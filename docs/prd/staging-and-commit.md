@@ -501,6 +501,26 @@ literally.
   exists (an amend points at the replaced commit, which Show Lost Commits draws).
   The list is virtualized and each stderr tail is drawn through a virtualizing
   view or bounded, never a `ScrollView`.
+  Amended 2026-10-09, the user's decisions on the popover as built: it hangs from
+  the status box — its left edge under the box's, an arrow pointing at it — kept
+  inside the window's width, never centred (A); the right pane's order, the status
+  words, the empty-state line, ×, the duration format, the command endings, the
+  newest entry selected, the 200-entry / 10,000-line / 4 MiB bounds and the error
+  message's three-line cut stay as built (B, C); the start time stays `HH:MM:SS
+  UTC` — local time, here and in the history's date column, needs a timezone
+  dependency, the user's to decide, and is filed as one issue (D); each write is
+  named in Fork's imperative form (E) and the way back keeps "Show Replaced
+  Commit" (F); while the popover is open the window's chords and the focused
+  list's keys do nothing, as under a dialog, Escape alone closing it (I); a fetch
+  refused because another runs gets no entry (J); the confirmed prompt keeps its
+  four-line cut with "Show All", which shows it whole in place, scrolling with the
+  pane, and collapses again (K); each `$ git …` line quotes every argument as a
+  POSIX shell needs it — single quotes, an embedded `'` written `'\''`, bare when
+  it needs none — so it pastes into a terminal (L); an operation whose lines the
+  byte bound let go of says "Its output was let go to make room for newer
+  operations." in their place (M); a write refused before it started keeps its own
+  name, such as "Stage 2 files" (N); and Create Branch's wait reads "Waiting for
+  the branch to be created…".
 - R12.2 Credentials in a URL (`scheme://user:secret@host`) are removed from every
   stderr line before it is drawn (#46, for display).
 - R12.3 Nothing about the log persists past the window (L14). It closes #41.
@@ -512,6 +532,18 @@ literally.
   removal of exactly `<gitdir>/index.lock`, made in `ops/` only, after re-checking
   the lock's age and identity against its `Consequence` (R1.4), so a lock removed
   and made again since the prompt is refused.
+  Amended 2026-10-09, the user's decisions G and H: the confirmation is titled
+  "Remove stale lock", its button stays "Remove index.lock", and its prompt reads
+  exactly "Remove <path>? It was last changed N ago and holds N bytes. Another
+  program may still own it: removing a lock a running git holds can corrupt the
+  index. You can't undo this action." (G). The offer and its `Consequence` are
+  computed when `Remove index.lock…` is pressed, on the local lane, not once as the
+  write ends — so the age is current, and the offer is not lost because some `git`
+  of Cairn's happened to run as the write ended; while one runs, the button is
+  drawn unpressable and says why rather than vanishing, and a refusal at the press
+  is said beside it (H). A lock found as the repository opens is an entry of its
+  own, "Lock files found as the repository opened", naming each lock and carrying
+  the same offer where `<gitdir>/index.lock` is among them (H).
 - R12.5 A guard holds every filesystem-mutating call in production code (removing,
   writing, renaming, creating or changing the permissions of a file or directory)
   to `crates/cairn-git/src/ops/` (L23), with a nonzero-files assertion and a

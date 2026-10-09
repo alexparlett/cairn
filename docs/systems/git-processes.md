@@ -1080,9 +1080,49 @@ commit as a ref's press finds its row (`ref_find::find_commit`) — and `Remove 
 where it is offered, then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to
 stderr and how it ended when that was not a clean exit. Escape and a press outside close it.
 
+The user's decisions of 2026-10-09 on it, as built:
+
+- **It hangs from the status box** (A). The window reads the box's laid-out place as Freya
+  lays it out — the `on_sized` event of the rect around it (`SizedEventData::area`, global
+  coordinates, the mechanism Freya's own `Attached` uses), kept by `ActivityLog::set_anchor`
+  only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
+  arrow (a square turned 45°, half hidden under the panel) pointing up at the box, the whole
+  kept inside the window's width (`Platform::root_size`), the panel narrowed to a window
+  narrower than it (`cairn_ui::activity_popover::hung`;
+  `the_panel_hangs_under_the_box_inside_the_window`,
+  `the_popover_hangs_from_the_status_box_inside_the_window`,
+  `the_popover_hangs_under_the_status_box`).
+- **Keys do nothing while it is open but close it** (I): `shortcuts::keys_inert` answers yes
+  while a credential prompt, a confirmation, the Git Error dialog or the popover is up, and the
+  window's chords (`shortcuts::act`), Local Changes' list intents
+  (`local_changes_actions::dialog_open`), the history list's presses and the Show Lost
+  Commits action ask it; the panel is `a11y_modal`, pulling focus into it; Escape closes it
+  (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
+- **The confirmed prompt** keeps its four-line cut, with "Show All" where it runs past the cut
+  (judged by its characters at the pane's width) — pressed, the prompt moves whole into the
+  lines' virtualizing view as its first row, sized by its own laid-out height (`on_sized`), so
+  it scrolls with git's lines below it, and "Show Less" cuts it again (K;
+  `show_all_makes_the_whole_confirmed_prompt_reachable`).
+- **Each `$ git …` line pastes into a terminal** (L): every argument written as a POSIX shell
+  needs it — bare when it is all ASCII letters, digits and `-_./:,+=@%`, otherwise in single
+  quotes with an embedded `'` written `'\''`, an empty one `''` (`activity::shell_quoted`;
+  `each_argument_is_quoted_as_a_shell_reads_it_back`, which has `sh` read the line back).
+- **Lines let go of say so** (M): an operation whose lines the byte bound let go of draws "Its
+  output was let go to make room for newer operations." (`activity::LINES_LET_GO`) in their
+  place (`an_operation_whose_lines_were_let_go_says_so`).
+- **A write that never started keeps its name** (N): one ended before it started — not run, the
+  repository closing — is named as it was asked, from the writes the window kept queued
+  (`a_write_refused_before_it_started_keeps_its_name`).
+- **A lock found as the repository opened** (H) is an entry of its own, "Lock files found as
+  the repository opened" (`activity::LOCKS_AT_OPEN_NAME`), status `found`, each lock a line,
+  carrying `Remove index.lock…` where `<gitdir>/index.lock` is among them
+  (`a_lock_found_at_open_is_an_entry_offering_its_removal`,
+  `the_locks_found_at_open_are_an_entry_of_their_own`).
+
 **Where an entry's `git` comes from.** Each lane marks the command log as an operation starts
 (`Repository::command_mark`) and, as it ends, sends the records of the invocations it built
-since (`Repository::commands_since`) in `Update::OperationRan { by, commands, lock }`, just
+since (`Repository::commands_since`) in `Update::OperationRan { by, commands, lock_named }`
+— `lock_named` whether its ending's locks name `<gitdir>/index.lock` — just
 before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` from the network
 lane. A commit's output streams into its entry as it arrives (R10.4: a hook's lines while it
 runs, `Update::WriteOutput`), and is replaced by its commands' records once they are in.
@@ -1103,27 +1143,41 @@ scp-like address (`git@host:path`) is no URL and is left. Pinned by `scrub.rs`'s
 `no_line_of_an_entry_carries_a_token` and
 `the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
 
-**`Remove index.lock…`** (R12.4, L23): offered only where an ending names `<gitdir>/index.lock`
-among its locks and the lane, asking the engine as the operation ends, finds the lock there,
-a plain file, and no `git` of Cairn's running in the repository
-(`ops::remove_lock_consequence`, refused with `Error::LockRefused` otherwise). Its press opens
-the confirmation over the popover; the token asks the local lane for `LocalWrite::RemoveLock`,
-which re-checks the registry, the lock's time, size, device and inode against the
-`Consequence` — refusing, removing nothing, a lock removed and made again since
-(`Error::LockChangedSinceConfirmed`) — then removes exactly that path with `std::fs::remove_file`
-(`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`), the one mutation Cairn makes without
-git. Residual: another program — a `git` in a terminal — may take the lock between the re-check
-and the removal; nothing in `std` removes a file only if it is still the inode it was, and the
-prompt says another program may own it. Nor does the registry count every process Cairn
-started: a hook's child left running in the background, its pipes closed, is no longer counted
-once its `git` is reaped, and a `git` it starts can hold the lock. A lock that cannot be looked at
-(permission denied, an I/O error) is refused as unreadable (`LockRefusal::Unreadable`). Pinned by `ops/remove_lock.rs`'s tests (the exact file
-removed and nothing beside it; a lock made again, rewritten or gone refused; no lock, a
-directory, a link and another repository's lock refused; a stub `git` holding the lock and
-running refuses the offer and the removal),
-`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails` (the lane's offer
-and the confirmed removal through the worker) and
-`remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_confirmation`.
+**`Remove index.lock…`** (R12.4, L23, the user's decisions G and H of 2026-10-09): offered on
+an entry whose ending names `<gitdir>/index.lock` among its locks
+(`local_lane::names_index_lock`), and on the entry of the locks found as the repository opened
+when it is among them. What its removal would cost is not computed as the write ends but when it
+is pressed: the press sends `Request::LockConsequence { asked }`, which the local lane answers in
+its order with `ops::remove_lock_consequence` — the lock there, a plain file, no `git` of
+Cairn's running in the repository, refused with `Error::LockRefused` otherwise — as
+`Update::LockConsequence { asked, outcome }`, so the age the prompt says is the age at the press,
+and an offer is never lost because some `git` happened to run as the write ended. Only the
+answer to the latest press is kept (`ActivityLog::lock_answered`): a refusal is said beside the
+button, which stays; a consequence opens the confirmation (`activity::use_lock_confirmation`),
+titled "Remove stale lock" (`activity::REMOVE_LOCK_TITLE`), its prompt `Consequence::prompt`'s —
+"Remove <path>? It was last changed N ago and holds N bytes. Another program may still own it:
+removing a lock a running git holds can corrupt the index. You can't undo this action." — and
+its button "Remove index.lock". While a write or a fetch of Cairn's runs the button is drawn
+unpressable, "Cairn is running git in this repository" beside it (`LockOffer::Blocked`). The
+token asks the local lane for `LocalWrite::RemoveLock`, which re-checks the registry, the lock's
+time, size, device and inode against the `Consequence` — refusing, removing nothing, a lock
+removed and made again since (`Error::LockChangedSinceConfirmed`) — then removes exactly that
+path with `std::fs::remove_file` (`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`), the
+one mutation Cairn makes without git; once it has, no entry offers it. Residual: another
+program — a `git` in a terminal — may take the lock between the re-check and the removal;
+nothing in `std` removes a file only if it is still the inode it was, and the prompt says
+another program may own it. Nor does the registry count every process Cairn started: a hook's
+child left running in the background, its pipes closed, is no longer counted once its `git` is
+reaped, and a `git` it starts can hold the lock. A lock that cannot be looked at (permission
+denied, an I/O error) is refused as unreadable (`LockRefusal::Unreadable`). Pinned by
+`ops/remove_lock.rs`'s tests (the exact file removed and nothing beside it; a lock made again,
+rewritten or gone refused; no lock, a directory, a link and another repository's lock refused; a
+stub `git` holding the lock and running refuses the consequence and the removal),
+`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails` (the lane's
+answer at the press and the confirmed removal through the worker),
+`the_lock_offer_answers_its_latest_press_and_goes_once_the_lock_is_removed`,
+`the_lock_removal_says_why_it_cannot_be_pressed` and
+`remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_confirmation`.
 
 **Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations, each at most
 `ACTIVITY_LINES` lines, all their lines together at most `ACTIVITY_BYTES` — counted as lines go
@@ -1131,7 +1185,8 @@ in and out, the oldest operations' lines let go of first and, for the newest alo
 budget, its oldest lines, so a running operation keeps its latest output; what a running
 operation wrote is let go of once its commands' records arrive, which are drawn in its place
 (`what_is_held_stays_under_the_bound_across_many_operations`,
-`a_running_operation_over_the_budget_keeps_its_latest_lines`). Nothing is written anywhere.
+`a_running_operation_over_the_budget_keeps_its_latest_lines`); an operation whose lines were let
+go of says so in their place (M, above). Nothing is written anywhere.
 Each line is cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character,
 with the diff view's marker after it (`cairn_ui::cut_marker`;
 `a_long_line_is_kept_cut_with_the_diff_views_marker`). Both lists — the operations and the
@@ -1144,7 +1199,8 @@ update costs the lines it carries (`closed_the_popover_builds_no_lines`).
 origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7): `LocalWrite::name` — "Stage
 1 file", "Stage lines of a.rs", "Unstage 2 files", "Commit", "Create branch 'topic'" — and, for a
 destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "Discard lines of
-a.rs", "Amend", "Remove index.lock").
+a.rs", "Amend", "Remove index.lock"). A write ended before it started keeps the name it was
+asked under; "A write" is said only of one the window never asked.
 
 **A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a write's
 stderr on a read of the pipe at a time (`Invocation::finish_by_read`), the commit's `CommitWatch`
@@ -1376,10 +1432,12 @@ which is a length of time, is waited out.
   file under the git directories as the repository opened
   (`SharedRepository::lock_files`, the listing a cancel uses, which walks every
   ref's directory and polls the lane's closing before each, so a close stops it)
-  and sends them as `Update::LocksAtOpen` when there are any — off the repository
-  thread, so the walk never delays the history's first page — and each ending
-  carries the ones it found; the window keeps
-  the last listed and draws them by path, hedged as a cancelled fetch's are
+  and sends them as `Update::LocksAtOpen { locks, index_lock }` when there are any —
+  off the repository thread, so the walk never delays the history's first page — and
+  each ending carries the ones it found; the window keeps
+  the last listed and draws them by path, hedged as a cancelled fetch's are, and the
+  activity popover gives the ones found at open an entry of their own ("The activity
+  popover")
   (`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails`,
   `the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`).
 - **A child reading the terminal** (R5.3). When Cairn was launched from a

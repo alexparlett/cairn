@@ -133,12 +133,15 @@ each with an askpass token whose prompt the window shows titled by its own opera
 read across a write never drawn, the read after each write what it left stale, a commit
 cancellable by its id, and a close that waits on the write running and names a lock left
 behind the next time the repository opens. The title bar's status box opens Fork's Activity
-popover (`docs/systems/git-processes.md`, "The activity popover"): the session's writes and
-fetches, newest first, each with the prompt it confirmed, every `git` it ran and what that said
+popover (`docs/systems/git-processes.md`, "The activity popover"), hung from the box, the
+window's keys inert while it is open: the session's writes and
+fetches, newest first, each with the prompt it confirmed, every `git` it ran — each argument
+quoted as a shell reads it — and what that said
 — every line of git's the window keeps scrubbed of a URL's userinfo first (`cairn_model::Scrubber`,
 `crate::shown_output`) — an amend's way back into Show Lost Commits, and `Remove index.lock…`,
-offered only where an ending names a stale `<gitdir>/index.lock` and Cairn runs no `git` in
-the repository, confirmed and re-checked before it removes exactly that file — the one mutation
+offered where an ending, or the locks found as the repository opened, name `<gitdir>/index.lock`,
+pressable only while Cairn runs no `git` in the repository, its consequence read at the press,
+confirmed and re-checked before it removes exactly that file — the one mutation
 Cairn makes without `git`.
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.

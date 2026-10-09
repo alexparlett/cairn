@@ -22,10 +22,9 @@ packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied
 at 18fea48. Phase 10 (Show Lost Commits) done in packet mode: Show Lost Commits with its check
 box, and Fork's Create Branch dialog with its sealed Discard, as the user decided (2026-10-09);
 QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green.
-Phase 11 (the activity popover and the measured bar) built in packet mode; QA adjudicated and
-every fix-now item fixed but DO3+DO5, held for the user's decisions G and H; gate green; its
-unsettled placements and words held for the user's sign-off. Phase 12 not
-started.**
+Phase 11 (the activity popover and the measured bar) done in packet mode: QA adjudicated, every
+fix-now item fixed, and the user's decisions A-N on the popover (2026-10-09) applied — DO3+DO5
+resolved by H; full gate green. Phase 12 not started.**
 
 ## Locked decisions
 
@@ -230,8 +229,8 @@ Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
   `Clone` refuses a destructive write). Ask a write with `local_writes::ask(&mut writes,
   submit, write)`, which takes the id and keeps it queued.
 - **Updates**: `WriteStarted { id }`, `WriteEnded { id, ending: WriteEnding, read_again:
-  ReadAgain }`; `LocksAtOpen { locks }` (the lock files as the repository opened, listed by the lane before
-  any write).
+  ReadAgain }`; `LocksAtOpen { locks, index_lock }` (the lock files as the repository opened, listed by
+  the lane before any write, and whether `<gitdir>/index.lock` is among them).
   `WriteEnding::{Done(Done), Stale { path, message }, Refused, Failed { message, locks },
   MayHaveTakenEffect { message, locks }, Incomplete { done, kept, message }, NotRun }`;
   `Done { description, acknowledged, locks_before, locks_after }`.
@@ -483,13 +482,21 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
 - **Worker**: `LocalWrite::RemoveLock(Confirmed)`, `LocalWrite::replaces()`,
   `is_cancellable()`; `Update::WriteOutput { id, lines, receipt: OutputReceipt }`
   (`worker/output_flow.rs`); `Update::OperationRan { by: RanBy::{Write(id), Fetch}, commands,
-  lock }`, sent before each ending; `local_lane::{ran_since, removable_lock}`.
-- **Window**: `View::activity: State<ActivityLog>` (`crate::activity`: `ActivityKey`,
-  `Outcome`, `ACTIVITY_ENTRIES`, `ACTIVITY_LINES`, `ACTIVITY_BYTES`, `popover`,
-  `REMOVE_LOCK_TITLE`); `Asked::{replaces, cancellable}`; `ref_find::find_commit`.
-- **`cairn_ui::ActivityPopover`** (`ActivityEntry`, `ActivityLine::{Ran, Output}`, captions
-  `ACTIVITY_TITLE`, `SHOW_REPLACED_CAPTION`, `REMOVE_LOCK_CAPTION`, `CANCEL_OPERATION_CAPTION`,
-  `CONFIRMED_CAPTION`, `NO_ACTIVITY`); `Expansion::take_all`.
+  lock_named }`, sent before each ending; `local_lane::{ran_since, names_index_lock}`;
+  `Request::LockConsequence { asked: OperationId }` (the local lane, routed `Routed::LockConsequence`)
+  answered by `Update::LockConsequence { asked, outcome: Result<Consequence, String> }` — the
+  removal's consequence read at the press (the user's decision H).
+- **Window**: `View::activity: State<ActivityLog>` (`crate::activity`: `ActivityKey::{Write,
+  Fetch, Opened}`, `Outcome` (with `Found`), `ACTIVITY_ENTRIES`, `ACTIVITY_LINES`, `ACTIVITY_BYTES`,
+  `popover`, `use_lock_confirmation`, `shell_quoted`, `REMOVE_LOCK_TITLE` ("Remove stale lock"),
+  `LOCKS_AT_OPEN_NAME`, `GIT_RUNNING_NOTE`, `LINES_LET_GO`; `ActivityLog::{set_anchor, lock_asked,
+  lock_answered, take_lock_ready, removal_asked, locks_at_open}`); `Asked::{name, awaited,
+  replaces, cancellable}`; `shortcuts::keys_inert`; `ref_find::find_commit`.
+- **`cairn_ui::ActivityPopover`** (`ActivityEntry` with `lock: Option<LockOffer>`,
+  `LockOffer::{Ready { note }, Blocked(why)}`, `ActivityLine::{Ran, Output}`, `.anchor(..)`,
+  `activity_popover::hung`, captions `ACTIVITY_TITLE`, `SHOW_REPLACED_CAPTION`,
+  `REMOVE_LOCK_CAPTION`, `CANCEL_OPERATION_CAPTION`, `CONFIRMED_CAPTION`, `NO_ACTIVITY`,
+  `SHOW_ALL_CAPTION`, `SHOW_LESS_CAPTION`); `Expansion::take_all`.
 - **Guards**: `only_the_ops_module_changes_the_filesystem`, `mutates_the_filesystem`,
   `FILESYSTEM_MUTATION_IDENTS`, `FILESYSTEM_MUTATION_FS_FUNCTIONS`,
   `FILESYSTEM_MUTATION_EXCEPTIONS`, `TEST_ONLY_CFGS`.
@@ -498,12 +505,36 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
 
 ## Carried forward from phase 11 (owned by the phase named)
 
-- **Held for the user's decisions G and H (the coordinator's)**: DO3+DO5 — `Remove index.lock…`'s
-  offer is computed once, as the write ends (`local_lane::removable_lock`): refused, and so absent,
-  while any Cairn git runs then (a focus-gained status read, a fetch), and its age stated as of
-  that moment when pressed later. Both err safe (the removal re-checks); the fix — the ending's
-  naming of the lock as the offer, the `Consequence` built on the press — waits on G and H.
+- **Resolved by the user's decision H (2026-10-09)**: DO3+DO5 — the offer is now the ending's
+  naming of the lock (`local_lane::names_index_lock`), and the `Consequence` is read on the local
+  lane at the press (`Request::LockConsequence`), so the age is current and a `git` running as the
+  write ended loses nothing; while one runs the button says why rather than vanishing.
+- **The user's decisions on the popover (2026-10-09), applied**: A — hung from the status box, its
+  left edge under the box's, an arrow pointing at it, inside the window's width; B, C — the right
+  pane's order and the status words as built; D — "HH:MM:SS UTC" kept (local time filed below);
+  E — Fork's imperative names (done in phase 11's fixes); F — "Show Replaced Commit" kept; G — the
+  confirmation titled "Remove stale lock", its button "Remove index.lock", its prompt "Remove
+  <path>? It was last changed N ago and holds N bytes. Another program may still own it: removing a
+  lock a running git holds can corrupt the index. You can't undo this action."; H — a lock found at
+  open an entry of its own, "Lock files found as the repository opened", and the consequence read at
+  the press; I — keys inert while it is open, Escape closing it; J — a fetch refused because another
+  runs gets no entry; K — the confirmed prompt's four-line cut with "Show All", expanding in place
+  and scrolling with the pane; L — each `$ git` argument quoted as a POSIX shell needs it; M — "Its
+  output was let go to make room for newer operations." where the byte bound let lines go; N — a
+  write refused before it started keeps its own name (cheaply available: the window's queued write,
+  no fallback needed); and Create Branch's "Waiting for the branch to be created…". The empty-state
+  line, ×, the duration format, the command endings, the newest entry selected, the bounds and the
+  error message's 3-line cut stay as built.
+- **Decided in the building, for the user's review** (phase 11, round 3): the lock-at-open entry's
+  status word "found" and its lines the lock paths; "Show Less" as the collapse caption; "Show All"
+  offered where the prompt's characters exceed four lines at the pane's width (an estimate, not a
+  layout); the blocked note "Cairn is running git in this repository"; a refusal at the press said
+  beside the still-pressable button; the arrow a square turned 45°; the panel narrowed for a window
+  narrower than it; a successful removal taking the offer from every entry.
 - **To file at teardown** (phase 11's QA, file-as-issue; not filed on GitHub in the packet):
+  - Local time (the user's decision D, 2026-10-09): the popover's start times and the history's
+    date column are drawn in UTC; showing local time needs a timezone dependency, which is the
+    user's decision — one issue for both.
   - DO1: the commit-graph reach (`history::walk::reaches_through_graph`) treats generation 0 as a
     level, where git reads 0 as "not computed"; a mixed chain needs a pre-2.19 graph under a newer
     layer, which no supported git writes, so no fixture can be built — and the failure is
@@ -519,9 +550,6 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
     block after a `#[cfg(test)]` on a field, variant or arm, which would hide production code from
     every guard using it; no such site exists in product `src/` today.
 
-- **The user (NEEDS USER SIGN-OFF, relayed by the coordinator)**: the popover's placements and
-  words the PRD and Fork's evidence leave open — built provisionally, listed in the phase's
-  report.
 - **Phase 12 / the user**: batching the discard count's per-path reads (measured 15.4 ms a path
   on the bench clone; a batched `numstat` read would change what a prompt counts for an LFS
   pointer, a file past the limits and under `diff.algorithm`); the amend read's split (measured:
@@ -862,9 +890,9 @@ From phase 02's QA (adjudicated 2026-10-08):
   (`an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog`); the box draws
   `replaces` under an in-place amend button whose token records exactly it, and the dialog the
   whole prompt.
-- **Phase 11** (QA item 23): the remove-lock prompt does not say whether removing
-  the lock can be undone, and says "corrupt the repository" where the index is
-  what is at risk; settle the wording there.
+- **Phase 11 — done** (QA item 23): settled by the user's decision G (2026-10-09) — the prompt
+  says the index is what a running git's lock protects and that removing it cannot be undone
+  (`removing_a_lock_names_it_its_age_and_the_risk`).
 
 ## The user's decisions on phase 01's QA (2026-10-08), applied
 
@@ -902,5 +930,5 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
-| 11 activity and measured | built, QA adjudicated, every fix-now item fixed but DO3+DO5 (held for the user's G and H), gate green; NEEDS USER SIGN-OFF on the popover's unsettled placements and words |
+| 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
 | 12 QA | not started |

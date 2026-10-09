@@ -3,6 +3,45 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 11, the user's decisions on the popover (packet mode)
+
+The user took every recommendation (A-N); each is applied and recorded in the PRD (R12.1, R12.4),
+`docs/systems/git-processes.md` ("The activity popover") and state.md.
+
+- **A**: the popover hangs from the status box. Freya 0.5's vendored source gives a laid-out
+  place through `on_sized` (`SizedEventData::area`, global; the same mechanism `Attached` uses,
+  clamped there to `Platform::root_size`), so the window keeps the box's left edge and bottom
+  (`ActivityLog::set_anchor`, written only when it moved) and the panel hangs under it, an arrow
+  — a square turned 45° — pointing up, both kept inside the window (`activity_popover::hung`).
+- **G**: "Remove stale lock", the button unchanged, the prompt exactly the user's
+  (`Consequence::prompt`, its test in the same commit); phase 01's QA item 23 settled by it.
+- **H**: the consequence is read on the local lane at the press (`Request::LockConsequence` →
+  `Update::LockConsequence`), the offer the ending's naming of the lock; while a `git` of Cairn's
+  runs the button is drawn unpressable, saying why; a refusal at the press is said beside it. The
+  locks found at open are an entry of their own. DO3+DO5 resolved by it.
+- **I**: `shortcuts::keys_inert` (a prompt, a confirmation, the Git Error dialog, or the popover)
+  stops the window's chords, Local Changes' intents, the history list's presses and Show Lost
+  Commits; the panel is `a11y_modal`; Escape closes it.
+- **K**: Show All moves the whole prompt into the lines' virtualizing view as its first row,
+  sized by its own layout, so it scrolls with the pane without a `ScrollView`; Show Less cuts it
+  again.
+- **L**: `activity::shell_quoted`, checked by `sh` reading the line back.
+- **M**: `activity::LINES_LET_GO` in place of lines the byte bound let go of.
+- **N**: the name is cheaply available — the window's queued write — so a write ended before it
+  started keeps it; no fallback was needed.
+- Create Branch's wait reads "Waiting for the branch to be created…" (`LocalWrite::awaited`, which
+  replaced `noun`, returns the whole clause).
+- B, C, D, E, F, J and the minor wordings and formats are kept as built; D's local time is filed at
+  teardown (state.md) as one issue with the history's date column.
+- In passing: the lock files line under the lists read "while they              are there", a
+  source line broken without `\`; fixed and pinned
+  (`the_lock_files_line_names_every_lock_in_one_sentence`).
+
+Decided in the building, for the user's review (listed in state.md): the lock-at-open entry's
+status "found"; "Show Less"; when Show All is offered (a character estimate); the blocked note's
+words; the refusal beside a still-pressable button; the arrow's shape; the panel narrowed in a
+narrow window; a successful removal clearing every entry's offer.
+
 ## 2026-10-09 — phase 11 QA, the adjudicated fixes (packet mode)
 
 The two adjudications (engine and app halves) listed 22 items to fix now. Every one is fixed

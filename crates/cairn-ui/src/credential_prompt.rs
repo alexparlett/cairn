@@ -16,6 +16,9 @@
 use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
+use crate::accelerators::Os;
+use crate::button_order::ordered;
+
 use crate::text_field::text_field;
 
 /// Width of the dialog, wide enough for a URL to stay on one line.
@@ -26,6 +29,7 @@ pub struct CredentialPrompt {
     text: String,
     on_submit: EventHandler<String>,
     on_cancel: EventHandler<()>,
+    platform: Os,
     key: DiffKey,
 }
 
@@ -38,6 +42,7 @@ impl CredentialPrompt {
             text: text.into(),
             on_submit: EventHandler::new(|_| {}),
             on_cancel: EventHandler::new(|()| {}),
+            platform: Os::current(),
             key: DiffKey::None,
         }
     }
@@ -53,12 +58,22 @@ impl CredentialPrompt {
         self.on_cancel = on_cancel.into();
         self
     }
+
+    /// Which platform's button order to draw in (the user's decision E): this build's own
+    /// unless a test names another.
+    pub fn platform(mut self, platform: Os) -> Self {
+        self.platform = platform;
+        self
+    }
 }
 
 // Hand-written: `EventHandler` never compares equal, and its identity is stable.
 impl PartialEq for CredentialPrompt {
     fn eq(&self, other: &Self) -> bool {
-        self.remote == other.remote && self.text == other.text && self.key == other.key
+        self.remote == other.remote
+            && self.text == other.text
+            && self.platform == other.platform
+            && self.key == other.key
     }
 }
 
@@ -96,14 +111,14 @@ impl Component for CredentialPrompt {
         let on_accept = self.on_submit.clone();
         let accept = move |_| on_accept.call(PromptKind::ACCEPTED.to_owned());
 
-        let mut buttons = PopupButtons::new().child(
-            Button::new()
-                .on_press({
-                    let on_cancel = self.on_cancel.clone();
-                    move |_| on_cancel.call(())
-                })
-                .child("Cancel"),
-        );
+        let cancel_button: Element = Button::new()
+            .on_press({
+                let on_cancel = self.on_cancel.clone();
+                move |_| on_cancel.call(())
+            })
+            .child("Cancel")
+            .into();
+        let primary: Element;
         let mut content = PopupContent::new().child(
             label()
                 .text(asking(kind, &self.text))
@@ -128,12 +143,11 @@ impl Component for CredentialPrompt {
                     .font_size(12.)
                     .color(secondary),
             );
-            buttons = buttons.child(
-                Button::new()
-                    .filled()
-                    .on_press(accept)
-                    .child("Yes, connect"),
-            );
+            primary = Button::new()
+                .filled()
+                .on_press(accept)
+                .child("Yes, connect")
+                .into();
         } else {
             content = content
                 .child(
@@ -157,13 +171,15 @@ impl Component for CredentialPrompt {
                             move |_: String| submit.call(())
                         }),
                 );
-            buttons = buttons.child(
-                Button::new()
-                    .filled()
-                    .on_press(move |_| submit.call(()))
-                    .child("Continue"),
-            );
+            primary = Button::new()
+                .filled()
+                .on_press(move |_| submit.call(()))
+                .child("Continue")
+                .into();
         }
+        // In the platform's order (the user's decision E).
+        let buttons =
+            PopupButtons::new().children(ordered(self.platform, vec![primary], cancel_button));
 
         Popup::new()
             .width(Size::px(DIALOG_WIDTH))

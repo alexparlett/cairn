@@ -14,6 +14,9 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 
+use crate::accelerators::Os;
+use crate::button_order::ordered;
+
 use cairn_model::{Confirmed, Consequence};
 
 use crate::commit_box::{AmendSkip, SKIP_HOOKS_CAPTION};
@@ -40,6 +43,7 @@ pub struct GitErrorDialog {
     /// A failed amend's skip: the consequence it was confirmed with, and where the token goes.
     skip_amend: Option<(Rc<Consequence>, EventHandler<Confirmed>)>,
     on_close: EventHandler<()>,
+    platform: Os,
     key: DiffKey,
 }
 
@@ -55,6 +59,7 @@ impl GitErrorDialog {
             on_skip: EventHandler::new(|()| {}),
             skip_amend: None,
             on_close: EventHandler::new(|()| {}),
+            platform: Os::current(),
             key: DiffKey::None,
         }
     }
@@ -89,6 +94,13 @@ impl GitErrorDialog {
         self.on_close = on_close.into();
         self
     }
+
+    /// Which platform's button order to draw in (the user's decision E): this build's own
+    /// unless a test names another.
+    pub fn platform(mut self, platform: Os) -> Self {
+        self.platform = platform;
+        self
+    }
 }
 
 impl PartialEq for GitErrorDialog {
@@ -96,6 +108,7 @@ impl PartialEq for GitErrorDialog {
         self.serial == other.serial
             && self.skip == other.skip
             && self.skip_amend.is_some() == other.skip_amend.is_some()
+            && self.platform == other.platform
             && self.key == other.key
     }
 }
@@ -149,7 +162,7 @@ impl Component for GitErrorDialog {
         .width(Size::fill())
         .height(Size::px(OUTPUT_HEIGHT));
 
-        let mut buttons = PopupButtons::new();
+        let mut actions: Vec<Element> = Vec::new();
         let amend_skip = self.skip_amend.as_ref().map(|(consequence, on_confirmed)| {
             let close = self.on_close.clone();
             let on_confirmed = on_confirmed.clone();
@@ -161,18 +174,23 @@ impl Component for GitErrorDialog {
             )
         });
         if self.skip && amend_skip.is_none() {
-            buttons = buttons.child(
+            actions.push(
                 Button::new()
                     .on_press(move |_| skip())
-                    .child(SKIP_HOOKS_CAPTION),
+                    .child(SKIP_HOOKS_CAPTION)
+                    .into(),
             );
         }
         let closing = close.clone();
-        buttons = buttons.child(
+        // In the platform's order (the user's decision E), Close in Cancel's place.
+        let buttons = PopupButtons::new().children(ordered(
+            self.platform,
+            actions,
             Button::new()
                 .on_press(move |_| closing())
-                .child(CLOSE_CAPTION),
-        );
+                .child(CLOSE_CAPTION)
+                .into(),
+        ));
 
         Popup::new()
             .width(Size::px(DIALOG_WIDTH))

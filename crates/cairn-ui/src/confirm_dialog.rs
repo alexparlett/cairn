@@ -19,6 +19,9 @@ use std::rc::Rc;
 use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
+use crate::accelerators::Os;
+use crate::button_order::ordered;
+
 /// Width of the dialog: room for a prompt naming a long path.
 const DIALOG_WIDTH: f32 = 520.0;
 
@@ -34,6 +37,7 @@ pub struct ConfirmDialog {
     consequence: Rc<Consequence>,
     on_confirm: EventHandler<Confirmed>,
     on_cancel: EventHandler<()>,
+    platform: Os,
     key: DiffKey,
 }
 
@@ -47,6 +51,7 @@ impl ConfirmDialog {
             consequence,
             on_confirm: EventHandler::new(|_| {}),
             on_cancel: EventHandler::new(|()| {}),
+            platform: Os::current(),
             key: DiffKey::None,
         }
     }
@@ -62,6 +67,13 @@ impl ConfirmDialog {
         self.on_cancel = on_cancel.into();
         self
     }
+
+    /// Which platform's button order to draw in (the user's decision E): this build's own
+    /// unless a test names another.
+    pub fn platform(mut self, platform: Os) -> Self {
+        self.platform = platform;
+        self
+    }
 }
 
 // By the serial alone: one confirmation is one serial, whose title, consequence and handlers
@@ -70,7 +82,7 @@ impl ConfirmDialog {
 // toolkit mounts a new dialog rather than keeping this one's handlers under its words.
 impl PartialEq for ConfirmDialog {
     fn eq(&self, other: &Self) -> bool {
-        self.serial == other.serial && self.key == other.key
+        self.serial == other.serial && self.platform == other.platform && self.key == other.key
     }
 }
 
@@ -132,8 +144,18 @@ impl Component for ConfirmDialog {
             }
         };
 
-        let buttons = PopupButtons::new()
-            .child(choice(
+        // In the platform's order (the user's decision E); focus starts on Cancel either way.
+        let buttons = PopupButtons::new().children(ordered(
+            self.platform,
+            vec![choice(
+                self.serial,
+                confirm_id,
+                action,
+                false,
+                &colours,
+                confirm,
+            )],
+            choice(
                 self.serial,
                 cancel_id,
                 CANCEL_CAPTION.to_owned(),
@@ -143,15 +165,8 @@ impl Component for ConfirmDialog {
                     let cancel = cancel.clone();
                     move || cancel()
                 },
-            ))
-            .child(choice(
-                self.serial,
-                confirm_id,
-                action,
-                false,
-                &colours,
-                confirm,
-            ));
+            ),
+        ));
 
         Popup::new()
             .width(Size::px(DIALOG_WIDTH))

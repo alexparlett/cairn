@@ -20,6 +20,9 @@
 use cairn_model::Oid;
 use freya::prelude::*;
 
+use crate::accelerators::Os;
+use crate::button_order::ordered;
+
 use crate::check_box::check_box;
 use crate::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::text_field::text_field;
@@ -77,6 +80,7 @@ pub struct CreateBranchDialog {
     on_local: EventHandler<LocalChoice>,
     on_create: EventHandler<()>,
     on_cancel: EventHandler<()>,
+    platform: Os,
     key: DiffKey,
 }
 
@@ -98,6 +102,7 @@ impl CreateBranchDialog {
             on_local: EventHandler::new(|_: LocalChoice| {}),
             on_create: EventHandler::new(|()| {}),
             on_cancel: EventHandler::new(|()| {}),
+            platform: Os::current(),
             key: DiffKey::None,
         }
     }
@@ -156,6 +161,13 @@ impl CreateBranchDialog {
         self.on_cancel = on_cancel.into();
         self
     }
+
+    /// Which platform's button order to draw in (the user's decision E): this build's own
+    /// unless a test names another.
+    pub fn platform(mut self, platform: Os) -> Self {
+        self.platform = platform;
+        self
+    }
 }
 
 // Hand-written: an `EventHandler` never compares equal, and its identity is stable.
@@ -170,6 +182,7 @@ impl PartialEq for CreateBranchDialog {
             && self.waiting == other.waiting
             && self.checkout == other.checkout
             && self.local == other.local
+            && self.platform == other.platform
             && self.key == other.key
     }
 }
@@ -317,21 +330,25 @@ impl Component for CreateBranchDialog {
             .padding(8.)
             .spacing(4.)
             .child(said)
-            .child(
+            // In the platform's order (the user's decision E).
+            .children(ordered(
+                self.platform,
+                vec![
+                    Button::new()
+                        .filled()
+                        .enabled(ready)
+                        .on_press(move |_| create())
+                        .child(primary)
+                        .into(),
+                ],
                 Button::new()
                     .on_press({
                         let on_cancel = self.on_cancel.clone();
                         move |_| on_cancel.call(())
                     })
-                    .child(CANCEL_BRANCH_CAPTION),
-            )
-            .child(
-                Button::new()
-                    .filled()
-                    .enabled(ready)
-                    .on_press(move |_| create())
-                    .child(primary),
-            );
+                    .child(CANCEL_BRANCH_CAPTION)
+                    .into(),
+            ));
         let on_close = self.on_cancel.clone();
         Popup::new()
             .width(Size::px(DIALOG_WIDTH))

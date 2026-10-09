@@ -80,6 +80,8 @@ fn git_diff(repo: &Repo, path: &str, which: WorkingTreeDiff, extra: &[&str]) -> 
     args.extend_from_slice(extra);
     match which {
         WorkingTreeDiff::Staged => args.extend(["--cached", "--", path]),
+        // Amend's staged list's diff: the index against `HEAD`'s parent.
+        WorkingTreeDiff::Amending => args.extend(["--cached", "HEAD^", "--", path]),
         WorkingTreeDiff::Unstaged => args.extend(["--", path]),
         // A path that is `-` is standard input to `--no-index`; git's own advice is to spell
         // it `./-`, which is what the user types.
@@ -1033,6 +1035,73 @@ fn staged_and_unstaged_edits_read_as_git_diff_shows_them() {
     }
 }
 
+/// Staging-and-commit R6.3, R10.3 (the amend diff phase 05 carried to phase 09): a file of
+/// amend's staged list reads as `git diff --cached HEAD^` shows it — a file the amended commit
+/// edited and the index edits again, one it added and the index leaves, one it left and the
+/// index deletes — and where the index is what `HEAD`'s parent has, nothing; the staged diff
+/// of the same path is still against `HEAD`. Caught by: the amend's diff read against `HEAD`
+/// (the edit `HEAD` made missing, the added file reading as no change).
+#[test]
+fn a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent() {
+    let repo = base("amending");
+    let body: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+    repo.write("f.txt", body.as_bytes());
+    repo.write("left.txt", b"left alone\n");
+    repo.write("back.txt", b"as the parent has it\n");
+    repo.commit("parent");
+    repo.write("f.txt", body.replace("line 3\n", "line three\n").as_bytes());
+    repo.write("added.txt", b"added by HEAD\n");
+    repo.write("back.txt", b"edited by HEAD\n");
+    repo.commit("head");
+    repo.write(
+        "f.txt",
+        body.replace("line 3\n", "line three\n")
+            .replace("line 30\n", "line thirty\n")
+            .as_bytes(),
+    );
+    repo.write("back.txt", b"as the parent has it\n");
+    repo.git(&["add", "f.txt", "back.txt"]);
+    repo.git(&["rm", "-q", "left.txt"]);
+    let answers = answers_writing_nothing(
+        &repo,
+        &[
+            ("f.txt", WorkingTreeDiff::Amending),
+            ("added.txt", WorkingTreeDiff::Amending),
+            ("left.txt", WorkingTreeDiff::Amending),
+            ("back.txt", WorkingTreeDiff::Amending),
+            ("added.txt", WorkingTreeDiff::Staged),
+        ],
+    );
+    for (path, answer) in ["f.txt", "added.txt", "left.txt", "back.txt"]
+        .into_iter()
+        .zip(&answers)
+    {
+        same_as_git(&repo, path, WorkingTreeDiff::Amending, answer);
+    }
+    let (old, new) = lines(some(answers[0].as_ref(), "f.txt's amend diff"));
+    assert!(old.contains(&"line 3".to_owned()), "{old:?}");
+    assert!(new.contains(&"line three".to_owned()) && new.contains(&"line thirty".to_owned()));
+    assert!(answers[1].is_some(), "a file HEAD added read as unchanged");
+    assert_eq!(
+        answers[3], None,
+        "a file put back to the parent's content read as changed"
+    );
+    assert_eq!(
+        answers[4], None,
+        "the staged diff of a file HEAD added is against HEAD"
+    );
+    // A root commit's amend is against the empty tree: every line of its file is added.
+    let root = Repo::new("amending-root");
+    root.write("only.txt", b"one\ntwo\n");
+    root.commit("root");
+    root.write("only.txt", b"one\ntwo\nthree\n");
+    root.git(&["add", "only.txt"]);
+    let diff = ask(&root, "only.txt", WorkingTreeDiff::Amending);
+    let (old, new) = lines(some(diff.as_ref(), "a root commit's amend diff"));
+    assert!(old.is_empty(), "{old:?}");
+    assert_eq!(new, ["one", "two", "three"]);
+}
+
 /// Line endings at the edges, staged and unstaged: an edit near a last line with no
 /// newline (which git prints as context, marked), a change to the final newline alone,
 /// each way, and a CRLF file kept as it is (`-text`) edited mid-file, its `\r` part of each
@@ -1700,6 +1769,9 @@ fn every_discriminating_file_reads_as_git_diff_shows_it_staged_and_unstaged() {
             repo.git(&["reset", "--quiet", reset, "HEAD^"]);
             let listed = match which {
                 WorkingTreeDiff::Staged => repo.git(&["diff", "--cached", "--name-only", "-z"]),
+                WorkingTreeDiff::Amending => {
+                    repo.git(&["diff", "--cached", "HEAD^", "--name-only", "-z"])
+                }
                 WorkingTreeDiff::Unstaged | WorkingTreeDiff::Untracked => {
                     repo.git(&["diff", "--name-only", "-z"])
                 }

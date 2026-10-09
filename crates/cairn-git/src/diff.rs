@@ -118,6 +118,13 @@ pub enum WorkingTreeDiff {
     /// show the destination alone as an addition. Against the empty tree on an unborn
     /// branch, as git compares it.
     Staged,
+    /// `HEAD`'s parent against the index: what `git diff --cached HEAD^` shows for the path,
+    /// paired as [`WorkingTreeDiff::Staged`] pairs — one file of amend's staged list
+    /// (staging-and-commit R6.3, R10.3), what the amended commit will hold that the parent
+    /// does not. Against the empty tree for a root commit or a shallow clone's boundary, as
+    /// amend's staged list is (`Repository::amend_parent`); an unborn branch, which has
+    /// nothing to amend, is [`crate::Error::UnbornHead`].
+    Amending,
     /// The index against the working tree: what `git diff -- <path>` shows.
     Unstaged,
     /// Nothing against the working tree: what `git diff --no-index /dev/null <path>` shows

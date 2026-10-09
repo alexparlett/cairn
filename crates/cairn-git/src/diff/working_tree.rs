@@ -91,7 +91,7 @@ pub(super) fn working_tree_diff(
             old: Some(0),
             new: None,
         },
-        WorkingTreeDiff::Staged | WorkingTreeDiff::Unstaged => {
+        WorkingTreeDiff::Staged | WorkingTreeDiff::Amending | WorkingTreeDiff::Unstaged => {
             let index = fresh_index(inner)?;
             if index.is_sparse() {
                 return Ok(Some(stand_in(
@@ -124,13 +124,17 @@ pub(super) fn working_tree_diff(
                 }
                 Some(_) | None => 0,
             };
-            if which == WorkingTreeDiff::Staged {
+            if which != WorkingTreeDiff::Unstaged {
                 // `git diff --cached` lists no intent-to-add entry, where `diff-index
                 // --cached` lists it as an empty file added (`crate::reads::working_tree`).
                 if intent_to_add {
                     return Ok(None);
                 }
-                let (commit, head_blob) = head_side(inner, path)?;
+                let (commit, head_blob) = if which == WorkingTreeDiff::Amending {
+                    parent_side(repo, path)?
+                } else {
+                    head_side(inner, path)?
+                };
                 staged_commit = Some(commit);
                 // R2.6: the pair `git diff --cached` puts the path in, if any; its sides are
                 // the pair's two blobs, at two paths. Only a path missing from one side can
@@ -170,9 +174,13 @@ pub(super) fn working_tree_diff(
         }
     };
     let side = match (which, &staged_commit) {
-        (WorkingTreeDiff::Staged, Some(commit)) => Side::Staged { commit },
+        (WorkingTreeDiff::Staged | WorkingTreeDiff::Amending, Some(commit)) => {
+            Side::Staged { commit }
+        }
         (WorkingTreeDiff::Untracked, _) => Side::Untracked,
-        (WorkingTreeDiff::Staged | WorkingTreeDiff::Unstaged, _) => Side::Unstaged,
+        (WorkingTreeDiff::Staged | WorkingTreeDiff::Amending | WorkingTreeDiff::Unstaged, _) => {
+            Side::Unstaged
+        }
     };
     // A pair's diff driver is its source's, as git reads it for the old side.
     let old_path = pair.as_ref().map_or(path, |(_, paired)| &paired.old_path);
@@ -758,6 +766,32 @@ fn head_side(
         .filter(|entry| entry.mode().is_blob_or_symlink())
         .map(|entry| entry.object_id());
     Ok((model_id(&head)?, blob))
+}
+
+/// The tree-ish amend's staged list compares the index with — `HEAD`'s parent, or the empty
+/// tree for a root commit (`Repository::amend_parent`) — and the blob it has at `path`.
+fn parent_side(
+    repo: &Repository,
+    path: &RepoPath,
+) -> Result<(Oid, Option<gix::hash::ObjectId>), Error> {
+    let inner = repo.inner();
+    let Some(parent) = repo.amend_parent()? else {
+        let empty = gix::hash::ObjectId::empty_tree(inner.object_hash());
+        return Ok((model_id(&empty)?, None));
+    };
+    let setup = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffSetup { source };
+    let tree = inner
+        .find_object(object_id(&parent)?)
+        .map_err(|e| setup(Box::new(e)))?
+        .peel_to_tree()
+        .map_err(|e| setup(Box::new(e)))?;
+    let entry = tree
+        .lookup_entry(path.as_bytes().split_str("/"))
+        .map_err(|e| setup(Box::new(e)))?;
+    let blob = entry
+        .filter(|entry| entry.mode().is_blob_or_symlink())
+        .map(|entry| entry.object_id());
+    Ok((parent, blob))
 }
 
 /// The size of one side of a pair, from the id git named for it: zero for an absent side.

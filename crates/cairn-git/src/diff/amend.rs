@@ -13,7 +13,7 @@
 //! fetched by git before 2.44, which ignores `GIT_NO_LAZY_FETCH`
 //! (`in_a_partial_clone_amends_staged_list_fails_rather_than_fetching`).
 
-use cairn_model::ChangedFile;
+use cairn_model::{ChangedFile, Oid};
 
 use crate::object_id::model_id;
 use crate::ops::GitBinary;
@@ -32,6 +32,21 @@ impl Repository {
         cancel: &impl Cancel,
     ) -> Result<Vec<ChangedFile>, Error> {
         let inner = self.inner();
+        let base = match self.amend_parent()? {
+            Some(parent) => parent,
+            None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
+        };
+        let detection = Configured::read(inner)?.search(git.version()).detection();
+        staged_since(git, self, &base, detection, cancel)
+    }
+
+    /// The commit an amend's staged list is against (module docs): `HEAD`'s first parent as
+    /// git shows it, or `None` for a root commit or a shallow clone's boundary, whose list is
+    /// against the empty tree — and what an unstage out of the amend puts an entry back to
+    /// (`git reset -q <parent> --`, or `git rm --cached` with none, R6.3). An unborn branch,
+    /// which has nothing to amend, is [`Error::UnbornHead`].
+    pub fn amend_parent(&self) -> Result<Option<Oid>, Error> {
+        let inner = self.inner();
         let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
         let mut head = inner
             .head()
@@ -45,11 +60,6 @@ impl Repository {
             });
         };
         let details = self.commit_details(&model_id(&head)?)?;
-        let base = match details.parents.first() {
-            Some(parent) => *parent,
-            None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
-        };
-        let detection = Configured::read(inner)?.search(git.version()).detection();
-        staged_since(git, self, &base, detection, cancel)
+        Ok(details.parents.first().copied())
     }
 }

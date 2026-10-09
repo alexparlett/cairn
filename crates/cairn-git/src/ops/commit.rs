@@ -299,9 +299,13 @@ impl Lines {
         }
         self.partial.drain(..start);
         // A line that never ends is handed on in pieces of the tail's size, so what is kept
-        // of it stays bounded.
+        // of it stays bounded — cut before a character a piece would split, which waits for
+        // the next piece rather than reading as U+FFFD (phase 05's QA item 11).
         if self.partial.len() > STDOUT_TAIL {
+            let whole = whole_characters(&self.partial);
+            let rest = self.partial.split_off(whole);
             self.finish(output);
+            self.partial = rest;
         }
     }
 
@@ -313,9 +317,39 @@ impl Lines {
         }
     }
 
+    /// The tail, starting at a character's start: a cut that fell inside one leaves its
+    /// continuation bytes out rather than reading them as U+FFFD.
     fn tail(&self) -> String {
-        String::from_utf8_lossy(&self.tail).into_owned()
+        let start = self
+            .tail
+            .iter()
+            .take(3)
+            .take_while(|byte| (**byte & 0xC0) == 0x80)
+            .count();
+        String::from_utf8_lossy(&self.tail[start..]).into_owned()
     }
+}
+
+/// How many of `bytes` end at a character's end: all of them, unless they end inside a UTF-8
+/// sequence, whose started bytes are left out. Bytes that are no UTF-8 at all are counted, to be
+/// read lossily as they always were.
+fn whole_characters(bytes: &[u8]) -> usize {
+    let length = bytes.len();
+    for back in 1..=length.min(3) {
+        let byte = bytes[length - back];
+        if (byte & 0xC0) == 0x80 {
+            continue;
+        }
+        // A lead byte: how long its sequence is, and whether all of it is here.
+        let needs = match byte {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1,
+        };
+        return if back < needs { length - back } else { length };
+    }
+    length
 }
 
 #[cfg(test)]
@@ -456,5 +490,50 @@ mod tests {
         lines.push(b"\nend\n", &mut |_| {});
         assert_eq!(lines.tail().len(), STDOUT_TAIL);
         assert!(lines.tail().ends_with("\nend\n"));
+    }
+
+    /// Phase 05's QA item 11: a cut — the tail's front, or a piece of a line with no end — that
+    /// falls inside a multibyte character never reads as U+FFFD; the piece's split character
+    /// goes whole with the next piece. Caught by: a byte cut decoded lossily.
+    #[test]
+    fn a_cut_inside_a_character_reads_no_replacement_character() {
+        let mut seen = Vec::new();
+        let mut lines = Lines::default();
+        // `é` is two bytes: one more byte than the tail's size puts its first byte at the end.
+        let mut long = vec![b'x'; STDOUT_TAIL];
+        long.extend_from_slice("é".as_bytes());
+        lines.push(&long[..=STDOUT_TAIL], &mut |line| {
+            seen.push(line.to_owned())
+        });
+        lines.push(&long[STDOUT_TAIL + 1..], &mut |line| {
+            seen.push(line.to_owned())
+        });
+        lines.push(b"\n", &mut |line| seen.push(line.to_owned()));
+        assert_eq!(
+            seen.len(),
+            2,
+            "{:?}",
+            seen.iter().map(String::len).collect::<Vec<_>>()
+        );
+        assert!(seen.iter().all(|line| !line.contains('\u{FFFD}')));
+        assert_eq!(seen[1], "é");
+        // The tail's front cut inside `€` (three bytes).
+        let mut lines = Lines::default();
+        let mut text = "€".as_bytes().to_vec();
+        text.extend(vec![b'y'; STDOUT_TAIL - 1]);
+        lines.push(&text, &mut |_| {});
+        let tail = lines.tail();
+        assert!(
+            !tail.contains('\u{FFFD}'),
+            "the tail began inside a character"
+        );
+        assert_eq!(tail.len(), STDOUT_TAIL - 1);
+        assert_eq!(whole_characters("a€".as_bytes()), 4);
+        assert_eq!(whole_characters(&"a€".as_bytes()[..3]), 1);
+        assert_eq!(
+            whole_characters(&[b'a', 0xFF]),
+            2,
+            "not UTF-8: counted as it is"
+        );
     }
 }

@@ -608,8 +608,9 @@ impl RepositoryHandle {
     /// for the child's — a review obligation, since this runs on the UI
     /// thread. A close stops the epochs first, an atomic store, so the page
     /// being walked and the diff being read are abandoned at their next poll
-    /// and the close behind them is reached at once; the waiting it starts is
-    /// the repository thread's. A refresh is numbered in its two lanes and
+    /// and the close behind them is reached at once, and marks the local lane
+    /// closing, one bounded lock, so no write asked after it starts; the waiting
+    /// it starts is the repository thread's. A refresh is numbered in its two lanes and
     /// sent to two threads — its refs to the repository thread, its status to
     /// the refresh thread under the status lane's number, which no refresh moves
     /// (a running status is never superseded, R10.3 as amended) — and returns its
@@ -671,6 +672,9 @@ impl RepositoryHandle {
             Routed::Repository(job) => {
                 if matches!(job, RepositoryJob::Close) {
                     self.epochs.stop();
+                    // No write asked from now on is started, whatever the repository thread
+                    // is still busy with (R4.9): one bounded lock.
+                    self.lane.close();
                 }
                 let _ = self.jobs.send((epoch, job));
             }
@@ -2225,6 +2229,22 @@ mod tests {
             "the close left the walk in progress to finish its page"
         );
         assert_eq!(asked(), vec![Request::Close], "the close was not queued");
+    }
+
+    /// Staging-and-commit R4.9: a close marks the local lane closing as it is submitted, so a
+    /// write asked after it is never started — even while the repository thread, which marks
+    /// it again as it closes, is still busy with what was queued before. Caught by: marking
+    /// the lane only in `Threads::drop`, which leaves an idle lane to start a write asked
+    /// between the close and the repository thread reaching it.
+    #[test]
+    fn a_close_marks_the_local_lane_closing_as_it_is_submitted() {
+        let (handle, _asked) = idle_handle();
+        assert!(!handle.lane.is_closing());
+        handle.submit(Request::Close);
+        assert!(
+            handle.lane.is_closing(),
+            "a write asked after the close could still start"
+        );
     }
 
     #[test]

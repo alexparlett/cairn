@@ -776,8 +776,8 @@ Project invariants:
   closure `RepositoryHandle::into_submitter` builds and through the window's
   close hook — `Closing::requested`, which lives in the render-side
   `crates/cairn-app/src/closing.rs` and is scanned, but calls `submit` — whose
-  `Request::Close` arm stops the epochs with an atomic store and queues the
-  close, whose query arms bump their lanes' atomic counters and send to the
+  `Request::Close` arm stops the epochs with an atomic store, marks the local
+  write lane closing under `LaneState`'s mutex and queues the close, whose query arms bump their lanes' atomic counters and send to the
   thread the routing table names over an unbounded channel, whose operation
   arms (`Request::Retire`, a replaced change set handed to the repository
   thread to free, among them) only send over one, whose `Request::Refresh`

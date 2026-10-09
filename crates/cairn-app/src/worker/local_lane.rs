@@ -552,7 +552,7 @@ impl LaneState {
         self.lock().closing = true;
     }
 
-    fn is_closing(&self) -> bool {
+    pub(super) fn is_closing(&self) -> bool {
         self.lock().closing
     }
 }

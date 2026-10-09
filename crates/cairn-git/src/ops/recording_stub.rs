@@ -158,6 +158,11 @@ impl RecordingStub {
             .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
     }
 
+    /// Sets `key` in the fixture's own configuration, through the real git.
+    pub(crate) fn config(&self, key: &str, value: &str) {
+        self.git(&["config", key, value]);
+    }
+
     pub(crate) fn write(&self, path: &str, content: &str) {
         std::fs::write(self.root.join(path), content)
             .unwrap_or_else(|error| panic!("writing {path}: {error}"));

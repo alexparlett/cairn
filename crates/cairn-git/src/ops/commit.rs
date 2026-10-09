@@ -340,6 +340,79 @@ mod tests {
         );
     }
 
+    /// C9 for commit and amend, against a `git` that records what it is given and runs the
+    /// real one (phase 05's QA item 2): the argv each actually runs, the message on stdin byte
+    /// for byte, a write's environment, and the message nowhere in the command log. Caught by:
+    /// the message given with `-m` (which stores the same bytes under the default cleanup),
+    /// `--literal-pathspecs`, `--no-verify` without the skip, or a `--cleanup` passed.
+    #[test]
+    fn commit_and_amend_run_git_commit_with_the_message_on_stdin_and_nowhere_else() {
+        use super::super::recording_stub::RecordingStub;
+        let stub = RecordingStub::new();
+        stub.config("user.name", "Commit Ter");
+        stub.config("user.email", "committer@example.com");
+        let (git, repo) = (stub.git_binary(), stub.repository());
+        let message = "a subject never on argv\n\nand a body\n";
+        let cancel = CancelSignal::new();
+        let (mut running, mut output) = (|_: CommitCancel| {}, |_: &str| {});
+        stub.forget();
+        commit(
+            &git,
+            &repo,
+            message,
+            Hooks::Run,
+            None,
+            CommitWatch {
+                cancel: &cancel,
+                running: &mut running,
+                output: &mut output,
+            },
+        )
+        .unwrap();
+        let consequence = amend_consequence(&repo, &cancel).unwrap();
+        amend(
+            &git,
+            &repo,
+            Confirmed::by_user(consequence),
+            message,
+            Hooks::Skip,
+            None,
+            CommitWatch {
+                cancel: &cancel,
+                running: &mut running,
+                output: &mut output,
+            },
+        )
+        .unwrap();
+        let recorded = stub.recorded();
+        let verbs: Vec<Vec<String>> = recorded
+            .iter()
+            .map(|record| record.arguments_after_location())
+            .collect();
+        assert_eq!(
+            verbs,
+            [
+                vec!["commit", "-q", "-F", "-"],
+                vec!["commit", "-q", "--amend", "--no-verify", "-F", "-"],
+            ]
+        );
+        for record in &recorded {
+            assert_eq!(record.stdin, message.as_bytes(), "{record:?}");
+            record.assert_a_write();
+        }
+        let logged = repo.processes().log();
+        assert!(logged.len() >= 2, "{logged:?}");
+        for entry in &logged {
+            assert!(
+                !entry
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("never on argv")),
+                "the message reached the command log: {entry:?}"
+            );
+        }
+    }
+
     /// git's `is_encoding_utf8`. Caught by: a case-sensitive match, `utf-8` refused, or
     /// `UTF-16` taken for UTF-8.
     #[test]

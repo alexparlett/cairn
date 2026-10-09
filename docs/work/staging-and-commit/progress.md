@@ -3,6 +3,82 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 06 QA, adjudicated and fixed; the user's decisions applied
+
+Five fresh reviewers and a fresh `qa-confirm` (the coordinator's; probes P1-P3 ran as window
+tests). Fixed, each test-first — the new test red on the code before the fix, or the named
+mutation or bypass caught:
+
+1. **Critical, items 1-3 as one change — the dialog kept a replaced confirmation's handlers,
+   stayed deaf after a chained one, and copied the consequence on every render.** `ChoiceButton`'s
+   equality ignored its handler and the dialog was unkeyed, so B set over A drew B and handed A's
+   continuation a token naming A's path (P1); `answered` survived into a confirmation opened by
+   the last one's answer, leaving Escape, Cancel and confirm dead under inert window chords (P2);
+   and the window cloned the `Consequence` and compared it whole each render. Each confirmation
+   now has a serial (`Confirming::serial`): the dialog is equal by it and keyed by it (the window's
+   `.key` and its own `render_key`), so another confirmation remounts afresh; `Confirming` shares
+   its consequence (`Rc`), and the dialog renders its words once as it mounts. Window tests
+   `a_confirmation_replaced_in_place_hands_its_own_token_to_its_own_continuation` and
+   `a_confirmation_opened_by_the_last_ones_answer_answers_afresh` were red on c74bfff ("the
+   replaced confirmation got a token"; "Escape did nothing"). The "identity is stable" comment is
+   gone.
+2. **Item 7 — the accelerator pin's guard read only the pin's own attributes.** New
+   `pin_placement_violations`: declared once, directly in the one module whose attributes are
+   exactly `#[cfg(test)]`, its own attributes exactly `#[test]` (or none, for R4.8's pinned
+   function), its body still holding its rule examples. R4.8's pin had the same gap (a
+   `cfg(any())` module, a nested module) and takes the same check. Self-test
+   `the_pin_placement_check_catches_the_shapes_it_claims` (module compiled away, `cfg(not(test))`,
+   ignored, nested in a `cfg(any())` module, body emptied, an example dropped, moved into an
+   `impl`, renamed) and three new R4.8 shapes.
+3. **Item 8 — a field built without `Input` escaped the text-field guard.** `TEXT_FIELD_IDENTS`
+   adds `use_editable`, `UseEditable`, `EditableConfig`, `text_edit`, `SelectableText`,
+   `CodeEditor`, each self-tested; `TEXT_FIELD_EXCEPTIONS` excuses the accelerator table's
+   `text_edit` (the editor's bindings), required to still match. Bypass reproduced: a
+   `freya::text_edit::use_editable` in a render file fails the guard.
+4. **Item 9** — root `CLAUDE.md` names `async-io` beside `nix` as a dependency whose features
+   `deny.toml` pins.
+5. **Item 10 — `EventHandler<Confirmed>` was trusted by spelling.** New
+   `token_callback_shadow_violations`: no production file declares, aliases or imports-as
+   `EventHandler`, `Fn`, `FnMut` or `FnOnce` (self-tested both ways); the residual — a callback
+   stashing its token in a captured cell — is stated in root `CLAUDE.md`.
+6. **Item 11 — `text_field_in` took any scope.** It takes a `FieldScope` (the commit box alone);
+   `a_fields_own_scope_holds_no_bare_chord` holds every field scope free of a bare chord.
+7. **Item 14, the user's decision — `is_chord` swallowed another view's chords.**
+   `is_chord(event, own)` reads the window's, the detail pane's and the view's own scopes only;
+   `another_views_chord_is_the_history_lists_arrow`, `..._file_lists_arrow`,
+   `..._commit_tabs_arrow` and `..._diff_views_arrow` were each red before (Shift+↓ moved nothing)
+   and green after; `a_chord_of_the_window_the_pane_or_the_views_own_scope_is_a_chord` replaces
+   `a_chord_of_any_scope_is_a_chord`.
+8. **Item 15** — `edge_step` answers 0 for a viewport with no height
+   (`a_viewport_with_no_height_scrolls_nothing`, red before: a pointer at -1000 over `0..0`
+   scrolled -32).
+9. **Item 18** — root `CLAUDE.md`'s UI-thread residuals name the edge-scroll timer task.
+10. **Items 19 and 20 — mutations K and L survived.** The text-field tests' view around the field
+    resolves every scope, the window's included, and the window records every raw key: removing
+    the unclaimed arm's `stop_propagation` (K) now fails the filter test, and removing the own
+    arm's `prevent_default` (L) the commit-box test.
+
+The user's decisions (2026-10-09, relayed by the coordinator):
+
+- **6 — ratified**: the token-holder exemption for a callback's argument, with item 10's
+  rename refusal and the stated residual. Root `CLAUDE.md` records it.
+- **12 — ratified**: "every text field takes the one key policy", with item 8's widened list.
+  Root `CLAUDE.md` records it.
+- **13 — R7.3 amended**: "no list or staging chord fires while the commit box has focus; the
+  window's chords still do" (as from the filter fields). PRD R7.3 carries a dated note;
+  `Scope::CommitBox`'s doc and state.md say so.
+- **14 — fix `is_chord`** (item 7 above). Range-select in the history stays a later call.
+
+Carried (state.md): to phase 07, items 4, 5, 16 and 21; to phase 09, how amend builds its token
+(through `ConfirmDialog`, the box handing the window a `Confirming`), a token-less force-push
+warning if informational, and the widened guard already covering the commit box.
+
+Dismissed:
+
+- **17** (per-key work; the idle context-menu viewer): an observation, bounded — `field_key` is
+  one table resolution per key press, `shortcuts::act` returns early in O(1) under a dialog, and
+  the viewer's pointer-move write touches its own scope alone.
+
 ## 2026-10-09 — phase 06, render foundations (packet mode)
 
 Built on `feature/staging-and-commit`; QA is the coordinator's. Commits f044c95 (the table's

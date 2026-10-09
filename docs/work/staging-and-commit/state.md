@@ -12,8 +12,8 @@ C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the 
 lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisions 12 and
 14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) done in packet
 mode: QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green
-at c07c076. Phase 06 (render foundations) built in packet mode, full gate green, QA pending (the
-coordinator's); three items batched for the user's ratification (progress.md). Phases 07-12 not
+at c07c076. Phase 06 (render foundations) done in packet mode: QA adjudicated, fixes and the
+user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phases 07-12 not
 started.**
 
 ## Locked decisions
@@ -285,15 +285,23 @@ Phase 06 (`docs/systems/diff.md`, "The accelerator table" and its two subsection
   ⌘Return, `CommitBox`); `ShowLostCommits` (Ctrl+Shift+. / ⌘⇧., `History`). `ExtendSelection`
   (command+press) is also Local Changes' toggle. `HeldKeys::press()` answers `SelectRange` for a
   Shift-press. `shortcuts::act` has a no-op arm for each new action: the views that hear those
-  scopes act.
-- **`cairn_ui::text_field(value) -> Input`** and **`text_field_in(value, scope, on_action:
-  impl Into<EventHandler<Action>>) -> Input`**: the only way to build a field (guard
+  scopes act. **`is_chord(event, own: &[Scope])`**: a view leaves alone the window's and the
+  detail pane's chords and those of the scopes it is in (history list `&[Scope::History]`, Local
+  Changes' lists `&[LocalChanges, LocalChangesLists]`, the rest `&[]`). R7.3 as amended by the
+  user (2026-10-09, decision 13): no list or staging chord fires while the commit box has focus;
+  the window's chords still do, as from the filter fields.
+- **`cairn_ui::text_field(value) -> Input`** and **`text_field_in(value, own: FieldScope,
+  on_action: impl Into<EventHandler<Action>>) -> Input`** (`FieldScope::CommitBox`, the one scope
+  a field can be heard in — none with a bare chord): the only way to build a field (guard
   `every_text_field_takes_the_shared_key_policy`). Chain `Input`'s builders after (`.multiline`,
   `.placeholder`, `.on_submit`), never `.on_pre_key_down`.
-- **`cairn_ui::ConfirmDialog::new(title, consequence).on_confirm(EventHandler<Confirmed>)
-  .on_cancel(..)`** (`CANCEL_CAPTION`); on `CONFIRMATION_SURFACES`.
+- **`cairn_ui::ConfirmDialog::new(serial, title, Rc<Consequence>)
+  .on_confirm(EventHandler<Confirmed>).on_cancel(..)`** (`CANCEL_CAPTION`); on
+  `CONFIRMATION_SURFACES`. Equal and keyed by `serial`, so another confirmation is another dialog;
+  its words are rendered once, as it mounts.
 - **`crate::confirming::Confirming::new(title, consequence, then: impl Fn(Confirmed))`** set into
-  **`View::confirming: State<Option<Confirming>>`** opens it; the window draws it, makes chords
+  **`View::confirming: State<Option<Confirming>>`** opens it (`Confirming::serial()`, unique per
+  confirmation; `consequence() -> &Rc<Consequence>`, cheap to clone); the window draws it, makes chords
   inert, and clears it on either answer. `Confirming::new` is `expect(dead_code)` outside tests
   until phase 07 asks.
 - **`ContextMenuViewer`** at the window's root: open a menu with
@@ -303,7 +311,9 @@ Phase 06 (`docs/systems/diff.md`, "The accelerator table" and its two subsection
   `edge.on(rect)` and call `edge.begin()` where a drag starts; it ends on release.
   `edge_step`, `EDGE_BAND`, `EDGE_TICK`, `MOST_PER_TICK`.
 - Guards: `TOKEN_CALLBACKS` (a type may name `Confirmed` only as a callback's argument, in four
-  exact spellings); `ACCELERATOR_PIN`; `TEXT_FIELD_POLICY`.
+  exact spellings) with `token_callback_shadow_violations`; `ACCELERATOR_PIN` with
+  `pin_placement_violations` (shared with R4.8's pin); `TEXT_FIELD_POLICY`, `TEXT_FIELD_IDENTS`
+  (eight names) and `TEXT_FIELD_EXCEPTIONS`.
 
 ## Carried forward from phase 06 (owned by the phase named)
 
@@ -315,15 +325,28 @@ Phase 06 (`docs/systems/diff.md`, "The accelerator table" and its two subsection
   LocalWrite::DiscardFiles(token)))` and drop `Confirming::new`'s `expect(dead_code)`; the
   context menu's items close it themselves; the drag between lists uses one drop zone per list
   and the list's `EdgeScroll`.
+- **Phase 07, from phase 06's QA** (adjudicated 2026-10-09):
+  - item 4: Local Changes hears its chords on focused keys only (the lists' and the diff's own
+    `on_key_down`) or checks `view.confirming`; a window test presses Enter, Backspace and Delete
+    in Local Changes while a confirmation is open and nothing stages or discards;
+  - item 5: decide how a credential prompt stacks over an open confirmation (today the prompt
+    cannot be typed into until the confirmation is answered — the modal holds focus; it fails
+    safe);
+  - item 16 (07 or 08, whichever first wires a drag): handle the pointer leaving the window — a
+    release outside it leaves `EdgeScroll` dragging;
+  - item 21: a window test pressing Backspace in the filter field while Local Changes is shown,
+    and nothing discards.
 - **Phase 08**: the drag selection over the diff's rows begins with `EdgeScroll::begin` on the
   diff's container (`EdgeScroll::on`), never on a row.
-- **Phase 09**: build the subject and description with `text_field_in(.., Scope::CommitBox,
-  on_action)` (the description `.multiline(true)`, no `on_submit`), so ⌘Return/Ctrl+Enter commits
-  without a new line and Backspace/Enter never reach Local Changes; the amend's pushed-warning
-  dialog: `ConfirmDialog` builds a token on its button, so either the dialog builds the amend
-  token (then the commit box does not) or phase 09 adds a question that builds none — decide,
-  and keep `CONFIRMATION_SURFACES` exact. Batched item 3 (window chords from the box) may change
-  `field_key_on`.
+- **Phase 09**: build the subject and description with `text_field_in(..,
+  FieldScope::CommitBox, on_action)` (the description `.multiline(true)`, no `on_submit`), so
+  ⌘Return/Ctrl+Enter commits without a new line and Backspace/Enter never reach Local Changes;
+  the window's chords still reach the window from the box (decision 13).
+- **Phase 09, from phase 06's QA** (adjudicated 2026-10-09): amend builds its token through
+  `ConfirmDialog` — the commit box hands the window a `Confirming`, and never calls `by_user`
+  itself; the force-push warning, if it is informational only, is a separate token-less
+  component, never a mode of `ConfirmDialog`; the widened text-field guard (item 8) already
+  covers the multi-line commit box.
 - **Phase 10**: hear `Scope::History` in the history list's `on_key_down` for Show Lost Commits.
 
 ## Carried forward from phase 05 (owned by the phase named)
@@ -531,7 +554,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
 | 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
-| 06 render foundations | built, gate green, QA pending |
+| 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | not started |
 | 08 diff gesture | not started |
 | 09 commit box | not started |

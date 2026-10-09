@@ -8,6 +8,13 @@ mod commit_box;
 mod commit_row;
 mod commit_tab;
 mod confirm_dialog;
+mod create_branch_dialog;
+pub use create_branch_dialog::{
+    BRANCH_NAME_CAPTION, BRANCH_NAME_PLACEHOLDER, CANCEL_BRANCH_CAPTION, CHECK_OUT_AFTER_CREATE,
+    CREATE_AND_CHECKOUT_CAPTION, CREATE_BRANCH_AT, CREATE_BRANCH_TITLE, CREATE_CAPTION,
+    CreateBranchDialog, DISCARD_LOCAL_CAPTION, DONT_CHANGE_CAPTION, LOCAL_CHANGES_LABEL,
+    LocalChoice,
+};
 mod credential_prompt;
 mod date_text;
 mod detail_tabs;
@@ -104,7 +111,7 @@ pub use diff_view::{
 pub use expansion::{Expansion, Opened};
 pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
-pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
+pub use history_list::{HistoryList, NEW_BRANCH_CAPTION, PREFETCH_ROWS, RowRender, reveal_row};
 pub use local_changes::{
     ChangeBadge, LIST_HEADER_HEIGHT, LISTS_SPLIT, ListIntent, LocalChangesList, NO_PATH_MATCHES,
     STAGED_CAPTION, UNSTAGED_CAPTION, change_badge, change_text, list_caption,

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use cairn_model::{History, HistoryRow, RefsSnapshot, RowContent, RowEdges, RowId};
+use cairn_model::{History, HistoryRow, Oid, RefsSnapshot, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys, Scope};
@@ -11,6 +11,9 @@ use crate::graph_geometry::ROW_HEIGHT;
 use crate::ref_chips::{Chip, chips_of_row};
 
 pub const PREFETCH_ROWS: usize = 24;
+
+/// The commit rows' context menu item, Fork's (the user's decision, 2026-10-09).
+pub const NEW_BRANCH_CAPTION: &str = "New Branch…";
 
 /// Every row in the last [`PREFETCH_ROWS`] asks, not only the boundary one, which a fast scroll can skip.
 fn asks_for_more(index: usize, length: usize) -> bool {
@@ -51,6 +54,7 @@ pub struct HistoryList {
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     on_action: EventHandler<Action>,
+    on_new_branch: EventHandler<Oid>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
     cursor: Option<State<usize>>,
@@ -70,6 +74,7 @@ impl HistoryList {
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
             on_action: EventHandler::new(|_: Action| {}),
+            on_new_branch: EventHandler::new(|_: Oid| {}),
             row: Callback::new(row),
             controller: None,
             cursor: None,
@@ -152,6 +157,14 @@ impl HistoryList {
         self.on_action = on_action.into();
         self
     }
+
+    /// "New Branch…" chosen from a commit row's context menu — every commit's row, a lost
+    /// one's too; a stash's row has no menu — reporting that commit (staging-and-commit R11.3,
+    /// the user's decision, 2026-10-09). What it opens is the caller's.
+    pub fn on_new_branch(mut self, on_new_branch: impl Into<EventHandler<Oid>>) -> Self {
+        self.on_new_branch = on_new_branch.into();
+        self
+    }
 }
 
 // Hand-written: `EventHandler` and `Callback` never compare equal, and their identity is stable.
@@ -199,6 +212,7 @@ struct ListData {
     on_select: EventHandler<RowId>,
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
+    on_new_branch: EventHandler<Oid>,
     list_id: AccessibilityId,
     cursor: State<usize>,
 }
@@ -247,6 +261,7 @@ impl Component for HistoryList {
             on_select: self.on_select.clone(),
             on_extend: self.on_extend.clone(),
             on_reach_end: self.on_reach_end.clone(),
+            on_new_branch: self.on_new_branch.clone(),
             list_id,
             cursor,
         };
@@ -367,6 +382,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let on_extend = data.on_extend.clone();
     let held = data.held.clone();
     let on_reach_end = data.on_reach_end.clone();
+    let on_new_branch = data.on_new_branch.clone();
     let asks_for_more = asks_for_more(index, data.length);
 
     let drawn = data.row.call(render_of(row, data));
@@ -390,6 +406,26 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         })
         .maybe(asks_for_more, |el| {
             el.on_visible(move |_| on_reach_end.call(()))
+        })
+        // Every commit's row offers Fork's "New Branch…"; a stash's row offers nothing.
+        .on_pointer_down(move |e: Event<PointerEventData>| {
+            let commit = match id {
+                RowId::Commit(commit) => commit,
+                RowId::Stash(_) => return,
+            };
+            if e.button() == Some(MouseButton::Right) {
+                let on_new_branch = on_new_branch.clone();
+                ContextMenu::open_from_down(
+                    Menu::new().child(
+                        MenuButton::new()
+                            .on_press(move |_: Event<PressEventData>| {
+                                ContextMenu::close();
+                                on_new_branch.call(commit);
+                            })
+                            .child(NEW_BRANCH_CAPTION),
+                    ),
+                );
+            }
         })
         .child(drawn)
         .into()

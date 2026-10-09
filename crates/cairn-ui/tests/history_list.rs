@@ -11,10 +11,10 @@ use cairn_model::{
     GraphRow, History, Lane, LaneAssigner, Oid, PagedCommit, RowContent, RowEdges, RowId, RowsPage,
 };
 use cairn_ui::accelerators::{self, Action, Os};
-use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
+use cairn_ui::{HistoryList, NEW_BRANCH_CAPTION, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
-use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use layout_before_compaction::AssignerBeforeCompaction;
 
 const WIDTH: f32 = 600.;
@@ -59,6 +59,7 @@ struct Reports {
     selected: Rc<RefCell<Vec<RowId>>>,
     reached_end: Rc<RefCell<usize>>,
     actions: Rc<RefCell<Vec<Action>>>,
+    new_branch: Rc<RefCell<Vec<Oid>>>,
 }
 
 #[derive(Clone)]
@@ -76,6 +77,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         let on_select = reports.selected.clone();
         let reached_end = reports.reached_end.clone();
         let actions = reports.actions.clone();
+        let new_branch = reports.new_branch.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
             let subject = match render.content {
@@ -90,6 +92,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
                 .into()
         })
         .on_action(move |action| actions.borrow_mut().push(action))
+        .on_new_branch(move |at: Oid| new_branch.borrow_mut().push(at))
         .selected(*selected.read())
         .on_select(move |id: RowId| {
             on_select.borrow_mut().push(id);
@@ -101,8 +104,15 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
 }
 
 fn launch(initial: History, reports: &Reports) -> (TestingRunner, Fixture) {
+    let listed = list(reports.clone());
     let (mut test, fixture) = TestingRunner::new(
-        list(reports.clone()),
+        move || -> Element {
+            rect()
+                .expanded()
+                .child(listed())
+                .child(ContextMenuViewer::new())
+                .into()
+        },
         (WIDTH, HEIGHT).into(),
         move |runner| {
             runner.provide_root_context(|| Fixture {
@@ -895,4 +905,74 @@ fn the_list_moves_from_the_row_its_callers_hint_names() {
         [RowId::Commit(oid(501))],
         "the arrow moved from the row a search found, not the one the hint named"
     );
+}
+
+fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
+    test.move_cursor(at);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: at.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    test.sync_and_update();
+}
+
+/// The user's decision (2026-10-09): every commit row's context menu offers Fork's "New
+/// Branch…", and choosing it reports that row's commit — a lost row's as any other's; a
+/// stash's row offers none. Caught by: the menu on lost rows alone (R11.3 as it read before),
+/// the wrong commit reported, or a stash's row offering a branch at its stash commit.
+#[test]
+fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
+    let mut history = rows(0..3);
+    let mut lost = RowsPage::new();
+    lost.push_lost(
+        GraphRow::new(oid(3), Lane::new(1), Vec::new()),
+        PagedCommit {
+            parents: 1,
+            subject: "commit 3",
+            author: "A",
+            author_time: 0,
+        },
+    );
+    lost.push_stash(
+        GraphRow::new(oid(4), Lane::new(2), Vec::new()),
+        cairn_model::PagedStash {
+            index: 0,
+            base: oid(0),
+            message: "commit 4 stash",
+            author: "A",
+            author_time: 0,
+        },
+    );
+    hold(&mut history, lost);
+    let reports = Reports::default();
+    let (mut test, _) = launch(history, &reports);
+    let row_at = |n: usize| (100., (n as f64 + 0.5) * f64::from(ROW_HEIGHT));
+    let menu_offered = |test: &TestingRunner| {
+        test.find(|_, element| {
+            Label::try_downcast(element).filter(|l| l.text == NEW_BRANCH_CAPTION)
+        })
+        .is_some()
+    };
+    for n in [1usize, 3] {
+        right_click(&mut test, row_at(n));
+        assert!(menu_offered(&test), "row {n} offered no menu");
+        let item = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == NEW_BRANCH_CAPTION)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no item"));
+        test.click_cursor((f64::from(item.x), f64::from(item.y)));
+        test.sync_and_update();
+        assert_eq!(reports.new_branch.borrow().last(), Some(&oid(n)), "row {n}");
+        assert!(!menu_offered(&test), "the menu stayed open");
+    }
+    right_click(&mut test, row_at(4));
+    assert!(!menu_offered(&test), "a stash's row offered New Branch");
+    assert_eq!(reports.new_branch.borrow().len(), 2);
 }

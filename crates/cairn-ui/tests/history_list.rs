@@ -66,6 +66,8 @@ struct Reports {
 struct Fixture {
     rows: State<History>,
     selected: State<Option<RowId>>,
+    /// The second of a compared pair.
+    also: State<Option<RowId>>,
 }
 
 /// Each row draws as one label: its subject, prefixed `> ` when the list says it is selected
@@ -94,6 +96,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         .on_action(move |action| actions.borrow_mut().push(action))
         .on_new_branch(move |at: (Oid, String)| new_branch.borrow_mut().push(at))
         .selected(*selected.read())
+        .also_selected(*fixture.also.read())
         .on_select(move |id: RowId| {
             on_select.borrow_mut().push(id);
             selected.set(Some(id));
@@ -118,6 +121,7 @@ fn launch(initial: History, reports: &Reports) -> (TestingRunner, Fixture) {
             runner.provide_root_context(|| Fixture {
                 rows: State::create(initial),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -260,6 +264,7 @@ fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_o
             runner.provide_root_context(|| Fixture {
                 rows: State::create(history),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -580,6 +585,7 @@ fn a_click_gives_the_list_the_keyboard() {
                 runner.provide_root_context(|| Fixture {
                     rows: State::create(rows(0..100)),
                     selected: State::create(None),
+                    also: State::create(None),
                 })
             }
         },
@@ -782,6 +788,7 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
             runner.provide_root_context(|| Fixture {
                 rows: State::create(history),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -979,4 +986,55 @@ fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
     right_click(&mut test, row_at(4));
     assert!(!menu_offered(&test), "a stash's row offered New Branch");
     assert_eq!(reports.new_branch.borrow().len(), 2);
+}
+
+/// The user's decision C (2026-10-09), Fork for Windows: a right-click selects the row it lands
+/// on — so the detail pane follows and the menu acts on what is shown — and a right-click on a
+/// row of the selection already made, either of a compared pair, keeps the whole selection.
+/// Caught by: a right-click that leaves the selection where it was, or one inside a compared
+/// pair that collapses it to one row.
+#[test]
+fn a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in() {
+    let reports = Reports::default();
+    let (mut test, fixture) = launch(rows(0..5), &reports);
+    let row_at = |n: usize| (100., (n as f64 + 0.5) * f64::from(ROW_HEIGHT));
+    right_click(&mut test, row_at(2));
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        &[RowId::Commit(oid(2))],
+        "the right-click did not select its row"
+    );
+    assert_eq!(selected_rows(&test), vec!["commit 2".to_owned()]);
+    assert!(
+        test.find(|_, element| {
+            Label::try_downcast(element).filter(|l| l.text == NEW_BRANCH_CAPTION)
+        })
+        .is_some(),
+        "the menu did not open on the row selected"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    test.sync_and_update();
+
+    let (mut selected, mut also) = (fixture.selected, fixture.also);
+    test.run_in(|| {
+        selected.set(Some(RowId::Commit(oid(0))));
+        also.set(Some(RowId::Commit(oid(3))));
+    });
+    test.sync_and_update();
+    for n in [3usize, 0] {
+        right_click(&mut test, row_at(n));
+        assert_eq!(
+            reports.selected.borrow().len(),
+            1,
+            "a right-click on row {n} of the compared pair collapsed it"
+        );
+        test.press_key(Key::Named(NamedKey::Escape));
+        test.sync_and_update();
+    }
+    right_click(&mut test, row_at(1));
+    assert_eq!(
+        reports.selected.borrow().last(),
+        Some(&RowId::Commit(oid(1))),
+        "a right-click outside the pair did not select its row"
+    );
 }

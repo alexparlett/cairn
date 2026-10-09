@@ -385,6 +385,11 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let on_reach_end = data.on_reach_end.clone();
     let on_new_branch = data.on_new_branch.clone();
     let rows = data.rows;
+    // A right-click selects its row, unless it lands in the selection already made (the user's
+    // decision C, 2026-10-09, Fork for Windows).
+    let in_selection = data.selected == Some(id) || data.also_selected == Some(id);
+    let right_selects = data.on_select.clone();
+    let mut right_cursor = data.cursor;
     let asks_for_more = asks_for_more(index, data.length);
 
     let drawn = data.row.call(render_of(row, data));
@@ -409,34 +414,41 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .maybe(asks_for_more, |el| {
             el.on_visible(move |_| on_reach_end.call(()))
         })
-        // Every commit's row offers Fork's "New Branch…"; a stash's row offers nothing.
+        // A right-click selects its row, and every commit's row offers Fork's "New Branch…";
+        // a stash's row offers nothing.
         .on_pointer_down(move |e: Event<PointerEventData>| {
+            if e.button() != Some(MouseButton::Right) {
+                return;
+            }
+            if !in_selection {
+                list_id.request_focus();
+                right_cursor.set(index);
+                right_selects.call(id);
+            }
             let commit = match id {
                 RowId::Commit(commit) => commit,
                 RowId::Stash(_) => return,
             };
-            if e.button() == Some(MouseButton::Right) {
-                let on_new_branch = on_new_branch.clone();
-                // Read by index as the menu opens, never per frame. No wildcard arm.
-                let subject = rows
-                    .peek()
-                    .row(index)
-                    .map(|row| match row.content() {
-                        RowContent::Commit(commit) => commit.summary,
-                        RowContent::Stash(stash) => stash.message,
-                    })
-                    .unwrap_or_default();
-                ContextMenu::open_from_down(
-                    Menu::new().child(
-                        MenuButton::new()
-                            .on_press(move |_: Event<PressEventData>| {
-                                ContextMenu::close();
-                                on_new_branch.call((commit, subject.clone()));
-                            })
-                            .child(NEW_BRANCH_CAPTION),
-                    ),
-                );
-            }
+            let on_new_branch = on_new_branch.clone();
+            // Read by index as the menu opens, never per frame. No wildcard arm.
+            let subject = rows
+                .peek()
+                .row(index)
+                .map(|row| match row.content() {
+                    RowContent::Commit(commit) => commit.summary,
+                    RowContent::Stash(stash) => stash.message,
+                })
+                .unwrap_or_default();
+            ContextMenu::open_from_down(
+                Menu::new().child(
+                    MenuButton::new()
+                        .on_press(move |_: Event<PressEventData>| {
+                            ContextMenu::close();
+                            on_new_branch.call((commit, subject.clone()));
+                        })
+                        .child(NEW_BRANCH_CAPTION),
+                ),
+            );
         })
         .child(drawn)
         .into()

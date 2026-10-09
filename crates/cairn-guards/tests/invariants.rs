@@ -2089,25 +2089,7 @@ fn pin_placement_violations(
         )),
     }
     // The pin's body, by matching braces from its own.
-    let body = code[at..].find('{').map(|start| {
-        let start = at + start;
-        let mut depth = 0usize;
-        let mut end = start;
-        for (i, b) in bytes.iter().enumerate().skip(start) {
-            match b {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = i;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        &code[start..=end]
-    });
+    let body = block_after(code, at);
     for line in required {
         if !body.is_some_and(|body| squeezed(body).contains(&squeezed(line))) {
             violations.push(format!(
@@ -2116,6 +2098,174 @@ fn pin_placement_violations(
         }
     }
     violations
+}
+
+/// The first block in `code` after `at` — a function's body from its declaration — by
+/// matching braces from its own.
+fn block_after(code: &str, at: usize) -> Option<&str> {
+    let start = at + code[at..].find('{')?;
+    let mut depth = 0usize;
+    let mut end = start;
+    for (i, b) in code.bytes().enumerate().skip(start) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(&code[start..=end])
+}
+
+/// The body of the one function `code` declares as `fn {function}(`, if there is one.
+fn function_body<'a>(code: &'a str, function: &str) -> Option<&'a str> {
+    let declaration = format!("fn {function}(");
+    let at = code
+        .match_indices(&declaration)
+        .map(|(at, _)| at)
+        .find(|at| {
+            code[..*at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })?;
+    block_after(code, at)
+}
+
+/// The assertion macros a pin's rule example must sit in.
+const ASSERTIONS: &[&str] = &["assert!", "assert_eq!", "assert_ne!"];
+
+/// Each occurrence of a call among `calls` in `body` (comments and strings blanked) that is not
+/// inside an assertion's parentheses: walked outward from the call through parentheses and
+/// brackets alone, an `assert!`, `assert_eq!` or `assert_ne!` must open one of them before a
+/// brace or a statement's end does. `let _ = pin_violations(&x);`, a bare call, or one in an
+/// `if` decides nothing the test reports.
+fn unasserted_calls(body: &str, calls: &[&str]) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let bytes = body.as_bytes();
+    let mut found = Vec::new();
+    for call in calls {
+        // The call's name up to its parenthesis, found however the call is spaced.
+        let name = call.split('(').next().unwrap_or(call);
+        for (at, _) in body.match_indices(name) {
+            let starts_a_word = body[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            let rest = &body[at..];
+            let close = rest.find(')').map_or(rest.len(), |close| close + 1);
+            if !starts_a_word || squeezed(&rest[..close]) != squeezed(call) {
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut asserted = false;
+            for i in (0..at).rev() {
+                match bytes[i] {
+                    b')' | b']' | b'}' => depth += 1,
+                    b'(' | b'[' if depth > 0 => depth -= 1,
+                    b'{' if depth > 0 => depth -= 1,
+                    b'(' => {
+                        let before = body[..i].trim_end();
+                        let opens_an_assertion = ASSERTIONS.iter().any(|macro_name| {
+                            before.strip_suffix(macro_name).is_some_and(|ahead| {
+                                ahead
+                                    .chars()
+                                    .next_back()
+                                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+                            })
+                        });
+                        if opens_an_assertion {
+                            asserted = true;
+                            break;
+                        }
+                    }
+                    b'[' => {}
+                    b'{' => break,
+                    b';' if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            if !asserted {
+                found.push(format!(
+                    "`{call}` is called outside an assertion: a rule example whose answer \
+                     nothing asserts decides nothing"
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Local Changes' bare keys, as the accelerator table's pin declares them (CLAUDE.md: exactly
+/// Enter, Backspace and Delete): a fourth key added there would be admitted by the pin's rule
+/// and its loops alike, so the declaration itself is pinned.
+const LOCAL_CHANGES_BARE_KEYS_DECLARATION: &str = "const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 3] = \
+     [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];";
+
+/// What the accelerator table's pin rests on, over the table's code (comments and strings
+/// blanked): the pin placed where it runs, holding each rule example inside an assertion; the
+/// rule function placed beside it and reading Local Changes' bare keys; and those keys declared
+/// once, exactly as [`LOCAL_CHANGES_BARE_KEYS_DECLARATION`] reads.
+fn accelerator_pin_violations(code: &str) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let mut found = pin_placement_violations(
+        code,
+        ACCELERATOR_TABLE,
+        ACCELERATOR_PIN,
+        "#[test]",
+        ACCELERATOR_PIN_BODY,
+    );
+    if let Some(body) = function_body(code, ACCELERATOR_PIN) {
+        found.extend(unasserted_calls(body, ACCELERATOR_PIN_BODY));
+    }
+    found.extend(pin_placement_violations(
+        code,
+        ACCELERATOR_TABLE,
+        "pin_violations",
+        "",
+        &["LOCAL_CHANGES_BARE_KEYS.contains(&named)"],
+    ));
+    let all = squeezed(code);
+    let declarations: usize = ["const", "static", "let", "letmut"]
+        .iter()
+        .map(|keyword| {
+            all.matches(&format!("{keyword}LOCAL_CHANGES_BARE_KEYS:"))
+                .count()
+        })
+        .sum::<usize>()
+        + ["let", "letmut"]
+            .iter()
+            .map(|keyword| {
+                all.matches(&format!("{keyword}LOCAL_CHANGES_BARE_KEYS="))
+                    .count()
+            })
+            .sum::<usize>();
+    if declarations != 1
+        || all
+            .matches(&squeezed(LOCAL_CHANGES_BARE_KEYS_DECLARATION))
+            .count()
+            != 1
+    {
+        found.push(format!(
+            "{ACCELERATOR_TABLE} no longer declares Local Changes' bare keys once, exactly as \
+             `{LOCAL_CHANGES_BARE_KEYS_DECLARATION}` ({declarations} declarations): a key added \
+             there is admitted by the pin it should fail"
+        ));
+    }
+    found
 }
 
 /// What the accelerator table's pin must still do, as code: check the table, and show the rule
@@ -5041,13 +5191,7 @@ fn the_accelerator_table_holds_data_and_resolution_only() {
         !code.contains("pub fn chord("),
         "{ACCELERATOR_TABLE} answers a single chord again; Fork's alternates need the list"
     );
-    let placed = pin_placement_violations(
-        &code,
-        ACCELERATOR_TABLE,
-        ACCELERATOR_PIN,
-        "#[test]",
-        ACCELERATOR_PIN_BODY,
-    );
+    let placed = accelerator_pin_violations(&code);
     assert!(
         placed.is_empty(),
         "the accelerator table's pin no longer runs as it must: {placed:?}"
@@ -5064,15 +5208,7 @@ fn the_pin_placement_check_catches_the_shapes_it_claims() {
         .into_iter()
         .find(|(path, _)| path == Path::new(ACCELERATOR_TABLE))
         .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} does not exist"));
-    let check = |source: &str| {
-        pin_placement_violations(
-            &code_without_strings(source),
-            ACCELERATOR_TABLE,
-            ACCELERATOR_PIN,
-            "#[test]",
-            ACCELERATOR_PIN_BODY,
-        )
-    };
+    let check = |source: &str| accelerator_pin_violations(&code_without_strings(source));
     assert_eq!(check(&table), Vec::<String>::new());
     let pin = format!("    #[test]\n    fn {ACCELERATOR_PIN}() {{");
     assert!(table.contains(&pin), "the pin fixture no longer applies");
@@ -5120,11 +5256,135 @@ fn the_pin_placement_check_catches_the_shapes_it_claims() {
             "the pin renamed",
             table.replacen(&format!("fn {ACCELERATOR_PIN}("), "fn another_test(", 1),
         ),
+        (
+            "a rule example's answer let go of",
+            replaced(
+                &table,
+                "assert!(\n                !pin_violations(&letter).is_empty(),\n                \
+                 \"a bare D in Local Changes\"\n            );",
+                "let _ = pin_violations(&letter);",
+            ),
+        ),
+        (
+            "a rule example called bare",
+            replaced(
+                &table,
+                "assert!(!pin_violations(&press).is_empty(), \"a bare press\");",
+                "pin_violations(&press);",
+            ),
+        ),
+        (
+            "a rule example tested by an if",
+            replaced(
+                &table,
+                "assert!(!pin_violations(&press).is_empty(), \"a bare press\");",
+                "if pin_violations(&press).is_empty() { return; }",
+            ),
+        ),
+        (
+            "a fourth bare key",
+            replaced(
+                &table,
+                "[NamedKey; 3] =\n        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];",
+                "[NamedKey; 4] =\n        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete, \
+                 NamedKey::Space];",
+            ),
+        ),
+        (
+            "the bare keys declared again inside the pin",
+            replaced(
+                &table,
+                &pin,
+                &format!(
+                    "{pin}\n        const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 1] = \
+                     [NamedKey::Space];"
+                ),
+            ),
+        ),
+        (
+            "the rule no longer reading the bare keys",
+            replaced(
+                &table,
+                "LOCAL_CHANGES_BARE_KEYS.contains(&named)",
+                "[NamedKey::Space].contains(&named)",
+            ),
+        ),
     ];
     for (shape, changed) in shapes {
         assert!(
             !check(&changed).is_empty(),
             "the pin-placement check missed {shape}"
+        );
+    }
+}
+
+/// `source` with `from` replaced by `to` once; a fixture that no longer applies fails.
+fn replaced(source: &str, from: &str, to: &str) -> String {
+    assert!(
+        source.contains(from),
+        "the fixture {from:?} no longer applies"
+    );
+    source.replacen(from, to, 1)
+}
+
+/// The assertion check alone: a rule example inside an assertion's parentheses — however deep
+/// in its argument, through a closure or a method chain — passes; one whose answer is bound,
+/// dropped, branched on or asserted inside a block of its own fails.
+#[test]
+fn the_unasserted_call_matcher_catches_the_shapes_it_claims() {
+    let calls = &["pin_violations(&rows)"];
+    for (shape, body) in [
+        (
+            "assert_eq!",
+            "{ assert_eq!(pin_violations(&rows), Vec::new(), \"x\"); }",
+        ),
+        (
+            "assert! over a chain",
+            "{ assert!(pin_violations(&rows).iter().any(|v| v.len() > 0)); }",
+        ),
+        (
+            "a negated assert!",
+            "{ assert!(!pin_violations(&rows).is_empty()); }",
+        ),
+        (
+            "assert_ne!",
+            "{ assert_ne!(pin_violations( &rows ), vec![]); }",
+        ),
+        (
+            "inside a closure called in an assertion",
+            "{ assert!((|| pin_violations(&rows))().is_empty()); }",
+        ),
+    ] {
+        assert_eq!(
+            unasserted_calls(body, calls),
+            Vec::<String>::new(),
+            "the assertion check refused {shape}"
+        );
+    }
+    for (shape, body) in [
+        ("bound to nothing", "{ let _ = pin_violations(&rows); }"),
+        ("called bare", "{ pin_violations(&rows); }"),
+        (
+            "branched on",
+            "{ if pin_violations(&rows).is_empty() { return; } }",
+        ),
+        (
+            "a debug assertion",
+            "{ debug_assert!(pin_violations(&rows).is_empty()); }",
+        ),
+        (
+            "asserted inside a block of its own",
+            "{ assert!({ let v = pin_violations(&rows); true }); }",
+        ),
+        (
+            "one of two asserted",
+            "{ assert!(pin_violations(&rows).is_empty()); let _ = pin_violations(&rows); }",
+        ),
+    ] {
+        assert_eq!(
+            unasserted_calls(body, calls).len(),
+            1,
+            "the assertion check missed {shape}"
         );
     }
 }
@@ -5440,15 +5700,18 @@ const CONFIRMED_RECORD: (&str, &str, &str) = (
     "destructive",
 );
 
-/// Production files of any crate whose types may hold a `Confirmed` in a field: a token held in
-/// a type (`struct Pending { confirmed: Option<Confirmed> }`) can be handed to an operation
-/// behind a reference, where the by-value roster cannot see it, or kept and spent twice in
-/// spirit by a caller that clones what holds it. A row here is a review. The one row: the
-/// local write lane's `LocalWrite`, which carries a destructive write's token from the
+/// The types, each by its production file and its name, that may hold a `Confirmed` in a
+/// field: a token held in a type (`struct Pending { confirmed: Option<Confirmed> }`) can be
+/// handed to an operation behind a reference, where the by-value roster cannot see it, or kept
+/// and spent twice in spirit by a caller that clones what holds it. A row here is a review, and
+/// excuses that one declaration alone: a second type in the same file that holds a token
+/// fails, and so does a row whose type no longer exists or no longer holds one. The one row:
+/// the local write lane's `LocalWrite`, which carries a destructive write's token from the
 /// confirmation surface to the lane that spends it by value on the operation
 /// (staging-and-commit R4), and is neither `Clone` (but for a test-only impl that refuses a
 /// destructive write) nor kept once run.
-const CONFIRMED_HOLDERS: &[&str] = &["crates/cairn-app/src/worker/local_lane.rs"];
+const CONFIRMED_HOLDERS: &[(&str, &str)] =
+    &[("crates/cairn-app/src/worker/local_lane.rs", "LocalWrite")];
 
 /// Crates whose production code may spell a path into a `Consequence` (a variant, a part):
 /// the model that defines and renders it, and the engine that computes it.
@@ -5737,16 +6000,24 @@ fn without_token_callbacks(body: &str) -> String {
     kept
 }
 
-/// No type in the production code of `files` keeps a token in a field, outside `holders`.
-fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec<String> {
+/// No type in the production code of `files` keeps a token in a field but the `holders`, each
+/// a file and the one type in it excused; and each holder is a type of that file that still
+/// holds one.
+fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[(&str, &str)]) -> Vec<String> {
     let mut found = Vec::new();
+    // Every (file, type) that holds a token.
+    let mut holding = Vec::new();
     for (path, code) in files {
-        if holders.iter().any(|holder| Path::new(holder) == *path) {
-            continue;
-        }
         for declaration in cairn_guards::type_declarations(code) {
             let body = without_token_callbacks(&declaration.body);
-            if !mentions_crate(&body, CONFIRMED_TYPE).is_empty() {
+            if mentions_crate(&body, CONFIRMED_TYPE).is_empty() {
+                continue;
+            }
+            holding.push((*path, declaration.name.clone()));
+            let excused = holders
+                .iter()
+                .any(|(file, ty)| Path::new(file) == *path && *ty == declaration.name);
+            if !excused {
                 found.push(format!(
                     "{}:{} `{}` holds a `{CONFIRMED_TYPE}`: a token kept in a type reaches an \
                      operation behind a reference, where the by-value roster cannot see it",
@@ -5757,10 +6028,27 @@ fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec
             }
         }
     }
-    for holder in holders {
-        if !files.iter().any(|(path, _)| *path == Path::new(holder)) {
+    for (file, ty) in holders {
+        let Some((_, code)) = files.iter().find(|(path, _)| *path == Path::new(file)) else {
             found.push(format!(
-                "CONFIRMED_HOLDERS lists `{holder}`, which is not a production file"
+                "CONFIRMED_HOLDERS lists `{file}`, which is not a production file"
+            ));
+            continue;
+        };
+        let declared = cairn_guards::type_declarations(code)
+            .iter()
+            .any(|declaration| declaration.name == *ty);
+        if !declared {
+            found.push(format!(
+                "CONFIRMED_HOLDERS lists `{ty}` in `{file}`, which declares no such type"
+            ));
+        } else if !holding
+            .iter()
+            .any(|(path, name)| *path == Path::new(file) && name == ty)
+        {
+            found.push(format!(
+                "CONFIRMED_HOLDERS lists `{ty}` in `{file}`, which no longer holds a \
+                 `{CONFIRMED_TYPE}`: a dead row"
             ));
         }
     }
@@ -6455,16 +6743,18 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
 
     // A token kept in a type.
     let pending = ops("pending.rs");
-    for (shape, source) in [
+    for (shape, ty, source) in [
         (
             "a struct field",
+            "Pending",
             "pub struct Pending {\n    pub confirmed: Option<Confirmed>,\n}",
         ),
         (
             "an enum variant",
+            "Job",
             "pub enum Job {\n    Discard(Confirmed),\n}",
         ),
-        ("a tuple struct", "pub struct Held(pub Confirmed);"),
+        ("a tuple struct", "Held", "pub struct Held(pub Confirmed);"),
     ] {
         let found = confirmed_holder_violations(&[(Path::new(&pending), source)], &[]);
         assert!(
@@ -6472,7 +6762,10 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
             "the holder check missed {shape}: {found:?}"
         );
         assert_eq!(
-            confirmed_holder_violations(&[(Path::new(&pending), source)], &[pending.as_str()]),
+            confirmed_holder_violations(
+                &[(Path::new(&pending), source)],
+                &[(pending.as_str(), ty)]
+            ),
             Vec::<String>::new(),
             "a listed holder was refused for {shape}"
         );
@@ -6489,7 +6782,7 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
         "a type that keeps no token, beside a function that takes one, was refused"
     );
     assert!(
-        !confirmed_holder_violations(&[], &[pending.as_str()]).is_empty(),
+        !confirmed_holder_violations(&[], &[(pending.as_str(), "Pending")]).is_empty(),
         "a listed holder that does not exist was not refused"
     );
     // The names the exemption trusts cannot be given to anything else in production code.
@@ -6585,8 +6878,9 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
     let lane = "crates/cairn-app/src/worker/local_lane.rs";
     let queued = "crates/cairn-app/src/worker/queued.rs";
     let held = "pub enum LocalWrite {\n    DiscardFiles(Confirmed),\n}";
+    let row = [(lane, "LocalWrite")];
     assert_eq!(
-        confirmed_holder_violations(&[(Path::new(lane), held)], &[lane]),
+        confirmed_holder_violations(&[(Path::new(lane), held)], &row),
         Vec::<String>::new(),
         "the rostered lane was refused"
     );
@@ -6596,11 +6890,33 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
                 (Path::new(lane), held),
                 (Path::new(queued), "pub struct Queued(pub Confirmed);")
             ],
-            &[lane]
+            &row
         )
         .len(),
         1,
         "an unrostered application file holding a token was not refused"
+    );
+    // The row excuses its type, not its file: a second holder beside it is refused.
+    let beside = format!("{held}\npub struct Parked {{\n    kept: Option<Confirmed>,\n}}");
+    let found = confirmed_holder_violations(&[(Path::new(lane), &beside)], &row);
+    assert!(
+        found.len() == 1 && found[0].contains("`Parked`"),
+        "a second holder in the rostered file was not refused: {found:?}"
+    );
+    // A row whose type stopped holding a token, or is gone, is a dead row.
+    let emptied = "pub enum LocalWrite {\n    StageFiles(Vec<String>),\n}";
+    let found = confirmed_holder_violations(&[(Path::new(lane), emptied)], &row);
+    assert!(
+        found.len() == 1 && found[0].contains("no longer holds"),
+        "a row whose type holds no token was not refused: {found:?}"
+    );
+    let renamed = "pub enum LaneWrite {\n    DiscardFiles(Confirmed),\n}";
+    let found = confirmed_holder_violations(&[(Path::new(lane), renamed)], &row);
+    assert!(
+        found.len() == 2
+            && found.iter().any(|f| f.contains("`LaneWrite` holds"))
+            && found.iter().any(|f| f.contains("declares no such type")),
+        "a row whose type was renamed was not refused: {found:?}"
     );
 
     // The consequence's own file.

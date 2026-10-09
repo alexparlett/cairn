@@ -188,6 +188,8 @@ pub(super) fn serve_network_lane(
                 // One token for the whole invocation, retired below before the outcome
                 // goes out, so no helper of a dead git is accepted afterwards.
                 let authorised = channel.and_then(|channel| channel.begin_for(remote.clone()).ok());
+                // What this fetch runs on this thread from here is its own (R12.1).
+                let mark = repo.command_mark();
                 let outcome = fetch(
                     git,
                     &repo,
@@ -218,6 +220,21 @@ pub(super) fn serve_network_lane(
                 });
                 control.clear();
                 drop(authorised);
+                let locks: &[std::path::PathBuf] = match &outcome {
+                    Err(Error::GitCancelled { stranded_locks, .. })
+                    | Err(Error::GitUnwatched { stranded_locks, .. }) => stranded_locks,
+                    Err(Error::GitFailed { present_locks, .. }) => present_locks,
+                    Ok(_) | Err(_) => &[],
+                };
+                let lock = super::local_lane::removable_lock(&repo, locks);
+                outbox.send(
+                    None,
+                    Update::OperationRan {
+                        by: super::request::RanBy::Fetch,
+                        commands: super::local_lane::ran_since(&repo, mark),
+                        lock,
+                    },
+                );
                 outbox.send(None, fetch_outcome(remote, outcome.map(|_| ()), prompting));
             }
         }

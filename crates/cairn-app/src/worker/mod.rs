@@ -53,8 +53,8 @@ pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 pub(crate) use refresh_tests::Refreshable;
 pub use request::{
     AllEnded, AllFrom, AllProgress, AmendRead, CommitReads, Comparison, DiffOptions, DiffQuery,
-    ExpandQuery, ExpandedFile, FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired,
-    TogetherEnded, TogetherFile, TogetherOutcome, TogetherQuery, Update, WorkingSide,
+    ExpandQuery, ExpandedFile, FileQuery, FileTarget, OpenedFile, RanBy, Refreshed, Request,
+    Retired, TogetherEnded, TogetherFile, TogetherOutcome, TogetherQuery, Update, WorkingSide,
     expanded_diffs, together_diffs,
 };
 #[cfg(test)]

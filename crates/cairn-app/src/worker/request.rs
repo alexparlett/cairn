@@ -728,6 +728,16 @@ pub enum Update {
         ending: WriteEnding,
         read_again: ReadAgain,
     },
+    /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
+    /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
+    /// their arguments and stderr scrubbed of a URL's userinfo (R12.2), and, where its ending
+    /// names a stranded `<gitdir>/index.lock` and Cairn runs no `git` in the repository, what
+    /// removing it would cost: `Remove index.lock…`'s offer (R12.4).
+    OperationRan {
+        by: RanBy,
+        commands: Vec<CommandRecord>,
+        lock: Option<Consequence>,
+    },
     /// What discarding the paths asked under `asked` would lose: the `Consequence` the
     /// confirmation draws, or why the engine refused before any prompt (display text).
     DiscardConsequence {
@@ -859,6 +869,7 @@ impl Update {
             | Self::Prompt { .. }
             | Self::WriteStarted { .. }
             | Self::WriteOutput { .. }
+            | Self::OperationRan { .. }
             | Self::WriteEnded { .. }
             | Self::DiscardConsequence { .. }
             | Self::BranchName { .. }
@@ -870,6 +881,15 @@ impl Update {
             | Self::DiffFailed { .. } => None,
         }
     }
+}
+
+/// Which operation an [`Update::OperationRan`] is of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RanBy {
+    /// A local write, by the id it was asked under.
+    Write(OperationId),
+    /// The fetch that just ended: the network lane runs one at a time.
+    Fetch,
 }
 
 /// What the commit box reads beside a commit (staging-and-commit R6.6, R6.7, R6.9): each

@@ -110,6 +110,7 @@ fn kind(update: &Update) -> &'static str {
         Update::Failed { .. }
         | Update::LocksAtOpen { .. }
         | Update::WriteOutput { .. }
+        | Update::OperationRan { .. }
         | Update::WorkerLost { .. }
         | Update::FetchStarted { .. }
         | Update::FetchProgress { .. }
@@ -414,6 +415,7 @@ fn launch(path: &str) -> Harness {
                 writes: State::create(crate::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
+                activity: State::create(crate::activity::ActivityLog::default()),
                 branch: crate::create_branch::CreateBranchView::created(),
             })
         },

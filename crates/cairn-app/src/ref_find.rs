@@ -133,9 +133,42 @@ pub fn press(row: SidebarRow, view: View, submit: Option<&dyn Fn(Request)>) {
         } => (target, name, stash),
     };
     sidebar.write().pressed(chosen, None);
+    find(target, name, stash, false, view, submit, was_finding);
+}
+
+/// A commit's row found in the history and selected, as a press of a ref finds its row: the
+/// main region switched to All Commits, the row brought into view when loaded, or found by
+/// paging the walk forward ("Finding <name>…"). The activity popover's way back from an amend
+/// (staging-and-commit R12.1) finds the replaced commit so, in Show Lost Commits. A commit no
+/// ref labels is looked for among every loaded row's id first — once per press, as a parent
+/// link's is (`selection::loaded_row`).
+pub fn find_commit(target: Oid, name: String, view: View, submit: Option<&dyn Fn(Request)>) {
+    let mut main = view.sidebar.main;
+    main.set(MainView::AllCommits);
+    let was_finding = view.sidebar.finding.peek().is_some();
+    find(target, name, false, true, view, submit, was_finding);
+}
+
+/// Where a press or a way back looks for `target`'s row: the rows refs label — and, for a way
+/// back, every loaded row — then pages of the walk.
+fn find(
+    target: Oid,
+    name: String,
+    stash: bool,
+    every_loaded_row: bool,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+    was_finding: bool,
+) {
+    let mut sidebar = view.sidebar.state;
     let (serial, loaded, found) = {
         let rows = view.rows.peek();
-        (rows.serial(), rows.len(), rows.labelled_position(target))
+        let found = rows.labelled_position(target).or_else(|| {
+            every_loaded_row
+                .then(|| place_of(&rows, target, 0))
+                .flatten()
+        });
+        (rows.serial(), rows.len(), found)
     };
     if let Some(index) = found {
         end_find(view, submit, was_finding);

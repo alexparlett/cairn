@@ -98,6 +98,9 @@ pub struct View {
     /// Create Branch: its dialog, its name, its sticky check box and a create's failure
     /// (staging-and-commit R11.3).
     pub branch: crate::create_branch::CreateBranchView,
+    /// The activity popover: the session's operations, and whether it is open
+    /// (staging-and-commit R12).
+    pub activity: State<crate::activity::ActivityLog>,
 }
 
 impl std::fmt::Debug for View {
@@ -138,6 +141,7 @@ pub fn window(
     let hearing = submit.clone();
     let erring = submit.clone();
     let branching = submit.clone();
+    let popping = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
     // window has it is never heard here, and a press after coming back must not be read as a
     // chord still held (the user's decision, 2026-10-04).
@@ -202,7 +206,17 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            status_box(view.repository.read().clone(), &view.refreshed.read()),
+            // Fork's: the status box opens the activity popover (R12.1).
+            rect()
+                .on_press(move |_| {
+                    let mut activity = view.activity;
+                    activity.write().open();
+                })
+                .child(status_box(
+                    view.repository.read().clone(),
+                    &view.refreshed.read(),
+                ))
+                .into(),
             &counted,
             &fetch,
             view.fetch,
@@ -234,6 +248,9 @@ pub fn window(
         // modal would keep every key from the prompt. The confirmation stays kept, unanswered,
         // and is drawn again — focus on Cancel — once the prompt is answered or refused
         // (phase 06's QA item 5).
+        // The activity popover (R12.1), under every dialog: `Remove index.lock…` opens its
+        // confirmation over it.
+        .maybe_child(crate::activity::popover(view, popping).filter(|_| prompt.is_none()))
         // A commit's Git Error dialog (staging-and-commit R10.5): its skip may open the amend's
         // confirmation in its place.
         .maybe_child(crate::commit_box_pane::git_error(view, erring).filter(|_| prompt.is_none()))
@@ -462,7 +479,7 @@ fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
 }
 
 fn title_bar(
-    status: StatusBox,
+    status: Element,
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
@@ -761,6 +778,7 @@ pub(crate) mod tests {
             writes: State::create(crate::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
+            activity: State::create(crate::activity::ActivityLog::default()),
             branch: crate::create_branch::CreateBranchView::created(),
         }
     }

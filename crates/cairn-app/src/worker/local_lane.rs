@@ -50,13 +50,14 @@ use cairn_askpass::Channel;
 use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{
-    AskpassToken, ChangeList, Confirmed, FileDiff, LocalChanges, Oid, RepoPath, Selection,
+    AskpassToken, ChangeList, CommandRecord, Confirmed, Consequence, FileDiff, LocalChanges, Oid,
+    RepoPath, Selection,
 };
 
 use super::epoch::{Epoch, Superseded};
 use super::output_flow::{OutputFlow, OutputReceipt};
 use super::pool::Outbox;
-use super::request::{AmendRead, CommitReads, Update};
+use super::request::{AmendRead, CommitReads, RanBy, Update};
 
 /// Names one local write from the moment the window asks for it: what its start, its
 /// ending and a cancel of it name. Never reused within the application.
@@ -157,6 +158,9 @@ pub enum LocalWrite {
     /// The branch and the commit the confirmation names, checked out with every change it
     /// names discarded: Create Branch's "Discard" (the user's decision 3, 2026-10-09).
     CreateBranchDiscarding(Confirmed),
+    /// The stale `<gitdir>/index.lock` the confirmation names, removed: `Remove index.lock…`
+    /// (staging-and-commit R12.4), the one mutation not made by git.
+    RemoveLock(Confirmed),
 }
 
 /// A test's copy of a write it asked for, to compare with what was sent. A destructive write
@@ -207,7 +211,8 @@ impl Clone for LocalWrite {
             Self::DiscardLines(_)
             | Self::DiscardFiles(_)
             | Self::Amend { .. }
-            | Self::CreateBranchDiscarding(_) => {
+            | Self::CreateBranchDiscarding(_)
+            | Self::RemoveLock(_) => {
                 panic!("a destructive write's confirmation is spent once; a test may not copy it")
             }
         }
@@ -251,7 +256,8 @@ impl LocalWrite {
             | Self::DiscardFiles(_)
             | Self::CreateBranch { .. }
             | Self::CreateBranchAndCheckout { .. }
-            | Self::CreateBranchDiscarding(_) => false,
+            | Self::CreateBranchDiscarding(_)
+            | Self::RemoveLock(_) => false,
             Self::Commit { .. } | Self::Amend { .. } => true,
         }
     }
@@ -267,7 +273,8 @@ impl LocalWrite {
             | Self::StageAll { .. }
             | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
-            | Self::DiscardFiles(_) => ReadAgain::Status,
+            | Self::DiscardFiles(_)
+            | Self::RemoveLock(_) => ReadAgain::Status,
             // A branch made moves the refs: the history is read again, and a commit it puts a
             // branch on is no longer lost.
             Self::Commit { .. }
@@ -319,6 +326,33 @@ impl LocalWrite {
                 format!("creating branch {name}")
             }
             Self::CreateBranchDiscarding(_) => "creating a branch, discarding changes".to_owned(),
+            Self::RemoveLock(_) => "removing index.lock".to_owned(),
+        }
+    }
+
+    /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
+    pub fn is_cancellable(&self) -> bool {
+        self.is_commit()
+    }
+
+    /// The commit an amend replaces, which Show Lost Commits draws once it has (R12.1's way
+    /// back): `None` for every other write.
+    pub fn replaces(&self) -> Option<Oid> {
+        match self {
+            Self::Amend { confirmed, .. } => confirmed.consequence().amended(),
+            Self::StageLines { .. }
+            | Self::UnstageLines { .. }
+            | Self::StageFiles { .. }
+            | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
+            | Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Commit { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. }
+            | Self::CreateBranchDiscarding(_)
+            | Self::RemoveLock(_) => None,
         }
     }
 
@@ -337,6 +371,7 @@ impl LocalWrite {
             Self::CreateBranchAndCheckout { .. } | Self::CreateBranchDiscarding(_) => {
                 "the checkout"
             }
+            Self::RemoveLock(_) => "the lock's removal",
         }
     }
 
@@ -400,6 +435,7 @@ impl LocalWrite {
             Self::CreateBranchDiscarding(confirmed) => {
                 ops::create_branch_discarding(git, repo, confirmed, token)
             }
+            Self::RemoveLock(confirmed) => ops::remove_index_lock(repo, confirmed),
         }
     }
 }
@@ -572,7 +608,9 @@ impl WriteEnding {
             Error::Refused { .. }
             | Error::NoPaths
             | Error::CommitRefused { .. }
-            | Error::CheckoutRefused { .. } => Self::Refused { message },
+            | Error::CheckoutRefused { .. }
+            | Error::LockRefused { .. } => Self::Refused { message },
+            Error::LockChangedSinceConfirmed { path } => Self::Stale { path, message },
             Error::CommitCancelledBeforeRunning => Self::NotRun { message },
             Error::GitCancelled { stranded_locks, .. }
             | Error::GitUnwatched { stranded_locks, .. } => Self::MayHaveTakenEffect {
@@ -1065,6 +1103,34 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
     }
 }
 
+/// The command log's records of what this thread ran in `repo` since `mark`, each argument and
+/// its stderr scrubbed of a URL's userinfo before it leaves the lane (R12.2).
+pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<CommandRecord> {
+    repo.commands_since(mark)
+        .into_iter()
+        .map(|record| CommandRecord {
+            arguments: record
+                .arguments
+                .iter()
+                .map(|argument| crate::shown_output::scrubbed(argument))
+                .collect(),
+            stderr: crate::shown_output::scrubbed(&record.stderr),
+            ..record
+        })
+        .collect()
+}
+
+/// `Remove index.lock…`'s offer (R12.4): the cost of removing `repo`'s `index.lock` when `locks`
+/// — an ending's — name it, and the engine finds it there and no `git` of Cairn's running in
+/// the repository; `None` otherwise.
+pub(super) fn removable_lock(repo: &Repository, locks: &[PathBuf]) -> Option<Consequence> {
+    let index_lock = repo.git_dir().join("index.lock");
+    if !locks.contains(&index_lock) {
+        return None;
+    }
+    ops::remove_lock_consequence(repo).ok()
+}
+
 /// Why a write had no askpass token, as its ending says it.
 fn no_token(why: &impl std::fmt::Display) -> String {
     format!("no askpass token could be made for this write ({why})")
@@ -1080,6 +1146,8 @@ fn run(
 ) {
     let commit = write.is_commit();
     let asked = write.read_again();
+    // Where the command log stands: what this write runs on this thread from here is its own.
+    let mark = repo.command_mark();
     serving.lane.begin(id, commit, || {
         serving.outbox.send(None, Update::WriteStarted { id })
     });
@@ -1110,6 +1178,14 @@ fn run(
     drop(authorised);
     let (ending, invalidated) = WriteEnding::of(outcome, &prompting);
     let read_again = after(commit, asked, invalidated);
+    serving.outbox.send(
+        None,
+        Update::OperationRan {
+            by: RanBy::Write(id),
+            commands: ran_since(repo, mark),
+            lock: removable_lock(repo, ending.locks()),
+        },
+    );
     serving.lane.end(|| {
         serving.outbox.send(
             None,

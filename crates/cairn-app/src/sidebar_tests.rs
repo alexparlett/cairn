@@ -177,6 +177,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     writes: State::create(crate::local_writes::LocalWrites::default()),
                     confirming: State::create(None),
                     show_lost: State::create(false),
+                    activity: State::create(crate::activity::ActivityLog::default()),
                     branch: crate::create_branch::CreateBranchView::created(),
                 }
             })

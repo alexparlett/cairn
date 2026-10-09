@@ -44,6 +44,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut refreshed,
         mut repository,
         mut writes,
+        mut activity,
         ..
     } = view;
     match update {
@@ -93,13 +94,32 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }
-        Update::FetchStarted { remote } => fetch.write().started(remote),
+        Update::FetchStarted { remote } => {
+            activity.write().fetch_started(&remote);
+            fetch.write().started(remote);
+        }
         Update::FetchProgress { line } => {
-            fetch
-                .write()
-                .progressed(crate::shown_output::scrubbed(&line));
+            let line = crate::shown_output::scrubbed(&line);
+            let key = activity.peek().fetch_key();
+            if let Some(key) = key {
+                activity.write().output(key, std::slice::from_ref(&line));
+            }
+            fetch.write().progressed(line);
+        }
+        // What an operation ran, for the activity popover (R12.1).
+        Update::OperationRan { by, commands, lock } => {
+            let key = match by {
+                crate::worker::RanBy::Write(id) => Some(crate::activity::ActivityKey::Write(id)),
+                crate::worker::RanBy::Fetch => activity.peek().fetch_key(),
+            };
+            if let Some(key) = key {
+                activity.write().ran(key, &commands, lock);
+            }
         }
         Update::FetchFinished { remote } => {
+            activity
+                .write()
+                .fetch_ended(&remote, crate::activity::Outcome::Succeeded);
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -110,6 +130,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             remote,
             stranded_locks,
         } => {
+            activity
+                .write()
+                .fetch_ended(&remote, crate::activity::Outcome::Cancelled);
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -121,6 +144,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         Update::FetchFailed { remote, message } => {
             let message = crate::shown_output::scrubbed(&message);
+            activity
+                .write()
+                .fetch_ended(&remote, crate::activity::Outcome::Failed(message.clone()));
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -129,12 +155,18 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         Update::WriteStarted { id } => {
             writes.write().started(id);
+            if let Some(asked) = writes.peek().running() {
+                activity.write().write_started(asked);
+            }
             crate::commit_box_pane::write_started(id, view);
         }
-        // The commit box's commit's output, kept for the Git Error dialog (R10.5); the activity
-        // popover (phase 11) will draw every write's.
+        // The commit box's commit's output, kept for the Git Error dialog (R10.5), and every
+        // write's for the activity popover (R10.4, R12.1).
         Update::WriteOutput { id, lines, .. } => {
             crate::commit_box_pane::write_output(id, &lines, view);
+            activity
+                .write()
+                .output(crate::activity::ActivityKey::Write(id), &lines);
         }
         Update::WriteEnded {
             id,
@@ -151,6 +183,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let ending = crate::shown_output::shown_ending(ending);
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
+            activity.write().write_ended(id, &ending);
             writes.write().ended(id, ending);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
@@ -477,6 +510,7 @@ mod tests {
                         writes: State::create(crate::local_writes::LocalWrites::default()),
                         confirming: State::create(None),
                         show_lost: State::create(false),
+                        activity: State::create(crate::activity::ActivityLog::default()),
                         branch: crate::create_branch::CreateBranchView::created(),
                     }
                 })

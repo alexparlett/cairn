@@ -20,6 +20,10 @@ pub struct Asked {
     pub what: String,
     /// What a wait behind it calls it: "the commit", "staging" (`LocalWrite::noun`).
     pub noun: &'static str,
+    /// The commit it replaces — an amend's — which the activity popover points back to.
+    pub replaces: Option<cairn_model::Oid>,
+    /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
+    pub cancellable: bool,
 }
 
 /// The local writes of this session, as the window draws them.
@@ -44,6 +48,8 @@ impl LocalWrites {
             id,
             what: write.what(),
             noun: write.noun(),
+            replaces: write.replaces(),
+            cancellable: write.is_cancellable(),
         });
     }
 
@@ -54,6 +60,8 @@ impl LocalWrites {
             id,
             what: "a write".to_owned(),
             noun: UNKNOWN_WRITE,
+            replaces: None,
+            cancellable: false,
         });
         self.running = Some(asked);
     }
@@ -69,6 +77,8 @@ impl LocalWrites {
                     id,
                     what: "a write".to_owned(),
                     noun: UNKNOWN_WRITE,
+                    replaces: None,
+                    cancellable: false,
                 })
             }
         };

@@ -31,7 +31,7 @@ use super::fetch_tests::{
 use super::lifecycle_tests::StubGit;
 use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 use super::pool::{Replier, RepositoryHandle, Updates, open};
-use super::request::{Request, Update};
+use super::request::{RanBy, Request, Update};
 use super::startup::Startup;
 
 /// The real `git` on this process's `PATH`, which a stub hands every other verb to.
@@ -993,6 +993,42 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
         ),
         other => panic!("a stage over index.lock ended {other:?}"),
     }
+    // R12.1 and R12.4: before its ending, what the write ran — its own `git add`, and nothing
+    // the refresh ran meanwhile — and, since no git of Cairn's runs, the lock's removal
+    // offered; confirmed, the lane removes exactly that file, and nothing else.
+    let ran = seen.iter().find_map(|update| match update {
+        Update::OperationRan {
+            by: RanBy::Write(ran),
+            commands,
+            lock,
+        } if *ran == id => Some((commands.clone(), lock.clone())),
+        _ => None,
+    });
+    let Some((commands, Some(offered))) = ran else {
+        panic!("no offer: {seen:?}");
+    };
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert!(
+        commands[0]
+            .arguments
+            .iter()
+            .any(|argument| argument == "add")
+    );
+    assert!(commands[0].stderr.contains("index.lock"), "{commands:?}");
+    let removed = ask(&handle, LocalWrite::RemoveLock(Confirmed::by_user(offered)));
+    let seen = until_ended(&mut updates, removed);
+    assert!(
+        matches!(ending_of(&seen, removed).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    assert!(!lock.exists(), "the lock is still there");
+    // And the stage now runs.
+    let id = ask(&handle, stage(&["a"]));
+    let seen = until_ended(&mut updates, id);
+    assert!(
+        matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
     drop(handle);
 }
 

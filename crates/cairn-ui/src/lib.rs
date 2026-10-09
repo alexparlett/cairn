@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod activity_popover;
 mod answer_button;
 mod button_order;
 mod changes_list;
@@ -36,6 +37,11 @@ pub use end_room::{END_ROOM, SCROLLBAR_THICKNESS, with_end_room};
 mod expansion;
 mod file_filter;
 mod git_error_dialog;
+pub use activity_popover::{
+    ACTIVITY_TITLE, ActivityEntry, ActivityLine, ActivityPopover, CANCEL_OPERATION_CAPTION,
+    CONFIRMED_CAPTION, ENTRY_ROW_HEIGHT, LINE_ROW_HEIGHT, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
+    SHOW_REPLACED_CAPTION,
+};
 pub use git_error_dialog::{
     CLOSE_CAPTION, ERROR_DETAILS, GIT_ERROR_TEXT, GIT_ERROR_TITLE, GitErrorDialog,
     OUTPUT_ROW_HEIGHT,

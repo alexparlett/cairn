@@ -1,5 +1,8 @@
 //! The Cairn binary.
 
+mod activity;
+#[cfg(test)]
+mod activity_tests;
 mod changes_tab;
 mod closing;
 mod commit_box_pane;
@@ -129,6 +132,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let show_lost = use_state(|| false);
     // Create Branch, for the session (staging-and-commit R11.3).
     let branch = create_branch::CreateBranchView::used();
+    // The activity popover's operations, for the session (staging-and-commit R12).
+    let activity = use_state(activity::ActivityLog::default);
     let view = View {
         rows,
         progress,
@@ -158,6 +163,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         confirming,
         show_lost,
         branch,
+        activity,
     };
 
     let opened = use_hook(|| {

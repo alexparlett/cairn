@@ -10,9 +10,9 @@ the user's review at the end of the packet. Phase 03 (the write verbs) built in 
 mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6) applied,
 C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the local
 lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisions 12 and
-14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) built in packet
-mode; QA adjudicated and its fixes landed, full gate green; awaiting the user's decisions A, C,
-D, E and F (progress.md's phase 05 entries). Phases 06-12 not started.**
+14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) done in packet
+mode: QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green
+at c07c076. Phases 06-12 not started.**
 
 ## Locked decisions
 
@@ -282,15 +282,19 @@ local write lane"):
   the failure's `GitFailed` — stdout's tail then stderr's). R10.8's `MERGE_MSG` prefill:
   `OperationInProgress::Merge.message` is git's file as it stands, with git's own `# Conflicts:`
   comment lines, which `-F` under the default cleanup (`whitespace`) keeps in the commit —
-  where the user's `git commit` (editor, `strip`) drops them; decide (with the user) whether the
-  box strips git's comment lines from the prefill. Still: `Consequence::needs_force_push()` (phase
+  where the user's `git commit` (editor, `strip`) drops them. **Decided by the user (2026-10-09,
+  E): keep them visible** — the box prefills `MERGE_MSG` as git wrote it, comment lines
+  included, and the user deletes them by hand; under `-F` they are committed if left (R10.8 as
+  amended). Test that the prefill is the file's text unchanged. Still: `Consequence::needs_force_push()` (phase
   01's note) and rendering the amend prompt's parts separately (phase 01 QA item 21).
-- **Phase 10**: `Reflog::Written` means git appends the amend's entry, whose OLD id is the
-  replaced commit. C20 seeds Show Lost Commits from `git reflog show --format=%H` (each entry's
-  NEW id), so a replaced commit no entry names as its new id — a log the amend itself created —
-  is not found unless the seed reads old ids too, as `git rev-list --reflog` does (measured in
-  phase 05: default config, logs removed, amend → the replaced commit is only an old id). Settle
-  the seed (old and new ids) or the rule, with the user.
+- **Phase 10 — a requirement that blocks phase 10's QA** (the user's decision D, 2026-10-09):
+  seed Show Lost Commits' walk from every reflog entry's OLD and NEW ids, for `HEAD` and each
+  local branch, as `git rev-list --reflog` and `git fsck` read a reflog (R11.1 and C20 as
+  amended). `Reflog::Written` means git appends the amend's entry, whose old id is the replaced
+  commit; with a log the amend itself created (measured in phase 05: default config, logs
+  removed, amend), the replaced commit is ONLY an old id, and the new-ids-only seed misses it.
+  C20's fixture gains that case. The amend prompt keeps "The old commit stays in Show Lost
+  Commits."; `gc.reflogExpireUnreachable`'s 30-day expiry stays a stated residual.
 - **Phase 11**: the pushed check's cost (`docs/systems/staging.md`, "What the walk costs"):
   under 3 ms to ~100 ms where `HEAD` is near a remote tip, 1.1-1.3 s on rust-lang/rust for a
   detached `HEAD` far behind every remote tip (git's own walk without a commit-graph, 1.14 s;
@@ -310,7 +314,7 @@ From phase 05's QA (adjudicated 2026-10-09):
   clone's missing blob on git 2.44+: `Error::GitFailed`).
 - **Phase 09** (item 8): a window test that the commit after a skipped-hooks commit runs the
   hooks again (the skip is per commit, never kept).
-- **Phase 10** (item 12, = batched D, pending the user's decision): the reflog seed above.
+- **Phase 10** (item 12, = D, decided by the user 2026-10-09): the reflog seed above.
 - **Phase 11** (item 3): `Update::WriteOutput` is one unbounded update per line
   (`worker/local_lane.rs`'s `Watch::commit`; `session.rs` discards it; `pool.rs`'s
   `Updates::next` drains the whole backlog in one poll) — send one update per pipe chunk
@@ -471,7 +475,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
-| 05 commit engine | QA fixes landed, awaiting user decisions A/C/D/E/F |
+| 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
 | 06 render foundations | not started |
 | 07 Local Changes actions | not started |
 | 08 diff gesture | not started |

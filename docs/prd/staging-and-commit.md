@@ -132,7 +132,7 @@ literally.
   unborn branch); unstage a staged rename whole: `git reset -q -- <old> <new>`;
   unstage out of an amend: `git reset -q HEAD^ --` (R6.3), and out of a root
   commit's amend, which has no `HEAD^`: `git rm --cached -f -q --`. (Amended
-  2026-10-09 by phase 05, for the user's ratification: `-f`, since `git rm --cached`
+  2026-10-09 by phase 05 and ratified by the user on 2026-10-09 (decision A): `-f`, since `git rm --cached`
   alone refuses a path whose staged content differs from both the file and `HEAD` —
   the path an amend's staged list shows edited — where the unstage drops that content
   as `git reset` would and keeps the file.)
@@ -236,7 +236,7 @@ literally.
   passed, so `commit.cleanup` and git's `-F` default decide; `--no-verify` is
   passed only from the hook failure's skip (R10.5). A non-UTF-8
   `i18n.commitEncoding` is refused before git runs, with its reason. (Amended
-  2026-10-09 by phase 05, for the user's ratification: `-q` beside it, which leaves
+  2026-10-09 by phase 05 and ratified by the user on 2026-10-09 (decision F): `-q` beside it, which leaves
   out only the summary git prints once the commit is made — by analogy with the
   user's decision 12 of 2026-10-09, which gave `git clean` `-q` so an orphaned write
   has nothing to print; and no `--literal-pathspecs`, which git would export to the
@@ -245,7 +245,7 @@ literally.
 - R6.3 In amend mode the staged list is the index against `HEAD^` (the plumbing
   the working-tree query already runs, `git diff-index --cached`), and unstaging
   from it is R3.4's `git reset -q HEAD^ --`. A root commit's amend compares
-  against the empty tree, and unstaging from it is R3.4's `git rm --cached -q --`,
+  against the empty tree, and unstaging from it is R3.4's `git rm --cached -f -q --`,
   since there is no `HEAD^`. Amend is unavailable with no `HEAD` (an unborn
   branch) and while a merge is in progress (R6.9).
 - R6.4 Amend is destructive (R1.5): its `Consequence` is `HEAD`'s id, subject,
@@ -253,8 +253,9 @@ literally.
   whether a remote already has it — from the upstream's ahead count, or, with no
   upstream or one that does not hold `HEAD`, a hidden walk of `HEAD --not --remotes`.
   (Reflog state added 2026-10-08 with R10.6, the user's decision. "Or one that does
-  not hold `HEAD`" amended 2026-10-09 by phase 05, for the user's ratification:
-  phase 05's QA item 1 found that asking the upstream alone answered "unpublished"
+  not hold `HEAD`" amended 2026-10-09 by phase 05 and ratified by the user on
+  2026-10-09 (decision B, accepting the QA verdict that it was a defect): phase 05's
+  QA item 1 found that asking the upstream alone answered "unpublished"
   for a commit another remote branch holds.)
 - R6.5 Commit and amend carry an askpass token (R5.1) and stream their stderr to
   the operation log (R12.1).
@@ -270,10 +271,11 @@ literally.
   terminal would — its configuration and R5.2's inherited identity variables —
   and when git has none, its own error is shown in R10.5's dialog.
 - R6.9 The engine reports the operation in progress as git records it (L25): a
-  merge (`MERGE_HEAD`, with git's `MERGE_MSG`), a rebase, a cherry-pick or a
-  revert. With a merge in progress, R6.1's commit is the merge commit, its message
-  the user's draft; with a rebase, cherry-pick or revert in progress, commit and
-  amend are refused with the operation's name before git runs.
+  merge (`MERGE_HEAD`, with git's `MERGE_MSG`), a rebase, `git am`, a cherry-pick or
+  a revert. With a merge in progress, R6.1's commit is the merge commit, its message
+  the user's draft; with a rebase, `git am`, a cherry-pick or a revert in progress,
+  commit and amend are refused with the operation's name before git runs. (`git am`
+  added 2026-10-09, the user's decision C.)
 
 ### R7 — Keys, dialogs and menus in the render layer (L5, L7, L8, L19)
 
@@ -382,15 +384,25 @@ literally.
 - R10.7 The draft survives refreshes, a failed hook and Amend's toggling, for the
   life of the window.
 - R10.8 With a merge in progress (R6.9) the box fills an empty draft with git's
-  `MERGE_MSG` and its commit is the merge commit, as Fork's is (L25). During a
-  rebase, cherry-pick or revert the box is disabled and names the operation in
-  progress.
+  `MERGE_MSG` as git wrote it — its `# Conflicts:` comment lines included, left
+  visible for the user to delete by hand, since under `-F` and the default cleanup
+  they are committed if left — and its commit is the merge commit, as Fork's is
+  (L25). During a rebase, `git am`, a cherry-pick or a revert the box is disabled and
+  names the operation in progress. (Comment lines kept visible and `git am` added
+  2026-10-09, the user's decisions E and C.)
 
 ### R11 — Show Lost Commits (L13)
 
 - R11.1 A toggle (R7.3's chord, and a control in the history's toolbar area) adds
-  every entry of `HEAD`'s reflog and of each local branch's reflog to the walk's
-  tips, and draws the commits no ref reaches dimmed.
+  the old and the new id of every entry of `HEAD`'s reflog and of each local branch's
+  reflog to the walk's tips — as `git rev-list --reflog` and `git fsck` read a reflog
+  — and draws the commits no ref reaches dimmed. The old ids are what keep an amend's
+  replaced commit findable when no entry names it as its new id (a log the amend
+  itself created), so the amend prompt's "The old commit stays in Show Lost Commits."
+  holds whenever git writes the entry (R10.6). Residual, stated: git expires a reflog
+  entry for an unreachable commit after `gc.reflogExpireUnreachable` (30 days by
+  default), and from then on Show Lost Commits no longer has it. (Old ids added
+  2026-10-09, the user's decision D.)
 - R11.2 A reflog is read whole, never through gix's newest-first iterator, which
   stops at a line over 4 KiB.
 - R11.3 A dimmed commit's context menu offers `Create Branch Here…`: a name, then
@@ -498,11 +510,11 @@ points here and does not restate them.
 | C17 | The discard dialog: modal (Tab stays inside, a window chord does nothing), focus on Cancel, Escape cancels, its text and button from the `Consequence` (`Discard Changes in 3 Files`, `Discard 2 Lines`) | headless tests |
 | C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection; a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact | headless tests |
 | C19 | The gesture: a hovered chunk's actions stage, unstage and discard exactly that chunk; a drag-selection narrows them to its lines, across rows the virtual list unmounted; side by side keeps a selection in one column; the Commit and Changes tabs draw no action; a 10,000-line diff with the gesture builds one viewport | headless tests, and a viewport twin |
-| C20 | Show Lost Commits: the commits it adds equal `git rev-list <every id git reflog show --format=%H lists for HEAD and each local branch> --not --branches --remotes --tags HEAD`, on a fixture with an amended, a reset-away and a 4 KiB-message entry; those rows are dimmed; `Create Branch Here…` creates the branch git would; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
+| C20 | Show Lost Commits: the commits it adds equal `git rev-list <every old and new id of every entry of HEAD's and each local branch's reflog, read from the log files> --not --branches --remotes --tags HEAD` (amended 2026-10-09, the user's decision D: old ids too, as `git rev-list --reflog` reads them), on a fixture with an amended, a reset-away and a 4 KiB-message entry, and an amend whose log it created itself (the replaced commit only an entry's old id); those rows are dimmed; `Create Branch Here…` creates the branch git would; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
 | C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a flat 50 ms (the user's decision, 2026-10-08, at R13.2's amendment): about 93 ms to stage, 93 ms to unstage, 76 ms to discard and 87 ms to commit, from `docs/research/staging-and-commit/measured-baseline.md`'s highest sums (42.9, 42.8, 25.8 and 37.4 ms); Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |
 | C22 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names R3.9's two reads, the write verbs and the one file deletion made without `git` (R12.4); the destructive-operation roster, the confirmation-surface roster, the chord lists and the bare-key scope, the gesture's viewport twin (C19) and the filesystem-mutation guard (R12.5) each have their twin named in `CLAUDE.md` | review |
 | C23 | `scripts/gate.sh` passes | the gate |
-| C24 | Conflicts and operations in progress (L25): staging a conflicted row runs `git add` and `git status` then reports it resolved; a conflicted row offers no line gesture and no discard by any route, and no verb takes a patch or a discard for one; with a merge in progress the engine reports it, the commit box holds `MERGE_MSG`'s text, its commit has `HEAD` and `MERGE_HEAD` as parents, and Amend is disabled; during a rebase, a cherry-pick and a revert the engine reports each, commit and amend are refused before git runs, and the commit box is disabled and names it | integration tests in `cairn-git` against real `git`, headless tests |
+| C24 | Conflicts and operations in progress (L25): staging a conflicted row runs `git add` and `git status` then reports it resolved; a conflicted row offers no line gesture and no discard by any route, and no verb takes a patch or a discard for one; with a merge in progress the engine reports it, the commit box holds `MERGE_MSG`'s text, its commit has `HEAD` and `MERGE_HEAD` as parents, and Amend is disabled; during a rebase, `git am` (added 2026-10-09, the user's decision C), a cherry-pick and a revert the engine reports each, commit and amend are refused before git runs, and the commit box is disabled and names it; the commit box holds `MERGE_MSG` with git's comment lines visible (the user's decision E) | integration tests in `cairn-git` against real `git`, headless tests |
 
 C21 is not automated, for the reason `history-graph`'s A7 was not: a timing
 assertion in CI is flaky and bound to a machine.

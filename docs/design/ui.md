@@ -56,7 +56,7 @@ Kept, and why:
 | A stale `index.lock` a write left behind can be removed, confirmed, from the activity popover while Cairn runs no `git` in that repository. | `processes.md`, "Cancellation"; `engine.md`, D1's one deletion made without `git` |
 | A nested repository among the untracked rows is refused before any dialog, since deleting it deletes history no prompt can count. | `engine.md`, the write verbs |
 | A submodule row offers no discard and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
-| During a rebase, cherry-pick or revert the commit box is disabled and names the operation; Fork pre-fills git's message for a cherry-pick or revert and commits it. Continuing those operations is their own design. | `cairn.md`, the milestone — rewrites are the second lap |
+| During a rebase, `git am`, a cherry-pick or a revert the commit box is disabled and names the operation; Fork pre-fills git's message for a cherry-pick or revert and commits it. Continuing those operations is their own design. | `cairn.md`, the milestone — rewrites are the second lap |
 | **Show Lost Commits has a control in the history's toolbar area** as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
 | Show Lost Commits reaches the commits `HEAD`'s and the local branches' reflogs hold; Fork's mode reaches every reflog, as `git log --all --reflog` does (TrackerWin #1307). | `history-graph.md`, "What it walks" |
 | **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree carries a chip as in Fork — and, unlike Fork, a disabled checkout. | `worktrees.md` |
@@ -191,9 +191,11 @@ empty or recalled subject walks them, and a recalled message fills both fields.
 The draft lives for the life of the window, through refreshes, a failed hook and
 Amend's toggle.
 
-With a merge in progress the box fills an empty draft with git's merge message
-and commits the merge, as Fork's does. During a rebase, cherry-pick or revert the
-box is disabled and names the operation in progress, since continuing one is that
+With a merge in progress the box fills an empty draft with git's merge message as
+git wrote it — its `# Conflicts:` comment lines left visible for the user to
+delete, since a message given with `-F` keeps them — and commits the merge, as
+Fork's does. During a rebase, `git am`, a cherry-pick or a revert the box is
+disabled and names the operation in progress, since continuing one is that
 operation's own design.
 
 Ticking Amend fills an empty draft with `HEAD`'s message and lists `HEAD`'s files
@@ -222,10 +224,11 @@ Commit and Push belongs with push, and is designed with it. Spec:
 
 Fork's reflog view is a mode of the graph, not a list. Its toggle — ⌘⇧. or
 Ctrl+Shift+., and a control in the history's toolbar area, which Fork does not
-have — adds every entry of `HEAD`'s reflog and of each local branch's to the walk's
-tips and draws the commits no ref reaches dimmed, in their lanes
+have — adds the old and the new id of every entry of `HEAD`'s reflog and of each
+local branch's to the walk's tips and draws the commits no ref reaches dimmed, in their lanes
 (`history-graph.md`, "What it walks"); Fork's reaches every reflog. An
-amended-away or reset-away commit is found there. Recovery is a dimmed commit's
+amended-away or reset-away commit is found there, until git expires its entry
+(`gc.reflogExpireUnreachable`, 30 days by default). Recovery is a dimmed commit's
 `Create Branch Here…`: a name, then the branch. As in Fork, there is no list of
 reflog entries. Spec: `docs/prd/staging-and-commit.md` R11.
 

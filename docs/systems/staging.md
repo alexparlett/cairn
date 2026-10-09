@@ -330,10 +330,12 @@ graph, which the walk does not read so it can be cancelled at every object).
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
   does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the
-  replaced commit. Show Lost Commits as C20 words it seeds from each entry's new id
-  (`git reflog show --format=%H`), so a replaced commit no entry names as its new id
-  — a log created by the amend itself — would not be found unless its seed reads
-  old ids too, as `git rev-list --reflog` does: phase 10's to settle.
+  replaced commit; with a log the amend itself created, that old id is the only place
+  the replaced commit is named. Show Lost Commits does not exist yet; it is to seed
+  from every entry's old and new ids, as `git rev-list --reflog` does
+  (`docs/prd/staging-and-commit.md` R11.1), which is what keeps the prompt's "The old
+  commit stays in Show Lost Commits." true. git expires an unreachable commit's entry
+  after `gc.reflogExpireUnreachable` (30 days by default).
 - In a partial clone, amend's staged list pairs a staged inexact rename against
   `HEAD^` by comparing blobs, and a blob only the promisor holds is never fetched by
   the read: on git 2.44 and later the whole list fails (`Error::GitFailed`, nothing

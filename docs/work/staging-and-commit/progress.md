@@ -3,6 +3,32 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 05, the user's decisions A-F applied
+
+The user decided the six batched items (relayed by the coordinator, 2026-10-09):
+
+- **A — ratified**: `git rm --cached -f -q` out of a root commit's amend. R3.4's note now
+  records the ratification (and R6.3 names `-f` too).
+- **B — ratified with the fix**: the user accepted QA's verdict that asking the upstream alone
+  was a defect (fixed in 44ccdb1); R6.4's amendment records the ratification.
+- **C — ratified**: commit and amend are refused while `git am` is in progress. R6.9, R10.8 and
+  C24 now list it.
+- **D — seed Show Lost Commits from every reflog entry's old and new ids; keep the prompt's
+  wording.** R11.1 and C20 amended (the walk's tips are each entry's old and new ids, as `git
+  rev-list --reflog` and `git fsck` read a reflog; C20's fixture adds an amend whose log it
+  created itself); "The old commit stays in Show Lost Commits." stays; the 30-day
+  `gc.reflogExpireUnreachable` expiry is a stated residual in R11.1. A phase 10 requirement that
+  blocks its QA (state.md).
+- **E — keep `MERGE_MSG`'s `# Conflicts:` lines visible**: the box prefills the file as git
+  wrote it and the user deletes them by hand; under `-F` they are committed if left. R10.8 and
+  C24 amended; recorded for phase 09 (state.md).
+- **F — ratified**: `git commit -q`, and no `--literal-pathspecs` on a commit. R6.1's note
+  records the ratification.
+
+Phase 05 is done: QA adjudicated, its fixes and these decisions applied, the full gate green
+at c07c076 (this entry's change is documentation alone; `gate.sh --fast` and `qa-stop.sh` run
+over it).
+
 ## 2026-10-09 — phase 05 QA, adjudicated and fixed
 
 Four fresh reviewers and a fresh `qa-confirm` (the coordinator's). Fixed, each test-first —

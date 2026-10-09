@@ -460,8 +460,9 @@ fn press_key(test: &mut TestingRunner, key: NamedKey) {
 
 fn press_action(test: &mut TestingRunner, action: Action) {
     // A named key: its code is not what the table matches it by.
-    let Some((key, _, modifiers)) =
-        accelerators::chord(action, Os::current()).and_then(|chord| chord.key_press())
+    let Some((key, _, modifiers)) = accelerators::chords(action, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
     else {
         panic!("{action:?} has no key chord");
     };

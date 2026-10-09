@@ -29,7 +29,9 @@ pub fn of_header(pressed: HeaderAction) -> Action {
 }
 
 /// Does `action` to `view`, asking through `submit` what it must — nothing while a
-/// credential prompt is up, which owns the keys until it is answered (Q3). The second commit
+/// credential prompt is up, which owns the keys until it is answered (Q3), nor while a
+/// destructive operation's confirmation is open (staging-and-commit R7.4): the window hears
+/// every key before any dialog can, so the dialog cannot make the chords inert itself. The second commit
 /// of a comparison is a press, not a key: the history list resolves it against the keys the
 /// window heard held (`HeldKeys`) and selects it (`selection::extend`).
 pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
@@ -37,9 +39,10 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         mut detail_tab,
         mut pane_collapsed,
         prompt,
+        confirming,
         ..
     } = view;
-    if prompt.peek().is_some() {
+    if prompt.peek().is_some() || confirming.peek().is_some() {
         return;
     }
     match action {
@@ -58,8 +61,19 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
             true
         }),
         Action::ToggleSideBySide => diff_actions::toggle_side_by_side(view),
-        // A press's chord, never a key's: resolved where the press lands.
-        Action::ExtendSelection => {}
+        // A press's chord, never a key's: resolved where the press lands. The range press and
+        // Shift+↑/↓ are Local Changes' lists' own, resolved by the list (R7.3).
+        Action::ExtendSelection
+        | Action::SelectRange
+        | Action::ExtendSelectionUp
+        | Action::ExtendSelectionDown => {}
+        // Heard only in their own scopes — Local Changes' lists and diff, the commit box, the
+        // history list — by the view that has focus there, never by the window (R7.3).
+        Action::StageOrUnstage
+        | Action::StageOrUnstageAll
+        | Action::Discard
+        | Action::Commit
+        | Action::ShowLostCommits => {}
         // Read again on the worker; the window only asks (R10.1).
         Action::Refresh => {
             if let Some(submit) = submit {

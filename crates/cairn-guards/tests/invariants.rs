@@ -5,13 +5,13 @@ use std::path::Path;
 
 use cairn_guards::{
     GITOXIDE_MUTATION_CALLS, GITOXIDE_MUTATION_IDENTS, GITOXIDE_MUTATION_METHODS,
-    GITOXIDE_MUTATION_PATH_ENDS, GITOXIDE_MUTATION_PATHS, calls_associated_function, calls_method,
-    calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
-    configures_process_environment, constructs_named_struct, constructs_process_command,
-    constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    embedded_font_violations, gate_command_assignments, gate_dispatch_arms, gate_full_sequence,
-    gate_function_body, gate_function_calls, gate_function_commands, implements_type,
-    job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
+    GITOXIDE_MUTATION_PATH_ENDS, GITOXIDE_MUTATION_PATHS, builds_a_text_field,
+    calls_associated_function, calls_method, calls_nullary_method, code_only, code_without_strings,
+    code_without_test_modules, configures_process_environment, constructs_named_struct,
+    constructs_process_command, constructs_struct, declared_dependencies, declares_publicly,
+    derives_or_implements, embedded_font_violations, gate_command_assignments, gate_dispatch_arms,
+    gate_full_sequence, gate_function_body, gate_function_calls, gate_function_commands,
+    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
     names_gitoxide_mutation, production_char_literals, production_string_literals,
     reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
     required_skip_violations, rust_sources, spawns_git, spells_a_chord,
@@ -4422,7 +4422,43 @@ fn the_accelerator_table_holds_data_and_resolution_only() {
          view; the table holds the chord as data.",
         spelled[0]
     );
+    // An action maps to a LIST of chords per platform (staging-and-commit L22), and the pin
+    // that holds every chord of every list distinct, and every bare one a function key or one
+    // of Local Changes' own, stays a test that runs.
+    let code = code_without_strings(&table);
+    assert!(
+        code.contains("pub fn chords(action: Action, platform: Os) -> Chords"),
+        "{ACCELERATOR_TABLE} no longer answers an action's chords as a list (`pub fn \
+         chords(action: Action, platform: Os) -> Chords`); CLAUDE.md's modifier invariant says \
+         it does"
+    );
+    assert!(
+        !code.contains("pub fn chord("),
+        "{ACCELERATOR_TABLE} answers a single chord again; Fork's alternates need the list"
+    );
+    let pin = format!("fn {ACCELERATOR_PIN}()");
+    let at = code
+        .find(&pin)
+        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} lost its pin `{ACCELERATOR_PIN}`"));
+    let attributes: Vec<&str> = code[..at]
+        .lines()
+        .rev()
+        .skip(1)
+        .take_while(|line| line.trim_start().starts_with("#["))
+        .map(str::trim)
+        .collect();
+    assert!(
+        attributes == ["#[test]"],
+        "`{ACCELERATOR_PIN}` must be a plain `#[test]`, never ignored or compiled out: \
+         {attributes:?}"
+    );
 }
+
+/// The accelerator table's pin (staging-and-commit R7.2): no chord listed twice on a platform,
+/// and a bare chord a function key's or one of Enter, Backspace and Delete in Local Changes'
+/// list-and-diff scope alone, each shown to fail on the shapes it refuses.
+const ACCELERATOR_PIN: &str =
+    "chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own";
 
 #[test]
 fn the_element_matcher_catches_the_shapes_it_claims() {
@@ -4464,6 +4500,100 @@ fn the_element_matcher_catches_the_shapes_it_claims() {
         ),
         vec![(1, "x".to_owned())]
     );
+}
+
+/// The one key policy every text field takes (staging-and-commit R7.1): the one render file
+/// that may build Freya's `Input` or replace its key handler.
+const TEXT_FIELD_POLICY: &str = "crates/cairn-ui/src/text_field.rs";
+
+/// R7.1, C15: every text field is built by the one key policy, which hands the window's chords
+/// and held modifiers to the window and keeps its own keys from the views around it. A field
+/// built anywhere else — Freya's `Input` named, or its key handler swapped — would claim every
+/// key again, hiding F5 and the held ⌘ or Ctrl from the window (the hole
+/// `docs/research/staging-and-commit/freya-ui-apis.md` §2 found in every filter field).
+#[test]
+fn every_text_field_takes_the_shared_key_policy() {
+    let policy = Path::new(TEXT_FIELD_POLICY);
+    let mut policy_seen = false;
+    for dir in RENDER_SOURCE_DIRS {
+        let mut scanned = 0usize;
+        for (path, source) in rust_sources(dir) {
+            scanned += 1;
+            let hits = builds_a_text_field(&source);
+            if path == policy {
+                policy_seen = true;
+                // The policy must be seen building the field and installing its handler, or
+                // the matcher reads nothing anywhere.
+                for ident in cairn_guards::TEXT_FIELD_IDENTS {
+                    assert!(
+                        !mentions_crate(
+                            &code_without_test_modules(&code_without_strings(&source)),
+                            ident
+                        )
+                        .is_empty(),
+                        "{TEXT_FIELD_POLICY} does not name `{ident}`. Either the policy moved — \
+                         move this guard with it — or the matcher has gone blind."
+                    );
+                }
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{}:{} builds a text field, or swaps its key handler, outside the one key policy. \
+                 Build it with `cairn_ui::text_field` or `text_field_in` ({TEXT_FIELD_POLICY}), \
+                 which hand the window's chords and held keys on (CLAUDE.md, Invariants; \
+                 staging-and-commit R7.1).",
+                path.display(),
+                hits[0]
+            );
+        }
+        assert!(
+            scanned > 0,
+            "the text-field guard found no files under {dir}; it is scanning less than it claims"
+        );
+    }
+    assert!(
+        policy_seen,
+        "{TEXT_FIELD_POLICY} does not exist, so the guard exempts a file nobody can see"
+    );
+}
+
+#[test]
+fn the_text_field_matcher_catches_the_shapes_it_claims() {
+    for (shape, source) in [
+        ("the constructor", "let field = Input::new(value);"),
+        ("spaced", "let field = Input :: new(value);"),
+        ("an aliased import", "use freya::prelude::Input as Field;"),
+        ("a type alias", "type Field = Input;"),
+        ("the default handler", "Input::key_down_default(e)"),
+        ("a swapped handler", "field.on_pre_key_down(keys)"),
+        (
+            "wrapped",
+            "field\n    .on_pre_key_down(\n        keys,\n    )",
+        ),
+    ] {
+        assert!(
+            !builds_a_text_field(source).is_empty(),
+            "the text-field matcher missed {shape}: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("another type", "InputMode::Shown"),
+        ("a validator", "fn check(v: InputValidator) {}"),
+        ("a comment", "// Freya's Input::new claims every key"),
+        ("a string", "const WHAT: &str = \"Input::new\";"),
+        ("a longer name", "let inputs = my_input();"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { Input::new(v); }\n}",
+        ),
+    ] {
+        assert_eq!(
+            builds_a_text_field(source),
+            Vec::<usize>::new(),
+            "the text-field matcher fired on {shape}: {source:?}"
+        );
+    }
 }
 
 /// The token a destructive operation takes, and the file that defines it.
@@ -4514,7 +4644,7 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 /// and presses the button that accepts it. Empty until the confirmation dialog
 /// (staging-and-commit phase 06) and the commit box (phase 09) exist, so today nothing may
 /// build the token; a row whose file no longer names the constructor fails.
-const CONFIRMATION_SURFACES: &[&str] = &[];
+const CONFIRMATION_SURFACES: &[&str] = &["crates/cairn-ui/src/confirm_dialog.rs"];
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
@@ -4769,6 +4899,37 @@ fn consequence_type_violations(source: &str) -> Vec<String> {
     found
 }
 
+/// The one way a type may name the token without keeping one: as the argument of a callback
+/// it holds — the confirmation dialog's `EventHandler<Confirmed>`, the window's
+/// `Rc<dyn Fn(Confirmed)>` — which is handed a token to spend and keeps none. Spelled exactly,
+/// so a callback that returns one, takes it beside other arguments or is named otherwise is
+/// still a holder.
+const TOKEN_CALLBACKS: &[&str] = &[
+    "EventHandler<Confirmed>",
+    "dyn Fn(Confirmed)",
+    "dyn FnMut(Confirmed)",
+    "dyn FnOnce(Confirmed)",
+];
+
+/// `body` with every [`TOKEN_CALLBACKS`] spelling blanked, where it starts a word.
+fn without_token_callbacks(body: &str) -> String {
+    let mut kept = body.to_owned();
+    for callback in TOKEN_CALLBACKS {
+        let mut from = 0;
+        while let Some(at) = kept[from..].find(callback).map(|at| at + from) {
+            let starts_a_word = kept[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            if starts_a_word {
+                kept.replace_range(at..at + callback.len(), &" ".repeat(callback.len()));
+            }
+            from = at + callback.len();
+        }
+    }
+    kept
+}
+
 /// No type in the production code of `files` keeps a token in a field, outside `holders`.
 fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
@@ -4777,7 +4938,8 @@ fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec
             continue;
         }
         for declaration in cairn_guards::type_declarations(code) {
-            if !mentions_crate(&declaration.body, CONFIRMED_TYPE).is_empty() {
+            let body = without_token_callbacks(&declaration.body);
+            if !mentions_crate(&body, CONFIRMED_TYPE).is_empty() {
                 found.push(format!(
                     "{}:{} `{}` holds a `{CONFIRMED_TYPE}`: a token kept in a type reaches an \
                      operation behind a reference, where the by-value roster cannot see it",
@@ -5518,6 +5680,55 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
         !confirmed_holder_violations(&[], &[pending.as_str()]).is_empty(),
         "a listed holder that does not exist was not refused"
     );
+    // A callback handed a token to spend keeps none; any other shape of one still holds it.
+    for (shape, source) in [
+        (
+            "the dialog's handler",
+            "pub struct Dialog {\n    on_confirm: EventHandler<Confirmed>,\n}",
+        ),
+        (
+            "the window's continuation",
+            "pub struct Asking {\n    then: Rc<dyn Fn(Confirmed)>,\n}",
+        ),
+        (
+            "a boxed one-shot",
+            "pub struct Asking {\n    then: Box<dyn FnOnce(Confirmed) + 'static>,\n}",
+        ),
+    ] {
+        assert_eq!(
+            confirmed_holder_violations(&[(Path::new(&pending), source)], &[]),
+            Vec::<String>::new(),
+            "a callback taking a token was refused: {shape}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a callback that returns one",
+            "pub struct Mint {\n    make: Rc<dyn Fn() -> Confirmed>,\n}",
+        ),
+        (
+            "a callback beside a token",
+            "pub struct Both {\n    then: Rc<dyn Fn(Confirmed)>,\n    kept: Option<Confirmed>,\n}",
+        ),
+        (
+            "a handler of more than the token",
+            "pub struct Pair {\n    on: EventHandler<(Confirmed, u8)>,\n}",
+        ),
+        (
+            "a handler named otherwise",
+            "pub struct Mine {\n    on: MyEventHandler<Confirmed>,\n}",
+        ),
+        (
+            "a variant named like the callback",
+            "pub enum Job {\n    MyFn(Confirmed),\n}",
+        ),
+    ] {
+        assert_eq!(
+            confirmed_holder_violations(&[(Path::new(&pending), source)], &[]).len(),
+            1,
+            "the holder check missed {shape}"
+        );
+    }
     // In the application, as in the engine: only the rostered file may hold one.
     let lane = "crates/cairn-app/src/worker/local_lane.rs";
     let queued = "crates/cairn-app/src/worker/queued.rs";

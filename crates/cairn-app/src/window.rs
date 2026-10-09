@@ -5,12 +5,13 @@ use std::rc::Rc;
 use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
-    ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
+    ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
+    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
     current_branch,
 };
 use freya::prelude::*;
 
+use crate::confirming::Confirming;
 use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
@@ -87,6 +88,9 @@ pub struct View {
     /// The local writes: queued, running and ended, the lock files last listed, and whether
     /// the window waits on one to close (staging-and-commit R4).
     pub writes: State<LocalWrites>,
+    /// A destructive operation's confirmation, while one is open: drawn over everything, the
+    /// window's chords inert until it is answered (staging-and-commit R7.4).
+    pub confirming: State<Option<Confirming>>,
 }
 
 impl std::fmt::Debug for View {
@@ -95,6 +99,7 @@ impl std::fmt::Debug for View {
             .field("fetch", &*self.fetch.read())
             .field("prompt", &*self.prompt.read())
             .field("refused", &*self.refused.read())
+            .field("confirming", &*self.confirming.read())
             .finish_non_exhaustive()
     }
 }
@@ -112,6 +117,7 @@ pub fn window(
     let counted = status_text::loaded_count(&view.progress.read());
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
+    let confirming = view.confirming.read().clone();
     // What the window says about the local writes: which it waits on to close (R4.9), and the
     // lock files last listed (R3.8, R4.9).
     let (closing_on, locks) = {
@@ -207,7 +213,24 @@ pub fn window(
             },
             view,
         ))
+        .maybe_child(confirming.map(|asking| confirmation(asking, view.confirming)))
         .maybe_child(prompt.map(|prompt| dialog(prompt, view.prompt, answer)))
+        // Every context menu opens here, so none panics for want of a host (R7.5).
+        .child(ContextMenuViewer::new())
+        .into()
+}
+
+/// The confirmation a destructive operation waits on (R7.4): its token handed where the
+/// asking view said, and the dialog let go of on either answer.
+fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> Element {
+    let title = asking.title().to_owned();
+    let consequence = asking.consequence().clone();
+    ConfirmDialog::new(title, consequence)
+        .on_confirm(move |token| {
+            showing.set(None);
+            asking.confirmed(token);
+        })
+        .on_cancel(move |()| showing.set(None))
         .into()
 }
 
@@ -646,36 +669,7 @@ pub(crate) mod tests {
             app,
             (WINDOW_WIDTH, HEIGHT).into(),
             move |runner| {
-                runner.provide_root_context(|| View {
-                    rows: State::create(held(initial)),
-                    progress: State::create(progress),
-                    selected: State::create(None),
-                    fetch: State::create(fetch),
-                    prompt: State::create(prompt),
-                    remotes: State::create(vec![RemoteSummary {
-                        name: "origin".to_owned(),
-                        url: Some("https://git.example.com/ada/engine".to_owned()),
-                    }]),
-                    refused: State::create(None),
-                    diff: State::create(DiffState::default()),
-                    history_scroll: ScrollController::new(0, 0, Vec::new()),
-                    history_cursor: State::create(0),
-                    detail_tab: State::create(DetailTab::default()),
-                    pane_collapsed: State::create(false),
-                    pane_height: State::create(PANE_HEIGHT),
-                    diff_settings: State::create(DiffSettings::default()),
-                    diff_scroll: ScrollController::new(0, 0, Vec::new()),
-                    change_cursor: State::create(None),
-                    filter_text: State::create(String::new()),
-                    changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
-                    pair: State::create(None),
-                    held_keys: State::create(HeldKeys::default()),
-                    refreshed: State::create(RefreshState::default()),
-                    repository: State::create(Some("engine".to_owned())),
-                    sidebar: SidebarView::created(),
-                    local: crate::local_changes_state::LocalChangesView::created(),
-                    writes: State::create(crate::local_writes::LocalWrites::default()),
-                })
+                runner.provide_root_context(|| test_view(initial, progress, fetch, prompt))
             },
             1.,
         );
@@ -683,6 +677,47 @@ pub(crate) mod tests {
             test.sync_and_update();
         }
         (test, view, submitted, answered)
+    }
+
+    /// The view state a test window is drawn from: `initial` rows loaded, everything else as
+    /// a window opens.
+    fn test_view(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        fetch: FetchStatus,
+        prompt: Option<PromptView>,
+    ) -> View {
+        View {
+            rows: State::create(held(initial)),
+            progress: State::create(progress),
+            selected: State::create(None),
+            fetch: State::create(fetch),
+            prompt: State::create(prompt),
+            remotes: State::create(vec![RemoteSummary {
+                name: "origin".to_owned(),
+                url: Some("https://git.example.com/ada/engine".to_owned()),
+            }]),
+            refused: State::create(None),
+            diff: State::create(DiffState::default()),
+            history_scroll: ScrollController::new(0, 0, Vec::new()),
+            history_cursor: State::create(0),
+            detail_tab: State::create(DetailTab::default()),
+            pane_collapsed: State::create(false),
+            pane_height: State::create(PANE_HEIGHT),
+            diff_settings: State::create(DiffSettings::default()),
+            diff_scroll: ScrollController::new(0, 0, Vec::new()),
+            change_cursor: State::create(None),
+            filter_text: State::create(String::new()),
+            changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+            pair: State::create(None),
+            held_keys: State::create(HeldKeys::default()),
+            refreshed: State::create(RefreshState::default()),
+            repository: State::create(Some("engine".to_owned())),
+            sidebar: SidebarView::created(),
+            local: crate::local_changes_state::LocalChangesView::created(),
+            writes: State::create(crate::local_writes::LocalWrites::default()),
+            confirming: State::create(None),
+        }
     }
 
     fn click_label(test: &mut TestingRunner, caption: &str) {
@@ -1776,7 +1811,9 @@ pub(crate) mod tests {
     /// Presses `action`'s chord on this platform, as a key press reaches the window; for the
     /// other window tests too, so no other test file names a modifier.
     pub(crate) fn press_chord(test: &mut TestingRunner, action: Action) {
-        let chord = accelerators::chord(action, accelerators::Os::current()).unwrap();
+        let chord = accelerators::chords(action, accelerators::Os::current())
+            .first()
+            .unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {
             name: KeyboardEventName::KeyDown,
@@ -2435,7 +2472,8 @@ pub(crate) mod tests {
     /// Holds (`down`) or lets go of the keys of the table's extending chord — ⌘ on macOS,
     /// Ctrl elsewhere — through the table, as the window hears them.
     fn hold_extending(test: &mut TestingRunner, down: bool) {
-        let chord = accelerators::chord(Action::ExtendSelection, accelerators::Os::current())
+        let chord = accelerators::chords(Action::ExtendSelection, accelerators::Os::current())
+            .first()
             .and_then(|chord| chord.press_hold())
             .expect("the extending chord is a press");
         let (key, code, modifiers) = chord;
@@ -4030,6 +4068,222 @@ pub(crate) mod tests {
         press_chord(&mut test, Action::Refresh);
         assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
         assert_eq!(view.rows.read().len(), 10);
+    }
+
+    /// Presses the sidebar's filter field, so it holds focus.
+    fn focus_sidebar_filter(test: &mut TestingRunner) {
+        let field = test
+            .find(|node, element| {
+                Paragraph::try_downcast(element)
+                    .filter(|paragraph| {
+                        paragraph
+                            .spans
+                            .iter()
+                            .any(|span| span.text.as_ref() == cairn_ui::SIDEBAR_FILTER_PLACEHOLDER)
+                    })
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no filter field in the sidebar"));
+        test.click_cursor((f64::from(field.x), f64::from(field.y)));
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// C15, R7.1: a focused text field hands the window's chords and the held modifiers to the
+    /// window. With the sidebar's filter focused, the Refresh chord asks for a refresh and types
+    /// nothing into the field, and a row pressed with the extending chord held — the hold made
+    /// while the field had focus — selects it beside the row selected. Caught by: a field whose
+    /// key handler claims every key, which cancels the window's global key event, so F5 is
+    /// unheard and `HeldKeys` never sees ⌘ or Ctrl go down (the hole recon found in Freya's
+    /// dispatch, `docs/research/staging-and-commit/freya-ui-apis.md` §2).
+    #[test]
+    fn a_focused_filter_field_hands_the_windows_chords_and_held_keys_to_the_window() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        focus_sidebar_filter(&mut test);
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(
+            requests_since(&submitted, from)
+                .into_iter()
+                .filter(|request| matches!(request, Request::Refresh))
+                .count(),
+            1,
+            "the Refresh chord went unheard while the filter had focus"
+        );
+        assert_eq!(
+            view.sidebar.filter_text.peek().as_str(),
+            "",
+            "the chord typed"
+        );
+
+        focus_sidebar_filter(&mut test);
+        extend_row(&mut test, 7);
+        assert_eq!(
+            selection(view),
+            (Some(RowId::Commit(oid(2))), Some(RowId::Commit(oid(7)))),
+            "the extending chord held while the filter had focus was never heard"
+        );
+    }
+
+    /// What a discard of one modified file would cost, for a confirmation to draw.
+    fn one_file_discard() -> cairn_model::Consequence {
+        use cairn_model::{Consequence, DiscardedFile, FileLoss};
+        Consequence::DiscardFiles {
+            files: vec![DiscardedFile {
+                path: RepoPath::from("src/lib.rs"),
+                loss: FileLoss::Modified {
+                    index: oid(1),
+                    working_tree: Some(oid(2)),
+                    executable: false,
+                    lines: Some(3),
+                    mode: None,
+                },
+            }],
+        }
+    }
+
+    /// Opens a confirmation of [`one_file_discard`] whose token goes to the returned list.
+    fn confirm_open(
+        test: &mut TestingRunner,
+        view: View,
+    ) -> Rc<RefCell<Vec<cairn_model::Confirmed>>> {
+        let tokens: Rc<RefCell<Vec<cairn_model::Confirmed>>> = Rc::default();
+        let kept = tokens.clone();
+        let mut confirming = view.confirming;
+        confirming.set(Some(Confirming::new(
+            "Discard changes",
+            one_file_discard(),
+            move |token| kept.borrow_mut().push(token),
+        )));
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        tokens
+    }
+
+    /// C17, R7.4 through the window: while a confirmation is open the window's chords do
+    /// nothing — Refresh asks for nothing, a tab chord shows no tab — and a press behind it
+    /// selects nothing there but cancels; Return, with focus on Cancel, cancels; the button
+    /// hands the token, built from the consequence drawn, where the asking view said, and
+    /// closes the dialog; once closed the chords act again. Caught by: a window that acts on
+    /// a chord under the dialog (its key listener runs before the dialog's), a dialog a press
+    /// can reach past, or a token that goes nowhere.
+    #[test]
+    fn no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        let tokens = confirm_open(&mut test, view);
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == "Discard Changes in 1 File"),
+            "{:?}",
+            texts(&test)
+        );
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        press_chord(&mut test, Action::ShowChangesTab);
+        for _ in 0..3 {
+            test.press_key(Key::Named(NamedKey::Tab));
+            test.sync_and_update();
+        }
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "a chord acted under it"
+        );
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        assert!(view.confirming.peek().is_some());
+
+        // A press behind it, on a row: the row is not chosen, and the dialog is cancelled.
+        click_row(&mut test, 5);
+        assert_eq!(selection(view), (Some(RowId::Commit(oid(2))), None));
+        assert!(view.confirming.peek().is_none(), "a press outside kept it");
+        assert!(tokens.borrow().is_empty());
+
+        // Return, on Cancel, cancels.
+        let tokens = confirm_open(&mut test, view);
+        test.press_key(Key::Named(NamedKey::Enter));
+        test.sync_and_update();
+        assert!(view.confirming.peek().is_none(), "Return did not cancel");
+        assert!(tokens.borrow().is_empty(), "Return confirmed");
+
+        // The button builds the token from the consequence drawn and hands it on.
+        let tokens = confirm_open(&mut test, view);
+        click_label(&mut test, "Discard Changes in 1 File");
+        assert_eq!(tokens.borrow().len(), 1);
+        assert_eq!(tokens.borrow()[0].prompt(), one_file_discard().prompt());
+        assert!(view.confirming.peek().is_none());
+
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+    }
+
+    /// R7.5: a context menu opens from anywhere in the window, since the window mounts the
+    /// host every menu needs (`ContextMenuViewer`), without which the toolkit panics. Caught
+    /// by: no host mounted.
+    #[test]
+    fn a_context_menu_opens_from_inside_the_window() {
+        const MENU_ITEM: &str = "Copy Path";
+        const STRIP: f32 = 40.;
+        let (mut test, _) = TestingRunner::new(
+            || {
+                let view = use_consume::<View>();
+                rect()
+                    .expanded()
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .height(Size::px(HEIGHT - STRIP))
+                            .child(window(PATH, view, None, None)),
+                    )
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .height(Size::px(STRIP))
+                            .on_secondary_down(|_| {
+                                ContextMenu::open_from_down(
+                                    Menu::new().child(MenuButton::new().child(MENU_ITEM)),
+                                );
+                            }),
+                    )
+            },
+            (WINDOW_WIDTH, HEIGHT).into(),
+            |runner| {
+                runner.provide_root_context(|| {
+                    test_view(
+                        (0..3).map(row).collect(),
+                        received(3, true),
+                        FetchStatus::Idle,
+                        None,
+                    )
+                })
+            },
+            1.,
+        );
+        test.sync_and_update();
+        let at = (20., f64::from(HEIGHT - STRIP / 2.));
+        test.move_cursor(at);
+        for name in [
+            freya_testing::prelude::MouseEventName::MouseDown,
+            freya_testing::prelude::MouseEventName::MouseUp,
+        ] {
+            test.send_event(PlatformEvent::Mouse {
+                name,
+                cursor: at.into(),
+                button: Some(MouseButton::Right),
+            });
+            test.sync_and_update();
+        }
+        test.sync_and_update();
+        assert!(
+            texts(&test).iter().any(|t| t == MENU_ITEM),
+            "no menu: {:?}",
+            texts(&test)
+        );
     }
 
     /// C10 headless with focus set, through the real boundary: the window opens its history

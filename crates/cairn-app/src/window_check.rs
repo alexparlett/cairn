@@ -178,7 +178,7 @@ impl Phase {
 
 /// What a frame sends besides the updates.
 #[derive(Clone, Copy)]
-enum Input {
+enum Stimulus {
     Nothing,
     /// A wheel scroll of `dy` pixels at `(x, y)`.
     Scroll {
@@ -204,7 +204,12 @@ impl Harness {
     }
 
     /// Frames until `done` holds of the view, then `settle` more, sending `input` with each.
-    fn pump(&mut self, input: Input, settle: usize, mut done: impl FnMut(View) -> bool) -> Phase {
+    fn pump(
+        &mut self,
+        input: Stimulus,
+        settle: usize,
+        mut done: impl FnMut(View) -> bool,
+    ) -> Phase {
         let mut phase = Phase::default();
         let started = Instant::now();
         let mut after = None::<usize>;
@@ -247,7 +252,7 @@ impl Harness {
             // The input is sent, and the frame that handles it timed: the runner's own scroll
             // would handle it inside an untimed update of its own.
             let framing = Instant::now();
-            if let Input::Scroll { x, y, dy } = input {
+            if let Stimulus::Scroll { x, y, dy } = input {
                 self.test.send_event(PlatformEvent::Wheel {
                     name: WheelEventName::Wheel,
                     scroll: (0., dy).into(),
@@ -401,6 +406,7 @@ fn launch(path: &str) -> Harness {
                 sidebar: crate::sidebar_state::SidebarView::created(),
                 local: crate::local_changes_state::LocalChangesView::created(),
                 writes: State::create(crate::local_writes::LocalWrites::default()),
+                confirming: State::create(None),
             })
         },
         1.,
@@ -437,7 +443,7 @@ fn window_check() {
     let history = (WIDTH as f64 / 2., 200.);
     let pane = (WIDTH as f64 / 2., f64::from(HEIGHT) - 100.);
 
-    let opened = harness.pump(Input::Nothing, 30, landed);
+    let opened = harness.pump(Stimulus::Nothing, 30, landed);
     opened.report(
         "opening: the refs, the first page of the decorated history, the sidebar's rows and \
          the status",
@@ -447,7 +453,7 @@ fn window_check() {
     // included, to set what follows against.
     let mut scrolled = 0;
     let alone = harness.pump(
-        Input::Scroll {
+        Stimulus::Scroll {
             x: history.0,
             y: history.1,
             dy: -240.,
@@ -478,7 +484,9 @@ fn window_check() {
             .run_in(|| selection::choose(newest, view, Some(&submit)));
         selection::comparison_of(newest)
     };
-    let drawn = harness.pump(Input::Nothing, 10, move |view| changes_ready(view, first));
+    let drawn = harness.pump(Stimulus::Nothing, 10, move |view| {
+        changes_ready(view, first)
+    });
     drawn.report("the Commit tab drawn the first time in the session, over the newest commit");
 
     for (name, subject) in [("S1 cf2dff2b1e3", S1), ("M1 5a3292f163d", M1)] {
@@ -488,7 +496,7 @@ fn window_check() {
         // operating system's cache, as the bar's numbers are warm).
         let of = harness.choose(subject);
         let cold = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: history.0,
                 y: history.1,
                 dy: -240.,
@@ -501,7 +509,7 @@ fn window_check() {
              Commit tab, the history scrolled every frame"
         ));
         let _ = harness.choose(F1);
-        let _ = harness.pump(Input::Nothing, 2, |view| {
+        let _ = harness.pump(Stimulus::Nothing, 2, |view| {
             changes_ready(
                 view,
                 Comparison::Commit(Oid::parse(F1).unwrap_or_else(|_| unreachable!())),
@@ -511,7 +519,7 @@ fn window_check() {
         // Asked again: the answer the diff thread kept.
         let of = harness.choose(subject);
         let loading = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: history.0,
                 y: history.1,
                 dy: -240.,
@@ -540,7 +548,7 @@ fn window_check() {
 
         let mut scrolled = 0;
         let scrolling = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: pane.0,
                 y: pane.1,
                 dy: -2_400.,
@@ -555,7 +563,7 @@ fn window_check() {
 
         // Back to the top of the files, where Expand All opens them.
         let _ = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: pane.0,
                 y: pane.1,
                 dy: 1e9,
@@ -570,7 +578,7 @@ fn window_check() {
             .test
             .run_in(|| diff_actions::expand_all(true, view, Some(&submit)));
         let expanding = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: pane.0,
                 y: pane.1,
                 dy: -240.,
@@ -601,7 +609,7 @@ fn window_check() {
         );
         let mut scrolled = 0;
         let through = harness.pump(
-            Input::Scroll {
+            Stimulus::Scroll {
                 x: pane.0,
                 y: pane.1,
                 dy: -2_400.,
@@ -629,7 +637,7 @@ fn window_check() {
     // F1: refused on the byte ceiling, then Load Diff.
     harness.show(DetailTab::Changes);
     let f1 = harness.choose(F1);
-    let refused = harness.pump(Input::Nothing, 10, move |view| {
+    let refused = harness.pump(Stimulus::Nothing, 10, move |view| {
         changes_ready(view, f1)
             && matches!(view.diff.peek().file(), Some((_, Answer::Ready(Some(_)))))
     });
@@ -640,7 +648,7 @@ fn window_check() {
         .test
         .run_in(|| diff_actions::load_anyway(view, Some(&submit)));
     let loading = harness.pump(
-        Input::Scroll {
+        Stimulus::Scroll {
             x: history.0,
             y: history.1,
             dy: -240.,
@@ -657,7 +665,7 @@ fn window_check() {
     let mut scrolled = 0;
     let diff_pane = (WIDTH as f64 * 0.75, f64::from(HEIGHT) - 80.);
     let scrolling = harness.pump(
-        Input::Scroll {
+        Stimulus::Scroll {
             x: diff_pane.0,
             y: diff_pane.1,
             dy: -2_400.,
@@ -724,7 +732,7 @@ fn local_changes_check(bench: &str) {
         panic!("{refused}");
     }
     let mut harness = launch(&scratch);
-    let opened = harness.pump(Input::Nothing, 30, landed);
+    let opened = harness.pump(Stimulus::Nothing, 30, landed);
     opened.report("scratch clone: opening, its large status among what lands");
     describe_landed(&harness);
     let paths = harness.test.run_in(|| {
@@ -743,7 +751,7 @@ fn local_changes_check(bench: &str) {
     // Local Changes pressed: its lists drawn and the first path's diff asked and drawn.
     let mut main = harness.view.sidebar.main;
     harness.test.run_in(|| main.set(MainView::LocalChanges));
-    let shown = harness.pump(Input::Nothing, 20, |view| {
+    let shown = harness.pump(Stimulus::Nothing, 20, |view| {
         view.local.state.peek().has_lists()
             && view
                 .diff
@@ -768,7 +776,7 @@ fn local_changes_check(bench: &str) {
     let unstaged_list = (f64::from(crate::sidebar_state::SIDEBAR_WIDTH) + 120., 150.);
     let mut scrolled = 0;
     let scrolling = harness.pump(
-        Input::Scroll {
+        Stimulus::Scroll {
             x: unstaged_list.0,
             y: unstaged_list.1,
             dy: -2_400.,
@@ -785,13 +793,13 @@ fn local_changes_check(bench: &str) {
     harness
         .test
         .run_in(|| filter.set("cairn-new-05".to_owned()));
-    let filtering = harness.pump(Input::Nothing, 10, |view| {
+    let filtering = harness.pump(Stimulus::Nothing, 10, |view| {
         let state = view.local.state.peek();
         state.text() == "cairn-new-05" && state.is_settled()
     });
     filtering.report("a filter typed: its rows asked of a worker and drawn");
     harness.test.run_in(|| filter.set(String::new()));
-    let _ = harness.pump(Input::Nothing, 5, |view| {
+    let _ = harness.pump(Stimulus::Nothing, 5, |view| {
         view.local.state.peek().is_settled()
     });
 
@@ -801,7 +809,7 @@ fn local_changes_check(bench: &str) {
         .test
         .run_in(|| harness.view.local.state.peek().serial());
     harness.handle.submit(Request::Refresh);
-    let refreshing = harness.pump(Input::Nothing, 20, move |view| {
+    let refreshing = harness.pump(Stimulus::Nothing, 20, move |view| {
         view.local.state.peek().serial() > before
             && view.diff.peek().working_choice().map(|choice| choice.lists)
                 == Some(view.local.state.peek().serial())

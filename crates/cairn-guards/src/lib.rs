@@ -819,6 +819,26 @@ pub fn names_an_element(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
+/// What builds a text field, or replaces the key handler a field was built with
+/// (staging-and-commit R7.1): Freya's `Input` — however it is reached, by its constructor, an
+/// import, an alias or its default key handler — and the builder method that swaps the
+/// handler. Every render file but the one key policy's (`cairn_ui::text_field`) leaves both
+/// alone, so a field that claims the window's chords cannot be written by accident.
+pub const TEXT_FIELD_IDENTS: &[&str] = &["Input", "on_pre_key_down"];
+
+/// 1-based lines where the production code of `source` (strings, comments and test modules
+/// blanked) names one of [`TEXT_FIELD_IDENTS`].
+pub fn builds_a_text_field(source: &str) -> Vec<usize> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in TEXT_FIELD_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
 const ROW_CONTENT: &str = "RowContent";
 
 /// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or

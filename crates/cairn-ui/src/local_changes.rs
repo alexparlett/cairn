@@ -24,6 +24,7 @@ use crate::commit_tab::DETAIL_ROW_HEIGHT;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::file_filter::ShownFiles;
 use crate::ref_glyphs::RefGlyph;
+use crate::text_field::text_field;
 
 /// The heading over the upper list.
 pub const UNSTAGED_CAPTION: &str = "Unstaged";
@@ -276,7 +277,7 @@ impl Component for LocalChangesList {
                     .width(Size::fill())
                     .padding(Gaps::new(4., 6., 4., 6.))
                     .child(
-                        Input::new(self.filter.clone())
+                        text_field(self.filter.clone())
                             .placeholder(FILTER_PLACEHOLDER)
                             .compact()
                             .width(Size::fill()),

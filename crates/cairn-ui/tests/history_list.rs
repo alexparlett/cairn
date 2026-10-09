@@ -284,7 +284,7 @@ fn an_accelerators_chord_does_not_move_the_selection() {
     press(&mut test, NamedKey::ArrowDown);
 
     for action in [Action::NextChange, Action::PreviousChange] {
-        let chord = accelerators::chord(action, Os::current()).unwrap();
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
         let (key, _, held) = chord.key_press().unwrap();
         test.press_key_with_modifiers(key, held);
         test.sync_and_update();

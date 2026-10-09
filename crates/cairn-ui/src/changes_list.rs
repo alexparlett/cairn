@@ -19,6 +19,7 @@ use crate::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
 use crate::date_text;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::file_filter::ShownFiles;
+use crate::text_field::text_field;
 use crate::toggle_glyphs::Glyph;
 
 /// The filter field's placeholder.
@@ -195,7 +196,7 @@ impl Component for ChangesList {
                     .width(Size::fill())
                     .padding(Gaps::new(4., 6., 4., 6.))
                     .child(
-                        Input::new(self.filter.clone())
+                        text_field(self.filter.clone())
                             .placeholder(FILTER_PLACEHOLDER)
                             .compact()
                             .width(Size::fill()),

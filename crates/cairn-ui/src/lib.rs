@@ -5,6 +5,7 @@ mod changes_list;
 mod columns;
 mod commit_row;
 mod commit_tab;
+mod confirm_dialog;
 mod credential_prompt;
 mod date_text;
 mod detail_tabs;
@@ -30,6 +31,7 @@ mod ref_glyphs;
 mod side_by_side_rows;
 mod sidebar;
 mod status_box;
+mod text_field;
 mod toggle_glyphs;
 mod unified_rows;
 
@@ -47,6 +49,7 @@ pub use commit_tab::{
     EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
     budget_notice, cut_short_notice, file_text, status_letter,
 };
+pub use confirm_dialog::{CANCEL_CAPTION, ConfirmDialog};
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,
@@ -92,3 +95,4 @@ pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
     name_text,
 };
+pub use text_field::{text_field, text_field_in};

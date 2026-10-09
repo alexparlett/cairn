@@ -2,6 +2,7 @@
 
 mod changes_tab;
 mod closing;
+mod confirming;
 mod detail_pane;
 mod diff_actions;
 mod diff_state;
@@ -108,6 +109,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let local = local_changes_state::LocalChangesView::used();
     // The local writes, for the session (staging-and-commit R4).
     let writes = use_state(local_writes::LocalWrites::default);
+    // A destructive operation's confirmation, while one is open (staging-and-commit R7.4).
+    let confirming = use_state(|| None::<confirming::Confirming>);
     let view = View {
         rows,
         progress,
@@ -134,6 +137,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         sidebar,
         local,
         writes,
+        confirming,
     };
 
     let opened = use_hook(|| {

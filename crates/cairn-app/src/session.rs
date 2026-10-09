@@ -406,6 +406,7 @@ mod tests {
                         sidebar: crate::sidebar_state::SidebarView::created(),
                         local: crate::local_changes_state::LocalChangesView::created(),
                         writes: State::create(crate::local_writes::LocalWrites::default()),
+                        confirming: State::create(None),
                     }
                 })
             },

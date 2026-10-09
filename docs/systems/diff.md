@@ -2153,80 +2153,146 @@ under every algorithm and over this repository's history.
 
 ## The accelerator table
 
-As-built for PRD R8 and decision D5 (`crates/cairn-ui/src/accelerators.rs`). Every
-shortcut is an `Action` mapped by `accelerators::chord(action, os)` to at most one
-`Chord` per `Os` — macOS, and Linux for every other platform — and by
-`accelerators::heard_in(action)` to the `Scope` it is heard in: `Window`, wherever
-focus is, or `Detail`, only while focus is inside the detail pane. The table is data:
-one match naming every action for the chord, one for the scope. A chord holds its
-modifiers exactly (the lock keys are ignored, an extra Shift is not, for a key and a
-pointer press alike), and is completed by a key that names itself (an arrow, matched by
-the key), by a key where it sits (a digit, matched by its physical position, since
-Option turns `1` into `¡` on macOS), or by a primary pointer press.
+As-built for PRD R8, decision D5 and staging-and-commit R7.2-R7.3
+(`crates/cairn-ui/src/accelerators.rs`). Every shortcut is an `Action` mapped by
+`accelerators::chords(action, os)` to a list of distinct `Chord`s per `Os` (`Chords`, in the
+table's order, empty for an action Fork binds none) — macOS, and Linux for every other
+platform — and by `accelerators::heard_in(action)` to the `Scope` it is heard in: `Window`,
+wherever focus is; `Detail`, only while focus is inside the detail pane or Local Changes'
+diff; `LocalChanges`, only while a file list or the diff in Local Changes has focus;
+`LocalChangesLists`, only while Unstaged or Staged has focus; `CommitBox`, only while the
+commit box's subject or description has focus; and `History`, only while the history list
+has focus. The table is data: one match naming every action for the chords, one for the
+scope. A chord holds its modifiers exactly (the lock keys are ignored, an extra Shift is not,
+for a key and a pointer press alike), and is completed by a key that names itself (an arrow,
+Enter, Backspace, matched by the key), by a key where it sits (a digit, a letter or the full
+stop, matched by its physical position, since Option turns `1` into `¡` on macOS and Shift
+turns `.` into `>`), or by a primary pointer press.
 
 The chords are Fork's and only Fork's — the user's decision of 2026-10-03, from
-`docs/research/diff-engine/fork-shortcuts.md`:
+`docs/research/diff-engine/fork-shortcuts.md`, and for staging
+`docs/research/staging-and-commit/fork-staging-and-commit.md` §1-2:
 
 | Action | Linux | macOS | Heard |
 | --- | --- | --- | --- |
-| previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ | in the detail pane |
+| previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ | in the detail pane or Local Changes' diff |
 | Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 | anywhere |
-| extend the selection to a second commit | Ctrl+press | ⌘+press | anywhere |
+| extend the selection: a second commit, or a path toggled in Local Changes' lists | Ctrl+press | ⌘+press | where the press lands |
+| select a range of paths in Local Changes' lists | Shift+press | Shift+press | where the press lands |
+| extend Local Changes' list selection up / down | Shift+↑ / Shift+↓ | Shift+↑ / Shift+↓ | in Local Changes' lists |
 | Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
+| stage or unstage the selection | Enter, Ctrl+Shift+S | Return, ⌘S | in Local Changes' lists and diff |
+| stage all or unstage all | Ctrl+Alt+Shift+S | ⌥⇧⌘S | in Local Changes' lists and diff |
+| discard the selection | Backspace, Delete, Ctrl+Shift+D | ⌫, ⇧⌘D | in Local Changes' lists and diff |
+| commit | Ctrl+Enter | ⌘Return | in the commit box |
+| Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |
 | toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
 
-Change navigation is scoped to the pane so a text field elsewhere keeps those keys (⌘↑
-is the start of the document on macOS). The 3 beside the tab chords is kept for a File
-Tree tab and is nothing yet. Fork binds no chord to the four diff toggles or the entire
-file, so they are actions without one, reached from the diff's header (phase 06). The
-previous and next file are not chords at all: they are the focused file list's own ↑
-and ↓, with Tab and Shift-Tab moving focus, as Fork does (the detail pane, above). No
-collapse chord: the user's decision. Every chord holds a modifier but a function key's: an
-unmodified key belongs to whatever has focus, and a function key types nothing in any of
-it. Refresh is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md`
-⌘R and `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows
-row, as it does for change navigation, and F5 is bound by no Linux desktop nor by any
-other action here; ⌘R is matched where R sits (`chords_are_distinct_and_every_bare_one_is_a_function_key`,
-`the_table_is_forks_chords_and_no_others`).
+Change navigation is scoped so a text field elsewhere keeps those keys (⌘↑ is the start of
+the document on macOS). The 3 beside the tab chords is kept for a File Tree tab and is
+nothing yet. Fork binds no chord to the four diff toggles or the entire file, so they are
+actions without one, reached from the diff's header. The previous and next file are not
+chords at all: they are the focused file list's own ↑ and ↓, with Tab and Shift-Tab moving
+focus, as Fork does (the detail pane, above). No collapse chord: the user's decision. Refresh
+is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md` ⌘R and
+`keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows row, as it
+does for every chord here, and F5 is bound by no Linux desktop nor by any other action. Fork
+keeps alternates for staging — stage on Return and ⌘S, discard on Backspace, Delete and
+Ctrl+Shift+D — so an action holds a list. No chord is listed twice on one platform, within
+one list or across two actions, whatever their scopes; and every chord holds a modifier but a
+function key's (F5) and, in `LocalChanges` alone, a bare Enter, Backspace or Delete: an
+unmodified key belongs to whatever has focus, a function key types nothing anywhere, and
+Local Changes' lists and diff are the one scope no text field is in
+(`chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`, which also
+shows a bare Enter in any other scope, a bare letter, a bare press, a chord listed twice for
+one action and one shared by two actions each failing it).
 
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
 action a key press is in a scope, or `accelerators::is_chord(event)` whether it is any
-action's chord, and never reads the held keys itself; the module's public surface
-speaks actions, scopes and chords, never a modifier a caller could branch on — but for
-`Chord::key_press` and `Chord::press_hold`, which hand a chord's keys to a headless test so
-it presses a chord, or holds a pointer chord's keys, through the table rather than spelling
-them. A pointer press is resolved against `HeldKeys`, the keys the window heard held (a
-press carries no modifiers in this Freya build): it answers which `Action` a press is,
-never which key is down (phase 08), and it has no equality and a `Debug` that names no
-key, so nothing can compare one with another to the same end. The window hears
-`Scope::Window` on every key press (`on_global_key_down` on its root), and keeps `HeldKeys`
-from every key down and up it hears, letting go of every key when the window loses focus
-(the toolkit's `Platform::is_app_focused`): a release made while another window has it is
-never heard here (`the_keys_held_are_let_go_of_when_the_window_loses_focus`). The detail
-pane hears `Scope::Detail` on
-the key presses that reach it from whatever inside it has focus (its root's
-`on_key_down`); both act in `crates/cairn-app/src/shortcuts.rs`, one arm per action,
-and nothing acts while a credential prompt is up, since the dialog owns the keys until
-it is answered (`no_accelerator_acts_while_a_credential_prompt_is_up`). The two tab
-chords show their tab, opening a collapsed pane; previous and next change move the diff
-(phase 06); and the extending press selects a second commit to compare (phase 08, "Comparing
-two commits" above). The history list and the file list leave a
-chord alone whichever scope hears it, so Ctrl+↓ is "next change", never "next commit"
-(`an_accelerators_chord_does_not_move_the_selection`). Pinned by
-`the_table_is_forks_chords_and_no_others` (the whole table, spelled out per platform),
-`every_chord_resolves_to_its_action_in_its_scope_only`,
-`chords_are_distinct_and_every_bare_one_is_a_function_key`,
-`the_command_key_is_the_platforms_own`,
+action's chord in any scope, and never reads the held keys itself; the module's public
+surface speaks actions, scopes and chords, never a modifier a caller could branch on — but
+for `Chord::key_press` and `Chord::press_hold`, which hand a chord's keys to a headless test
+so it presses a chord, or holds a pointer chord's modifier key down, through the table rather
+than spelling them. A pointer press is resolved against `HeldKeys`, the keys the window heard
+held (a press carries no modifiers in this Freya build): it answers which `Action` a press
+is, never which key is down, and it has no equality and a `Debug` that names no key, so
+nothing can compare one with another to the same end. The window hears `Scope::Window` on
+every key press (`on_global_key_down` on its root), and keeps `HeldKeys` from every key down
+and up it hears, letting go of every key when the window loses focus (the toolkit's
+`Platform::is_app_focused`): a release made while another window has it is never heard here
+(`the_keys_held_are_let_go_of_when_the_window_loses_focus`). The detail pane hears
+`Scope::Detail` on the key presses that reach it from whatever inside it has focus (its
+root's `on_key_down`); both act in `crates/cairn-app/src/shortcuts.rs`, one arm per action,
+and nothing acts while a credential prompt or a confirmation is up, since the dialog owns the
+keys until it is answered (`no_accelerator_acts_while_a_credential_prompt_is_up`,
+`no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked`). The two tab
+chords show their tab, opening a collapsed pane; previous and next change move the diff;
+and the extending press selects a second commit to compare ("Comparing two commits" above).
+The staging, commit and Show Lost Commits chords are in the table, each heard in its own
+scope only — so with the commit box focused, only the commit chord resolves
+(`in_the_commit_box_only_the_commit_chord_resolves`) — and are acted on by the views that
+hear those scopes; until a view hears a scope, its chords resolve and do nothing — today
+no view hears `LocalChanges`, `LocalChangesLists`, `CommitBox` or `History`, and no list
+reads the range press, so a Local Changes list does not yet toggle a path on the extending
+press. The history
+list and the file lists leave a chord alone whichever scope hears it, so Ctrl+↓ is "next
+change", never "next commit" (`an_accelerators_chord_does_not_move_the_selection`), and
+Shift+↓, the list selection's extension in Local Changes, moves nothing in the other lists.
+Pinned by `the_table_is_forks_chords_and_no_others` (the whole table, every list spelled out
+per platform), `every_chord_resolves_to_its_action_in_its_scope_only` (every chord of every
+list), the pin above, `the_command_key_is_the_platforms_own`,
 `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
-`a_physical_chord_is_matched_by_where_the_key_sits`,
-`a_chord_of_either_scope_is_a_chord`,
+`a_physical_chord_is_matched_by_where_the_key_sits`, `a_chord_of_any_scope_is_a_chord`,
 `the_change_chords_and_the_arrows_belong_to_the_focused_pane` (a pane hearing
 `Scope::Detail` as the window's does), and `the_tab_chords_resolve_through_the_table`
 through the window; that the window's detail pane hears them and moves the diff is
 `previous_and_next_change_move_the_diff_while_the_pane_has_focus`. That no component names a
-literal modifier is the guard `no_component_names_a_literal_modifier`, and that the
-table holds data and resolution only is `the_accelerator_table_holds_data_and_resolution_only`
-(root `CLAUDE.md`, Invariants).
+literal modifier is the guard `no_component_names_a_literal_modifier`, and that the table
+holds data and resolution only — answering a list of chords, with its pin a plain test — is
+`the_accelerator_table_holds_data_and_resolution_only` (root `CLAUDE.md`, Invariants).
+
+### Text fields hand the window its chords
+
+Freya's `Input` claims every key but Enter, Escape, Shift and Tab: it stops the press
+bubbling and cancels the window's global key event, so a focused field hid F5 and the held ⌘
+or Ctrl from the window (staging-and-commit R7.1,
+`docs/research/staging-and-commit/freya-ui-apis.md` §2). Every field is built by
+`cairn_ui::text_field` (a filter, the credential prompt's field) or `text_field_in` (a field
+heard in a scope of its own, the commit box), whose one pre-key handler asks the table what
+each key is (`accelerators::field_key`, `FieldKey`): a window chord, and a lone Control, Alt
+or Command, is neither typed nor kept from the window — so Refresh refreshes and `HeldKeys`
+sees the extending key go down while a filter has focus
+(`a_focused_filter_field_hands_the_windows_chords_and_held_keys_to_the_window`); a
+primary+letter press that is no editing binding of the toolkit's editor types nothing (⌘R
+never types `r`); a chord of the field's own scope is claimed and reported, typing nothing,
+so ⌘Return or Ctrl+Enter in the commit box's description commits without a new line; and
+every other key is the field's alone, kept from the views around it — Backspace deletes a
+character and Enter makes a new line, never Local Changes' discard or stage — with Shift
+still reaching them, since a scroll view behind a field reads it
+(`a_text_field_hands_on_the_windows_chords_and_keeps_its_own_keys`,
+`a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own`,
+`in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits`). No render file
+but `crates/cairn-ui/src/text_field.rs` names `Input` or `on_pre_key_down`
+(`every_text_field_takes_the_shared_key_policy`).
+
+### Confirmations and menus
+
+A destructive operation waits on `cairn_ui::ConfirmDialog` (staging-and-commit R7.4): it
+draws a `Consequence`'s prompt and button (`Discard Changes in 3 Files`, `Discard 2 Lines`),
+both rendered by the consequence itself, and its button builds the `Confirmed` token from
+that value — the first file on the confirmation-surface roster. It is modal to the keyboard
+and to assistive technology (`a11y_modal`: Tab and Shift-Tab move between its two answers
+only), focus starts on Cancel — a deliberate deviation from Fork, which styles Discard the
+default (L8) — Escape and a press outside it cancel, and once answered it ignores every
+later press, so one acknowledgement builds one token
+(`crates/cairn-ui/tests/confirm_dialog.rs`). The window keeps the confirmation open
+(`View::confirming`, `crates/cairn-app/src/confirming.rs`: the consequence and where the
+token goes, never a token), draws the dialog over everything, makes its own chords inert
+while it is open — its key listener runs before any dialog's, so the dialog could not — and
+lets go of it on either answer
+(`no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked`). The window's
+root also mounts Freya's `ContextMenuViewer`, which every context menu needs or the toolkit
+panics (R7.5, `a_context_menu_opens_from_inside_the_window`).
 
 ## What a commit's details carry
 

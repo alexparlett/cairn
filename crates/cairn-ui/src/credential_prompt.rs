@@ -16,6 +16,8 @@
 use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
+use crate::text_field::text_field;
+
 /// Width of the dialog, wide enough for a URL to stay on one line.
 const DIALOG_WIDTH: f32 = 520.0;
 
@@ -142,7 +144,7 @@ impl Component for CredentialPrompt {
                         .color(secondary),
                 )
                 .child(
-                    Input::new(typed)
+                    text_field(typed)
                         .width(Size::fill())
                         .auto_focus(true)
                         .mode(if kind.is_shown() {

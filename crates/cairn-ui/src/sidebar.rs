@@ -24,6 +24,7 @@ use freya::prelude::*;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::status_box::counts_text;
+use crate::text_field::text_field;
 
 /// A row's height in the sidebar's list.
 pub const SIDEBAR_ROW_HEIGHT: f32 = 22.0;
@@ -301,7 +302,7 @@ impl Component for Sidebar {
             ))
             .child(
                 rect().width(Size::fill()).padding(6.).child(
-                    Input::new(self.filter.clone())
+                    text_field(self.filter.clone())
                         .placeholder(SIDEBAR_FILTER_PLACEHOLDER)
                         .compact()
                         .width(Size::fill()),

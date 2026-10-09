@@ -95,16 +95,16 @@ pub fn chunk_caption(verb: GestureVerb) -> &'static str {
     }
 }
 
-/// A selection's caption for `verb` over `count` lines, R9.2's words: `Stage 2 Lines`,
-/// `Unstage 1 Line`, `Discard 2 Lines` — the discard's confirmation button's words too.
+/// A selection's caption for `verb` over `count` lines (R9.2): `Stage 2 Lines`,
+/// `Unstage 1 Line`, and `Discard 2 Lines…`, whose ellipsis says it confirms — the
+/// confirmation's own button then reads `Discard 2 Lines` (the user's decision, 2026-10-09).
 pub fn lines_caption(verb: GestureVerb, count: usize) -> String {
     let lines = if count == 1 { "Line" } else { "Lines" };
-    let verb = match verb {
-        GestureVerb::Stage => "Stage",
-        GestureVerb::Unstage => "Unstage",
-        GestureVerb::Discard => "Discard",
-    };
-    format!("{verb} {count} {lines}")
+    match verb {
+        GestureVerb::Stage => format!("Stage {count} {lines}"),
+        GestureVerb::Unstage => format!("Unstage {count} {lines}"),
+        GestureVerb::Discard => format!("Discard {count} {lines}…"),
+    }
 }
 
 /// The mode row's caption for `verb` (R9.4).
@@ -117,12 +117,15 @@ pub fn mode_caption(verb: GestureVerb) -> &'static str {
 }
 
 /// What a person asked of the gesture: `verb` on `selection` of the file at `file` — the one
-/// file a single diff draws is file 0; the files drawn together are numbered in their order.
+/// file a single diff draws is file 0; the files drawn together are numbered in their order —
+/// under the answer numbered `drawn`. The selection names lines of that answer alone: whoever
+/// acts on it refuses it once another answer is drawn (phase 08 QA item 1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GestureAct {
     pub file: usize,
     pub verb: GestureVerb,
     pub selection: Selection,
+    pub drawn: u64,
 }
 
 /// Where a drag across a diff's lines stands (R9.2), kept by the window and handed to the view
@@ -524,11 +527,16 @@ impl Host {
     fn released(&self) {
         let drawn = self.gesture.drawn;
         let mut lines = self.gesture.lines;
-        let phase = lines.peek().phase_under(drawn).clone();
-        match phase {
-            Phase::Armed { .. } => lines.set(LineDrag::default()),
-            Phase::Dragging { .. } => self.finish(),
-            Phase::Idle | Phase::Selected { .. } => {}
+        // Read in place: a selection is as long as its lines, and this runs on every release.
+        let dragging = match lines.peek().phase_under(drawn) {
+            Phase::Armed { .. } => Some(false),
+            Phase::Dragging { .. } => Some(true),
+            Phase::Idle | Phase::Selected { .. } => None,
+        };
+        match dragging {
+            Some(false) => lines.set(LineDrag::default()),
+            Some(true) => self.finish(),
+            None => {}
         }
     }
 
@@ -537,13 +545,14 @@ impl Host {
     pub(crate) fn finish(&self) {
         let drawn = self.gesture.drawn;
         let mut lines = self.gesture.lines;
-        let Phase::Dragging {
-            file,
-            column,
-            anchor,
-        } = lines.peek().phase_under(drawn).clone()
-        else {
-            return;
+        // Read in place, the three fields copied: this runs on every press.
+        let (file, column, anchor) = match lines.peek().phase_under(drawn) {
+            Phase::Dragging {
+                file,
+                column,
+                anchor,
+            } => (*file, *column, *anchor),
+            Phase::Idle | Phase::Armed { .. } | Phase::Selected { .. } => return,
         };
         let pointer = *self.pointer.at.peek();
         let side_by_side = self.side_by_side;
@@ -576,6 +585,7 @@ impl Host {
             file,
             verb,
             selection,
+            drawn: self.gesture.drawn,
         });
     }
 
@@ -896,14 +906,17 @@ pub struct ModeRow {
     old: FileMode,
     new: FileMode,
     side: GestureSide,
+    drawn: u64,
     on_act: EventHandler<GestureAct>,
 }
 
 impl ModeRow {
-    /// The mode row of `file`'s change, when its mode changed and the gesture is over it.
+    /// The mode row of `file`'s change — in the answer numbered `drawn` — when its mode changed
+    /// and the gesture is over it.
     pub fn of(
         file: &cairn_model::ChangedFile,
         side: GestureSide,
+        drawn: u64,
         on_act: impl Into<EventHandler<GestureAct>>,
     ) -> Option<Self> {
         let (Some(old), Some(new)) = (file.old_mode, file.new_mode) else {
@@ -913,6 +926,7 @@ impl ModeRow {
             old,
             new,
             side,
+            drawn,
             on_act: on_act.into(),
         })
     }
@@ -929,7 +943,10 @@ impl std::fmt::Debug for ModeRow {
 
 impl PartialEq for ModeRow {
     fn eq(&self, other: &Self) -> bool {
-        self.old == other.old && self.new == other.new && self.side == other.side
+        self.old == other.old
+            && self.new == other.new
+            && self.side == other.side
+            && self.drawn == other.drawn
     }
 }
 
@@ -947,7 +964,7 @@ impl Component for ModeRow {
             new_id: None,
         };
         let words = header_lines(&file).join("  ");
-        let side = self.side;
+        let (side, drawn) = (self.side, self.drawn);
         let on_act = self.on_act.clone();
         rect()
             .horizontal()
@@ -984,6 +1001,7 @@ impl Component for ModeRow {
                                 file: 0,
                                 verb,
                                 selection,
+                                drawn,
                             });
                         }));
                 }
@@ -1099,7 +1117,8 @@ mod tests {
         assert_eq!(GestureSide::Staged.verbs(), &[GestureVerb::Unstage]);
         assert_eq!(lines_caption(GestureVerb::Stage, 2), "Stage 2 Lines");
         assert_eq!(lines_caption(GestureVerb::Unstage, 1), "Unstage 1 Line");
-        assert_eq!(lines_caption(GestureVerb::Discard, 2), "Discard 2 Lines");
+        assert_eq!(lines_caption(GestureVerb::Discard, 2), "Discard 2 Lines…");
+        assert_eq!(lines_caption(GestureVerb::Discard, 1), "Discard 1 Line…");
         assert_eq!(chunk_caption(GestureVerb::Discard), "Discard Changes…");
         assert_eq!(mode_caption(GestureVerb::Stage), "Stage Mode Change");
     }

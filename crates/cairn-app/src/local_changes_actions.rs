@@ -36,6 +36,7 @@
 //! is open, nothing here acts.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cairn_model::{
     ChangeList, ChangeStatus, Consequence, FileDiff, LocalChanges, RepoPath, Selection,
@@ -332,6 +333,7 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&dyn Fn(Request)>)
                     file,
                     verb,
                     selection,
+                    drawn,
                 },
                 view,
                 submit,
@@ -339,9 +341,11 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&dyn Fn(Request)>)
             return;
         }
     }
-    // The paths drawn together, whole: the selection they are drawn for.
+    // The paths drawn together, whole — those read and drawn, never one still being read or
+    // one the line budget left unread (the user's decision, 2026-10-09).
     if let Some(list) = together {
-        act(list, Acted::Selection, action, view, submit);
+        let paths = view.diff.peek().together_read_paths();
+        act(list, Acted::Paths(paths), action, view, submit);
         return;
     }
     let Some((list, path)) = view
@@ -369,17 +373,22 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&dyn Fn(Request)>)
     }
     quiet(view);
     // The diff the act was over: one of the paths drawn together, by its place, or the path
-    // chosen — copied, since the lane applies exactly what was drawn.
+    // chosen — shared, since the lane applies exactly what was drawn — and only while it is
+    // still the answer the act was made under: a selection names that answer's lines, and
+    // against a re-read's diff it would name others (phase 08 QA item 1).
     let drawn = {
         let diff = view.diff.peek();
         match diff.together() {
             Some((list, _)) => diff
                 .together_diff(act.file)
-                .map(|shown| (list, shown.diff().clone())),
+                .filter(|_| diff.together_drawn() == Some(act.drawn))
+                .map(|shown| (list, shown.shared_diff())),
             None => {
                 let list = diff.working_choice().map(|choice| choice.list);
-                let shown = diff.shown_working().filter(|_| act.file == 0);
-                list.zip(shown.map(|shown| shown.diff().clone()))
+                let shown = diff
+                    .shown_working()
+                    .filter(|_| act.file == 0 && diff.working_drawn() == act.drawn);
+                list.zip(shown.map(cairn_model::ShownDiff::shared_diff))
             }
         }
     };
@@ -392,29 +401,19 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&dyn Fn(Request)>)
 /// `verb` on `selection` of `diff`, the diff of a path in `list`.
 fn act_on_lines(
     list: ChangeList,
-    diff: FileDiff,
+    diff: Arc<FileDiff>,
     verb: GestureVerb,
     selection: Selection,
     view: View,
     submit: Option<&dyn Fn(Request)>,
 ) {
     match (verb, list) {
-        (GestureVerb::Stage, ChangeList::Unstaged) => ask(
-            view,
-            submit,
-            LocalWrite::StageLines {
-                diff: Box::new(diff),
-                selection,
-            },
-        ),
-        (GestureVerb::Unstage, ChangeList::Staged) => ask(
-            view,
-            submit,
-            LocalWrite::UnstageLines {
-                diff: Box::new(diff),
-                selection,
-            },
-        ),
+        (GestureVerb::Stage, ChangeList::Unstaged) => {
+            ask(view, submit, LocalWrite::StageLines { diff, selection })
+        }
+        (GestureVerb::Unstage, ChangeList::Staged) => {
+            ask(view, submit, LocalWrite::UnstageLines { diff, selection })
+        }
         (GestureVerb::Discard, _) => discard_lines(list, diff, selection, view, submit),
         // Not offered: a stage of what is staged, an unstage of what is not.
         (GestureVerb::Stage, ChangeList::Staged) | (GestureVerb::Unstage, ChangeList::Unstaged) => {
@@ -428,7 +427,7 @@ fn act_on_lines(
 /// it would lose asked of the engine, whose answer opens the confirmation.
 fn discard_lines(
     list: ChangeList,
-    diff: FileDiff,
+    diff: Arc<FileDiff>,
     selection: Selection,
     view: View,
     submit: Option<&dyn Fn(Request)>,
@@ -462,7 +461,7 @@ fn discard_lines(
         acting.write().lines_discard_asked(asked);
         submit(Request::DiscardLinesConsequence {
             asked,
-            diff: Box::new(diff),
+            diff,
             selection,
         });
     }
@@ -476,6 +475,8 @@ enum Acted {
     Rows(Vec<usize>),
     /// This path alone, if the list lists it.
     Path(RepoPath),
+    /// These paths, those the list lists.
+    Paths(Vec<RepoPath>),
 }
 
 impl Acted {
@@ -484,6 +485,14 @@ impl Acted {
             Self::Selection => acted_rows(view, lists, list),
             Self::Rows(rows) => rows,
             Self::Path(path) => lists.row_of(list, &path).into_iter().collect(),
+            Self::Paths(paths) => {
+                let mut rows: Vec<usize> = paths
+                    .iter()
+                    .filter_map(|path| lists.row_of(list, path))
+                    .collect();
+                rows.sort_unstable();
+                rows
+            }
         }
     }
 }

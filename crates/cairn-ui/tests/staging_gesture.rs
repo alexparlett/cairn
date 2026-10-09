@@ -609,3 +609,30 @@ fn files_drawn_together_build_one_viewport() {
         );
     }
 }
+
+/// Phase 08 QA item 12: after an action with no diff drawn again, the actions come back once
+/// the pointer moves — they hide only while it stands where the action was pressed. Caught by:
+/// actions hidden until a redraw that a refused write never brings.
+#[test]
+fn after_an_action_a_moved_pointer_brings_the_actions_back() {
+    let mut view = launch(
+        edited(60, 8, 4, Context::lines(3)),
+        Some(GestureSide::Unstaged),
+        false,
+    );
+    hover(&mut view.test, 300., row_y(2));
+    press_caption(&mut view.test, STAGE_CHUNK_CAPTION);
+    assert!(
+        !captions(&view.test)
+            .iter()
+            .any(|c| c == STAGE_CHUNK_CAPTION),
+        "the actions stayed under a still pointer"
+    );
+    hover(&mut view.test, 310., row_y(3));
+    assert!(
+        captions(&view.test)
+            .iter()
+            .any(|c| c == STAGE_CHUNK_CAPTION),
+        "the actions did not come back once the pointer moved"
+    );
+}

@@ -13,6 +13,8 @@
 //! a horizontal extent of its whole width. [`drawn_bytes`] is the cut every view draws to, and
 //! the widest line is measured to it.
 
+use std::sync::Arc;
+
 use crate::{
     ChangeStops, Context, DiffLimits, DiffLine, DisplayOverlay, FileDiff, SideBySideLayout,
     TextDiff, UnifiedLayout,
@@ -56,10 +58,11 @@ pub fn widest_drawn_columns<'a>(lines: impl Iterator<Item = &'a DiffLine>) -> (u
 }
 
 /// One file's diff as the views draw it: built once when the answer is computed, at the
-/// context it was asked at.
+/// context it was asked at. The answer is shared ([`Self::shared_diff`]), so what the staging
+/// gesture hands a write is the answer drawn, never a copy of it made on the thread that draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShownDiff {
-    diff: FileDiff,
+    diff: Arc<FileDiff>,
     context: Context,
     /// `None` for a file that is not text.
     unified: Option<UnifiedLayout>,
@@ -86,7 +89,7 @@ impl ShownDiff {
                 _ => (None, None, false, (0, false), 1),
             };
         Self {
-            diff,
+            diff: Arc::new(diff),
             context,
             unified,
             side_by_side,
@@ -101,9 +104,15 @@ impl ShownDiff {
         &self.diff
     }
 
-    /// The answer itself, for a caller letting go of it.
+    /// The answer drawn, shared: a handle, not a copy, whatever the file's size.
+    pub fn shared_diff(&self) -> Arc<FileDiff> {
+        Arc::clone(&self.diff)
+    }
+
+    /// The answer itself, for a caller letting go of it: moved out when nothing else shares
+    /// it, copied otherwise.
     pub fn into_diff(self) -> FileDiff {
-        self.diff
+        Arc::unwrap_or_clone(self.diff)
     }
 
     pub fn context(&self) -> Context {
@@ -235,6 +244,32 @@ mod tests {
             (LINE_CUT_BYTES, true)
         );
         assert_eq!(widest_drawn_columns(std::iter::empty()), (0, false));
+    }
+
+    /// The answer drawn is shared, never copied: a handle to it is the same allocation, and
+    /// letting go of the view's last hold moves it out whole. Caught by: a `diff()` copied into
+    /// each handle (the staging gesture copying a whole file per action on the UI thread).
+    #[test]
+    fn the_answer_drawn_is_shared_not_copied() {
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("f"),
+            new_path: RepoPath::from("f"),
+            old_mode: None,
+            new_mode: None,
+            old_id: None,
+            new_id: None,
+        };
+        let diff = FileDiff {
+            file,
+            content: DiffContent::ModeChangeOnly,
+        };
+        let shown = ShownDiff::new(diff.clone(), Context::lines(3));
+        let handle = shown.shared_diff();
+        assert!(std::ptr::eq(&*handle, shown.diff()), "the handle is a copy");
+        assert_eq!(Arc::strong_count(&handle), 2);
+        drop(handle);
+        assert_eq!(shown.into_diff(), diff);
     }
 
     /// Both projections are built once, at the context asked, and a file that is not text

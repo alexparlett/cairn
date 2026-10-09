@@ -53,6 +53,11 @@ pub(super) struct Together {
     shown: Expansion,
     /// The ask is the one in the file-diff lane now.
     pub(super) in_lane: bool,
+    /// The number of the diffs drawn: another whenever a page replaces a diff drawn, so a
+    /// selection made over the old rows is nothing over the new (phase 08 QA item 1).
+    drawn: u64,
+    /// The paths the line budget left unread: never acted on as drawn.
+    unread: Vec<usize>,
     /// Every page of the ask has arrived.
     ended: bool,
 }
@@ -96,9 +101,38 @@ impl DiffState {
             .map(|together| (together.list, together.paths.as_slice()))
     }
 
-    /// The number of the ask drawn together: what a selection over its rows belongs to.
+    /// The number of the diffs drawn together: what a selection over their rows belongs to.
+    /// Another each time a page replaces a diff that was drawn — a re-read's answer — never
+    /// for a page filling a path still being read.
     pub fn together_drawn(&self) -> Option<u64> {
-        self.together.as_ref().map(|together| together.query.asked)
+        self.together.as_ref().map(|together| together.drawn)
+    }
+
+    /// The paths drawn together that were read and are drawn — a diff, its notice, its
+    /// failure — never one still being read or one the line budget left unread: what the
+    /// chords act on with no lines selected (the user's decision, 2026-10-09).
+    pub fn together_read_paths(&self) -> Vec<RepoPath> {
+        let Some(together) = &self.together else {
+            return Vec::new();
+        };
+        together
+            .shown
+            .iter()
+            .filter(|(index, opened)| {
+                !together.unread.contains(index)
+                    && match opened {
+                        Opened::Shown(_) | Opened::Failed(_) => true,
+                        Opened::Reading => false,
+                    }
+            })
+            .filter_map(|(index, _)| together.paths.get(index).cloned())
+            .collect()
+    }
+
+    /// A new number for the diffs drawn.
+    fn next_drawn(&mut self) -> u64 {
+        self.answers = self.answers.wrapping_add(1).max(1);
+        self.answers
     }
 
     /// The diff of the path at `file` among the paths drawn together, when it has arrived.
@@ -138,8 +172,9 @@ impl DiffState {
                 && together.query.options == wanted.options
         });
         let mut freed = Vec::new();
-        let shown = match (same_paths, self.together.take()) {
-            (true, Some(kept)) => kept.shown,
+        let (shown, drawn, unread) = match (same_paths, self.together.take()) {
+            // Kept, and their number with them, until a page replaces one.
+            (true, Some(kept)) => (kept.shown, kept.drawn, kept.unread),
             (_, replaced) => {
                 if let Some(mut replaced) = replaced {
                     freed.extend(shown_of(replaced.shown.close_all()));
@@ -154,7 +189,7 @@ impl DiffState {
                         },
                     )
                 }));
-                shown
+                (shown, self.next_drawn(), Vec::new())
             }
         };
         let paths = wanted
@@ -171,6 +206,8 @@ impl DiffState {
             shown,
             in_lane: true,
             ended: false,
+            drawn,
+            unread,
         });
         self.took_lane_for_together();
         let mut requests = vec![Request::Together(query)];
@@ -241,6 +278,7 @@ impl DiffState {
         files: Vec<(usize, TogetherOutcome)>,
         ended: Option<TogetherEnded>,
     ) -> Option<Request> {
+        let renumbered = self.answers.wrapping_add(1).max(1);
         let Some(together) = self
             .together
             .as_mut()
@@ -269,6 +307,7 @@ impl DiffState {
                     .skip(next)
                     .map(|file| file.index)
                     .collect();
+                together.unread.clone_from(&unread);
                 freed.extend(shown_of(
                     together.shown.set(
                         unread
@@ -277,6 +316,11 @@ impl DiffState {
                     ),
                 ));
             }
+        }
+        // A diff drawn was replaced: whatever was selected over its rows names other lines now.
+        if !freed.is_empty() {
+            together.drawn = renumbered;
+            self.answers = renumbered;
         }
         retire(freed)
     }
@@ -308,6 +352,7 @@ impl DiffState {
         options: DiffOptions,
         ask: bool,
     ) -> (Vec<Request>, Vec<ShownDiff>) {
+        let renumbered = self.answers.wrapping_add(1).max(1);
         let Some(together) = &mut self.together else {
             return (Vec::new(), Vec::new());
         };
@@ -325,6 +370,7 @@ impl DiffState {
         }
         let freed = shown_of(together.shown.close_all());
         together.query.options = options;
+        together.unread.clear();
         together.shown.set(
             together
                 .entries
@@ -342,6 +388,8 @@ impl DiffState {
         );
         together.in_lane = false;
         together.ended = false;
+        together.drawn = renumbered;
+        self.answers = renumbered;
         (Vec::new(), freed)
     }
 }

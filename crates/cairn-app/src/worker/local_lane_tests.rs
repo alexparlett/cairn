@@ -14,6 +14,7 @@
 //! `std::fs`, every write goes through the lane, and a stub `git` is a `/bin/sh` script.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cairn_git::ops::{Askpass, GitBinary};
@@ -450,14 +451,14 @@ fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
         ask(
             &handle,
             LocalWrite::StageLines {
-                diff: Box::new(diff.clone()),
+                diff: Arc::new(diff.clone()),
                 selection: selection.clone(),
             },
         ),
         ask(
             &handle,
             LocalWrite::StageLines {
-                diff: Box::new(diff),
+                diff: Arc::new(diff),
                 selection,
             },
         ),
@@ -1362,8 +1363,8 @@ fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
     let prompt = consequence.prompt();
     assert_eq!(
         prompt,
-        "Do you want to discard the changes in 2 files? 1 modified (3 lines), 1 untracked file \
-         deleted (12 bytes). You can't undo this action."
+        "Do you want to discard the changes in 2 files (modified and new.txt)? 1 modified (3 \
+         lines), 1 untracked file deleted (12 bytes). You can't undo this action."
     );
     assert_eq!(consequence.action(), "Discard Changes in 2 Files");
     let discarding = ask(
@@ -1469,4 +1470,77 @@ fn a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read() {
         "a count ended before its end was answered: {seen:?}"
     );
     drop(handle);
+}
+
+/// Phase 08 QA item 14: the paths drawn together are each read as their own side — an
+/// unstaged path's working tree against the index, a staged path's index against `HEAD`, an
+/// untracked path whole — through the real boundary against real `git`. Caught by: every
+/// path drawn together read as one side.
+#[test]
+fn paths_drawn_together_are_each_read_as_their_own_side() {
+    use super::request::{DiffOptions, TogetherEnded, TogetherFile, TogetherQuery, WorkingSide};
+    let fixture = to_commit("cairn-together-sides", &["a", "b"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a", "b"]);
+    let committed = ask(&handle, commit());
+    let seen = until_ended(&mut updates, committed);
+    assert!(
+        matches!(ending_of(&seen, committed).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    let write = |name: &str, content: &str| {
+        let path = fixture.path.join(name);
+        std::fs::write(&path, content)
+            .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+    };
+    write("a", "unstaged a\n");
+    write("b", "staged b\n");
+    staged(&handle, &mut updates, &["b"]);
+    write("b", "working b\n");
+    write("n", "untracked n\n");
+    let files = [
+        ("a", WorkingSide::Unstaged),
+        ("b", WorkingSide::Staged),
+        ("n", WorkingSide::Untracked),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (path, side))| TogetherFile {
+        index,
+        path: RepoPath::from(path),
+        side,
+    })
+    .collect();
+    handle.submit(Request::Together(TogetherQuery {
+        asked: 3,
+        files: Arc::new(files),
+        options: DiffOptions::default(),
+    }));
+    let seen = collect_until(&mut updates, |u| {
+        matches!(u, Update::Together { ended: Some(_), .. })
+    });
+    let mut read = Vec::new();
+    for update in seen {
+        if let Update::Together { files, ended, .. } = update {
+            for (index, outcome) in files {
+                let new = outcome
+                    .ok()
+                    .flatten()
+                    .and_then(|shown| shown.diff().text().map(|text| text.new_content()));
+                read.push((index, new));
+            }
+            if ended.is_some() {
+                assert_eq!(ended, Some(TogetherEnded::Every));
+            }
+        }
+    }
+    assert_eq!(
+        read,
+        [
+            (0, Some(b"unstaged a\n".to_vec())),
+            (1, Some(b"staged b\n".to_vec())),
+            (2, Some(b"untracked n\n".to_vec())),
+        ]
+    );
 }

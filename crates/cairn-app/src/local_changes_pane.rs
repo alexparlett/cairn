@@ -720,9 +720,12 @@ fn diff_body(
     let side = gesture_side(list);
     let mode_row = match &shown.diff().content {
         // The mode change's own row: over text, and over a change of the mode alone.
-        DiffContent::Text { .. } | DiffContent::ModeChangeOnly => {
-            ModeRow::of(&shown.diff().file, side, gesture_acts(view, submit.clone()))
-        }
+        DiffContent::Text { .. } | DiffContent::ModeChangeOnly => ModeRow::of(
+            &shown.diff().file,
+            side,
+            drawn,
+            gesture_acts(view, submit.clone()),
+        ),
         DiffContent::Binary { .. }
         | DiffContent::TooLarge { .. }
         | DiffContent::LfsPointer { .. }

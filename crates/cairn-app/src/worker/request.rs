@@ -452,10 +452,10 @@ pub enum Request {
     /// lane in the order asked and answered by [`Update::DiscardConsequence`] under `asked`, as
     /// a discard of files is: the diff's staging gesture's discard (staging-and-commit R9.1,
     /// R9.2). Numbered in the discard-count lane with it; one superseded before it runs answers
-    /// nothing. Boxed: it carries a whole diff.
+    /// nothing. The diff is the answer drawn, shared, never copied.
     DiscardLinesConsequence {
         asked: OperationId,
-        diff: Box<FileDiff>,
+        diff: Arc<FileDiff>,
         selection: Selection,
     },
     /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
@@ -914,7 +914,7 @@ mod tests {
             (
                 Request::DiscardLinesConsequence {
                     asked: OperationId::next(),
-                    diff: Box::new(FileDiff {
+                    diff: Arc::new(FileDiff {
                         file: cairn_model::ChangedFile {
                             status: cairn_model::ChangeStatus::Modified,
                             old_path: RepoPath::from("a"),

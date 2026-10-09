@@ -732,8 +732,9 @@ fn a_discard_of_files_restores_the_tracked_and_deletes_exactly_the_untracked() {
     let prompt = consequence.prompt();
     assert_eq!(
         prompt,
-        "Do you want to discard the changes in 3 files? 1 modified (2 lines), 1 deleted file \
-         restored, 1 untracked file deleted (12 bytes). You can't undo this action."
+        "Do you want to discard the changes in 3 files (a.txt, b.txt and dir/u1.txt)? 1 modified \
+         (2 lines), 1 deleted file restored, 1 untracked file deleted (12 bytes). You can't undo \
+         this action."
     );
     let performed = ok(
         ops::discard_files(git(), &worker, Confirmed::by_user(consequence), None),

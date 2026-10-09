@@ -112,12 +112,12 @@ impl From<UnstageTarget> for UnstageTo {
 pub enum LocalWrite {
     /// `selection` of `diff` — the path's unstaged or untracked diff — into the index.
     StageLines {
-        diff: Box<FileDiff>,
+        diff: Arc<FileDiff>,
         selection: Selection,
     },
     /// `selection` of `diff` — the path's staged diff — out of the index.
     UnstageLines {
-        diff: Box<FileDiff>,
+        diff: Arc<FileDiff>,
         selection: Selection,
     },
     /// Every one of `paths`, whole, into the index.
@@ -568,7 +568,7 @@ pub(super) enum LocalJob {
     /// not read.
     LinesConsequence {
         asked: OperationId,
-        diff: Box<FileDiff>,
+        diff: Arc<FileDiff>,
         selection: Selection,
         cancel: Superseded,
     },

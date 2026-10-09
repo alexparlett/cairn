@@ -1540,5 +1540,18 @@ fn paths_drawn_together_are_answered_by_place_under_their_budget() {
         .collect();
     assert_eq!(indices, [(8, 0, true), (8, 2, true)]);
     assert_eq!(ended, Some(TogetherEnded::Budget { next: 2 }));
+
+    // Phase 08 QA item 13: a path costing exactly the budget — one, and 49,999 lines on its
+    // new side — spends it: the path after it is not read.
+    let exact: String = (0..49_999).map(|n| format!("{n}\n")).collect();
+    write(&fixture.fixture.path.join("exact.txt"), &exact);
+    handle.submit(Request::Together(ask(9, &["exact.txt", "one.txt"])));
+    let (files, ended) = answered(&mut updates);
+    let indices: Vec<(u64, usize, bool)> = files
+        .iter()
+        .map(|(asked, index, text)| (*asked, *index, text.is_some()))
+        .collect();
+    assert_eq!(indices, [(9, 0, true)], "a budget spent exactly read on");
+    assert_eq!(ended, Some(TogetherEnded::Budget { next: 1 }));
     drop(handle);
 }

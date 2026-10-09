@@ -47,9 +47,19 @@ fn entries() -> Vec<StatusEntry> {
 /// Forty lines of `path`, `line {n}`, lines 4 and 30 replaced by `EDIT {n}`: two chunks at
 /// context three. A new file is every line added.
 fn forty_lines(path: &str, status: ChangeStatus, modes: Option<(FileMode, FileMode)>) -> FileDiff {
+    forty_lines_edited(path, status, modes, [4, 30])
+}
+
+/// [`forty_lines`] with its two edits at `edits` instead.
+fn forty_lines_edited(
+    path: &str,
+    status: ChangeStatus,
+    modes: Option<(FileMode, FileMode)>,
+    edits: [u32; 2],
+) -> FileDiff {
     let new: Vec<DiffLine> = (0..40)
         .map(|n| {
-            DiffLine::terminated(if n == 4 || n == 30 {
+            DiffLine::terminated(if edits.contains(&n) {
                 format!("EDIT {n}")
             } else {
                 format!("line {n}")
@@ -66,10 +76,10 @@ fn forty_lines(path: &str, status: ChangeStatus, modes: Option<(FileMode, FileMo
             (0..40)
                 .map(|n| DiffLine::terminated(format!("line {n}")))
                 .collect(),
-            vec![
-                ChangedRange::new(LineSpan::at(4, 1), LineSpan::at(4, 1)),
-                ChangedRange::new(LineSpan::at(30, 1), LineSpan::at(30, 1)),
-            ],
+            edits
+                .iter()
+                .map(|at| ChangedRange::new(LineSpan::at(*at, 1), LineSpan::at(*at, 1)))
+                .collect(),
         )
     };
     FileDiff {
@@ -644,5 +654,268 @@ fn a_renames_source_row_unstages_its_lines_at_the_new_path() {
     assert_eq!(
         lines_asked(&submitted),
         [("unstage", "new.rs".to_owned(), (vec![4], vec![4]), false)]
+    );
+}
+
+/// Draws a.rs and n.rs together from the default entries, their first ask answered, and
+/// returns that ask's number.
+fn drawn_together(test: &mut TestingRunner, view: View, submitted: &Submitted) -> u64 {
+    answer_with(
+        test,
+        view,
+        submitted,
+        forty_lines("a.rs", ChangeStatus::Modified, None),
+    );
+    press_row(test, "a.rs", 0);
+    hold(test, view, Action::ExtendSelection);
+    press_row(test, "n.rs", 0);
+    let_go(test, view);
+    let (asked_id, _) = together_asked(submitted)
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("the paths were not asked together"));
+    answer_together(
+        test,
+        view,
+        submitted,
+        asked_id,
+        forty_lines("a.rs", ChangeStatus::Modified, None),
+    );
+    asked_id
+}
+
+/// Answers the ask `asked` of a.rs and n.rs drawn together, a.rs with `first`.
+fn answer_together(
+    test: &mut TestingRunner,
+    view: View,
+    submitted: &Submitted,
+    asked: u64,
+    first: FileDiff,
+) {
+    let shown = |diff: FileDiff| Ok(Some(Box::new(ShownDiff::new(diff, Context::default()))));
+    apply(
+        test,
+        view,
+        submitted,
+        Update::Together {
+            asked,
+            files: vec![
+                (0, shown(first)),
+                (1, shown(forty_lines("n.rs", ChangeStatus::Added, None))),
+            ],
+            ended: Some(crate::worker::TogetherEnded::Every),
+        },
+    );
+    settle(test);
+}
+
+/// Drags over the diff row reading `text` and the row after it.
+fn drag_over(test: &mut TestingRunner, text: &str) {
+    let (x, y) = row(test, text);
+    test.press_cursor((x, y));
+    test.move_cursor((x, y + 8.));
+    test.move_cursor((x, y + 17.));
+    test.release_cursor((x, y + 17.));
+    settle(test);
+}
+
+/// Whether any lines were asked of the lane: a stage, an unstage, or a discard's consequence.
+fn any_lines_asked(submitted: &Submitted) -> bool {
+    !lines_asked(submitted).is_empty()
+        || submitted
+            .borrow()
+            .iter()
+            .any(|request| matches!(request, Request::DiscardLinesConsequence { .. }))
+}
+
+/// Phase 08 QA item 1 (critical): a selection made over files drawn together, then a re-read's
+/// page replacing a file's diff under it — a refresh asks the same paths again, their old diffs
+/// drawn meanwhile — is nothing: neither the discard chord nor the stage chord sends its rows'
+/// old lines against the new diff. Caught by: a selection numbered by the ask alone, kept
+/// across a page that replaced the diff it was made on.
+#[test]
+fn a_selection_over_files_drawn_together_is_nothing_once_a_page_replaces_its_diff() {
+    let (mut test, view, submitted) = opened();
+    drawn_together(&mut test, view, &submitted);
+    // A refresh: the same status again asks the same paths under a new number, drawing the
+    // old diffs meanwhile.
+    apply(&mut test, view, &submitted, status(entries()));
+    settle(&mut test);
+    let (again, _) = together_asked(&submitted)
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("the refresh did not ask again"));
+    drag_over(&mut test, "line 4");
+    let drawn = view.diff.peek().together_drawn().unwrap_or(0);
+    assert!(
+        view.local.lines.peek().selected(drawn).is_some(),
+        "the drag selected nothing, so the test decides nothing"
+    );
+    // The re-read's page: a.rs edited elsewhere now.
+    answer_together(
+        &mut test,
+        view,
+        &submitted,
+        again,
+        forty_lines_edited("a.rs", ChangeStatus::Modified, None, [10, 30]),
+    );
+    crate::window::tests::press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    crate::window::tests::press_chord(&mut test, Action::StageOrUnstage);
+    settle(&mut test);
+    assert!(
+        !any_lines_asked(&submitted),
+        "old rows' lines were acted on against the re-read diff: {:?}",
+        submitted.borrow()
+    );
+}
+
+/// Phase 08 QA item 1, the single path: an act made under one answer — the floating action
+/// built before the diff was read again — is refused once another answer is drawn, so its
+/// lines never reach the lane against the new diff. Caught by: an act that trusts the number
+/// it was drawn under.
+#[test]
+fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
+    let (mut test, view, submitted) = opened();
+    let query = answer_with(
+        &mut test,
+        view,
+        &submitted,
+        forty_lines("a.rs", ChangeStatus::Modified, None),
+    );
+    let old = view.diff.peek().working_drawn();
+    let mut selection = Selection::empty();
+    selection.select_removed(LineNumber::from_index(4));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::FileDiff {
+            query,
+            diff: Some(Box::new(ShownDiff::new(
+                forty_lines_edited("a.rs", ChangeStatus::Modified, None, [10, 30]),
+                Context::default(),
+            ))),
+        },
+    );
+    assert_ne!(view.diff.peek().working_drawn(), old);
+    for verb in [GestureVerb::Stage, GestureVerb::Discard] {
+        crate::local_changes_actions::on_gesture(
+            cairn_ui::GestureAct {
+                file: 0,
+                verb,
+                selection: selection.clone(),
+                drawn: old,
+            },
+            view,
+            Some(&|request: Request| submitted.borrow_mut().push(request)),
+        );
+    }
+    settle(&mut test);
+    assert!(!any_lines_asked(&submitted), "{:?}", submitted.borrow());
+}
+
+/// Phase 08 QA item 11: part of a new file's lines is not the file — a drag over two of its
+/// forty lines asks what discarding those lines would lose, never the file's deletion. Caught
+/// by: a new file's every discard routed to the files' route.
+#[test]
+fn part_of_a_new_files_lines_is_discarded_as_lines() {
+    let (mut test, view, submitted) = opened();
+    press_row(&mut test, "n.rs", 0);
+    answer_with(
+        &mut test,
+        view,
+        &submitted,
+        forty_lines("n.rs", ChangeStatus::Added, None),
+    );
+    drag_over(&mut test, "line 10");
+    let drawn = view.diff.peek().working_drawn();
+    let selected = view
+        .local
+        .lines
+        .peek()
+        .selected(drawn)
+        .map(|(_, selection)| selection.len());
+    assert_eq!(selected, Some(2), "the drag did not select two lines");
+    crate::window::tests::press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let (lines, files) = submitted
+        .borrow()
+        .iter()
+        .fold((0, 0), |(lines, files), r| match r {
+            Request::DiscardLinesConsequence { .. } => (lines + 1, files),
+            Request::DiscardConsequence { .. } => (lines, files + 1),
+            _ => (lines, files),
+        });
+    assert_eq!((lines, files), (1, 0));
+}
+
+/// The user's decision (2026-10-09): with no lines selected, the chords over files drawn
+/// together act on the files read and drawn alone — never one the line budget left unread.
+/// Caught by: a discard or a stage reaching a path the person was never shown.
+#[test]
+fn the_chords_over_files_drawn_together_take_only_the_files_drawn() {
+    let (mut test, view, submitted) = launch();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(vec![
+            changed("a.rs", None, Some(UnstagedChange::Modified)),
+            changed("b.rs", None, Some(UnstagedChange::Modified)),
+            changed("c.rs", None, Some(UnstagedChange::Modified)),
+        ]),
+    );
+    open_local_changes(&mut test);
+    press_row(&mut test, "a.rs", 0);
+    hold(&mut test, view, Action::SelectRange);
+    press_row(&mut test, "c.rs", 0);
+    let_go(&mut test, view);
+    let (asked_id, files) = together_asked(&submitted)
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("the paths were not asked together"));
+    assert_eq!(files.len(), 3);
+    let shown = |path: &str| {
+        Ok(Some(Box::new(ShownDiff::new(
+            forty_lines(path, ChangeStatus::Modified, None),
+            Context::default(),
+        ))))
+    };
+    // a.rs read; the budget spent before b.rs, so b.rs and c.rs are not.
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::Together {
+            asked: asked_id,
+            files: vec![(0, shown("a.rs"))],
+            ended: Some(crate::worker::TogetherEnded::Budget { next: 1 }),
+        },
+    );
+    settle(&mut test);
+    // Focus the diff, then the chords.
+    let (x, y) = row(&test, "EDIT 4");
+    test.click_cursor((x, y));
+    settle(&mut test);
+    crate::window::tests::press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    crate::window::tests::press_chord(&mut test, Action::StageOrUnstage);
+    settle(&mut test);
+    let asked: Vec<Vec<RepoPath>> = submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::DiscardConsequence { paths, .. } => Some(paths.clone()),
+            Request::Write {
+                write: LocalWrite::StageFiles { paths },
+                ..
+            } => Some(paths.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [vec![RepoPath::from("a.rs")], vec![RepoPath::from("a.rs")]]
     );
 }

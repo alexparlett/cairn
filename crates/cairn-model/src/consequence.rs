@@ -309,14 +309,19 @@ impl Consequence {
     }
 }
 
-/// Fork's words (L8): "Do you want to discard the changes in 3 files? 2
-/// modified (14 lines), 1 untracked file deleted (2.1 KiB). You can't undo
-/// this action." One file is named by its path; a file deleted in the working
+/// Fork's words (L8): "Do you want to discard the changes in 3 files (a.rs, b.rs
+/// and c.rs)? 2 modified (14 lines), 1 untracked file deleted (2.1 KiB). You can't
+/// undo this action." One file is named by its path, several by their first three
+/// paths and how many more (the user's decision, 2026-10-09); a file deleted in the working
 /// tree, which the discard brings back, is named as that.
 fn discard_files_prompt(files: &[DiscardedFile]) -> String {
     let what = match files {
         [only] => quoted(only.path.as_bytes()),
-        _ => counted(files.len(), "file", "files"),
+        _ => format!(
+            "{} ({})",
+            counted(files.len(), "file", "files"),
+            named(files)
+        ),
     };
     let mut modified = Lines::default();
     let mut modes: Vec<(FileMode, FileMode)> = Vec::new();
@@ -403,6 +408,28 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         "Do you want to discard the changes in {what}? {}. You can't undo this action.",
         parts.join(", ")
     )
+}
+
+/// How many files a discard of several names before it counts the rest.
+const NAMED_FILES: usize = 3;
+
+/// The files of a discard of several, as its prompt names them (the user's decision,
+/// 2026-10-09): the first [`NAMED_FILES`] by their quoted paths, and how many more after them
+/// — "a.rs, b.rs and c.rs", "a.rs, b.rs, c.rs and 2 more".
+fn named(files: &[DiscardedFile]) -> String {
+    let shown: Vec<String> = files
+        .iter()
+        .take(NAMED_FILES)
+        .map(|file| quoted(file.path.as_bytes()))
+        .collect();
+    let rest = files.len().saturating_sub(NAMED_FILES);
+    match (shown.split_last(), rest) {
+        (Some((last, before)), 0) if !before.is_empty() => {
+            format!("{} and {last}", before.join(", "))
+        }
+        (_, 0) => shown.join(", "),
+        (_, more) => format!("{} and {more} more", shown.join(", ")),
+    }
 }
 
 /// The lines of a kind of file in a discard, and how many of those files are not text.
@@ -648,10 +675,58 @@ mod tests {
         };
         assert_eq!(
             consequence.prompt(),
-            "Do you want to discard the changes in 3 files? 2 modified (14 lines), 1 untracked \
+            "Do you want to discard the changes in 3 files (a.rs, b.rs and notes.txt)? 2 \
+             modified (14 lines), 1 untracked \
              file deleted (2.1 KiB). You can't undo this action."
         );
         assert_eq!(consequence.action(), "Discard Changes in 3 Files");
+    }
+
+    /// The user's decision (2026-10-09): a discard of several files names them — the first
+    /// three by their quoted paths, then how many more — so the dialog says which files go.
+    /// Caught by: a count alone, every name listed however many, or a name left unquoted.
+    #[test]
+    fn a_discard_of_several_files_names_the_first_three_and_counts_the_rest() {
+        let two = Consequence::DiscardFiles {
+            files: vec![modified("a.rs", Some(1)), modified("b.rs", Some(1))],
+        };
+        assert_eq!(
+            two.prompt(),
+            "Do you want to discard the changes in 2 files (a.rs and b.rs)? 2 modified (2 \
+             lines). You can't undo this action."
+        );
+        let five = Consequence::DiscardFiles {
+            files: vec![
+                modified("a.rs", Some(1)),
+                modified("b.rs", Some(1)),
+                modified("c.rs", Some(1)),
+                modified("d.rs", Some(1)),
+                untracked("e.txt", 12),
+            ],
+        };
+        assert_eq!(
+            five.prompt(),
+            "Do you want to discard the changes in 5 files (a.rs, b.rs, c.rs and 2 more)? 4 \
+             modified (4 lines), 1 untracked file deleted (12 bytes). You can't undo this \
+             action."
+        );
+        // A name is quoted as any path in a prompt is: it cannot rewrite the sentence.
+        let quoted = Consequence::DiscardFiles {
+            files: vec![
+                modified("a\nYou can undo this.rs", Some(1)),
+                modified("b.rs", Some(1)),
+            ],
+        };
+        assert_eq!(
+            quoted.prompt(),
+            "Do you want to discard the changes in 2 files (\"a\\nYou can undo this.rs\" and \
+             b.rs)? 2 modified (2 lines). You can't undo this action."
+        );
+        // The token's prompt is the dialog's, word for word.
+        assert_eq!(
+            crate::Confirmed::by_user(five.clone()).prompt(),
+            five.prompt()
+        );
     }
 
     /// Caught by: the untracked files' sizes not summed (the last one's kept), or their
@@ -667,7 +742,8 @@ mod tests {
         };
         assert_eq!(
             consequence.prompt(),
-            "Do you want to discard the changes in 3 files? 3 untracked files deleted (2.0 \
+            "Do you want to discard the changes in 3 files (a, b and c)? 3 untracked files \
+             deleted (2.0 \
              KiB). You can't undo this action."
         );
     }
@@ -703,7 +779,8 @@ mod tests {
         };
         assert_eq!(
             all_binary.prompt(),
-            "Do you want to discard the changes in 2 files? 2 modified (binary). You can't \
+            "Do you want to discard the changes in 2 files (logo.png and icon.png)? 2 modified \
+             (binary). You can't \
              undo this action."
         );
         let mixed = Consequence::DiscardFiles {
@@ -711,7 +788,8 @@ mod tests {
         };
         assert_eq!(
             mixed.prompt(),
-            "Do you want to discard the changes in 2 files? 2 modified (3 lines, 1 binary). \
+            "Do you want to discard the changes in 2 files (logo.png and a.rs)? 2 modified (3 \
+             lines, 1 binary). \
              You can't undo this action."
         );
     }
@@ -729,7 +807,8 @@ mod tests {
         };
         assert_eq!(
             consequence.prompt(),
-            "Do you want to discard the changes in 3 files? 1 modified (2 lines), 2 deleted \
+            "Do you want to discard the changes in 3 files (gone.rs, a.rs and also.rs)? 1 \
+             modified (2 lines), 2 deleted \
              files restored. You can't undo this action."
         );
         let one = Consequence::DiscardFiles {
@@ -905,7 +984,8 @@ mod tests {
         };
         assert_eq!(
             several.prompt(),
-            "Do you want to discard the changes in 3 files? 3 modified (13 lines, 2 mode \
+            "Do you want to discard the changes in 3 files (a.rs, run.sh and tool)? 3 modified \
+             (13 lines, 2 mode \
              changes). You can't undo this action."
         );
     }
@@ -940,7 +1020,8 @@ mod tests {
         };
         assert_eq!(
             two.prompt(),
-            "Do you want to discard the changes in 3 files? 1 modified (1 line), 2 new files \
+            "Do you want to discard the changes in 3 files (a.txt, b.bin and c.rs)? 1 modified \
+             (1 line), 2 new files \
              emptied (5 lines, 1 binary). You can't undo this action."
         );
     }

@@ -154,7 +154,7 @@ pub(super) enum Routed {
     /// What a discard of lines would lose, to the local lane as a discard of files is.
     DiscardLinesConsequence {
         asked: OperationId,
-        diff: Box<cairn_model::FileDiff>,
+        diff: Arc<cairn_model::FileDiff>,
         selection: cairn_model::Selection,
     },
     /// Nothing sent: numbering the discard-count lane is all it is for.

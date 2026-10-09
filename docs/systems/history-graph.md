@@ -1151,8 +1151,13 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   walk's date — about 4 µs an id on rust-lang/rust without a commit-graph. Measured above: a
   `HEAD` log of 10,000 entries makes the first page 49.8 ms, past twice the first page
   without it (7.27 ms), where git's own `rev-list --reflog` takes 57-80 ms; 1,000 entries
-  make it 7.95 ms. Reading each id once, and taking its date from a commit-graph where one
-  is present, is still to be done.
+  make it 7.95 ms. The cost is the ids across every log read — `HEAD`'s and each local
+  branch's, so it grows with the count of local branches as well as with any one log's length,
+  which only `HEAD`'s has been measured for — and it is paid again on every refresh that moves
+  a ref while the toggle is on, since each reopen reads every log again. Merging the logs' ids
+  with the refs' tips is linear (a hash set, `history::open_stream`). Reading each id once,
+  taking its date from a commit-graph where one is present, and measuring many branches' logs
+  and the repeat per ref-moving refresh are phase 11's.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

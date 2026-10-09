@@ -3,6 +3,86 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, QA fixes (packet mode)
+
+Five fresh reviewers and a fresh qa-confirm adjudicated phase 10 (the coordinator's
+`qa10/adjudication.md`). Every FIX NOW item is done test-first: each regression test failed on the
+code before its fix, and each guard fix was proven by the mutation the reviewers ran.
+
+- **1-3 (CRITICAL), Discard's untracked losses**: the count now reads every untracked path from
+  `git ls-files --others --exclude-standard -z` (`reads::untracked_paths`), whatever
+  `status.showUntrackedFiles` says (3), and looks up each path's every proper prefix in the
+  commit's tree: a directory where the commit holds a file is removed with every file under it
+  (1, and the variant of a tracked `x` replaced by an untracked `x/`), and a nested repository
+  where the commit holds anything is removed whole (2) — each a loss of its own,
+  `ChangeLoss::Removed { kind: RemovedKind, files, bytes }`, compared by the re-check too.
+  Tests in `crates/cairn-git/tests/diff/branch.rs`, green on the floors too:
+  `untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost`,
+  `a_nested_repository_the_commit_holds_a_file_at_is_named_lost`,
+  `an_untracked_file_in_the_way_is_named_whatever_status_shows`; the model's prompt test
+  `a_directory_or_a_nested_repository_in_the_way_is_named_lost`. **The words are interim,
+  awaiting the user (held item A)**: "N directory/directories in the way removed (N untracked
+  file(s), size)" and "N nested repository/repositories removed (N file(s), size)", in the
+  discard's existing style, and the "kept" sentence counts only the untracked files not lost.
+- **4**: `ops/checkout.rs` and `docs/systems/staging.md` say ignored files and ignored
+  directories are overwritten or removed by any checkout, as git's own does, and not counted.
+- **6 (CRITICAL)**: the chord-name module is held to the modifier matcher too, its
+  `Modifiers::<CONST>` uses alone blanked (`names_a_modifier_in_code`,
+  `modifier_constants_blanked`, `CHORD_NAME_CONSTANTS`); the event's `modifiers` field,
+  `.ctrl()` and `NamedKey::Control` there now fail (the reviewers' mutation), self-tested.
+- **7**: a literal that is exactly a bare modifier word (`Alt`, `Shift`, `Super`, `Meta`,
+  `Option`, ...; `MODIFIER_WORDS`) fails outside the chord-name module, self-tested both ways.
+- **8**: `scripts/git-floor.sh`'s floors raised to one under today's counts (lib 140, diff_engine
+  200 with item 15's test, status 17) and a `lost_commits` run added (3): its oracle builds
+  reflogs with the git in use.
+- **9**: `qa-checklist` item 11 triggers on `accelerators/chord_names.rs` and carries the residual
+  of a name put together there from single-key literals.
+- **10**: the two guard assert messages with embedded spaces mended.
+- **11**: the reflog tips are de-duplicated against the refs' through a `HashSet`.
+- **12**: the long-reflog residual widened (`state.md`, `docs/systems/history-graph.md`): the
+  local branches' count, the ids across every log, the repeat per ref-moving refresh, item 11;
+  carried to phase 11's measurements.
+- **13**: a name check superseded before its turn on the local lane starts no `git`
+  (`a_name_check_superseded_before_its_turn_runs_no_git`).
+- **15**: a name a branch's directory holds — `foo` beside `foo/bar`, `baz/qux` beside `baz` —
+  is refused before git runs, in git's words, inline where other refusals show today (held item
+  B) (`a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`).
+- **17**: "Local changes:" pinned over an untracked-only tree (not drawn) and over an untracked
+  file sorting before a changed one (drawn)
+  (`local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`; both mutants
+  fail it).
+- **19, Fork-settled, built**: Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), heard
+  anywhere (`Scope::Window`, as Fork's menu item is), opening Create Branch at `HEAD`'s commit
+  as the last refresh read it, and doing nothing before the refs are read, on an unborn `HEAD`
+  or over a dialog already up (`the_new_branch_chord_opens_create_branch_at_head`). Clash check:
+  no other action of the table holds it on either platform
+  (`chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`); this host's
+  desktop (Hyprland) binds `SUPER + SHIFT + B` and no `CTRL + SHIFT + B`; other desktops' and
+  macOS's defaults were not checked on a machine. The subtitle "Use '/' as a path separator to
+  create folders" under the title; ⚠ — Fork's warning triangle, `RefGlyph::Gone` — before a
+  refusal.
+- **20**: the refusal is said in the buttons' row, left of them
+  (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`).
+- **21**: the derived user-visible choices are carried in `state.md` as awaiting the user.
+- **22**: `state.md`'s stale `expect(dead_code)` line removed; C20's dimming is attributed
+  alike in the PRD, `state.md` and here: Fork-settled on Fork's evidence, applied under the
+  user's Fork-first rule.
+
+**Dismissed** (qa-confirm's verdicts, logged with their reasons):
+
+- **5**, the re-check run on a signal that cannot be cancelled: the local lane is serial, so
+  nothing of Cairn's moves the tree between the count and the write; edits from outside are
+  R1.4's stated residual.
+- **18**, the reflog unit test covering entries only: the integration test
+  (`crates/cairn-git/tests/lost_commits.rs`) kills the mutant.
+- **23**, "Return presses, Escape cancels" not being in the evidence: it is a PRD requirement
+  (R11.3), and Escape cancelling is C17's convention.
+
+**Held for the user, not decided** (today's behaviour kept): (A) the Discard confirmation's
+wording, title and button, the new losses' interim words among them; (B) a refusal inline or in
+the Git Error dialog; (C) whether a right-click selects the row; (D) a "checking…" state while
+the name's check waits behind a write; (E) the buttons' order on Linux; (F) names holding `@{`.
+
 ## 2026-10-09 — phase 10, the check box, its tooltip and Create Branch built (packet mode)
 
 The user decided the check box's place and tooltip and chose Fork's full Create Branch dialog

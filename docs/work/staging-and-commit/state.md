@@ -19,9 +19,10 @@ Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
 user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) done in
 packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green
-at 18fea48. Phase 10 (Show Lost Commits) built in packet mode, full gate green, QA pending (the
-coordinator runs it): Show Lost Commits with its check box, and Fork's Create Branch dialog with
-its sealed Discard, as the user decided (2026-10-09). Phases 11-12 not started.**
+at 18fea48. Phase 10 (Show Lost Commits) built in packet mode: Show Lost Commits with its check
+box, and Fork's Create Branch dialog with its sealed Discard, as the user decided (2026-10-09);
+QA adjudicated, its fixes landed, full gate green, six items with the user (below). Phases 11-12
+not started.**
 
 ## Locked decisions
 
@@ -431,30 +432,33 @@ verb table):
 - **`cairn_ui`**: `HistoryList::on_action(EventHandler<Action>)` — the history's own scope's chords
   (`Scope::History`), resolved before anything else in its key handler; `RowRender::lost`;
   `CommitRow::lost(bool)`: its four texts in the theme's `text_placeholder`, graph and chips in
-  their own colours (the user's decision on Fork's evidence, 2026-10-09);
+  their own colours (Fork-settled on Fork's evidence, applied under the user's Fork-first rule, 2026-10-09);
   `HistoryHeader::show_lost_commits(on, on_toggle)`, `SHOW_LOST_COMMITS_CAPTION`;
   `accelerators::chord_name(action, os)` (`accelerators/chord_names.rs`); `check_box(caption,
   ticked, enabled, on_toggle)` (shared with Amend); `HistoryList::on_new_branch(EventHandler<(Oid,
   String)>)`, `NEW_BRANCH_CAPTION`; `CreateBranchDialog::new(serial, at, subject, name).ready()
   .refusal().checkout().local_changes().on_checkout().on_local().on_create().on_cancel()`,
-  `LocalChoice::{Keep, Discard}` and Fork's captions.
+  `LocalChoice::{Keep, Discard}` and Fork's captions, `CREATE_BRANCH_SUBTITLE`;
+  `accelerators::Action::NewBranch` (Ctrl+Shift+B, ⇧⌘B, `Scope::Window`).
 - **Create Branch's engine**: `cairn_model::BranchName::{Free, Taken, Refused { reason }}` and
   `refusal(name)`; `Consequence::CheckoutDiscarding { branch, at, head, changes: Vec<LostChange>,
   kept_untracked }`, `LostChange`, `ChangeLoss::{Changed { kind, index, working_tree, executable,
-  lines }, Overwritten { .. }}`, `ChangedKind`; `Repository::branch_name(git, name, cancel)`;
+  lines }, Overwritten { .. }, Removed { kind: RemovedKind, files, bytes }}`, `ChangedKind`,
+  `RemovedKind::{Directory, Repository}`; `Repository::branch_name(git, name, cancel)` (a name a
+  branch's directory holds refused in git's words);
   `ops::create_branch_and_checkout`, `ops::checkout_discarding_consequence`,
   `ops::create_branch_discarding` (on `DESTRUCTIVE_OPERATIONS`); `reads::branch_name`,
-  `reads::change_lines`; `Error::CheckoutRefused { why: CheckoutRefusal }`.
+  `reads::change_lines`, `reads::untracked_paths`; `Error::CheckoutRefused { why: CheckoutRefusal }`.
 - **Create Branch's worker and window**: `Request::CheckBranchName { name }` (`QueryLane::BranchName`),
   `Request::CheckoutConsequence { asked, name, at }` (`QueryLane::CheckoutCount`), answered by
   `Update::BranchName` and `Update::CheckoutConsequence`; `LocalWrite::CreateBranchAndCheckout`,
   `LocalWrite::CreateBranchDiscarding(Confirmed)` (`CreateBranch`'s `expect(dead_code)` gone);
   `View::branch: CreateBranchView { state, name }` (`create_branch.rs`: `open`, `name_checked`,
-  `create`, `consequence_arrived`, `write_ended`, `dialogs`).
+  `open_at_head`, `create`, `consequence_arrived`, `write_ended`, `dialogs`).
 - **Worker**: `Request::OpenHistory { rows, lost }`, `Routed::OpenHistory { rows, lost }`,
   `Page::Open { rows, walk, lost }`, `HistoryLane::replace_walk(walk, lost)` (the lane keeps
   `lost` for the walk it opens); `LocalWrite::CreateBranch { name, at }` (`what()` "creating branch
-  <name>", reads everything again) — `expect(dead_code)` outside tests until its view lands.
+  <name>", reads everything again), asked by Create Branch's dialog.
 - **Window**: `View::show_lost: State<bool>` (off as the window opens, kept for the session);
   `crate::lost_commits::{history_action, toggle}`; `session::reopen_history(rows, progress, lost,
   submit)` is now `pub` and takes the toggle — a refresh's reopen passes `*view.show_lost.peek()`.
@@ -472,10 +476,25 @@ verb table):
   a sealed "Discard" (decision 3; R1.5 and R3.6's stated exception, `DESTRUCTIVE_OPERATIONS`
   row), no "Stash and reapply" until packet 5b (decision 2, carried into 5b's brief); checkout
   enters this packet only through the dialog (roadmap, branch-ops).
-- **Not decided, not built**: Fork's New Branch chord (⇧⌘B / Ctrl+Shift+B,
-  `fork-create-branch-evidence.md` §1) — no chord was decided, so the menu is the one route;
-  Fork's dialog subtitle ("Use '/' as a path separator to create folders") and its warning glyph
-  beside a refusal, which the decided anatomy does not list.
+- **Fork-settled at QA, built**: Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), at
+  `HEAD`, heard anywhere (`fork-create-branch-evidence.md` §1); the dialog's subtitle ("Use '/'
+  as a path separator to create folders"); a refusal said in the buttons' row, left of them,
+  behind Fork's warning triangle (§2: TrackerWin #2472, Tracker #1911).
+- **With the user (QA's held items, 2026-10-09) — today's behaviour kept, nothing decided**:
+  (A) the Discard confirmation's wording, title and button, the new losses' words among them —
+  a directory in the way and a nested repository removed are said in interim words, "N
+  directory/directories in the way removed (N untracked file(s), size)" and "N nested
+  repository/repositories removed (N file(s), size)" (`cairn_model::consequence`), awaiting the
+  user; (B) a refusal inline or in the Git Error dialog — inline today, a name a branch's
+  directory holds included; (C) whether a right-click selects the row — it does not today; (D) a
+  "checking…" state while the name's check waits behind a write — none today; (E) the buttons'
+  order on Linux — Cancel then the primary today; (F) names holding `@{` — git's
+  `check-ref-format --branch` answer today.
+- **Derived, not separately decided — awaiting the user** (phase 10's QA, item 21): the discard
+  confirmation's title ("Discard changes", Local Changes'), its button ("Discard Changes and Check
+  Out") and its prompt (L8's form); an engine refusal of Discard said inline in the dialog; the
+  buttons in Cairn's existing order; a right-click opening the menu without selecting the row.
+  Each is held item A, B, E or C above.
 - **Phase 11 (the user's decision A, 2026-10-09)**: read each Show Lost Commits tip id once
   (today a lookup and then the walk's date read, ~41 ms of the 49.8 ms at 10,000 entries) and take
   the dates from a commit-graph where one is present, measured on the bench clone with
@@ -487,7 +506,12 @@ verb table):
   while no drawn ref moves (`git reflog expire`) is not read again until the next reopen; only
   `HEAD`'s and the local branches' logs (no remote-tracking, leftover or other worktrees' logs);
   a chord pressed while the reopened walk's first page is on its way is not heard (the list is
-  not drawn then); the long-reflog first page (decision A).
+  not drawn then); the long-reflog first page (decision A) — its cost grows with the local
+  branches' count and the ids across all their logs, not `HEAD`'s alone, and is paid again on
+  every refresh that moves a ref while the toggle is on (each reopen reads every log again);
+  the tips are de-duplicated against the refs' through a hash set (QA item 11), so the merge is
+  linear. Carried to phase 11's measurements: a bench run with many local branches' logs, and the
+  repeat per ref-moving refresh.
 
 ## Carried forward from phase 09 (owned by the phase named)
 
@@ -814,6 +838,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
-| 10 lost commits | built, gate green, QA pending |
+| 10 lost commits | QA fixes landed; six items with the user |
 | 11 activity and measured | not started |
 | 12 QA | not started |

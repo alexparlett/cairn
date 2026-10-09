@@ -53,6 +53,7 @@ use cairn_model::{
     AskpassToken, ChangeList, Confirmed, FileDiff, LocalChanges, Oid, RepoPath, Selection,
 };
 
+use super::epoch::Superseded;
 use super::pool::Outbox;
 use super::request::Update;
 
@@ -538,6 +539,9 @@ pub(super) enum LocalJob {
     Consequence {
         asked: OperationId,
         paths: Vec<RepoPath>,
+        /// Its number in the discard-count lane: a newer ask, `Request::StopCounting` or a
+        /// close ends the count, between paths or by ending its `git` read.
+        cancel: Superseded,
     },
     /// The repository is closing: end once the write running, if any, has.
     Stop,
@@ -691,6 +695,19 @@ impl cairn_git::Cancel for Closing<'_> {
     }
 }
 
+/// What a discard's count polls: its own number in the discard-count lane (a newer ask, a
+/// `StopCounting`, or the close's stop of every lane) and the lane closing.
+struct Counting<'a> {
+    superseded: &'a Superseded,
+    lane: &'a LaneState,
+}
+
+impl cairn_git::Cancel for Counting<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.superseded.is_cancelled() || self.lane.is_closing()
+    }
+}
+
 /// What the local lane serves with.
 pub(super) struct Local<'a> {
     pub git: &'a GitBinary,
@@ -733,14 +750,23 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 );
             }
             LocalJob::Write { id, write } => run(&repo, id, *write, serving),
-            LocalJob::Consequence { asked, paths } => {
-                let outcome = if serving.lane.is_closing() {
-                    Err("the repository is closing".to_owned())
-                } else {
-                    ops::discard_files_consequence(serving.git, &repo, &paths)
-                        .map_err(|error| error.to_string())
+            LocalJob::Consequence {
+                asked,
+                paths,
+                cancel,
+            } => {
+                let counting = Counting {
+                    superseded: &cancel,
+                    lane: serving.lane,
                 };
+                let outcome = ops::discard_files_consequence(serving.git, &repo, &paths, &counting);
                 drop(paths);
+                let outcome = match outcome {
+                    // Superseded, let go of or closing: nobody waits on it.
+                    Err(Error::ConsequenceCancelled) => continue,
+                    Ok(consequence) => Ok(consequence),
+                    Err(error) => Err(error.to_string()),
+                };
                 serving
                     .outbox
                     .send(None, Update::DiscardConsequence { asked, outcome });

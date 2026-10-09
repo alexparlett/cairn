@@ -819,7 +819,8 @@ Project invariants:
   `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; whose `Request::Write` arm boxes the write and sends it
   straight to the local write lane's thread, as its `Request::DiscardConsequence`
-  arm sends that lane the paths a discard would take, whose `Request::CancelWrite` arm
+  arm bumps the discard-count lane's counter and sends that lane the paths a discard
+  would take, and its `Request::StopCounting` arm only bumps that counter, whose `Request::CancelWrite` arm
   takes `LaneState`'s mutex (`worker/local_lane.rs`) and, when the write it
   names is a running commit, calls its cancel — a `KillHandle::kill`, through
   `ops::CommitCancel` — and whose `Request::Refresh` and `Request::RefreshStatus` arms
@@ -1055,7 +1056,12 @@ Project invariants:
     asks of each selected path whether it is a submodule or a conflict (`cairn_ui::no_discard`)
     — so a Shift-press across fifty thousand rows costs fifty thousand clones once, and each
     action on that selection fifty thousand searches; Stage All and Unstage All gather their
-    paths on the local lane, never here. A press in
+    paths on the local lane, never here. Off the UI thread but in its way: what a discard would
+    lose is counted per path on the local lane (`ops::discard_files_consequence`: a gix index
+    read, two reads of each file and a `git diff-files` per tracked path), so it holds that
+    lane — and a close, which waits on the lane — for as long as the selection is wide; it is
+    numbered in the discard-count lane and ends, between paths or by ending its `git` read,
+    on a newer ask, on Local Changes being let go of (`Request::StopCounting`) and on a close. A press in
     the sidebar looks for its row among the labelled, stash and `HEAD` rows alone
     (`History::labelled_position`), never every loaded row, and a find then looks
     through each page as it arrives (`ref_find::pages_arrived`), never a page twice. A refresh asks the UI thread for

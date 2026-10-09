@@ -60,7 +60,9 @@ use super::fresh_state::{
 use super::local_write::{PATHSPEC_FILE, locks_around, locks_now, run};
 use super::stage::{checked_pathspec_file, patch_of, refused};
 use super::{GitBinary, Invalidated, Performed};
-use crate::{CancelSignal, ContentOptions, Error, Refusal, Repository, WorkingTreeDiff};
+use std::collections::HashSet;
+
+use crate::{Cancel, ContentOptions, Error, Refusal, Repository, WorkingTreeDiff};
 
 /// How many bytes of `argv` one `git clean` is given for its paths: each path's bytes, its
 /// NUL and its pointer. Half of Linux's smallest `ARG_MAX` (32 pages, 128 KiB), a sixteenth
@@ -234,18 +236,29 @@ pub fn discard_lines(
 /// change; [`Error::NoPaths`] for no path at all; [`Error::ChangedSinceRead`] for an
 /// untracked file that is gone; [`Error::ContentReadsDisagree`] for a file that changed
 /// while it was read. Each path is counted once, in the order given.
+///
+/// The count is per path — a tracked file's unstaged diff is a `git diff-files` read — so it
+/// takes as long as the selection is wide. `cancel` is polled before each path and handed to
+/// each read, which it ends: once it trips the count stops with
+/// [`Error::ConsequenceCancelled`] and no prompt is offered (a newer ask superseded it, the
+/// view moved on, or the repository is closing).
 pub fn discard_files_consequence(
     git: &GitBinary,
     repo: &Repository,
     paths: &[RepoPath],
+    cancel: &impl Cancel,
 ) -> Result<Consequence, Error> {
     if paths.is_empty() {
         return Err(Error::NoPaths);
     }
     let index = IndexNow::read(repo)?;
     let mut files: Vec<DiscardedFile> = Vec::with_capacity(paths.len());
+    let mut counted: HashSet<&RepoPath> = HashSet::with_capacity(paths.len());
     for path in paths {
-        if files.iter().any(|file| &file.path == path) {
+        if cancel.is_cancelled() {
+            return Err(Error::ConsequenceCancelled);
+        }
+        if !counted.insert(path) {
             continue;
         }
         crate::reads::work_tree_relative(path)?;
@@ -265,7 +278,13 @@ pub fn discard_files_consequence(
                 if let Some(refusal) = not_a_file(repo, path, &disk)? {
                     return Err(refusal);
                 }
-                let (lines, mode) = unstaged_change(git, repo, path)?;
+                let (lines, mode) = unstaged_change(git, repo, path, cancel).map_err(|error| {
+                    if cancel.is_cancelled() {
+                        Error::ConsequenceCancelled
+                    } else {
+                        error
+                    }
+                })?;
                 if on_disk(repo, path)? != disk {
                     return Err(moved_while_read(path));
                 }
@@ -511,18 +530,14 @@ fn unstaged_change(
     git: &GitBinary,
     repo: &Repository,
     path: &RepoPath,
+    cancel: &impl Cancel,
 ) -> Result<(Option<usize>, Option<ModeChange>), Error> {
     let options = ContentOptions {
         load_anyway: true,
         ..ContentOptions::default()
     };
-    let Some(diff) = repo.working_tree_diff(
-        git,
-        path,
-        WorkingTreeDiff::Unstaged,
-        &options,
-        &CancelSignal::new(),
-    )?
+    let Some(diff) =
+        repo.working_tree_diff(git, path, WorkingTreeDiff::Unstaged, &options, cancel)?
     else {
         return Err(refused(path, Refusal::NoUnstagedChange));
     };
@@ -650,6 +665,7 @@ mod tests {
             &git,
             &repo,
             &[RepoPath::new("file.txt"), RepoPath::new("new.txt")],
+            &crate::CancelSignal::new(),
         )
         .unwrap();
         stub.forget();
@@ -677,5 +693,79 @@ mod tests {
         for record in &recorded {
             record.assert_a_write();
         }
+    }
+
+    /// A cancel that trips once it has been polled `allowed` times.
+    struct TripsAfter {
+        allowed: usize,
+        polled: std::cell::Cell<usize>,
+    }
+
+    impl Cancel for TripsAfter {
+        fn is_cancelled(&self) -> bool {
+            let polled = self.polled.get() + 1;
+            self.polled.set(polled);
+            polled > self.allowed
+        }
+    }
+
+    fn trips_after(allowed: usize) -> TripsAfter {
+        TripsAfter {
+            allowed,
+            polled: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Phase 07's QA item 1: the count of what a discard of files would lose is polled for a
+    /// cancel before each path and stops — no prompt offered, no further `git` read — once it
+    /// trips: before the first path nothing runs, and between paths the tracked file's
+    /// `git diff-files` read is never started. A count left to run reads it. Caught by: a count
+    /// that ignores its cancel (it held the local lane and the close for as long as the
+    /// selection was wide), or one that reads the next path's diff after the cancel.
+    #[test]
+    fn a_cancelled_count_stops_between_paths_and_runs_no_further_read() {
+        let stub = RecordingStub::new();
+        let (git, repo) = (stub.git_binary(), stub.repository());
+        let paths = [RepoPath::new("new.txt"), RepoPath::new("file.txt")];
+        stub.forget();
+        for allowed in [0, 1] {
+            let outcome = discard_files_consequence(&git, &repo, &paths, &trips_after(allowed));
+            assert!(
+                matches!(outcome, Err(Error::ConsequenceCancelled)),
+                "cancelled after {allowed} polls: {outcome:?}"
+            );
+            assert!(stub.recorded().is_empty(), "a read ran after the cancel");
+        }
+        let counted = discard_files_consequence(&git, &repo, &paths, &trips_after(usize::MAX));
+        assert!(counted.is_ok(), "{counted:?}");
+        assert!(
+            stub.recorded().iter().any(|record| record
+                .arguments_after_location()
+                .contains(&"diff-files".to_owned())),
+            "the uncancelled count read no diff"
+        );
+    }
+
+    /// Each path is counted once however often it is named, by a set rather than a scan of
+    /// what was counted (phase 07's QA item 1: the scan was quadratic in the selection).
+    #[test]
+    fn a_path_named_twice_is_counted_once() {
+        let stub = RecordingStub::new();
+        let (git, repo) = (stub.git_binary(), stub.repository());
+        let twice = [
+            RepoPath::new("new.txt"),
+            RepoPath::new("new.txt"),
+            RepoPath::new("file.txt"),
+        ];
+        let consequence =
+            discard_files_consequence(&git, &repo, &twice, &crate::CancelSignal::new()).unwrap();
+        let once = discard_files_consequence(
+            &git,
+            &repo,
+            &[RepoPath::new("new.txt"), RepoPath::new("file.txt")],
+            &crate::CancelSignal::new(),
+        )
+        .unwrap();
+        assert_eq!(consequence, once);
     }
 }

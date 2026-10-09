@@ -1129,11 +1129,17 @@ which is a length of time, is waited out.
   own (`LocalJob::Consequence`), so it is counted by `ops::discard_files_consequence`
   after every write asked before it, never ahead of a stage that changes what it
   counts; it ticks no write clock, and is answered as `Update::DiscardConsequence {
-  asked, outcome }` — the `Consequence`, or why the engine refused before any prompt —
-  or, once the repository is closing, as a refusal. Pinned by
-  `a_discards_consequence_is_counted_after_the_writes_asked_before_it` and
-  `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection`
-  (`worker/local_lane_tests.rs`). Stage All and Unstage All are writes of their own,
+  asked, outcome }` — the `Consequence`, or why the engine refused before any prompt.
+  The count is per path — a `git diff-files` read for each tracked file — so it holds the
+  lane for as long as the selection is wide: it is numbered in a lane of its own
+  (`QueryLane::DiscardCount`), and a newer ask, `Request::StopCounting` (Local Changes let
+  go of) or a close ends it between paths or by ending its read's process group, and it
+  answers nothing. Pinned by
+  `a_discards_consequence_is_counted_after_the_writes_asked_before_it`,
+  `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection` and
+  `a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read`
+  (`worker/local_lane_tests.rs`), and in the engine by
+  `a_cancelled_count_stops_between_paths_and_runs_no_further_read`. Stage All and Unstage All are writes of their own,
   `LocalWrite::StageAll` and `LocalWrite::UnstageAll`, carrying the lists the window
   draws, shared, from which the lane gathers every path (`LocalChanges::whole_file_paths`)
   before it runs `git add` or `git reset`: a status of tens of thousands of paths is never

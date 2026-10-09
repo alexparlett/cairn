@@ -827,3 +827,27 @@ fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
     settle(&mut test);
     assert_eq!(writes(&submitted)[3..], [write("unstage", &["s.rs"])]);
 }
+
+/// Phase 07's QA item 1: Local Changes let go of while a discard's loss is being counted ends
+/// the count — `Request::StopCounting`, so the local lane is not held for a confirmation nobody
+/// will see — and forgets it. Caught by: a count left running once the view is gone.
+#[test]
+fn leaving_local_changes_ends_a_discards_count() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    press_chord(&mut test, Action::Discard);
+    assert_eq!(consequences_asked(&submitted).len(), 1);
+    let stops = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .filter(|request| matches!(request, Request::StopCounting))
+            .count()
+    };
+    assert_eq!(stops(&submitted), 0);
+    let mut main = view.sidebar.main;
+    test.run_in(|| main.set(cairn_ui::MainView::AllCommits));
+    settle(&mut test);
+    assert_eq!(stops(&submitted), 1, "the count was left running");
+    assert!(!view.local.acting.peek().is_reading());
+}

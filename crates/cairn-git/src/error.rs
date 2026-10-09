@@ -115,6 +115,13 @@ pub enum Error {
     #[error("the changes query was cancelled after {changed} files")]
     ChangesCancelled { changed: usize },
 
+    /// Counting what a discard of files would lose was cancelled — a newer ask superseded
+    /// it, the view that asked moved on, or the repository is closing — between paths or
+    /// while a path's `git` read ran, which is then ended. No prompt is offered for it, and
+    /// it is not a failure to report: the caller asked for this.
+    #[error("counting what the discard would lose was cancelled")]
+    ConsequenceCancelled,
+
     /// A content query was cancelled — superseded before or while its `git` read ran, which
     /// is then ended. Not a failure to report as one: the caller asked for this by
     /// superseding it.

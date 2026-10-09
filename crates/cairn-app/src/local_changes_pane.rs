@@ -250,6 +250,18 @@ impl Component for LocalChangesPane {
                 local_changes_actions::confirm_arrived(view, confirming.clone());
             }
         });
+        // A discard's count nobody will now confirm stops holding the local lane as the view
+        // goes (phase 07's QA item 1): the view moved on, so the count is let go of and ended.
+        let stopping = self.submit.clone();
+        use_drop(move || {
+            let mut acting = view.local.acting;
+            if acting.peek().is_reading() {
+                acting.write().forget_discard();
+                if let Some(submit) = stopping.as_deref() {
+                    submit(Request::StopCounting);
+                }
+            }
+        });
         // A path whose request lost the file-diff lane to the commit's file or the files opened
         // in place is asked again as the view is shown.
         let reasking = self.submit.clone();

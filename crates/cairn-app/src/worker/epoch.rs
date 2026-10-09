@@ -1,10 +1,10 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Ten lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
-//! R11.1): the history, the walk its pages come from, the changes query, the file diff, the
-//! Changes tab's filter over a change set's files, the refs snapshot, ahead/behind, the
-//! working tree's status, the sidebar's filter over the refs and Local Changes' filter over
-//! the status. A new query supersedes the
+//! Eleven lanes (PRD R4.1, packet decision L8, phase 07's file filter, refs-and-status
+//! R11.1 and staging-and-commit R8.4): the history, the walk its pages come from, the changes
+//! query, the file diff, the Changes tab's filter over a change set's files, the refs
+//! snapshot, ahead/behind, the working tree's status, the sidebar's filter over the refs,
+//! Local Changes' filter over the status, and the count of what a discard would lose. A new query supersedes the
 //! older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
@@ -52,6 +52,10 @@ pub enum QueryLane {
     /// Which paths of Local Changes' two lists the view's filter text leaves (R9): numbered so
     /// a keystroke, or the lists of a status that has arrived, supersede the pass before.
     LocalChangesFilter,
+    /// What a discard of files would lose, counted on the local lane before its confirmation
+    /// (staging-and-commit R8.4): numbered so a newer discard asked, or the view letting the
+    /// count go (`Request::StopCounting`), ends the one being counted, its `git` reads with it.
+    DiscardCount,
 }
 
 impl QueryLane {
@@ -68,6 +72,7 @@ impl QueryLane {
         Self::Status,
         Self::RefFilter,
         Self::LocalChangesFilter,
+        Self::DiscardCount,
     ];
 
     fn index(self) -> usize {
@@ -82,6 +87,7 @@ impl QueryLane {
             Self::Status => 7,
             Self::RefFilter => 8,
             Self::LocalChangesFilter => 9,
+            Self::DiscardCount => 10,
         }
     }
 
@@ -99,12 +105,13 @@ impl QueryLane {
             Self::Status => &[Self::Status],
             Self::RefFilter => &[Self::RefFilter],
             Self::LocalChangesFilter => &[Self::LocalChangesFilter],
+            Self::DiscardCount => &[Self::DiscardCount],
         }
     }
 }
 
 /// How many lanes there are: one counter each.
-const LANES: usize = 10;
+const LANES: usize = 11;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.

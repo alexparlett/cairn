@@ -1234,8 +1234,13 @@ fn confirmed_discards_run_through_the_lane_and_quote_their_prompts() {
     let selection = Selection::with_every_change(diff.text().unwrap_or_else(|| panic!("no text")));
     let lines = cairn_git::ops::discard_lines_consequence(&git, &repo, &diff, selection)
         .unwrap_or_else(|error| panic!("{error}"));
-    let files = cairn_git::ops::discard_files_consequence(&git, &repo, &[RepoPath::from("b")])
-        .unwrap_or_else(|error| panic!("{error}"));
+    let files = cairn_git::ops::discard_files_consequence(
+        &git,
+        &repo,
+        &[RepoPath::from("b")],
+        &cairn_git::CancelSignal::new(),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     let prompts = [lines.prompt(), files.prompt()];
 
     let ids = [
@@ -1386,5 +1391,82 @@ fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
         "a file the prompt did not name was taken"
     );
     assert!(fixture.path.join("kept").exists());
+    drop(handle);
+}
+
+/// Phase 07's QA item 1: a count of what a discard would lose holds the local lane while its
+/// `git diff-files` reads run, so it is numbered in a lane of its own — a newer ask ends it,
+/// its held read's process ended with it, and answers nothing, the newer one answered; a
+/// `StopCounting` ends one with nothing after it; and the writes behind each still run. Caught
+/// by: a count that runs to its end whatever was asked after it (it held the lane and the close
+/// for as long as the selection was wide).
+#[test]
+fn a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read() {
+    let fixture = to_commit("cairn-lane-count-cancelled", &["kept", "modified"]);
+    let body = format!(
+        "{}\n",
+        held("diffs").replace("  exit 0", "  exec \"$REAL\" \"$@\"")
+    );
+    // Every read here past the commit is a working-tree diff, the only verb led by `-c`.
+    let stub = stub(&[("-c", &body)]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["kept", "modified"]);
+    let committing = ask(&handle, commit());
+    until_ended(&mut updates, committing);
+    std::fs::write(fixture.path.join("modified"), "modified\nedited\n")
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let count = |handle: &RepositoryHandle| {
+        let asked = OperationId::next();
+        handle.submit(Request::DiscardConsequence {
+            asked,
+            paths: vec![RepoPath::from("modified")],
+        });
+        asked
+    };
+    let first = count(&handle);
+    let held_first = until_pids(&stub, "diffs", 1)[0];
+    let second = count(&handle);
+    // The second is counted once the first has stopped: release only the second's read.
+    let held_second = until_pids(&stub, "diffs", 2)[1];
+    assert_ne!(held_first, held_second);
+    release(&stub, held_second);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::DiscardConsequence { .. })
+    });
+    assert!(
+        matches!(
+            seen.last(),
+            Some(Update::DiscardConsequence { asked, outcome: Ok(_) }) if *asked == second
+        ),
+        "the newer count was not the one answered: {seen:?}"
+    );
+    // The superseded count's held read was ended, never released.
+    let deadline = Instant::now() + WAIT;
+    while std::path::Path::new(&format!("/proc/{held_first}")).exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the superseded count's read was left running"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!pids(&stub, "finished").contains(&held_first));
+
+    // A stop ends the count in flight, which answers nothing; a write asked after it runs.
+    let third = count(&handle);
+    until_pids(&stub, "diffs", 3);
+    handle.submit(Request::StopCounting);
+    let staging = ask(&handle, stage(&["modified"]));
+    let _ = std::fs::write(stub.directory.join("release"), "");
+    let seen = until_ended(&mut updates, staging);
+    assert!(
+        !seen.iter().any(|update| matches!(
+            update,
+            Update::DiscardConsequence { asked, .. } if *asked == first || *asked == third
+        )),
+        "a count ended before its end was answered: {seen:?}"
+    );
     drop(handle);
 }

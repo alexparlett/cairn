@@ -360,7 +360,7 @@ fn a_discard_of_files_refuses_whatever_moved_after_the_confirmation() {
         repo.config("core.autocrlf", "true");
         repo.config("core.safecrlf", "false");
         let consequence = ok(
-            ops::discard_files_consequence(git(), &engine(&repo), &both()),
+            ops::discard_files_consequence(git(), &engine(&repo), &both(), &CancelSignal::new()),
             what,
         );
         moved(&repo);
@@ -389,7 +389,12 @@ fn a_discard_of_files_refuses_whatever_moved_after_the_confirmation() {
 fn a_file_added_beside_a_confirmed_deletion_is_never_taken() {
     let repo = modified_and_untracked("c2-beside");
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("dir/u.txt")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("dir/u.txt")],
+            &CancelSignal::new(),
+        ),
         "the consequence",
     );
     repo.write("dir/newcomer.txt", b"added after the confirmation\n");
@@ -721,7 +726,7 @@ fn a_discard_of_files_restores_the_tracked_and_deletes_exactly_the_untracked() {
         RepoPath::new("dir/u1.txt"),
     ];
     let consequence = ok(
-        ops::discard_files_consequence(git(), &worker, &paths),
+        ops::discard_files_consequence(git(), &worker, &paths, &CancelSignal::new()),
         "the consequence",
     );
     let prompt = consequence.prompt();
@@ -780,7 +785,7 @@ fn a_long_list_is_deleted_in_batches_after_one_recheck() {
     );
 
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &paths),
+        ops::discard_files_consequence(git(), &engine(&repo), &paths, &CancelSignal::new()),
         "the consequence",
     );
     let last = paths[paths.len() - 1].to_string();
@@ -797,7 +802,7 @@ fn a_long_list_is_deleted_in_batches_after_one_recheck() {
     let shared = ok(SharedRepository::discover(repo.path()), "the fixture opens");
     let worker = shared.to_worker();
     let consequence = ok(
-        ops::discard_files_consequence(git(), &worker, &paths),
+        ops::discard_files_consequence(git(), &worker, &paths, &CancelSignal::new()),
         "the consequence again",
     );
     ok(
@@ -843,8 +848,12 @@ fn a_nested_repository_is_refused_before_any_confirmation() {
     nested.commit("only here");
     assert_eq!(status(&repo), ["?? nested/"]);
     for spelling in ["nested/", "nested"] {
-        let outcome =
-            ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new(spelling)]);
+        let outcome = ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new(spelling)],
+            &CancelSignal::new(),
+        );
         assert!(
             is_refused(&outcome, Refusal::NestedRepository),
             "{spelling}: {outcome:?}"
@@ -852,7 +861,12 @@ fn a_nested_repository_is_refused_before_any_confirmation() {
     }
     assert!(nested.path().join(".git").is_dir());
     repo.write("plain/file.txt", b"p\n");
-    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("plain/")]);
+    let outcome = ops::discard_files_consequence(
+        git(),
+        &engine(&repo),
+        &[RepoPath::new("plain/")],
+        &CancelSignal::new(),
+    );
     assert!(is_refused(&outcome, Refusal::NotAFile), "{outcome:?}");
 }
 
@@ -903,8 +917,12 @@ fn staged_changes_are_never_discarded() {
     repo.commit("base");
     repo.write("file.txt", b"two\n");
     repo.git(&["add", "file.txt"]);
-    let outcome =
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("file.txt")]);
+    let outcome = ops::discard_files_consequence(
+        git(),
+        &engine(&repo),
+        &[RepoPath::new("file.txt")],
+        &CancelSignal::new(),
+    );
     assert!(
         is_refused(&outcome, Refusal::NoUnstagedChange),
         "{outcome:?}"
@@ -937,7 +955,12 @@ fn a_submodule_is_never_discarded() {
     Repo::borrowed(&repo.path().join("sub")).git(&["checkout", "--quiet", &first.to_string()]);
     assert_eq!(status(&repo), [" M sub"]);
 
-    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("sub")]);
+    let outcome = ops::discard_files_consequence(
+        git(),
+        &engine(&repo),
+        &[RepoPath::new("sub")],
+        &CancelSignal::new(),
+    );
     assert!(is_refused(&outcome, Refusal::Submodule), "{outcome:?}");
     let drawn = diff_of(&repo, "sub", WorkingTreeDiff::Unstaged);
     assert!(
@@ -980,7 +1003,8 @@ fn a_conflicted_path_takes_no_patch_or_discard_and_add_resolves_it() {
     let refusals = [
         ops::stage_lines(git(), &engine(&repo), &drawn, &every, None).map(drop),
         ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every.clone()).map(drop),
-        ops::discard_files_consequence(git(), &engine(&repo), &path).map(drop),
+        ops::discard_files_consequence(git(), &engine(&repo), &path, &CancelSignal::new())
+            .map(drop),
     ];
     for outcome in &refusals {
         assert!(is_refused(outcome, Refusal::Conflicted), "{outcome:?}");
@@ -1011,7 +1035,12 @@ fn every_line_of_an_untracked_file_is_discarded_by_the_file_verb_which_says_so()
     let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every);
     assert!(is_refused(&outcome, Refusal::WholeFileOnly), "{outcome:?}");
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("new.txt")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("new.txt")],
+            &CancelSignal::new(),
+        ),
         "the file verb's consequence",
     );
     assert_eq!(
@@ -1041,7 +1070,7 @@ fn nothing_selected_is_refused_before_any_prompt() {
             "{outcome:?}"
         );
     }
-    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[]);
+    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[], &CancelSignal::new());
     assert!(matches!(outcome, Err(Error::NoPaths)), "{outcome:?}");
 }
 
@@ -1094,7 +1123,12 @@ fn every_path_is_read_literally_never_as_a_pattern() {
     repo.write("st*", b"one\n");
     repo.write("stx", b"other\n");
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("st*")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("st*")],
+            &CancelSignal::new(),
+        ),
         "the consequence",
     );
     ok(
@@ -1125,7 +1159,12 @@ fn a_write_names_the_lock_files_around_it() {
         other => panic!("{other:?}"),
     }
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("dir/u.txt")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("dir/u.txt")],
+            &CancelSignal::new(),
+        ),
         "the consequence",
     );
     let performed = ok(
@@ -1155,12 +1194,22 @@ fn a_file_where_a_deleted_files_directory_was_is_never_destroyed() {
     let repo = make();
     repo.write("d", b"an untracked file where the directory was\n");
     assert_eq!(status(&repo), [" D d/a", "?? d"]);
-    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]);
+    let outcome = ops::discard_files_consequence(
+        git(),
+        &engine(&repo),
+        &[RepoPath::new("d/a")],
+        &CancelSignal::new(),
+    );
     assert!(is_refused(&outcome, Refusal::Obstructed), "{outcome:?}");
 
     let repo = make();
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("d/a")],
+            &CancelSignal::new(),
+        ),
         "the consequence, while nothing is at d",
     );
     repo.write("d", b"made after the confirmation\n");
@@ -1189,7 +1238,12 @@ fn a_symlinked_parent_is_never_followed_out_of_the_working_tree() {
     std::fs::remove_dir_all(repo.path().join("d")).unwrap_or_else(|e| panic!("{e}"));
     std::os::unix::fs::symlink(outside.path(), repo.path().join("d"))
         .unwrap_or_else(|e| panic!("{e}"));
-    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]);
+    let outcome = ops::discard_files_consequence(
+        git(),
+        &engine(&repo),
+        &[RepoPath::new("d/a")],
+        &CancelSignal::new(),
+    );
     assert!(is_refused(&outcome, Refusal::Obstructed), "{outcome:?}");
     assert_eq!(
         on_disk(&outside, "a"),
@@ -1254,7 +1308,7 @@ fn a_discard_that_fails_part_way_says_what_it_did_and_what_is_left() {
         RepoPath::new("ro/kept.txt"),
     ];
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &paths),
+        ops::discard_files_consequence(git(), &engine(&repo), &paths, &CancelSignal::new()),
         "the consequence",
     );
     let prompt = consequence.prompt();
@@ -1300,7 +1354,12 @@ fn a_file_git_clean_leaves_is_named_as_kept() {
     repo.commit("base");
     repo.write("ignored.txt", b"ignored\n");
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("ignored.txt")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("ignored.txt")],
+            &CancelSignal::new(),
+        ),
         "the consequence",
     );
     let outcome = ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None);
@@ -1326,7 +1385,12 @@ fn an_intent_to_add_files_discard_empties_it_and_says_so() {
     repo.write("new.txt", lines(base).as_bytes());
     repo.git(&["add", "-N", "new.txt"]);
     let consequence = ok(
-        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("new.txt")]),
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("new.txt")],
+            &CancelSignal::new(),
+        ),
         "the consequence",
     );
     assert_eq!(
@@ -1369,7 +1433,12 @@ fn a_whole_files_mode_change_is_named_and_put_back() {
         }
         repo.chmod("run.sh", 0o755);
         let consequence = ok(
-            ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("run.sh")]),
+            ops::discard_files_consequence(
+                git(),
+                &engine(&repo),
+                &[RepoPath::new("run.sh")],
+                &CancelSignal::new(),
+            ),
             "the consequence",
         );
         assert_eq!(consequence.prompt(), prompt);

@@ -405,11 +405,15 @@ pub enum Request {
     /// [`Update::DiscardConsequence`] under `asked`: the `Consequence` the confirmation draws,
     /// or why no discard is offered (a nested repository, a submodule, a conflict, …), before
     /// any dialog (staging-and-commit R8.4). A read: it writes nothing, and the window may ask
-    /// again.
+    /// again. Numbered in the discard-count lane, so a newer ask ends it — between paths, or
+    /// its `git` read's process — and so does a close; a count ended so answers nothing.
     DiscardConsequence {
         asked: OperationId,
         paths: Vec<RepoPath>,
     },
+    /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
+    /// when it is no longer shown, so a count nobody will confirm stops holding the local lane.
+    StopCounting,
     /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     #[cfg_attr(
@@ -463,12 +467,12 @@ impl Request {
             Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
             Self::FilterRefs { .. } => &[QueryLane::RefFilter],
             Self::FilterLocalChanges { .. } => &[QueryLane::LocalChangesFilter],
+            Self::DiscardConsequence { .. } | Self::StopCounting => &[QueryLane::DiscardCount],
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
             | Self::CancelFetch
             | Self::Write { .. }
-            | Self::DiscardConsequence { .. }
             | Self::CancelWrite { .. }
             // Status is numbered in its lane, which nothing moves (R10.3 as amended).
             | Self::RefreshStatus
@@ -824,6 +828,14 @@ mod tests {
                 },
                 QueryLane::LocalChangesFilter,
             ),
+            (
+                Request::DiscardConsequence {
+                    asked: OperationId::next(),
+                    paths: vec![RepoPath::from("a")],
+                },
+                QueryLane::DiscardCount,
+            ),
+            (Request::StopCounting, QueryLane::DiscardCount),
         ] {
             assert_eq!(query.lanes(), [lane], "{query:?}");
         }

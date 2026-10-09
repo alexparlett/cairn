@@ -15,7 +15,7 @@
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
-//! | `DiscardConsequence` | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it |
+//! | discard count (`DiscardConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
@@ -66,6 +66,7 @@ pub(super) const fn thread_of(lane: QueryLane) -> Thread {
         | QueryLane::RefFilter
         | QueryLane::LocalChangesFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
+        QueryLane::DiscardCount => Thread::Local,
         QueryLane::AheadBehind | QueryLane::Status => Thread::Refresh,
     }
 }
@@ -144,11 +145,14 @@ pub(super) enum Routed {
         id: OperationId,
         write: LocalWrite,
     },
-    /// What a discard would lose, to the local lane behind the writes asked before it.
+    /// What a discard would lose, to the local lane behind the writes asked before it, under
+    /// the discard-count lane's number `submit` gave it.
     DiscardConsequence {
         asked: OperationId,
         paths: Vec<cairn_model::RepoPath>,
     },
+    /// Nothing sent: numbering the discard-count lane is all it is for.
+    StopCounting,
     /// Never queued: it reaches the local lane's state directly.
     CancelWrite(OperationId),
     /// A status alone, to the refresh thread under the status lane's number.
@@ -162,7 +166,10 @@ impl Routed {
         match self {
             Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
-            Self::Write { .. } | Self::DiscardConsequence { .. } => Some(Thread::Local),
+            // `StopCounting` queues nowhere, but what it supersedes is the local lane's.
+            Self::Write { .. } | Self::DiscardConsequence { .. } | Self::StopCounting => {
+                Some(Thread::Local)
+            }
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -223,6 +230,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::CancelFetch => Routed::CancelFetch,
         Request::Write { id, write } => Routed::Write { id, write },
         Request::DiscardConsequence { asked, paths } => Routed::DiscardConsequence { asked, paths },
+        Request::StopCounting => Routed::StopCounting,
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
     }
@@ -270,6 +278,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::CancelFetch => Request::CancelFetch,
         Routed::Write { id, write } => Request::Write { id, write },
         Routed::DiscardConsequence { asked, paths } => Request::DiscardConsequence { asked, paths },
+        Routed::StopCounting => Request::StopCounting,
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,
     }
@@ -360,6 +369,7 @@ mod tests {
                 asked: OperationId::for_tests(3),
                 paths: vec![cairn_model::RepoPath::from("a")],
             },
+            Request::StopCounting,
             Request::CancelWrite {
                 id: OperationId::for_tests(1),
             },
@@ -398,6 +408,7 @@ mod tests {
         assert_eq!(thread_of(QueryLane::Status), Thread::Refresh);
         assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::DiscardCount), Thread::Local);
         // Staging-and-commit R4.1: a write goes straight to the local lane, never through the
         // repository thread, where it would wait behind a page or a find; a status asked alone
         // goes where a refresh's does; a write's cancel queues nowhere.

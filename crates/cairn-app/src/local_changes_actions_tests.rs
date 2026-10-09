@@ -78,13 +78,13 @@ fn writes(submitted: &Submitted) -> Vec<(String, Vec<String>)> {
                     assert_eq!(*to, UnstageTarget::Head);
                     ("unstage".to_owned(), names(paths))
                 }
-                LocalWrite::StageAll { changes } => (
+                LocalWrite::StageAll { changes, shown } => (
                     "stage all".to_owned(),
-                    vec![changes.len(ChangeList::Unstaged).to_string()],
+                    names(&gathered(changes, ChangeList::Unstaged, shown.as_deref())),
                 ),
-                LocalWrite::UnstageAll { changes, .. } => (
+                LocalWrite::UnstageAll { changes, shown, .. } => (
                     "unstage all".to_owned(),
-                    vec![changes.len(ChangeList::Staged).to_string()],
+                    names(&gathered(changes, ChangeList::Staged, shown.as_deref())),
                 ),
                 LocalWrite::DiscardFiles(confirmed) => {
                     ("discard".to_owned(), vec![confirmed.prompt().to_owned()])
@@ -94,6 +94,18 @@ fn writes(submitted: &Submitted) -> Vec<(String, Vec<String>)> {
             _ => None,
         })
         .collect()
+}
+
+/// The paths the local lane gathers for an All, as it gathers them.
+fn gathered(
+    changes: &cairn_model::LocalChanges,
+    list: ChangeList,
+    shown: Option<&[u32]>,
+) -> Vec<RepoPath> {
+    match shown {
+        Some(rows) => changes.whole_file_paths(list, rows.iter().map(|row| *row as usize)),
+        None => changes.whole_file_paths(list, 0..changes.len(list)),
+    }
 }
 
 fn write(kind: &str, paths: &[&str]) -> (String, Vec<String>) {
@@ -321,7 +333,10 @@ fn a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list() 
     settle(&mut test);
     assert_eq!(
         writes(&submitted)[1..],
-        [write("unstage all", &["3"]), write("stage all", &["4"])]
+        [
+            write("unstage all", &["new.rs", "old.rs", "s.rs", "u.rs"]),
+            write("stage all", &["a.rs", "b.rs", "c.rs", "d.rs"])
+        ]
     );
 }
 
@@ -881,4 +896,92 @@ fn leaving_local_changes_ends_a_discards_count() {
     settle(&mut test);
     assert_eq!(stops(&submitted), 1, "the count was left running");
     assert!(!view.local.acting.peek().is_reading());
+}
+
+/// Types `text` into the filter and applies the worker's answer for it, as the real pass makes
+/// it.
+fn filter_to(test: &mut TestingRunner, view: View, submitted: &Submitted, text: &str) {
+    let mut typed = view.local.filter_text;
+    test.run_in(|| typed.set(text.to_owned()));
+    settle(test);
+    let lists = submitted
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            Request::FilterLocalChanges { changes, .. } => Some(std::sync::Arc::clone(changes)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the filter was not asked"));
+    let rows = lists
+        .matching(text, || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    apply(
+        test,
+        view,
+        submitted,
+        Update::FilteredLocalChanges {
+            changes: lists,
+            text: text.to_owned(),
+            rows,
+        },
+    );
+}
+
+/// Unstaged: a.rs, b.rs, cx.rs, dx.rs, ex.rs, and clash.rs (conflicted); Staged: sx.rs, t.rs.
+fn filterable() -> Vec<StatusEntry> {
+    vec![
+        changed("a.rs", None, Some(UnstagedChange::Modified)),
+        changed("b.rs", None, Some(UnstagedChange::Modified)),
+        changed("cx.rs", None, Some(UnstagedChange::Modified)),
+        changed("dx.rs", None, Some(UnstagedChange::Modified)),
+        untracked("ex.rs"),
+        conflicted("clash.rs"),
+        changed("sx.rs", Some(StagedChange::Modified), None),
+        changed("t.rs", Some(StagedChange::Modified), None),
+    ]
+}
+
+/// Phase 07's QA item 7, R8.3: the selection moves to the row that takes the FIRST acted row's
+/// place — c.rs staged out of a, b, c, d leaves d.rs selected, not the list's first row — and,
+/// through a filter, by the rows the filter shows: cx.rs staged out of cx, dx, ex leaves dx.rs.
+/// Caught by: the nearest measured from the top of the list, or from the row's place in the
+/// whole list rather than the rows shown.
+#[test]
+fn the_selection_moves_to_the_row_that_takes_the_acted_rows_place() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "c.rs", 0);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+    assert_eq!(selected(view), ["d.rs"]);
+    assert_eq!(chosen(view).as_deref(), Some("d.rs"));
+
+    let (mut test, view, submitted) = opened(filterable());
+    filter_to(&mut test, view, &submitted, "x");
+    press_row(&mut test, "cx.rs", 0);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["cx.rs"])]);
+    assert_eq!(selected(view), ["dx.rs"]);
+}
+
+/// The user's decision (2026-10-09, phase 07's QA item 11): with a filter on, Stage All and
+/// Unstage All take the rows the filter shows and no other — a hidden row, a hidden conflicted
+/// row among them, stays as it is — and with none on, every row. Caught by: an All that takes
+/// the rows the filter hides.
+#[test]
+fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
+    let (mut test, view, submitted) = opened(filterable());
+    filter_to(&mut test, view, &submitted, "x");
+    let (x, y) = at(&test, STAGE_CAPTION, 0);
+    test.click_cursor((x - 20., y));
+    settle(&mut test);
+    right_click(&mut test, "sx.rs");
+    click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
+    assert_eq!(
+        writes(&submitted),
+        [
+            write("stage all", &["cx.rs", "dx.rs", "ex.rs"]),
+            write("unstage all", &["sx.rs"]),
+        ]
+    );
 }

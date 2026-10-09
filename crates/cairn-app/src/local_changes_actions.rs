@@ -372,19 +372,31 @@ fn stage_or_unstage(list: ChangeList, acted: Acted, view: View, submit: Option<&
     move_to(list, next, view, submit);
 }
 
-/// Stage All (from Unstaged) or Unstage All (from Staged): every row of the list, gathered on
-/// the local lane from the lists drawn.
+/// Stage All (from Unstaged) or Unstage All (from Staged): every row of the list — or, with a
+/// filter on, every row it shows and none it hides (the user's decision, 2026-10-09) — gathered
+/// on the local lane from the lists drawn. Nothing while the filter's rows are on their way.
 fn everything(list: ChangeList, view: View, submit: Option<&dyn Fn(Request)>) {
-    let Some(changes) = view.local.state.peek().drawn_shared() else {
-        return;
+    let (changes, shown) = {
+        let local = view.local.state.peek();
+        let Some(changes) = local.drawn_shared() else {
+            return;
+        };
+        // The filter's rows: a copy of the indices it answered, never a walk of the paths.
+        let shown = match shown_rows(&local, list) {
+            ShownFiles::All => None,
+            ShownFiles::Filtered(rows) => Some(rows.clone()),
+            ShownFiles::Waiting => return,
+        };
+        (changes, shown)
     };
-    if changes.len(list) == 0 {
+    if shown.as_ref().map_or(changes.len(list), Vec::len) == 0 {
         return;
     }
     let write = match list {
-        ChangeList::Unstaged => LocalWrite::StageAll { changes },
+        ChangeList::Unstaged => LocalWrite::StageAll { changes, shown },
         ChangeList::Staged => LocalWrite::UnstageAll {
             changes,
+            shown,
             to: UnstageTarget::Head,
         },
     };

@@ -128,14 +128,19 @@ pub enum LocalWrite {
         paths: Vec<RepoPath>,
         to: UnstageTarget,
     },
-    /// Every path of `changes`' Unstaged list, whole, into the index: Stage All (R8.2). The
+    /// Every path of `changes`' Unstaged list — or, with a filter on, of the rows it shows,
+    /// `shown` (the user's decision, 2026-10-09) — whole, into the index: Stage All (R8.2). The
     /// paths are gathered here, on the lane, never on the UI thread — a status can list tens
     /// of thousands.
-    StageAll { changes: Arc<LocalChanges> },
-    /// Every path of `changes`' Staged list, whole, out of the index, back to `to`: Unstage
-    /// All.
+    StageAll {
+        changes: Arc<LocalChanges>,
+        shown: Option<Vec<u32>>,
+    },
+    /// Every path of `changes`' Staged list, or of its rows `shown`, whole, out of the index,
+    /// back to `to`: Unstage All.
     UnstageAll {
         changes: Arc<LocalChanges>,
+        shown: Option<Vec<u32>>,
         to: UnstageTarget,
     },
     /// The lines the confirmation names, discarded from the working tree.
@@ -175,11 +180,13 @@ impl Clone for LocalWrite {
                 paths: paths.clone(),
                 to: to.clone(),
             },
-            Self::StageAll { changes } => Self::StageAll {
+            Self::StageAll { changes, shown } => Self::StageAll {
                 changes: Arc::clone(changes),
+                shown: shown.clone(),
             },
-            Self::UnstageAll { changes, to } => Self::UnstageAll {
+            Self::UnstageAll { changes, shown, to } => Self::UnstageAll {
                 changes: Arc::clone(changes),
+                shown: shown.clone(),
                 to: to.clone(),
             },
             Self::Commit {
@@ -268,12 +275,22 @@ impl LocalWrite {
             }
             Self::StageFiles { paths } => format!("staging {}", files(paths.len())),
             Self::UnstageFiles { paths, .. } => format!("unstaging {}", files(paths.len())),
-            Self::StageAll { changes } => {
-                format!("staging {}", files(changes.len(ChangeList::Unstaged)))
-            }
-            Self::UnstageAll { changes, .. } => {
-                format!("unstaging {}", files(changes.len(ChangeList::Staged)))
-            }
+            Self::StageAll { changes, shown } => format!(
+                "staging {}",
+                files(
+                    shown
+                        .as_ref()
+                        .map_or(changes.len(ChangeList::Unstaged), Vec::len)
+                )
+            ),
+            Self::UnstageAll { changes, shown, .. } => format!(
+                "unstaging {}",
+                files(
+                    shown
+                        .as_ref()
+                        .map_or(changes.len(ChangeList::Staged), Vec::len)
+                )
+            ),
             Self::DiscardLines(_) => "discarding lines".to_owned(),
             Self::DiscardFiles(_) => "discarding files".to_owned(),
             Self::Commit { .. } => "commit".to_owned(),
@@ -301,13 +318,13 @@ impl LocalWrite {
             Self::UnstageFiles { paths, to } => {
                 ops::unstage_files(git, repo, &paths, &to.into(), token)
             }
-            Self::StageAll { changes } => {
-                let paths = every_path(&changes, ChangeList::Unstaged);
+            Self::StageAll { changes, shown } => {
+                let paths = every_path(&changes, ChangeList::Unstaged, shown.as_deref());
                 drop(changes);
                 ops::stage_files(git, repo, &paths, token)
             }
-            Self::UnstageAll { changes, to } => {
-                let paths = every_path(&changes, ChangeList::Staged);
+            Self::UnstageAll { changes, shown, to } => {
+                let paths = every_path(&changes, ChangeList::Staged, shown.as_deref());
                 drop(changes);
                 ops::unstage_files(git, repo, &paths, &to.into(), token)
             }
@@ -338,9 +355,13 @@ impl LocalWrite {
     }
 }
 
-/// Every path `list` lists, and each rename's source, as a whole-file action names them.
-fn every_path(changes: &LocalChanges, list: ChangeList) -> Vec<RepoPath> {
-    changes.whole_file_paths(list, 0..changes.len(list))
+/// Every path `list` lists — or, with a filter on, of its rows `shown` — and each rename's
+/// source, as a whole-file action names them.
+fn every_path(changes: &LocalChanges, list: ChangeList, shown: Option<&[u32]>) -> Vec<RepoPath> {
+    match shown {
+        Some(rows) => changes.whole_file_paths(list, rows.iter().map(|row| *row as usize)),
+        None => changes.whole_file_paths(list, 0..changes.len(list)),
+    }
 }
 
 fn hooks(skip: bool) -> Hooks {
@@ -829,6 +850,59 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user's decision (2026-10-09): Stage All and Unstage All take the rows a filter shows
+    /// — a hidden row, a conflicted one among them, left as it is — and every row with none
+    /// on; a rename's source comes with its row. Caught by: the lane gathering every row
+    /// whatever the filter showed.
+    #[test]
+    fn an_all_gathers_the_rows_the_filter_shows_or_every_row() {
+        use cairn_model::{
+            ChangedEntry, ConflictKind, ConflictedEntry, Similarity, StagedChange, StatusEntry,
+            UnstagedChange, WorkingTreeStatus,
+        };
+        let changed = |path: &str, staged, unstaged| {
+            StatusEntry::Changed(ChangedEntry {
+                path: RepoPath::from(path),
+                staged,
+                unstaged,
+                submodule: None,
+            })
+        };
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            changed("a.rs", None, Some(UnstagedChange::Modified)),
+            StatusEntry::Conflicted(ConflictedEntry {
+                path: RepoPath::from("clash.rs"),
+                kind: ConflictKind::BothModified,
+                submodule: None,
+            }),
+            changed("cx.rs", None, Some(UnstagedChange::Modified)),
+            changed(
+                "new.rs",
+                Some(StagedChange::Renamed {
+                    from: RepoPath::from("old.rs"),
+                    similarity: Similarity::from_percent(90),
+                }),
+                None,
+            ),
+            changed("t.rs", Some(StagedChange::Modified), None),
+        ]));
+        let names = |paths: Vec<RepoPath>| -> Vec<String> {
+            paths.iter().map(ToString::to_string).collect()
+        };
+        assert_eq!(
+            names(every_path(&changes, ChangeList::Unstaged, Some(&[2]))),
+            ["cx.rs"]
+        );
+        assert_eq!(
+            names(every_path(&changes, ChangeList::Unstaged, None)),
+            ["a.rs", "clash.rs", "cx.rs"]
+        );
+        assert_eq!(
+            names(every_path(&changes, ChangeList::Staged, Some(&[0]))),
+            ["new.rs", "old.rs"]
+        );
+    }
 
     /// A lane with `id` running, as `begin` leaves it.
     fn running(id: OperationId, commit: bool) -> LaneState {

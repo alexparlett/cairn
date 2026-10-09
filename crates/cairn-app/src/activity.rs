@@ -466,13 +466,16 @@ impl ActivityLog {
         self.bound();
     }
 
-    /// A local write has ended, as `ending` says (already scrubbed by the window); `name` is
-    /// what it was asked as, for one that never started (the user's decision N, 2026-10-09).
-    pub fn write_ended(&mut self, id: OperationId, ending: &WriteEnding, name: Option<String>) {
+    /// A local write has ended, as `ending` says (already scrubbed by the window); `asked` is
+    /// the write as the window asked it, if it saw it asked: its name, for one that never
+    /// started (the user's decision N, 2026-10-09), and the prompt its confirmation recorded,
+    /// quoted however it ended (R12.1) — the token is spent by then, and only an ending that ran
+    /// carries the prompt back.
+    pub fn write_ended(&mut self, id: OperationId, ending: &WriteEnding, asked: Option<&Asked>) {
         let key = ActivityKey::Write(id);
         if self.find(key).is_none() {
             // Never started: not run, as the repository was closing — named as it was asked.
-            let name = name.unwrap_or_else(|| "A write".to_owned());
+            let name = asked.map_or_else(|| "A write".to_owned(), |asked| asked.name.clone());
             self.push(Activity::new(key, name, None, false));
         }
         // The stale lock removed: no entry offers its removal any more.
@@ -486,7 +489,7 @@ impl ActivityLog {
         let Some(entry) = self.find(key) else {
             return;
         };
-        let (outcome, prompt) = match ending {
+        let (outcome, acknowledged) = match ending {
             WriteEnding::Done(done) => (Outcome::Succeeded, done.acknowledged.clone()),
             WriteEnding::Incomplete { done, message, .. } => (
                 Outcome::PartlyDone(message.clone()),
@@ -500,7 +503,7 @@ impl ActivityLog {
                 (Outcome::MayHaveTakenEffect(message.clone()), None)
             }
         };
-        entry.prompt = prompt;
+        entry.prompt = acknowledged.or_else(|| asked.and_then(|asked| asked.prompt.clone()));
         entry.end(outcome);
     }
 
@@ -803,6 +806,7 @@ mod tests {
             awaited: "the commit to finish",
             replaces,
             cancellable: true,
+            prompt: None,
         }
     }
 

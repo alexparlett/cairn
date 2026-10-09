@@ -1074,7 +1074,11 @@ every fetch — newest first, each its name, its status (`running`, `succeeded`,
 run`, `may have taken effect`, `partly done`, `cancelled`) and when it started, with Fork's ×
 beside a running one that can be cancelled (a commit, an amend, a fetch); on the right the one
 selected: its status, when it started and how long it took, what its ending said, the prompt it
-confirmed (`Done::acknowledged`, R1.6), the way back where there is one — an amend that
+confirmed — however it ended, failed, cancelled part way or never run included: the write's
+`Confirmed` prompt is copied as the window asks it (`LocalWrite::prompt`, kept on
+`local_writes::Asked`), since the verb spends the token and only an ending that ran carries it
+back (`Done::acknowledged`, R1.6;
+`a_destructive_write_that_did_not_succeed_still_quotes_its_prompt`) — the way back where there is one — an amend that
 succeeded offers its replaced commit, whose press turns Show Lost Commits on and finds the
 commit as a ref's press finds its row (`ref_find::find_commit`) — and `Remove index.lock…`
 where it is offered, then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to

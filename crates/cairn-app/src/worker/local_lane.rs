@@ -381,6 +381,28 @@ impl LocalWrite {
         self.is_commit()
     }
 
+    /// The prompt a destructive write's confirmation recorded — what the user accepted — copied
+    /// as the write is asked, before the verb spends the token, so the activity popover quotes
+    /// it however the write ends (R12.1): `None` for a write that asks no confirmation.
+    pub fn prompt(&self) -> Option<String> {
+        match self {
+            Self::DiscardLines(confirmed)
+            | Self::DiscardFiles(confirmed)
+            | Self::Amend { confirmed, .. }
+            | Self::CreateBranchDiscarding(confirmed)
+            | Self::RemoveLock(confirmed) => Some(confirmed.prompt().to_owned()),
+            Self::StageLines { .. }
+            | Self::UnstageLines { .. }
+            | Self::StageFiles { .. }
+            | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
+            | Self::Commit { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. } => None,
+        }
+    }
+
     /// The commit an amend replaces, which Show Lost Commits draws once it has (R12.1's way
     /// back): `None` for every other write.
     pub fn replaces(&self) -> Option<Oid> {

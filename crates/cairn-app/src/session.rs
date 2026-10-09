@@ -195,16 +195,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let ending = crate::shown_output::shown_ending(ending);
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
-            // A write that never started is named as it was asked (the user's decision N).
-            let name = {
+            // A write that never started is named as it was asked (the user's decision N), and
+            // a destructive one quotes the prompt it was asked with however it ended (R12.1).
+            let asked = {
                 let writes = writes.peek();
                 writes
                     .queued()
                     .chain(writes.running())
                     .find(|asked| asked.id == id)
-                    .map(|asked| asked.name.clone())
+                    .cloned()
             };
-            activity.write().write_ended(id, &ending, name);
+            activity.write().write_ended(id, &ending, asked.as_ref());
             writes.write().ended(id, ending);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);

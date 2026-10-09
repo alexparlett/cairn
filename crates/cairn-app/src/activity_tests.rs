@@ -8,7 +8,10 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use cairn_model::{CommandExit, CommandRecord, Consequence, Oid, UnstagedChange};
+use cairn_model::{
+    ChangeLoss, ChangedKind, CommandExit, CommandRecord, Confirmed, Consequence, LostChange, Oid,
+    Publication, Reflog, RepoPath, UnstagedChange,
+};
 use cairn_ui::{
     ACTIVITY_TITLE, CANCEL_CAPTION, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
     SHOW_REPLACED_CAPTION,
@@ -438,6 +441,130 @@ fn a_write_refused_before_it_started_keeps_its_name() {
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
+/// R12.1, the merge bar's W2: a destructive write that git failed, or that may have done part
+/// before it was cancelled, still quotes the prompt the user accepted — copied as it was asked,
+/// since the verb spent the token and only an ending that ran carries it back — and so does one
+/// that never ran. Caught by: the prompt drawn only for a write that succeeded.
+#[test]
+fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
+    let (mut test, view, submitted) = launch();
+    let amend = Consequence::Amend {
+        commit: Oid::from_bytes(&[0xab; 20]).unwrap(),
+        subject: "Fix the parser".to_owned(),
+        published: Publication::Unpublished,
+        reflog: Reflog::NotWritten,
+    };
+    let discarding = Consequence::CheckoutDiscarding {
+        branch: "topic".to_owned(),
+        at: Oid::from_bytes(&[0xcd; 20]).unwrap(),
+        head: Some(Oid::from_bytes(&[1; 20]).unwrap()),
+        changes: vec![LostChange {
+            path: RepoPath::from("a.rs"),
+            loss: ChangeLoss::Changed {
+                kind: ChangedKind::Modified,
+                index: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+                working_tree: Some(Oid::from_bytes(&[3; 20]).unwrap()),
+                executable: false,
+                lines: Some(4),
+            },
+        }],
+        kept_untracked: 0,
+    };
+    let lock = index_lock();
+    let prompts = [amend.prompt(), discarding.prompt(), lock.prompt()];
+    assert!(
+        prompts.iter().all(|prompt| !prompt.is_empty()),
+        "{prompts:?}"
+    );
+
+    // An amend cancelled part way: it may have taken effect.
+    let killed = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::Amend {
+            confirmed: Confirmed::by_user(amend),
+            message: "Fix the parser properly\n".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: killed,
+            ending: WriteEnding::MayHaveTakenEffect {
+                message: "git commit was cancelled; it may have taken effect".to_owned(),
+                locks: Vec::new(),
+            },
+            read_again: crate::worker::ReadAgain::Everything,
+        },
+    );
+    // Create Branch's discard, which git failed.
+    let failed = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::CreateBranchDiscarding(Confirmed::by_user(discarding)),
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: failed,
+            ending: WriteEnding::Failed {
+                message: "git checkout failed: fatal: a branch named 'topic' already exists"
+                    .to_owned(),
+                locks: Vec::new(),
+                command: Some("git checkout -q -f -b topic".to_owned()),
+                output: "fatal: a branch named 'topic' already exists".to_owned(),
+            },
+            read_again: crate::worker::ReadAgain::Everything,
+        },
+    );
+    // A removal asked and never run: the repository was closing.
+    let id = OperationId::next();
+    let mut writes = view.writes;
+    test.run_in(|| {
+        writes
+            .write()
+            .asked(id, &LocalWrite::RemoveLock(Confirmed::by_user(lock)))
+    });
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::NotRun {
+                message: "Not run: the repository was closing.".to_owned(),
+            },
+            read_again: crate::worker::ReadAgain::Status,
+        },
+    );
+
+    // Newest first: the removal, the checkout, the amend — each selected in turn.
+    open(&mut test);
+    let names: Vec<String> = test.run_in(|| {
+        view.activity
+            .peek()
+            .newest_first()
+            .map(|entry| entry.name.clone())
+            .collect()
+    });
+    assert_eq!(names.len(), 3, "{names:?}");
+    for (name, prompt) in names.iter().zip(prompts.iter().rev()) {
+        click_lowest(&mut test, name);
+        assert!(
+            drawn(&test, prompt),
+            "{name:?} did not quote {prompt:?}: {:?}",
+            labels(&test)
+        );
+    }
+}
+
 /// R12.1's way back: an amend that succeeded draws the prompt it confirmed and offers its
 /// replaced commit, whose press switches to All Commits, turns Show Lost Commits on and looks
 /// for the commit in the walk that draws it. Caught by: a way back that changes nothing, or one
@@ -469,6 +596,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             awaited: "the amend to finish",
             replaces: Some(replaced),
             cancellable: true,
+            prompt: None,
         });
     });
     apply(

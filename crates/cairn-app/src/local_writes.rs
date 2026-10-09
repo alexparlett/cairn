@@ -27,6 +27,24 @@ pub struct Asked {
     pub replaces: Option<cairn_model::Oid>,
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
     pub cancellable: bool,
+    /// The prompt a destructive write's confirmation recorded, copied as it was asked
+    /// (`LocalWrite::prompt`): what the activity popover quotes however the write ends.
+    pub prompt: Option<String>,
+}
+
+impl Asked {
+    /// A write the window did not see asked.
+    fn unknown(id: OperationId) -> Self {
+        Self {
+            id,
+            what: "a write".to_owned(),
+            name: "A write".to_owned(),
+            awaited: UNKNOWN_WRITE,
+            replaces: None,
+            cancellable: false,
+            prompt: None,
+        }
+    }
 }
 
 /// The local writes of this session, as the window draws them.
@@ -54,20 +72,16 @@ impl LocalWrites {
             awaited: write.awaited(),
             replaces: write.replaces(),
             cancellable: write.is_cancellable(),
+            prompt: write.prompt(),
         });
     }
 
     /// `id` has started: every write asked before it has ended.
     pub fn started(&mut self, id: OperationId) {
         let at = self.queued.iter().position(|asked| asked.id == id);
-        let asked = at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
-            id,
-            what: "a write".to_owned(),
-            name: "A write".to_owned(),
-            awaited: UNKNOWN_WRITE,
-            replaces: None,
-            cancellable: false,
-        });
+        let asked = at
+            .and_then(|at| self.queued.remove(at))
+            .unwrap_or_else(|| Asked::unknown(id));
         self.running = Some(asked);
     }
 
@@ -78,14 +92,8 @@ impl LocalWrites {
             // Never started: not run, as the repository was closing.
             None => {
                 let at = self.queued.iter().position(|asked| asked.id == id);
-                at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
-                    id,
-                    what: "a write".to_owned(),
-                    name: "A write".to_owned(),
-                    awaited: UNKNOWN_WRITE,
-                    replaces: None,
-                    cancellable: false,
-                })
+                at.and_then(|at| self.queued.remove(at))
+                    .unwrap_or_else(|| Asked::unknown(id))
             }
         };
         self.locks = ending.locks().to_vec();

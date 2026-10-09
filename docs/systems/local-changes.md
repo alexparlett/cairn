@@ -247,6 +247,7 @@ phase 08's.
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
   `a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list`,
+  `a_staged_selection_unstages_by_the_drag_the_button_and_the_menu`,
   `a_discard_asks_what_it_would_lose_and_confirms_exactly_that`,
   `no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why`,
   `a_conflicted_row_stages_whole_by_every_route`,

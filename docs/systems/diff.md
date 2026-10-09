@@ -2182,7 +2182,7 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | extend Local Changes' list selection up / down | Shift+↑ / Shift+↓ | Shift+↑ / Shift+↓ | in Local Changes' lists |
 | Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
 | stage or unstage the selection | Enter, Ctrl+Shift+S | Return, ⌘S | in Local Changes' lists and diff |
-| stage all or unstage all | Ctrl+Alt+Shift+S | ⌥⇧⌘S | in Local Changes' lists and diff |
+| stage all or unstage all | Ctrl+Alt+Shift+S; Alt+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
 | discard the selection | Backspace, Delete, Ctrl+Shift+D | ⌫, ⇧⌘D | in Local Changes' lists and diff |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
 | Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |

@@ -3,6 +3,90 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 07, Local Changes acts on files (packet mode)
+
+Built on `feature/staging-and-commit`; QA is the coordinator's. Commits ed168c2 (model:
+`LocalChanges::whole_file_paths`), 4b60da0 (ui: the lists' selection, routes, drag, menu, the
+exact diff's bar, the edge scroll's lost release), f059a13 (git: a nested repository's row
+staged, and the engine's `Absent` arm owned by its caller), 988cee5 (app: the actions, the
+discard's consequence on the local lane, the confirmation, the line under the lists).
+
+- **No new dependency, no Fork route unbuildable** (stopping rule 1 not met): Freya's
+  `EventsCombos` gives the double press, `ContextMenu`/`MenuButton` the menu (each item closes
+  it, `ContextMenu::close`), `on_mouse_up` the drop — a press is reported only on the element
+  the button went down on, so a drop zone hears the release, as Freya's own `DropZone` does —
+  and `freya::clipboard::Clipboard` Copy Path; each read in the vendored fork at `caa46f8`.
+- **The selection after a stage (R8.3) for a multi-selection** — stopping rule 2 weighed, and
+  decided rather than stopped on, for the user's ratification (item 1 below): the row that
+  slides into the FIRST acted row's place, else the nearest row above it
+  (`cairn_ui::nearest_remaining`). For a contiguous selection that is Fork's documented
+  "nearest remaining" with no other reading; it differs only for a selection with gaps.
+- **Where a discard's consequence is asked** (phase 04's carry): on the local lane, as a job of
+  its own (`Request::DiscardConsequence`, `LocalJob::Consequence`), so it counts what the writes
+  asked before it left (`a_discards_consequence_is_counted_after_the_writes_asked_before_it`:
+  a stage held in its `git add`, the consequence answered only after it ended, and refusing the
+  path it staged). The answer opens `Confirming::new` from the pane (whose submit it needs);
+  one arriving with Local Changes not shown, or for an earlier ask, is dropped.
+- **Paths git status never listed** (phase 03's QA item 4): the caller owns it — the window
+  asks only for paths of rows the lists drawn list, each found again by a search
+  (`a_discard_names_only_paths_the_lists_drawn_still_list`); `staging.md`'s residual and the
+  engine test's doc (`a_file_git_clean_leaves_is_named_as_kept`, the `Absent` arm) say so.
+- **A collapsed untracked-directory row** is, since status lists untracked files one per file,
+  only ever a nested repository (`dir/`): staged by its row it becomes a gitlink at its commit
+  and nothing else (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`, read
+  back with `git ls-files --stage`); its discard is refused before any dialog (engine,
+  phase 03).
+- **Keys** (phase 06's carry): `Scope::LocalChanges` heard on each list's and the diff's own
+  `on_key_down`, `Scope::LocalChangesLists` (Shift+↑/↓) on the lists; presses resolved through
+  `HeldKeys::press()` (`ExtendSelection` toggles, `SelectRange` ranges). The table gained one
+  chord: `StageOrUnstageAll`'s ⌥/Alt **press**, for the heading button (R8.2's "⌥-held");
+  every table test and the text-field tests now skip a press where they read keys.
+- **While a dialog is open** (phase 06's QA item 4): the dialog's modal holds the keys, and
+  `local_changes_actions::intent` and `on_the_diff` act on nothing while a confirmation or a
+  credential prompt is up (`local_changes_acts_on_nothing_while_a_confirmation_is_open`).
+  **A credential prompt over a confirmation** (item 5, decided): the confirmation is set aside —
+  kept, unanswered, not drawn — while the prompt is up, and drawn again after
+  (`a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered`). **Backspace in
+  the filter field** (item 21): `backspace_in_the_filter_edits_the_filter_and_discards_nothing`.
+  **The pointer leaving the window** (item 16): `EdgeScroll` (and the lists' drag) end on a
+  press heard while a drag is on, and on focus lost
+  (`a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost`).
+- **R8.5**: the working-tree query is asked with `ignore_whitespace: false` whatever the shared
+  setting (`diff_actions::working_options`, and `DiffState::settings_changed` takes the working
+  options apart); `DiffHeader::exact` draws the toggle off and disabled and no hiding notice.
+- **R8.6**: one line under the lists (`local_changes_actions::acting_line`): why the last
+  action asked nothing, a discard being counted, the write running and those queued, or a
+  write's ending that did not do what was asked (a stale patch naming its path).
+- `expect(dead_code)` removed from `Confirming::new`, `local_writes::ask`, `LocalWrites::{queued,
+  running, last}` and `OperationId::next`; `LocalWrite`'s now names phases 08 and 09.
+
+Decisions, and items batched for the user's ratification (none was a stopping rule):
+
+1. **For the user's ratification — R8.3 for a selection with gaps**: the selection moves to the
+   row that takes the first acted row's place, else the nearest above it. Alternatives: the row
+   after the LAST acted row; or the remaining row nearest the selection's middle. Recommendation:
+   keep (the eye stays where the selection began; a contiguous run walks down the list as
+   Fork's does).
+2. **For the user's ratification — a multi-selection's diff**: the diff shows the path last
+   pressed in (or, toggled out, another the selection holds), where Fork draws the selection's
+   files together. A combined view is new UI, not in R8.
+3. **For the user's ratification — Stage All's placement and press**: the double chevron sits in
+   Unstaged's heading (Fork for Windows' place; Linux follows the Windows rows), and the heading
+   button's ⌥ press is Alt on Linux (Fork for Windows' own is unrecorded), which some window
+   managers take to move a window; the chevron, the menu and the chord remain.
+4. **For the user's ratification — what the view says for a staged-side discard**: Fork does
+   nothing; Cairn says "Staged changes can't be discarded: unstage them first." (the chord on the
+   Staged list or a staged diff), asking nothing.
+5. **A double press acts on its row**: its first press makes the row the selection, so a double
+   press never stages a multi-selection; C18's "each route stages and unstages a
+   multi-selection" holds for the other four routes, each tested both ways, and the double
+   press is tested on its row.
+6. The menu names no chord beside its items (a chord spelled in a label would be a modifier
+   named in a component) and nothing opens it from the keyboard.
+
+Carried forward: see `state.md` (the amend diff against `HEAD^` to phase 09; a discard of every
+line of a new file to phase 08, whose gesture is the only route that selects lines).
+
 ## 2026-10-09 — phase 06 QA, adjudicated and fixed; the user's decisions applied
 
 Five fresh reviewers and a fresh `qa-confirm` (the coordinator's; probes P1-P3 ran as window

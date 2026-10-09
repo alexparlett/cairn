@@ -1123,6 +1123,21 @@ which is a length of time, is waited out.
   stale one dropped)
   and `writes_are_queued_in_order_until_each_starts_and_end_with_their_locks`
   (`local_writes.rs`).
+- **What a discard would lose, in the lane's order** (staging-and-commit R8.4).
+  `Request::DiscardConsequence { asked, paths }` — what Local Changes asks before it
+  opens a discard's confirmation — is routed straight to the lane too, as a job of its
+  own (`LocalJob::Consequence`), so it is counted by `ops::discard_files_consequence`
+  after every write asked before it, never ahead of a stage that changes what it
+  counts; it ticks no write clock, and is answered as `Update::DiscardConsequence {
+  asked, outcome }` — the `Consequence`, or why the engine refused before any prompt —
+  or, once the repository is closing, as a refusal. Pinned by
+  `a_discards_consequence_is_counted_after_the_writes_asked_before_it` and
+  `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection`
+  (`worker/local_lane_tests.rs`). Stage All and Unstage All are writes of their own,
+  `LocalWrite::StageAll` and `LocalWrite::UnstageAll`, carrying the lists the window
+  draws, shared, from which the lane gathers every path (`LocalChanges::whole_file_paths`)
+  before it runs `git add` or `git reset`: a status of tens of thousands of paths is never
+  walked on the UI thread.
 - **Endings** (`WriteEnding`, R4.7). `Done` — the `Performed`'s description, the
   prompt a destructive write quotes, and the lock files before and after it;
   `Stale` — a patch the writes ahead of it made stale, or a file edited since its

@@ -13,8 +13,9 @@ lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisi
 14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) done in packet
 mode: QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green
 at c07c076. Phase 06 (render foundations) done in packet mode: QA adjudicated, fixes and the
-user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phases 07-12 not
-started.**
+user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 07 (Local
+Changes acts on files) built in packet mode, gate green, QA pending (the coordinator's); six
+items batched for the user in progress.md. Phases 08-12 not started.**
 
 ## Locked decisions
 
@@ -315,7 +316,55 @@ Phase 06 (`docs/systems/diff.md`, "The accelerator table" and its two subsection
   `pin_placement_violations` (shared with R4.8's pin); `TEXT_FIELD_POLICY`, `TEXT_FIELD_IDENTS`
   (eight names) and `TEXT_FIELD_EXCEPTIONS`.
 
+Phase 07 (`docs/systems/local-changes.md`, "Acting on files"):
+
+- **`cairn_ui::ListSelection`** (`crates/cairn-ui/src/list_selection.rs`): the paths selected in
+  one list, sorted by bytes, and the anchor — `of`, `spanning`, `toggled`, `holds`, `paths`,
+  `anchor`, `list`; **`cairn_ui::nearest_remaining(len, first, acted)`** (R8.3). The window keeps
+  it as `LocalChangesView::selection`.
+- **`cairn_ui::ListIntent`**: `Toggle`, `Range`, `Double`, `Act(list, Action)`, `Drop { from,
+  path }`, `CopyPaths`; `LocalChangesList::{selection, held, on_intent}` beside `on_choose`.
+  **`cairn_ui::NoDiscard`** and **`no_discard(changes, list, paths)`** (why a selection offers no
+  discard); the menu captions (`STAGE_CAPTION`, …, `DISCARD_CAPTION`, `COPY_PATH_CAPTION`).
+  `DiffHeader::exact(bool)`. `DRAG_THRESHOLD`.
+- **The table**: `StageOrUnstageAll` gained a press chord, ⌥/Alt+press (the heading button held).
+- **`LocalChanges::whole_file_paths(list, rows)`**: each row's path and a rename's source.
+- **Worker**: `Request::DiscardConsequence { asked: OperationId, paths }` → local lane
+  (`LocalJob::Consequence`), answered `Update::DiscardConsequence { asked, outcome:
+  Result<Consequence, String> }`; `LocalWrite::StageAll { changes: Arc<LocalChanges> }` and
+  `UnstageAll { changes, to }` (paths gathered on the lane); `worker::UnstageTarget` re-exported.
+- **`crate::local_changes_actions`** (`crates/cairn-app/src/local_changes_actions.rs`): `choose`,
+  `intent`, `on_the_diff`, `confirm_arrived`, `acting_line`, `Acting` (kept as
+  `LocalChangesView::acting`), `DISCARD_TITLE`, `READING_DISCARD`; `diff_actions::working_options`
+  (always exact); `DiffState::settings_changed(options, in_place, working, asking)`.
+- **The window** draws a credential prompt in place of an open confirmation, which it keeps.
+- **`EdgeScroll`** ends on a press heard while dragging and on focus lost.
+
+## Carried forward from phase 07 (owned by the phase named)
+
+- **Phase 08**: a discard of every line of a new file goes to `discard_files` (phase 03's
+  `Refusal::WholeFileOnly`): the line gesture is the only route that selects lines, so the
+  gesture routes it — `local_changes_actions` asks `Request::DiscardConsequence` for the path,
+  as the file routes do. The diff's chords act on the whole file today
+  (`local_changes_actions::on_the_diff`); phase 08 narrows them to a drag-selection's lines.
+  The drag selection over the diff begins its `EdgeScroll` on the diff's container (unchanged
+  from phase 06's carry); `EdgeScroll` now ends on a lost release itself.
+- **Phase 09**: no engine query diffs one file of amend's staged list against `HEAD^` (phase
+  05's carry, "07 or 09"): Local Changes does not draw an amend's files, so it stays the commit
+  box's; and an unstage out of an amend (`UnstageTarget::Commit`) — Local Changes asks
+  `UnstageTarget::Head` today, and the commit box's amend mode switches it.
+- **Phase 11**: the activity popover reads the same `LocalWrites` the line under the lists does;
+  the cost of a 50,000-path selection's actions on the UI thread (a clone per path on a range
+  press, a search per path on an action) is named in root `CLAUDE.md` and is the window check's
+  to measure if a reviewer asks.
+
 ## Carried forward from phase 06 (owned by the phase named)
+
+Phase 07's items here are done (the keys heard on the lists and diff and resolved through
+`HeldKeys::press()`, `Confirming::new` opening the discard, menu items closing themselves, the
+drag with one drop zone per list and the target's `EdgeScroll`; QA items 4, 5, 16 and 21 — see
+progress.md's phase 07 entry).
+
 
 - **Phase 07**: hear `Scope::LocalChanges` on the Unstaged and Staged lists' and the diff's own
   `on_key_down` (the filter above the lists keeps its keys, so it never reaches them), and
@@ -351,7 +400,7 @@ Phase 06 (`docs/systems/diff.md`, "The accelerator table" and its two subsection
 
 ## Carried forward from phase 05 (owned by the phase named)
 
-- **Phase 07 or 09**: no engine query diffs one file of amend's staged list against `HEAD^`
+- **Phase 09** (phase 07 re-carried it: Local Changes draws no amend's files): no engine query diffs one file of amend's staged list against `HEAD^`
   (`WorkingTreeDiff::Staged` diffs against `HEAD`); the view that shows an amend's file needs
   one (a `staged_since`-based side in `diff/working_tree.rs`), with a test.
 - **Phase 09**: `Request::CancelWrite`'s `expect(dead_code)` stays until the commit box cancels;
@@ -431,9 +480,11 @@ From phase 05's QA (adjudicated 2026-10-09):
     orphaned discard finishes its batch (an `ops/` change, with a test in the same commit),
     and check `git restore` and `git apply` for the same `SIGPIPE` exposure; the closing
     banner says closing again leaves the write unfinished.
-- **Phase 07**: ask writes through `local_writes::ask`; draw a write queued and its outcome
-  (`LocalWrites::queued`, `last`); decide where `discard_*_consequence` is asked (a worker's
-  call; the local lane orders it after the writes ahead of it).
+- **Phase 07** (done: every route asks through `local_writes::ask`; the line under the lists
+  draws queued, running and ended; the consequence is asked on the local lane): ask writes
+  through `local_writes::ask`; draw a write queued and its outcome (`LocalWrites::queued`,
+  `last`); decide where `discard_*_consequence` is asked (a worker's call; the local lane
+  orders it after the writes ahead of it).
 - **Phase 09**: a Cancel the commit box draws is for the running commit (`CancelWrite` of a
   queued one does nothing, R4.3).
 - **Phase 11**: the activity popover reads `WriteEnding`/`Done`; measure the open's lock
@@ -455,12 +506,14 @@ From phase 05's QA (adjudicated 2026-10-09):
   amend's tests; the root amend's refusal met with `-f`; C13's root-commit case): `hooks_path`
   re-export; `UnstageTo::Commit`/`Nothing` for amend; the root amend's `git rm --cached`
   refusal; C13's root-commit case.
-- **Phase 07** (phase 03's QA item 4): `discard_files_consequence` accepts any path
+- **Phase 07** (done: the caller owns it, `staging.md`'s residual, pinned by
+  `a_discard_names_only_paths_the_lists_drawn_still_list`; phase 03's QA item 4): `discard_files_consequence` accepts any path
   absent from the index as untracked, so an ignored file or a path inside a nested
   repository reaches `git clean -f`, which leaves it (the outcome now names it as kept).
   Phase 07 either refuses a path `git status` did not list before any prompt, or states in
   `docs/systems/staging.md` that the caller owns that, with a test of the `Absent` arm.
-- **Phase 07**: the dialog's `Consequence` from `discard_files_consequence` (a nested
+- **Phase 07** (done: the dialog opens on the engine's `Consequence`; the rename's row
+  unstages `[new, old]`, a source row alone; the engine's refusals said before any dialog): the dialog's `Consequence` from `discard_files_consequence` (a nested
   repository, a submodule, a conflicted path and a staged-only path are refused by it
   before any dialog); the rename source row's whole-file unstage resets the source alone,
   both paths unstage the rename; an intent-to-add file's discard leaves it empty and says
@@ -491,7 +544,7 @@ From phase 05's QA (adjudicated 2026-10-09):
 
 From phase 02's QA (adjudicated 2026-10-08):
 
-- **Phases 03 and 07** (QA item 8; the engine's half done, `a_rename_sources_row_unstages_its_lines_at_the_new_path`): a rename's SOURCE path is paired too
+- **Phases 03 and 07** (QA item 8; the engine's half done, `a_rename_sources_row_unstages_its_lines_at_the_new_path`; phase 07's whole-file half done, `a_whole_file_action_names_each_rows_path_and_a_renames_source` — the lines half is phase 08's gesture): a rename's SOURCE path is paired too
   (`reads::working_tree::names`): where the user's `status.renames` differs from
   `diff.renames`, status lists the deleted source as a row of its own while its staged
   diff is the rename, and an unstage built from it acts at the NEW path. The verb and the
@@ -555,7 +608,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
 | 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
-| 07 Local Changes actions | not started |
+| 07 Local Changes actions | built, gate green, QA pending |
 | 08 diff gesture | not started |
 | 09 commit box | not started |
 | 10 lost commits | not started |

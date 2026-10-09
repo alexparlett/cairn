@@ -556,6 +556,79 @@ fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
     drop(handle);
 }
 
+/// R4.6 on the threads' side: a refresh asked BEFORE a commit, whose reads are still queued
+/// on the refresh thread — its status held, its ahead/behind waiting behind it — when the
+/// commit starts, draws nothing while the commit runs: the status, released, was read across
+/// a write and is dropped, and the ahead/behind is kept back as it is taken up. Once the
+/// commit has ended and the window asks, one refresh is answered. Caught by: the refresh
+/// thread counting ahead/behind while a commit runs (only the handle's gate kept back).
+#[test]
+fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
+    let fixture = with_origin(
+        &format!("cairn-lane-refresh-before-commit-{}", std::process::id()),
+        "/nonexistent/origin",
+    );
+    let stub = stub(&[("fetch", &held("commits")), ("status", &held("statuses"))]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+
+    handle.submit(Request::Refresh);
+    let status = until_pids(&stub, "statuses", 1)[0];
+    // A second refresh while the first's status is held: its refs are read on the
+    // repository thread, which forwards its ahead/behind to the refresh thread, where it
+    // waits behind the held status — and supersedes the first's, which may have been counted
+    // before the status began.
+    collect_until(&mut updates, |update| matches!(update, Update::Refs { .. }));
+    handle.submit(Request::Refresh);
+    collect_until(&mut updates, |update| matches!(update, Update::Refs { .. }));
+    let commit = ask(&handle, commit());
+    let pid = until_pids(&stub, "commits", 1)[0];
+    release(&stub, status);
+    let seen = arriving_within(&mut updates, Duration::from_millis(700));
+    // What arrived once the commit had started.
+    let meanwhile: Vec<&Update> = seen
+        .iter()
+        .skip_while(|update| !matches!(update, Update::WriteStarted { id } if *id == commit))
+        .collect();
+    assert!(!meanwhile.is_empty(), "the commit never started: {seen:?}");
+    assert!(
+        !meanwhile.iter().any(|update| matches!(
+            update,
+            Update::Refs { .. } | Update::Status { .. } | Update::AheadBehind { .. }
+        )),
+        "a refresh asked before the commit drew while it ran: {meanwhile:?}"
+    );
+    assert_eq!(
+        pids(&stub, "statuses"),
+        [status],
+        "a status started while the commit ran"
+    );
+
+    release(&stub, pid);
+    let seen = until_ended(&mut updates, commit);
+    assert_eq!(ending_of(&seen, commit).1, ReadAgain::Everything);
+    // What the window asks as the commit ends: answered once, its status released.
+    handle.submit(Request::Refresh);
+    let follow_up = until_pids(&stub, "statuses", 2)[1];
+    release(&stub, follow_up);
+    let mut seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::Status { .. })
+    });
+    seen.extend(arriving_within(&mut updates, Duration::from_millis(500)));
+    let count = |kind: fn(&Update) -> bool| seen.iter().filter(|update| kind(update)).count();
+    assert_eq!(
+        (
+            count(|update| matches!(update, Update::Refs { .. })),
+            count(|update| matches!(update, Update::AheadBehind { .. })),
+            count(|update| matches!(update, Update::Status { .. })),
+        ),
+        (1, 1, 1),
+        "not one read of each after the commit: {seen:?}"
+    );
+    drop(handle);
+}
+
 /// C10, R4.3 and the QA brief: a cancel names its write and reaches only that one — a cancel
 /// for a commit still queued does nothing, the running commit's ends it as one that may have
 /// taken effect, and that same cancel sent again once the next commit runs leaves the next

@@ -1152,8 +1152,12 @@ the same tests against `git commit`.
   lane remembers it, and the commit's ending says to read everything again, so
   none is lost and the window asks one. Index writes queued behind the commit
   wait for it by the lane's order
-  (`a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it`,
-  `a_refresh_is_kept_back_only_while_a_commit_runs_and_its_ending_says_so`).
+  (`a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it`, the
+  handle's gate; `a_refresh_asked_before_a_commit_draws_nothing_while_it_runs`, the
+  refresh thread's, with a refresh's reads queued behind a held status as the commit
+  starts; `a_refresh_is_kept_back_only_while_a_commit_runs_and_its_ending_says_so`).
+  The repository thread's gate on a refresh's refs is not driven by a test: its refs
+  are read before a test can start a commit behind them.
 - **Cancel by id** (R4.3). `Request::CancelWrite { id }` reaches `LaneState`
   directly, never queued; it ends the write it names only when that is a commit
   and is running — at once once git runs, or as git starts if it came first — so

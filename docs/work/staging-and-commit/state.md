@@ -22,7 +22,9 @@ packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied
 at 18fea48. Phase 10 (Show Lost Commits) done in packet mode: Show Lost Commits with its check
 box, and Fork's Create Branch dialog with its sealed Discard, as the user decided (2026-10-09);
 QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green.
-Phases 11-12 not started.**
+Phase 11 (the activity popover and the measured bar) built in packet mode, gate green, QA
+pending; its unsettled placements and words held for the user's sign-off. Phase 12 not
+started.**
 
 ## Locked decisions
 
@@ -465,6 +467,47 @@ verb table):
   `crate::lost_commits::{history_action, toggle}`; `session::reopen_history(rows, progress, lost,
   submit)` is now `pub` and takes the toggle — a refresh's reopen passes `*view.show_lost.peek()`.
 
+Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popover"):
+
+- **`cairn_model::Scrubber`** (`new`, `after_cut`, `line`) and `scrub_userinfo`
+  (`crates/cairn-model/src/scrub.rs`); the window's `crate::shown_output` (`ShownLines`,
+  `shown_lines`, `shown_line`, `scrubbed`, `shown_ending`, `MAY_BE_CUT_BYTES`).
+- **`cairn_git`**: `Repository::command_mark() -> CommandMark`, `commands_since(mark)`,
+  `running_invocations()`; `ops::remove_lock_consequence(repo)`, `ops::remove_index_lock(repo,
+  Confirmed)` (`src/ops/remove_lock.rs`, on `DESTRUCTIVE_OPERATIONS`); `Error::LockRefused { why:
+  LockRefusal }` (`NoLock`, `NotAFile`, `GitRunning(n)`, `NotWhatWasConfirmed`),
+  `Error::LockChangedSinceConfirmed { path }`, `Error::LockNotRemoved`; `CommitWatch::output`
+  now `&mut dyn FnMut(&[&str])` (one call a pipe read), `Invocation::finish_by_read`;
+  `history::walk::{open_dated, graph_date, reaches_through_graph}`.
+- **Worker**: `LocalWrite::RemoveLock(Confirmed)`, `LocalWrite::replaces()`,
+  `is_cancellable()`; `Update::WriteOutput { id, lines, receipt: OutputReceipt }`
+  (`worker/output_flow.rs`); `Update::OperationRan { by: RanBy::{Write(id), Fetch}, commands,
+  lock }`, sent before each ending; `local_lane::{ran_since, removable_lock}`.
+- **Window**: `View::activity: State<ActivityLog>` (`crate::activity`: `ActivityKey`,
+  `Outcome`, `ACTIVITY_ENTRIES`, `ACTIVITY_LINES`, `ACTIVITY_BYTES`, `popover`,
+  `REMOVE_LOCK_TITLE`); `Asked::{replaces, cancellable}`; `ref_find::find_commit`.
+- **`cairn_ui::ActivityPopover`** (`ActivityEntry`, `ActivityLine::{Ran, Output}`, captions
+  `ACTIVITY_TITLE`, `SHOW_REPLACED_CAPTION`, `REMOVE_LOCK_CAPTION`, `CANCEL_OPERATION_CAPTION`,
+  `CONFIRMED_CAPTION`, `NO_ACTIVITY`); `Expansion::take_all`.
+- **Guards**: `only_the_ops_module_changes_the_filesystem`, `mutates_the_filesystem`,
+  `FILESYSTEM_MUTATION_IDENTS`, `FILESYSTEM_MUTATION_FS_FUNCTIONS`,
+  `FILESYSTEM_MUTATION_EXCEPTIONS`, `TEST_ONLY_CFGS`.
+- **Reporters**: `window_check::writes_check` (C21 in the window), `cairn_write_costs` and
+  `discard_count_costs` (`crates/cairn-git/tests/diff/write_baseline.rs`).
+
+## Carried forward from phase 11 (owned by the phase named)
+
+- **The user (NEEDS USER SIGN-OFF, relayed by the coordinator)**: the popover's placements and
+  words the PRD and Fork's evidence leave open — built provisionally, listed in the phase's
+  report.
+- **Phase 12 / the user**: batching the discard count's per-path reads (measured 15.4 ms a path
+  on the bench clone; a batched `numstat` read would change what a prompt counts for an LFS
+  pointer, a file past the limits and under `diff.algorithm`); the amend read's split (measured:
+  0.14 ms consequence, 2.6 ms staged list per status at a remote tip; 1.2 s only for a detached
+  `HEAD` far behind every remote tip with no commit-graph); the engine's half of #46 (the command
+  log and `Error::GitFailed` keep git's stderr unscrubbed; every drawn line is scrubbed); closing
+  #41 and commenting #46/#87 on GitHub, left to the coordinator.
+
 ## Carried forward from phase 10 (owned by the phase named)
 
 - **Decided by the user (2026-10-09), built**: (B) Show Lost Commits' check box at the right end
@@ -837,5 +880,5 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
-| 11 activity and measured | not started |
+| 11 activity and measured | built, gate green, QA pending; NEEDS USER SIGN-OFF on the popover's unsettled placements and words |
 | 12 QA | not started |

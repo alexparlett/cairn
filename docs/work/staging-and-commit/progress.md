@@ -3,6 +3,72 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 11, the activity popover and the measured bar (packet mode; built, QA pending)
+
+Built on `feature/staging-and-commit` from 4794754, in packet mode. Everything R12, R13, C2's lock
+half, C20's popover half, C21 and C22 settle is built; the popover's placements and words that
+neither the PRD nor Fork's evidence settle are built provisionally and held for the user (NEEDS
+USER SIGN-OFF, relayed by the coordinator).
+
+- **The popover (R12.1, R12.3)**: `cairn_ui::ActivityPopover`, opened by the title bar's status
+  box — Fork's left list of operations (name, status, start, × on a running commit, amend or
+  fetch) and the selected one on the right: status, start and duration, what its ending said,
+  the prompt it confirmed, an amend's way back (Show Lost Commits turned on, the replaced
+  commit found as a ref's press finds its row, `ref_find::find_commit`), `Remove index.lock…`,
+  then `$ git ...` and its stderr. Both lists virtualized; at most 200 operations, 10,000 lines
+  one, 4 MiB of lines together; session only. Each lane hands the window its own operation's
+  records (`Repository::command_mark`/`commands_since`, the thread and the build order kept
+  beside each record) in `Update::OperationRan`, just before the ending.
+- **Scrubbing (R12.2)**: `cairn_model::Scrubber` removes every `scheme://` URL's userinfo, a URL
+  cut at a line's end on both sides of the cut; the lanes scrub records, progress, messages and
+  output, and the window scrubs again as it keeps them (`shown_output`) — the Git Error dialog's
+  streamed and kept lines, the line under the lists and the popover's (dialog-level
+  `the_git_error_draws_no_token_a_hook_printed`).
+- **`Remove index.lock…` (R12.4, C2's lock half)**: `ops::remove_lock_consequence` /
+  `ops::remove_index_lock` (on `DESTRUCTIVE_OPERATIONS`), `LocalWrite::RemoveLock`, offered by
+  the lane only where an ending names the lock and `Repository::running_invocations` is zero; the
+  re-check refuses a lock made again (new inode at the same time and size), rewritten or gone.
+- **The filesystem-mutation guard (R12.5)**: `only_the_ops_module_changes_the_filesystem`,
+  matcher `mutates_the_filesystem`, self-test, exceptions roster (askpass socket directory,
+  the ownership probe), each row failing when unneeded; checked by adding an aliased
+  `remove_file` to a render file, which fails it.
+- **Carries done**: WriteOutput one update a pipe read with a 1 MiB budget the window gives back
+  (`output_flow`) — and `OutputTail`'s one line kept whole past its byte bound is at most a
+  runner's piece (256 KiB of stderr, 64 KiB of stdout), since the runner sends a longer line in
+  pieces, so it is bounded already; a multibyte character at
+  `ops/commit.rs`'s cuts no longer reads as U+FFFD; `begin_for`'s failure said in the ending; Show
+  Lost Commits' tips read once and dated from the commit-graph (decision A); the pushed check
+  answered from the commit-graph with a generation cutoff; files drawn together keep their
+  diffs across a selection change (#4'); 50,000 paths stay off argv (pinned).
+- **Re-carried, measured**: the discard count's per-path reads (15.4 ms a path on the clone:
+  1,000 files 15.4 s before the dialog, cancellable) — batching them changes what a prompt counts
+  for an LFS pointer, a file past the limits and under a configured `diff.algorithm` (numstat
+  counts what the drawn diff does not), so it is not made here; the amend read's split (0.14 ms
+  consequence, 2.6 ms staged list per status at a remote tip; 1.2 s per status only for a
+  detached `HEAD` far behind with no commit-graph); #87 (two lock listings a write: 0.02 ms on
+  the clone's packed refs, 3.4 ms at 10,000 loose refs) — no change.
+
+**Measured** (release, warm, a plain `--no-hardlinks` clone of the bench at `c999cef531e` in
+`/tmp` (tmpfs), no alternates, no commit-graph unless said, `maintenance.auto=false` and
+`gc.auto=0` set in the clone so a commit's auto-maintenance cannot write a graph mid-run; deleted
+after). C21, press to the refreshed lists drawn, median of seven after one to warm, three runs
+of `writes_check`: stage 85.9 / 69.1 / 68.7 ms (bar 93; baseline git + status 42.9), unstage
+85.5 / 68.8 / 68.6 (bar 93; 42.8), discard (from the confirmation's press) 68.0 / 51.3 / 51.4
+(bar 76; 25.8), commit 69.1 / 52.6 / 52.4 (bar 87; 37.4) — the first run a frame slower
+throughout; an earlier run, its time read one frame late, had commit at 86.2. Every bar met. The
+engine's share (`cairn_write_costs`): `stage_lines` 30.0 ms, `unstage_lines` 30.2, `discard_lines`
+13.7 (its consequence 13.4 before the dialog), `commit` 9.2-11.4; git's own in the same run
+17.7 / 17.7 / 0.8 / 12.1 and a status read 33.8. Frames: every frame under 16.7 ms of UI-thread
+work — while the writes landed, slowest 1.4 ms; a commit whose hook writes a line every 50 ms for
+2 s, 132 frames, slowest 1.25 ms; the gesture hovered across a 10,000-line diff, slowest 0.5 ms,
+and dragged down it past its edge, slowest 1.35 ms; 1,000 files selected and drawn together in
+28.5 ms, slowest frame 12.0 ms; Show Lost Commits toggled on, its first page drawn 18.2 ms after
+the press. Show Lost Commits' first page and the pushed check: `docs/systems/history-graph.md`
+and `docs/systems/staging.md`.
+
+**Bench**: see the phase's bench check in state.md; the clone was made with
+`GIT_OPTIONAL_LOCKS=0`.
+
 ## 2026-10-09 — phase 10, the review of the decisions' round (packet mode)
 
 A fresh review of 1eba929..32b64cb found it ready but for one safety item. Each fix was built

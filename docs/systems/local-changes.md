@@ -670,9 +670,12 @@ typed, the arrows are the editor's.
   Load Diff and a file whose mode changed no mode row: either is reached by choosing the path
   alone. Previous and next change step through one file's changes, so they are inert over paths
   drawn together. (Each ratified by the user, 2026-10-09.)
-- Adding a path to a selection drawn together asks every path again, so the files already drawn
-  are read afresh and flash as they arrive: interim, until each file's answer is kept across a
-  change of the selection (carried to phase 11, with measurements).
+- Adding a path to a selection drawn together, or taking one from it, asks every path again, and
+  each path drawn before in the same lists under the same options keeps its diff, at its new
+  place, until its new answer replaces it (staging-and-commit phase 11, the user's decision on
+  phase 08's QA item 4'; `a_selection_that_changes_keeps_each_paths_diff_meanwhile`), so nothing
+  already drawn flashes. A thousand files selected are read and drawn in 28.5 ms on the bench
+  clone, the slowest frame 12 ms (`writes_check`).
 - Fork's floating actions sit at the chunk's top right; Cairn's also stand at the list's top while
   the chunk's top is scrolled above it, so a tall chunk's actions stay in reach. A selection's
   actions are drawn at its top, not at the chunk's. A press without a drag, or Escape, lets a

@@ -367,7 +367,22 @@ new commit with no upstream, 91-99 ms; a detached `HEAD` at a commit 2,000 or
 30,000 first parents back — `HEAD` reached only after painting from every remote
 tip — 1.1-1.3 s, which is git's own walk without a commit-graph (`git -c
 core.commitGraph=false rev-list -1 HEAD --not --remotes`, 1.14 s; 0.08 s with the
-graph, which the walk does not read so it can be cancelled at every object).
+graph, which the walk does not read so it can be cancelled at every object). Where the
+repository has a commit-graph holding `HEAD` and every remote tip the check reads, the graph
+answers alone (`crate::history::walk::reaches_through_graph`, phase 11): a walk down from the
+remote tips through the graph's parents that never descends below `HEAD`'s generation, as git's
+own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for that detached
+`HEAD` 20,000 commits behind on the bench clone with a graph written, against 1.2 s by the
+object walk and git's 10 ms
+(`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
+itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
+twice (consequence, re-check) and, while Amend is ticked, once per status the window reads
+(phase 09's QA item 9, measured and not split: 0.14 ms for the consequence and 2.6 ms for
+amend's staged list with `HEAD` at a remote tip).
+
+**`Remove index.lock…`** (R12.4): `ops::remove_lock_consequence` and the destructive
+`ops::remove_index_lock` (`src/ops/remove_lock.rs`), the one mutation not made by git —
+`docs/systems/git-processes.md`, "The activity popover".
 
 ## Residuals
 

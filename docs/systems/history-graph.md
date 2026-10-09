@@ -923,6 +923,17 @@ date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags
 the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
 with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
 
+Since phase 11 (the user's decision A) each reflog tip is read once, its date taken with its
+kind (`reflogs::reflog_tips` hands the walk the dates, `walk::open_dated`), and every tip's
+date — a ref's or a reflog's — is the commit-graph's where the graph holds it, as git's own walk
+takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back:
+with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
+pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
+1,000 entries 7.8 ms and 2.8 ms; 200 local branches each with a 50-entry log (10,000 ids),
+50.6 ms with no graph and 8.9 ms with one. Every reopen while the toggle is on — a refresh that
+moves a ref — pays the same again, since each reads every log; in the window the toggle's first
+page is drawn 18.2 ms after the press on the clone's own reflog (`writes_check`).
+
 Turning it on or off is a reopen (`Request::OpenHistory`'s `lost`, the window's
 `View::show_lost`, kept for the session and off as the window opens — the user's decision D):
 the history lane opens the walk as the open asked, and a later reopen — a refresh that finds the

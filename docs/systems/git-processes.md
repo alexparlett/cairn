@@ -967,6 +967,17 @@ it, but on a close nobody may be left to show them, and the next write in
 that repository fails on them with git's own "File exists" message (issue
 #44).
 
+Two questions the registry answers outside a close (staging-and-commit phase 11):
+`Repository::running_invocations` — how many `git` Cairn runs in the repository now, on any
+thread, reads and writes alike (what git detached from its group, auto-maintenance or the
+fsmonitor daemon, is not Cairn's and is not counted) — which `Remove index.lock…` is offered
+and run only at zero; and `Repository::command_mark` with `Repository::commands_since`, the
+command log's records of the invocations the calling thread built since the mark. A
+`Registration` records the thread that built it and its place in the order invocations are
+built (`command_log::Origin`, kept beside each record, never in it), so a lane takes exactly
+the `git` its own operation ran, whatever the refresh or the diff thread ran meanwhile. Pinned
+by `an_operations_commands_are_what_its_thread_built_since_its_mark`.
+
 `CLOSE_BOUND` is 3 s: the 2 s grace and the 250 ms drain bound, which is the
 longest a cancel can take, with three-quarters of a second to spare; a
 compile-time assertion keeps it above their sum.
@@ -1012,9 +1023,9 @@ two ways, dropping its oldest records to stay under both:
 
 `SharedRepository::command_log()` answers it, and the worker hands it to
 whoever asks: `Request::CommandLog` is answered on the repository thread by
-`Update::CommandLog { records }`, the records oldest first. Nothing in the
-application asks yet — no view draws the log (PRD R8.3; issue #41) — so
-the request is its tests' alone. Pinned, G17's worker half:
+`Update::CommandLog { records }`, the records oldest first — a request its tests' alone,
+since the activity popover ("The activity popover", below) is handed each operation's own
+records as the operation ends instead. Pinned, G17's worker half:
 `the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`
 (`worker/lifecycle_tests.rs`: empty before anything has run; after a fetch
 through the boundary, one record with fetch's arguments, the repository's
@@ -1026,10 +1037,12 @@ the session where before it travelled only on an error. git can quote a
 remote's URL there, and a URL configured with userinfo
 (`https://user:token@host`) is a credential that is not a `Secret`. git
 anonymises the URL in the messages checked (`From <url>`), but that every
-message of every git from 2.30 does is not verified; scrubbing userinfo from
-the tail would be a design change, and is not made; whether to make it, before
-the log's view (issue #41) draws a tail, is issue #46. The arguments carry what
-Cairn passed, which for fetch is a remote's name.
+message of every git from 2.30 does is not verified. Its display half is closed
+(staging-and-commit R12.2): no line of git's is drawn without its URLs' userinfo
+removed ("The activity popover", below). What the engine keeps — the log's records
+and the stderr an `Error::GitFailed` carries — is still git's text as it wrote it,
+which is the rest of issue #46. The arguments carry what Cairn passed, which for
+fetch is a remote's name.
 
 Pinned, G17's engine half, one record per exit path (`process/registry.rs`):
 `a_finished_invocation_is_logged_once_with_every_field`,
@@ -1051,6 +1064,77 @@ by `a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`
 (`ops/fetch.rs`), whose stub writes the environment it was given to a file —
 the token and every value looked for among it — while its record holds none
 of them.
+
+## The activity popover
+
+Fork's Activity popover (staging-and-commit R12, `docs/design/ui.md`, "Activity"): the title
+bar's status box opens it over the window (`crate::activity::popover`, drawn by
+`cairn_ui::ActivityPopover`), on the left the session's operations — every local write and
+every fetch — newest first, each its name, its status (`running`, `succeeded`, `failed`, `not
+run`, `may have taken effect`, `partly done`, `cancelled`) and when it started, with Fork's ×
+beside a running one that can be cancelled (a commit, an amend, a fetch); on the right the one
+selected: its status, when it started and how long it took, what its ending said, the prompt it
+confirmed (`Done::acknowledged`, R1.6), the way back where there is one — an amend that
+succeeded offers its replaced commit, whose press turns Show Lost Commits on and finds the
+commit as a ref's press finds its row (`ref_find::find_commit`) — and `Remove index.lock…`
+where it is offered, then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to
+stderr and how it ended when that was not a clean exit. Escape and a press outside close it.
+
+**Where an entry's `git` comes from.** Each lane marks the command log as an operation starts
+(`Repository::command_mark`) and, as it ends, sends the records of the invocations it built
+since (`Repository::commands_since`) in `Update::OperationRan { by, commands, lock }`, just
+before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` from the network
+lane. A commit's output streams into its entry as it arrives (R10.4: a hook's lines while it
+runs, `Update::WriteOutput`), and is replaced by its commands' records once they are in.
+
+**Scrubbed before it is kept** (R12.2, `cairn_model::Scrubber`): the userinfo of every
+`scheme://` URL is removed from every line of git's the window keeps — the lane scrubs each
+record's arguments and stderr, a fetch's progress lines and every ending's message and output
+before they leave it, and the window scrubs them again as it keeps them
+(`crate::shown_output`), so no entry, no Git Error dialog and no line under the lists can draw a
+token whoever built the update. A URL whose authority a line's end cuts — a line git's reader
+sent in pieces, a tail cut from the front — loses its userinfo on both sides of the cut. An
+scp-like address (`git@host:path`) is no URL and is left. Pinned by `scrub.rs`'s tests,
+`the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept),
+`no_line_of_an_entry_carries_a_token` and
+`the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
+
+**`Remove index.lock…`** (R12.4, L23): offered only where an ending names `<gitdir>/index.lock`
+among its locks and the lane, asking the engine as the operation ends, finds the lock there,
+a plain file, and no `git` of Cairn's running in the repository
+(`ops::remove_lock_consequence`, refused with `Error::LockRefused` otherwise). Its press opens
+the confirmation over the popover; the token asks the local lane for `LocalWrite::RemoveLock`,
+which re-checks the registry, the lock's time, size, device and inode against the
+`Consequence` — refusing, removing nothing, a lock removed and made again since
+(`Error::LockChangedSinceConfirmed`) — then removes exactly that path with `std::fs::remove_file`
+(`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`), the one mutation Cairn makes without
+git. Residual: another program — a `git` in a terminal — may take the lock between the re-check
+and the removal; nothing in `std` removes a file only if it is still the inode it was, and the
+prompt says another program may own it. Pinned by `ops/remove_lock.rs`'s tests (the exact file
+removed and nothing beside it; a lock made again, rewritten or gone refused; no lock, a
+directory, a link and another repository's lock refused; a stub `git` holding the lock and
+running refuses the offer and the removal),
+`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails` (the lane's offer
+and the confirmed removal through the worker) and
+`remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_confirmation`.
+
+**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` (200) operations, each
+at most `ACTIVITY_LINES` (10,000) lines, all of them at most `ACTIVITY_BYTES` (4 MiB) of lines,
+the oldest let go of first; nothing is written anywhere. Both lists — the operations and the
+selected one's lines — are drawn through a virtualizing view
+(`the_popover_builds_one_viewport_of_operations_and_of_lines`). An operation's entry is built
+only while the popover is open, from lines kept shared.
+
+**A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a write's
+stderr on a read of the pipe at a time (`Invocation::finish_by_read`), the commit's `CommitWatch`
+hands those lines on together, and the lane sends each read as one `Update::WriteOutput` whose
+`OutputReceipt` counts its bytes in a budget shared with the window. Past
+`output_flow::IN_FLIGHT_BYTES` (1 MiB) waiting for the window, the lane holds the newest lines
+itself, at most the window's own tail's bounds, and sends them once the window has given bytes
+back or as the write ends; the receipt's drop — on the UI thread — is one atomic subtraction.
+Pinned by `the_lines_of_one_read_are_handed_on_together` and
+`output_is_one_update_a_read_and_what_waits_is_bounded`. Residual: while the window is behind,
+held lines wait for git's next read or its end.
 
 ## The network lane
 

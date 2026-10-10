@@ -49,7 +49,7 @@ impl Similarity {
 }
 
 /// What happened to a path between two versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeStatus {
     Added,
     Deleted,
@@ -65,7 +65,7 @@ pub enum ChangeStatus {
 /// `old_path` and `new_path` name the same path for anything but a rename or a copy —
 /// which is what git's own `diff --git` line spells, even for an added or a deleted file.
 /// A mode or an id is absent exactly when the file did not exist on that side.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ChangedFile {
     pub status: ChangeStatus,
     pub old_path: RepoPath,

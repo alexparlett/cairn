@@ -35,7 +35,7 @@ impl Default for DiffLimits {
 
 /// Which limit a file crossed, and what it measured. The measurement is what a notice
 /// quotes, so it is the reason the limit fired and not a recount of the whole file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SizeLimit {
     Bytes { limit: u64, measured: u64 },
     Lines { limit: u32, measured: u32 },

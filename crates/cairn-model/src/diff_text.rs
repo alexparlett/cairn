@@ -132,7 +132,7 @@ impl DiffLine {
 ///
 /// Either side may be empty — an empty `removed` is an insertion, an empty `added` a
 /// deletion — and an empty span still says where, so an insertion knows what it follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChangedRange {
     pub removed: LineSpan,
     pub added: LineSpan,
@@ -180,7 +180,7 @@ impl ChangedRange {
 /// );
 /// let _ = text.changes_ignoring_whitespace();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TextDiff {
     old: Vec<DiffLine>,
     new: Vec<DiffLine>,

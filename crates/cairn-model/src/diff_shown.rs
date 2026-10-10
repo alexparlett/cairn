@@ -12,12 +12,21 @@
 //! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row and
 //! a horizontal extent of its whole width. [`drawn_bytes`] is the cut every view draws to, and
 //! the widest line is measured to it.
+//!
+//! **What it was drawn from** (staging-and-commit R9.6, L4): a diff keyed with what it was asked
+//! as ([`ShownDiff::keyed`]) carries a hash of that and of the whole answer — its paths, modes
+//! and ids, every line of both sides and the ranges that differ, the context it is drawn at —
+//! computed where it is built. Two answers with the same [`ShownDiff::content`] draw the same
+//! rows over the same text, so a line selection made over one names the same lines of the other:
+//! what lets a refresh that re-reads a file unchanged keep a selection, and one that reads
+//! another byte drop it.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use crate::{
-    ChangeStops, Context, DiffLimits, DiffLine, DisplayOverlay, FileDiff, SideBySideLayout,
-    TextDiff, UnifiedLayout,
+    ChangeStops, Context, DiffContent, DiffLimits, DiffLine, DisplayOverlay, FileDiff,
+    SideBySideLayout, TextDiff, UnifiedLayout,
 };
 
 /// How many of a line's bytes a view draws at most: the long-line limit (R2.6, R6.9).
@@ -71,6 +80,8 @@ pub struct ShownDiff {
     widest_columns: usize,
     has_cut_line: bool,
     number_digits: usize,
+    /// What it was drawn from, once keyed ([`Self::keyed`]); 0 before.
+    content: u64,
 }
 
 impl ShownDiff {
@@ -97,7 +108,28 @@ impl ShownDiff {
             widest_columns,
             has_cut_line,
             number_digits: digits,
+            content: 0,
         }
+    }
+
+    /// The same diff keyed with what it was asked as — `asked`, the caller's question: for a
+    /// working-tree diff its path, its side and its options. Hashes `asked`, the context and the
+    /// whole answer (the patch's text, not the view's highlights), so it costs a pass over the
+    /// answer's bytes: done where the diff is built, never on the thread that draws.
+    pub fn keyed(mut self, asked: &impl Hash) -> Self {
+        let mut hasher = DefaultHasher::new();
+        asked.hash(&mut hasher);
+        self.context.hash(&mut hasher);
+        answer_hash(&self.diff, &mut hasher);
+        self.content = hasher.finish();
+        self
+    }
+
+    /// What the diff was drawn from ([`Self::keyed`]): equal for two answers to the same
+    /// question whose text is the same in every byte, and — but for a 64-bit collision —
+    /// different for any other. 0 for a diff never keyed.
+    pub fn content(&self) -> u64 {
+        self.content
     }
 
     pub fn diff(&self) -> &FileDiff {
@@ -176,6 +208,32 @@ impl ShownDiff {
     /// The text diff and its overlay, for a file that is text.
     pub fn text(&self) -> Option<(&TextDiff, &DisplayOverlay)> {
         self.diff.text().zip(self.diff.overlay())
+    }
+}
+
+/// Every part of `diff` a patch or a drawn row is made from, into `hasher`: the file — paths,
+/// status, modes, ids — and its content, each state by name. Of a text diff, both sides' lines,
+/// the exact ranges and the whitespace-ignoring ones; the intra-line highlights and git's
+/// function context are drawn from those and add nothing.
+fn answer_hash(diff: &FileDiff, hasher: &mut DefaultHasher) {
+    diff.file.hash(hasher);
+    match &diff.content {
+        DiffContent::Text { text, overlay } => {
+            0u8.hash(hasher);
+            text.hash(hasher);
+            overlay.changes_ignoring_whitespace().hash(hasher);
+        }
+        DiffContent::Binary { old_size, new_size } => (1u8, old_size, new_size).hash(hasher),
+        DiffContent::TooLarge { crossed, loadable } => (2u8, crossed, loadable).hash(hasher),
+        DiffContent::LfsPointer { old, new } => (3u8, old, new).hash(hasher),
+        DiffContent::Submodule {
+            old_target,
+            new_target,
+            dirty,
+        } => (4u8, old_target, new_target, dirty).hash(hasher),
+        DiffContent::ModeChangeOnly => 5u8.hash(hasher),
+        DiffContent::Conflicted => 6u8.hash(hasher),
+        DiffContent::Unsupported { reason } => (7u8, reason).hash(hasher),
     }
 }
 
@@ -270,6 +328,71 @@ mod tests {
         assert_eq!(Arc::strong_count(&handle), 2);
         drop(handle);
         assert_eq!(shown.into_diff(), diff);
+    }
+
+    /// A text diff of `new` against three lines, its one change at line 2.
+    fn edited(path: &str, new: &[u8]) -> FileDiff {
+        FileDiff {
+            file: ChangedFile {
+                status: ChangeStatus::Modified,
+                old_path: RepoPath::from(path),
+                new_path: RepoPath::from(path),
+                old_mode: None,
+                new_mode: None,
+                old_id: None,
+                new_id: None,
+            },
+            content: DiffContent::Text {
+                text: TextDiff::new(
+                    crate::split_lines(b"a\nb\nc\n"),
+                    crate::split_lines(new),
+                    vec![ChangedRange::new(LineSpan::at(1, 1), LineSpan::at(1, 1))],
+                ),
+                overlay: DisplayOverlay::none(),
+            },
+        }
+    }
+
+    /// R9.6, L4 (C26): two answers to one question whose text is the same in every byte are
+    /// one content, built apart; one byte of another line, another path, another question (the
+    /// side or the options a caller keys with) or another context is another; a diff never
+    /// keyed is 0. Caught by: a content of the drawn rows alone (a byte changed outside the
+    /// context missed), of the text alone (the staged diff's selection kept over the unstaged
+    /// one), or the context left out (a selection's rows kept across a wider context).
+    #[test]
+    fn a_diffs_content_is_its_question_and_every_byte_of_its_answer() {
+        let at = Context::lines(3);
+        let content = |diff: FileDiff, asked: &str, context: Context| {
+            ShownDiff::new(diff, context).keyed(&asked).content()
+        };
+        let one = content(edited("f", b"a\nB\nc\n"), "unstaged", at);
+        assert_eq!(one, content(edited("f", b"a\nB\nc\n"), "unstaged", at));
+        assert_ne!(one, 0);
+        for (other, why) in [
+            (
+                content(edited("f", b"a\nB\nC\n"), "unstaged", at),
+                "a byte of another line",
+            ),
+            (
+                content(edited("f", b"a\nb!\nc\n"), "unstaged", at),
+                "a byte of the changed line",
+            ),
+            (
+                content(edited("g", b"a\nB\nc\n"), "unstaged", at),
+                "another path",
+            ),
+            (
+                content(edited("f", b"a\nB\nc\n"), "staged", at),
+                "another question",
+            ),
+            (
+                content(edited("f", b"a\nB\nc\n"), "unstaged", Context::lines(4)),
+                "another context",
+            ),
+        ] {
+            assert_ne!(one, other, "{why} kept the content");
+        }
+        assert_eq!(ShownDiff::new(edited("f", b"a\nB\nc\n"), at).content(), 0);
     }
 
     /// Both projections are built once, at the context asked, and a file that is not text

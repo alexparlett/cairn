@@ -6,7 +6,7 @@ use std::ops::Range;
 use crate::{ChangedRange, LineSpan, TextDiff};
 
 /// How much unchanged text a hunk shows around its changes (R1.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Context {
     Lines(u32),
     EntireFile,

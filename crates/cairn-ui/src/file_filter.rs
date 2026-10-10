@@ -52,6 +52,17 @@ impl ShownFiles {
             Self::Waiting => None,
         }
     }
+
+    /// The row that shows the first file at or after the change set's file `index` — the
+    /// number of rows when none does: where a file the list no longer shows had its place
+    /// (staging-and-commit R8.3, L5). A search, like [`Self::row_of`]; none while `Waiting`.
+    pub fn row_from(&self, index: usize) -> usize {
+        match self {
+            Self::All => index,
+            Self::Filtered(indices) => indices.partition_point(|shown| (*shown as usize) < index),
+            Self::Waiting => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -68,5 +79,12 @@ mod tests {
         assert_eq!(shown.row_of(4), None);
         assert_eq!(ShownFiles::All.len(7), 7);
         assert_eq!(ShownFiles::All.row_of(4), Some(4));
+        // A file's place among the rows shown: its own row, else the next shown after it.
+        assert_eq!(shown.row_from(5), 1);
+        assert_eq!(shown.row_from(3), 1);
+        assert_eq!(shown.row_from(0), 0);
+        assert_eq!(shown.row_from(10), 3);
+        assert_eq!(ShownFiles::All.row_from(4), 4);
+        assert_eq!(ShownFiles::Waiting.row_from(4), 0);
     }
 }

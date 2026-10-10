@@ -269,6 +269,17 @@ impl LocalChanges {
             .ok()
     }
 
+    /// The row of `list` that `path` is listed on or would be listed at: the first row whose
+    /// path is not before it in [`path_order`] — the list's length when every path is. A path a
+    /// refresh or an action took away is found its place by it: the row there now is the one
+    /// that took its place (staging-and-commit R8.3, L5). A binary search, like [`Self::row_of`].
+    pub fn row_from(&self, list: ChangeList, path: &RepoPath) -> usize {
+        let entries = self.entries();
+        self.list(list).partition_point(|index| {
+            path_order(path_at(entries, *index), path.as_bytes()) == Ordering::Less
+        })
+    }
+
     /// The paths a whole-file stage or unstage of `rows` of `list` names
     /// (staging-and-commit R3.4, R8.2): each row's path, and a rename's source beside it, so a
     /// rename moves whole — `git reset -q -- <old> <new>` unstages a staged rename, `git add
@@ -873,6 +884,31 @@ mod tests {
         assert_eq!(
             changes.row_of(ChangeList::Staged, &RepoPath::from("a")),
             Some(0)
+        );
+    }
+
+    /// A path's place in a list (staging-and-commit R8.3, L5): its own row while it is listed,
+    /// else the row of the first path after it in the list's order — numbers read as numbers,
+    /// case ignored — and the list's length past its last. Caught by: a place found in the
+    /// paths' bytes rather than the list's order (`b10` before `b9`), or the row before it.
+    #[test]
+    fn a_path_is_given_its_place_in_a_list_listed_or_not() {
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            untracked("b9"),
+            untracked("B10"),
+            untracked("d"),
+            changed("a", Some(StagedChange::Added), None),
+        ]));
+        let place = |path: &str| changes.row_from(ChangeList::Unstaged, &RepoPath::from(path));
+        assert_eq!(place("b9"), 0, "a listed path's own row");
+        assert_eq!(place("B10"), 1);
+        assert_eq!(place("a"), 0, "before every path");
+        assert_eq!(place("b10a"), 2, "after B10, before d");
+        assert_eq!(place("c"), 2);
+        assert_eq!(place("z"), 3, "past the last");
+        assert_eq!(
+            changes.row_from(ChangeList::Staged, &RepoPath::from("b")),
+            1
         );
     }
 

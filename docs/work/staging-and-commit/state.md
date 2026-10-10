@@ -38,9 +38,9 @@ coordinator's decisions of 2026-10-10; see "Phase 13" below. QA is the coordinat
 ratified the coordinator's three recommendations after phase 13's QA (2026-10-10, "Those are
 fine"): see "Resolved after phase 13's QA" below. Phase 14 (Create Branch as Fork runs it)
 built in packet mode after its stopping rule was decided (2026-10-10), full gate green; see
-"Phase 14" below. QA is the coordinator's. Phase 15 (the discard prompts) PART-BUILT in packet mode
-and stopped for the user's sign-off on the wording and behaviour its docs do not settle; see
-"Phase 15" below.**
+"Phase 14" below. QA is the coordinator's. Phase 15 (the discard prompts) built in packet mode after
+the user's answers to its six questions (2026-10-10), full gate green; see "Phase 15" below. QA
+is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -85,7 +85,7 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
 
-## Phase 15 of the rebuild, the discard prompts (2026-10-10) — part-built, stopped for sign-off
+## Phase 15 of the rebuild, the discard prompts (2026-10-10)
 
 - **Built** (`phase-15-discard-prompts.md`): (1) the frame — `Consequence::prompt` asks every
   discard in one sentence: files "Discard all changes in <path>?" / "Discard all changes in 31
@@ -121,18 +121,39 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed` (staged greyed),
   `part_of_a_new_files_lines_is_discarded_as_lines` (a drag's lines never a chunk) and
   `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file` (the chunk's own).
-- **Not built, waiting on the user's sign-off** (the coordinator holds the questions): the
-  dialog opening at the press with "Counting…" (the greyed button's caption meanwhile), what
-  happens when the engine refuses while it counts, Show files and its rows' words, the
-  nothing-discardable reasons for submodules, conflicts, both, and a nested repository (and
-  whether a nested repository in a mixed selection refuses whole), and the disclosure's caption
-  when open. Until then: `READING_DISCARD` is still the line under the lists while counting;
-  a selection of submodules or conflicts alone keeps the old reasons naming its first path
-  (`NoDiscard::Submodule`, `NoDiscard::Conflicted`); a nested repository is still refused by the
-  engine before any dialog, said under the lists.
-- **The coordinator's direction, flagged for the user**: decision G's lock prompt now ends "You
-  can't undo this." where the user's answer 4 of 2026-10-10 kept G's prompt unchanged (it then
-  spoke of Title Case only); one line to revert if the user wants "this action" back there.
+- **The user's answers to phase 15's questions (2026-10-10), built**: Q1 — the dialog opens at
+  the press (`Confirming::counting`, `cairn_ui::DialogAnswer`), "Counting…", its button greyed
+  and reading "Discard Changes" until the `Consequence` fills the same dialog
+  (`local_changes_actions::consequence_arrived`, by serial); Q2 — a refusal while counting makes
+  it "Couldn't Discard Changes", the engine's one sentence (`worker::local_lane::
+  refused_while_counting`) and "Nothing was changed.", Close alone; Cancel while counting ends the
+  count (`Confirming::on_let_go`, `Request::StopCounting`); Q3 — Show files' rows
+  (`Consequence::listed`, `Consequence::listed_file`): "14 lines" / "1 line", "Binary",
+  "Restored", "Deleted", "Emptied", "Mode change", "14 lines and mode change", "Binary and mode
+  change", a virtualized list read by index; Q4 — the caption stays "Show files", the glyph turns
+  ▸/▾; Q5 — "Submodule changes can't be discarded.", "Conflicted files can't be discarded.
+  Resolve or stage them first.", one sentence per kind, submodules first (`NoDiscard::Kept`);
+  Q6 — a nested repository (`LocalChange::is_nested_repository`, an untracked row with a trailing
+  `/`) is left as a submodule is: "1 nested repository is left as it is.", alone "Nested
+  repositories can't be discarded." (evidence `fork-observed-nested-repo-2026-10-10.md`); the
+  lock prompt's "You can't undo this." stands. Recorded in the PRD (R7.4, R8.4, C8, C17).
+  Removed: `READING_DISCARD`, `Discarding`, `Acting`'s arrived consequence and said line,
+  `Acting::quiet`, `confirm_arrived` and its effect, `left_as_they_are` and `discards` (now
+  `cairn_ui::Left` and `cairn_ui::kept`), the "Nothing was discarded: …" line. Pinned:
+  `a_discard_asks_what_it_would_lose_and_confirms_exactly_that` (rewritten: counting at the
+  press, the same serial filled), `a_refusal_while_counting_is_said_in_the_dialog_and_cancel_ends_the_count`,
+  `a_refusal_while_counting_is_one_sentence`, `show_files_lists_each_file_and_what_happens_to_it`,
+  `a_nested_repository_is_the_untracked_row_git_lists_as_its_directory`, and in
+  `crates/cairn-ui/tests/confirm_dialog.rs`
+  `while_counting_the_dialog_says_so_and_its_greyed_button_builds_nothing`,
+  `a_refusal_is_the_same_dialog_with_close_alone`,
+  `what_is_left_is_one_line_under_the_prompt_and_not_in_the_token`,
+  `show_files_discloses_each_file_and_what_happens_to_it` and the viewport twin
+  `show_files_over_50000_paths_builds_one_viewport` (named in the root CLAUDE.md).
+- **Carried**: the line under the lists for a write's ending stays until phase 19 (only the
+  discard's own lines went); `refused_while_counting` is the count's sentence until phase 19
+  gives every ending its own; the engine still refuses a nested repository before any
+  confirmation, a backstop the view no longer reaches. QA is the coordinator's (not run here).
 
 ## Phase 14 of the rebuild, Create Branch as Fork runs it (2026-10-10)
 

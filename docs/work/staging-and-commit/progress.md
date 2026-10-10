@@ -3,6 +3,23 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 15 built after the user's answers (packet mode)
+
+The user took the coordinator's recommendations on Q1, Q3, Q4 and Q5, and decided Q2 (the
+refusal in the dialog, rule 4) and Q6 (a nested repository left as a submodule is, on the
+evidence of Fork deleting one) otherwise; the lock prompt's new ending stands. What shipped is
+state.md's "Phase 15". Notes for the record:
+
+- **Decided here**: one dialog under one serial from the press to its answer — the count fills
+  it, a refusal turns it, a stale answer never opens another; the deferred write needs an owned
+  submitter, so the actions over the diff now take `local_changes_actions::Submit`; the count's
+  refusal sentence keeps a path as written (never capitalised) and leaves the engine's "; nothing
+  was written" tail to the dialog's one "Nothing was changed."; the prompt and button are
+  rendered once per dialog, when the consequence arrives (a cache in the dialog), not per frame.
+- **Found on the way**: the menu's discard test pressed a row twice in quick succession, read as a
+  double press (a stage); the dialog's tests move the pointer off before a second press of the
+  disclosure for the same reason.
+
 ## 2026-10-10 — phase 15 part-built, stopped for the user's sign-off (packet mode)
 
 What shipped is state.md's "Phase 15". Notes for the record:

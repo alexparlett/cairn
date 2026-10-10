@@ -114,15 +114,15 @@ impl LocalSelection {
     /// nearest path kept, the anchor kept or moved to the primary — or `None` when it keeps none.
     /// Costs the selection, never the lists `keep` asks.
     pub fn kept(&self, keep: impl Fn(&RepoPath) -> bool) -> Option<Self> {
+        if self.paths.iter().all(&keep) {
+            return Some(self.clone());
+        }
         let paths: Vec<RepoPath> = self
             .paths
             .iter()
             .filter(|path| keep(path))
             .cloned()
             .collect();
-        if paths.len() == self.paths.len() {
-            return Some(self.clone());
-        }
         let primary = if place(&paths, &self.primary).is_ok() {
             self.primary.clone()
         } else {

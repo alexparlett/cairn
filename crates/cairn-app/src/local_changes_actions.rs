@@ -227,9 +227,7 @@ fn make_selection(
     retry: bool,
 ) {
     let mut local = view.local.state;
-    if local.peek().selection() != selection.as_ref() {
-        local.write().set_selection(selection);
-    }
+    local.write().set_selection(selection);
     diff_actions::show_primary(view, submit, retry);
 }
 

@@ -27,7 +27,7 @@ use cairn_model::{ChangeList, LocalChanges, MatchedRows, WorkingTreeStatus};
 use cairn_ui::{ChangeCursor, LocalSelection, ShownFiles};
 use freya::prelude::*;
 
-use crate::next_selection::{Leaving, Rows, next_selection};
+use crate::next_selection::{Leaving, Next, Rows, next_selection};
 use crate::worker::{Request, Retired};
 
 /// The list side's share of the view until its splitter is dragged, in percent: the Changes
@@ -177,9 +177,7 @@ impl LocalChangesState {
 
     /// `selection` is selected: a press in the lists.
     pub fn set_selection(&mut self, selection: Option<LocalSelection>) {
-        if self.selection != selection {
-            self.selection = selection;
-        }
+        self.selection = selection;
     }
 
     /// The lists drawn and the rows shown of each, as the rule reads them.
@@ -191,9 +189,10 @@ impl LocalChangesState {
     /// the rule at once, over the lists drawn — the next file's diff asked before the status
     /// that shows the write arrives, whose turn of the rule then changes nothing.
     pub fn acted(&mut self, leaving: &Leaving) {
-        if let Some(rows) = self.rows() {
-            let next = next_selection(self.selection.as_ref(), rows, rows, leaving);
-            self.set_selection(next);
+        if let Some(rows) = self.rows()
+            && let Next::To(next) = next_selection(self.selection.as_ref(), rows, rows, leaving)
+        {
+            self.selection = next;
         }
     }
 
@@ -209,12 +208,14 @@ impl LocalChangesState {
             changes: &NO_CHANGES,
             shown: [&ShownFiles::All, &ShownFiles::All],
         };
-        let first = next_selection(None, empty, rows, &Leaving::none());
-        self.selection = first;
+        if let Next::To(first) = next_selection(None, empty, rows, &Leaving::none()) {
+            self.selection = first;
+        }
     }
 
     /// The selection moved by the rule from the lists drawn to `after` (none leaving) — unless
-    /// `after`'s rows are on their way, when it is left as it is.
+    /// `after`'s rows are on their way, when it is left as it is; one the rule keeps whole is
+    /// neither copied nor written.
     fn follow(&mut self, after: Rows<'_>) {
         if *after.shown[0] == ShownFiles::Waiting {
             return;
@@ -224,8 +225,11 @@ impl LocalChangesState {
             shown: [&ShownFiles::All, &ShownFiles::All],
         };
         let before = self.rows().unwrap_or(empty);
-        let next = next_selection(self.selection.as_ref(), before, after, &Leaving::none());
-        self.set_selection(next);
+        if let Next::To(next) =
+            next_selection(self.selection.as_ref(), before, after, &Leaving::none())
+        {
+            self.selection = next;
+        }
     }
 
     /// The lists drawn, shared: what Stage All and Unstage All hand the local lane to gather
@@ -515,6 +519,41 @@ mod tests {
         // Cleared, every row is drawn and no count of what a filter left is kept.
         let _ = state.filter("");
         assert_eq!(shown_paths(&state), None);
+    }
+
+    /// Phase 16's QA #4: a status that keeps every selected path leaves the selection as it was
+    /// — the same value, not a copy — while one that takes a path away moves it. Caught by: a
+    /// refresh that clones and rewrites the selection whatever it keeps.
+    #[test]
+    fn a_status_that_keeps_the_selection_leaves_it_uncopied() {
+        let mut state = LocalChangesState::default();
+        let _ = state.status_arrived(lists(&["a", "b", "c"]));
+        assert_eq!(
+            state.selection().map(|s| s.primary().clone()),
+            Some(RepoPath::from("a")),
+            "the first status selects the first row"
+        );
+        let wide = LocalSelection::spanning(
+            ChangeList::Unstaged,
+            RepoPath::from("a"),
+            RepoPath::from("b"),
+            [RepoPath::from("a"), RepoPath::from("b")],
+        );
+        state.set_selection(Some(wide.clone()));
+        let held = state.selection().map(|s| s.paths().as_ptr());
+        let _ = state.status_arrived(lists(&["a", "b", "c", "d"]));
+        assert_eq!(state.selection(), Some(&wide));
+        assert_eq!(
+            state.selection().map(|s| s.paths().as_ptr()),
+            held,
+            "a selection kept whole was copied"
+        );
+        let _ = state.status_arrived(lists(&["b", "c"]));
+        assert_eq!(
+            state.selection().map(|s| s.paths().len()),
+            Some(1),
+            "a path the status took away stayed selected"
+        );
     }
 
     /// Clearing the filter draws every row of the newest lists at once, a status waiting for

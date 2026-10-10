@@ -128,29 +128,42 @@ impl Leaving {
     }
 }
 
+/// What the rule makes of a selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Next {
+    /// It stays exactly as it is — every path kept, or nothing selected and nothing to select:
+    /// the usual refresh, which copies and writes nothing.
+    Unchanged,
+    /// It becomes this.
+    To(Option<LocalSelection>),
+}
+
 /// Where `selection` goes once the lists show `after` — `before` the lists it was made in —
-/// and the paths `leaving` names leave its list: the module's rule.
+/// and the paths `leaving` names leave its list: the module's rule. A selection that stays
+/// whole is answered [`Next::Unchanged`], with nothing copied.
 pub fn next_selection(
     selection: Option<&LocalSelection>,
     before: Rows<'_>,
     after: Rows<'_>,
     leaving: &Leaving,
-) -> Option<LocalSelection> {
+) -> Next {
     let Some(selection) = selection else {
-        return if before.shows_none() {
-            after.first_shown()
-        } else {
-            None
+        return match before.shows_none().then(|| after.first_shown()).flatten() {
+            Some(first) => Next::To(Some(first)),
+            None => Next::Unchanged,
         };
     };
     let list = selection.list();
     // Every row the list shows leaves: no row is left to take the selection's place.
     if leaving.empties(list) {
-        return None;
+        return Next::To(None);
     }
-    if let Some(kept) = selection.kept(|path| after.shows(list, path) && !leaving.holds(list, path))
-    {
-        return Some(kept);
+    let stays = |path: &RepoPath| after.shows(list, path) && !leaving.holds(list, path);
+    if selection.paths().iter().all(stays) {
+        return Next::Unchanged;
+    }
+    if let Some(kept) = selection.kept(stays) {
+        return Next::To(Some(kept));
     }
     // None stays: the row that took the first selected path's place, past any leaving.
     let place = after.place(list, selection.first());
@@ -158,10 +171,12 @@ pub fn next_selection(
         after
             .path_at(list, drawn)
             .is_some_and(|path| leaving.holds(list, path))
-    })?;
-    after
-        .path_at(list, row)
-        .map(|path| LocalSelection::of(list, path.clone()))
+    });
+    Next::To(row.and_then(|row| {
+        after
+            .path_at(list, row)
+            .map(|path| LocalSelection::of(list, path.clone()))
+    }))
 }
 
 #[cfg(test)]
@@ -169,6 +184,19 @@ mod tests {
     use cairn_model::{StagedChange, StatusEntry, WorkingTreeStatus};
 
     use super::*;
+
+    /// The rule's answer as the selection it leaves.
+    fn moved(
+        selection: Option<&LocalSelection>,
+        before: Rows<'_>,
+        after: Rows<'_>,
+        leaving: &Leaving,
+    ) -> Option<LocalSelection> {
+        match next_selection(selection, before, after, leaving) {
+            Next::Unchanged => selection.cloned(),
+            Next::To(next) => next,
+        }
+    }
 
     const U: ChangeList = ChangeList::Unstaged;
     const S: ChangeList = ChangeList::Staged;
@@ -230,7 +258,7 @@ mod tests {
         let drawn = lists(&["f1", "f2", "f3", "f4", "f5"], &[]);
         let at = rows(&drawn, [&ALL, &ALL]);
         let staged = selecting(U, &["f4", "f2"]);
-        let next = next_selection(
+        let next = moved(
             Some(&staged),
             at,
             at,
@@ -238,7 +266,7 @@ mod tests {
         );
         assert_eq!(next, Some(LocalSelection::of(U, path("f3"))));
         let last = selecting(U, &["f4", "f5"]);
-        let next = next_selection(Some(&last), at, at, &Leaving::of([path("f4"), path("f5")]));
+        let next = moved(Some(&last), at, at, &Leaving::of([path("f4"), path("f5")]));
         assert_eq!(
             next,
             Some(LocalSelection::of(U, path("f3"))),
@@ -246,18 +274,15 @@ mod tests {
         );
         let every = selecting(U, &["f1", "f2", "f3", "f4", "f5"]);
         let all = Leaving::of(every.paths().to_vec());
-        assert_eq!(next_selection(Some(&every), at, at, &all), None);
+        assert_eq!(moved(Some(&every), at, at, &all), None);
         // Stage All: a selection in the list goes; one in the other list stays as it was.
         let some = selecting(U, &["f2"]);
-        assert_eq!(
-            next_selection(Some(&some), at, at, &Leaving::every(U)),
-            None
-        );
+        assert_eq!(moved(Some(&some), at, at, &Leaving::every(U)), None);
         let staged = lists(&["f1"], &["s1", "s2"]);
         let both = rows(&staged, [&ALL, &ALL]);
         let other = selecting(S, &["s2", "s1"]);
         assert_eq!(
-            next_selection(Some(&other), both, both, &Leaving::every(U)).as_ref(),
+            moved(Some(&other), both, both, &Leaving::every(U)).as_ref(),
             Some(&other)
         );
     }
@@ -273,15 +298,25 @@ mod tests {
         let selection =
             LocalSelection::spanning(U, path("b"), path("d"), [path("b"), path("c"), path("d")]);
         let same = lists(&["a", "b", "c", "d"], &[]);
-        let next = next_selection(
+        let next = moved(
             Some(&selection),
             rows(&before, [&ALL, &ALL]),
             rows(&same, [&ALL, &ALL]),
             &Leaving::none(),
         );
         assert_eq!(next.as_ref(), Some(&selection));
+        assert_eq!(
+            next_selection(
+                Some(&selection),
+                rows(&before, [&ALL, &ALL]),
+                rows(&same, [&ALL, &ALL]),
+                &Leaving::none(),
+            ),
+            Next::Unchanged,
+            "a refresh that keeps every path copied the selection"
+        );
         let more = lists(&["0", "a", "b", "bb", "c", "d"], &["s"]);
-        let next = next_selection(
+        let next = moved(
             Some(&selection),
             rows(&before, [&ALL, &ALL]),
             rows(&more, [&ALL, &ALL]),
@@ -289,7 +324,7 @@ mod tests {
         );
         assert_eq!(next.as_ref(), Some(&selection), "rows added elsewhere");
         let without_d = lists(&["a", "b", "c"], &[]);
-        let next = next_selection(
+        let next = moved(
             Some(&selection),
             rows(&before, [&ALL, &ALL]),
             rows(&without_d, [&ALL, &ALL]),
@@ -312,7 +347,7 @@ mod tests {
         let before = lists(&["f1", "f2", "f3", "f4", "f5", "f6", "f7"], &[]);
         let selection = selecting(U, &["f5"]);
         let place = |after: &LocalChanges| {
-            next_selection(
+            moved(
                 Some(&selection),
                 rows(&before, [&ALL, &ALL]),
                 rows(after, [&ALL, &ALL]),
@@ -346,21 +381,21 @@ mod tests {
         let unfiltered = rows(&drawn, [&ALL, &ALL]);
         let shown = rows(&drawn, [&filtered, &ALL]);
         let selection = selecting(U, &["c", "a", "dx"]);
-        let next = next_selection(Some(&selection), unfiltered, shown, &Leaving::none());
+        let next = moved(Some(&selection), unfiltered, shown, &Leaving::none());
         assert_eq!(names(next.as_ref()), ["dx"]);
         assert_eq!(
             next.as_ref().map(LocalSelection::primary),
             Some(&path("dx"))
         );
         let hidden = selecting(U, &["c"]);
-        let next = next_selection(Some(&hidden), unfiltered, shown, &Leaving::none());
+        let next = moved(Some(&hidden), unfiltered, shown, &Leaving::none());
         assert_eq!(
             next,
             Some(LocalSelection::of(U, path("dx"))),
             "c's place, shown"
         );
         let staged = selecting(U, &["bx"]);
-        let next = next_selection(Some(&staged), shown, shown, &Leaving::of([path("bx")]));
+        let next = moved(Some(&staged), shown, shown, &Leaving::of([path("bx")]));
         assert_eq!(
             next,
             Some(LocalSelection::of(U, path("dx"))),
@@ -369,7 +404,7 @@ mod tests {
         let nothing = ShownFiles::Filtered(Vec::new());
         let none_shown = rows(&drawn, [&nothing, &ALL]);
         assert_eq!(
-            next_selection(Some(&hidden), unfiltered, none_shown, &Leaving::none()),
+            moved(Some(&hidden), unfiltered, none_shown, &Leaving::none()),
             None
         );
     }
@@ -385,14 +420,14 @@ mod tests {
         let some = lists(&["b", "a"], &["s"]);
         let staged_only = lists(&[], &["s", "t"]);
         let none = Leaving::none();
-        let first = next_selection(
+        let first = moved(
             None,
             rows(&empty, [&ALL, &ALL]),
             rows(&some, [&ALL, &ALL]),
             &none,
         );
         assert_eq!(first, Some(LocalSelection::of(U, path("a"))));
-        let first = next_selection(
+        let first = moved(
             None,
             rows(&empty, [&ALL, &ALL]),
             rows(&staged_only, [&ALL, &ALL]),
@@ -400,7 +435,7 @@ mod tests {
         );
         assert_eq!(first, Some(LocalSelection::of(S, path("s"))));
         assert_eq!(
-            next_selection(
+            moved(
                 None,
                 rows(&some, [&ALL, &ALL]),
                 rows(&staged_only, [&ALL, &ALL]),

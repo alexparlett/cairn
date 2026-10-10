@@ -3,6 +3,52 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — the review, the design pass, the user's redesign decisions; the rebuild planned
+
+**The review.** At 2bf8394, with the merge bar's fixes in, the user asked whether the packet had
+grown by patches. Five fresh reviewers on another model read the whole packet — the commit box
+and dialogs, the activity popover and chrome, Local Changes, the engine, the app and UI code —
+and found that it had, from about eight design causes: confirmation built around the token, not
+the person (three ways to confirm an amend); prompts that list the engine's cases; messages with
+no home; capped text; invented features that breed states (the lock offer, Show All, the line
+under the lists); two sources of truth for the selection; the engine's re-checks, after-the-cut
+scrubbing and re-implementations of git; and app state copied rather than generalised. About 17
+of 24 engine fix commits trace to three of those choices. Four git-parity bugs were found:
+`MERGE_MSG`'s comment lines committed; stderr cut inside a character in `process/pipes.rs`; the
+branch name checked with `--branch`, which resolves `@{-N}`; `core.logAllRefUpdates` read
+through gix. All five reviewers also named what is sound (the seams, the token, Cancel focused,
+the five routes, the gesture, the key policy, the narrow rosters). Reports:
+`docs/research/staging-and-commit/review-*.md`.
+
+**The design pass.** The user held the merge and ordered a design pass. Four briefs, each from
+Fork's tracker and release notes, git reproduced and Cairn as built (`brief-*.md`), became one
+page — eight design rules, a storyboard per flow, every choice starting on its recommendation —
+which also showed that three earlier decisions rested on Fork claims Fork's own record
+contradicts: files drawn together (Fork shows one file, Tracker #261, TrackerWin #786), Alt for
+Stage All (Fork's key is Shift, TrackerWin #2429) and `MERGE_MSG`'s comment lines (Fork's open
+bug, Tracker #180) (`redesign-page-2026-10-10.html`).
+
+**The decisions.** The user approved rules 1-8 and answered every choice
+(`redesign-decisions-2026-10-10.md`), changing B2 (Create Branch's Discard asks no second
+question, as Fork), B3 ("Create and Checkout") and F7 (UTC kept everywhere). The user then
+checked Fork for Windows 2.21.1 in a VM (`fork-observed-2026-10-10.md`), which changed B1 to
+Fork's own command, `git checkout --no-track -b <name> <commit> --force`, and applied three
+things as Fork under rule 1: the diff shows the file clicked first, Ctrl+S (not Return) stages
+from the diff, and each activity row carries Fork's result line. Kept as the user's deviations:
+L4 (a line selection survives an unchanged refresh), C1 (the amend dialog when pushed or no
+reflog), F6 and G (the lock banner, and its removal confirmed). Last, the user decided how Create
+Branch's Discard is confirmed: "Clicking the button when I've already selected discard is the
+confirmation. Asking again will just annoy the user." — the dialog joins the confirmation-surface
+roster, its `Consequence` fixed and generic, its re-check `HEAD`, the commit and the name, and the
+prediction of what git deletes goes.
+
+**Written down.** The evidence saved in full under `docs/research/staging-and-commit/`; the PRD
+amended in place, dated, with R4.10, R6.10, R6.11, R9.6 and R14 added, the three superseded
+decisions recorded and C25-C34 added; `docs/design/ui.md`'s deviation table and staging sections
+and `docs/design/engine.md`'s D1 and seal rewritten; phases 12-20 planned, and the merge bar
+renamed `phase-21-qa.md`. The merge bar's W1 and W3 are resolved by the redesign; F2 and F7 still
+wait on the user, and five new questions are listed in `state.md` ("Open for the user").
+
 ## 2026-10-09 — phase 12, the merge bar: QA adjudicated, fixes applied (packet mode)
 
 The merge-bar QA's two adjudications (engine half and app half, at 8002e2f) listed nine items to

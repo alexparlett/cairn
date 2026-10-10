@@ -1,45 +1,52 @@
-# Phase 12 — The merge bar, and teardown
+# Phase 21 — The merge bar, and teardown
 
-Its own fresh session. Nothing here builds a feature.
+Its own fresh session. Nothing here builds a feature. The packet's first merge bar ran
+under this doc as phase 12 (2026-10-09, `progress.md`); the user then ordered the redesign
+of 2026-10-10, built in phases 12-20, and this merge bar runs again over the whole packet.
 
 ```
 STEP 0  Pre-flight: read docs/work/staging-and-commit/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/staging-and-commit before
-        editing. Verify phases 01-11 are present at the integration tip and
+        editing. Verify phases 01-20 are present at the integration tip and
         every phase PR is merged into it. Direct integration work requires an
         orchestrator prompt that explicitly declares packet mode.
 STEP 1  Load context via an Explore agent over the whole packet diff
         (git diff main...feature/staging-and-commit), docs/prd/staging-and-commit.md,
-        qa-checklist.md, progress.md (the dismissal log) and the docs/systems/
-        files the phases wrote.
+        qa-checklist.md, progress.md (the dismissal log), the docs/systems/
+        files the phases wrote, and
+        docs/research/staging-and-commit/redesign-decisions-2026-10-10.md.
 STEP 2  Run /qa over the whole packet diff, with every reviewer
         implementation-plan.md names for any phase, spawned fresh. Run the
-        ENTIRE qa-checklist.md. Verify every PRD acceptance criterion C1-C24
+        ENTIRE qa-checklist.md. Verify every PRD acceptance criterion C1-C34
         against its pinned test (run it; read that it decides what it claims).
-        C14's checklist includes a real-git end-to-end test of a commit a
-        hook fails, its skip, and the next commit running its hooks (phase
-        09's QA item 8, carried here).
+        Check every behaviour of the redesign page against the built window
+        (redesign-page-2026-10-10.html's storyboards, with the user's answers
+        and fork-observed-2026-10-10.md where they changed them): a storyboard
+        the window does not draw is a finding. Every code removal a phase doc of
+        12-20 lists under "What goes" is gone: grep for each.
         AUDIT the per-phase dismissal log in progress.md: a dismissal whose
         reason no longer holds is a finding. Adjudication goes to qa-confirm
         (fresh); fix confirmed findings in focused commits; disputed findings
         go to the user.
 STEP 3  Validate: scripts/gate.sh (the full gate, git-floor included).
 STEP 4  Acceptance — the merge bar, and everything after it is conditional on
-        passing: every criterion C1-C24 met against its test, C21's numbers
-        recorded and within their bars, the checklist complete, the gate green.
+        passing: every criterion C1-C34 met against its test, C21's numbers
+        re-measured on the rebuilt tip (R13.3) and within their bars, the checklist complete, the gate green.
         If it fails, stop here and report.
 STEP 5  Update state.md and progress.md. Then offer teardown per docs/CLAUDE.md:
         stamp the PRD `shipped`, pointing at docs/systems/; verify each
         docs/systems/ file this packet touched is current against the code;
         move C21's numbers to docs/research/staging-and-commit/measured.md;
-        graduate the new invariants (the two rosters, the chord lists and the
-        bare-key scope, the filesystem-mutation guard, the gesture's viewport
-        twin) into CLAUDE.md with their twins; update the
+        graduate the new invariants (the two rosters as the redesign left them,
+        the chord lists and the narrowed bare-key scope, the filesystem-mutation
+        guard, the stripspace read's guard row, the viewport twins) into
+        CLAUDE.md with their twins; update the
         program roadmap and state (packet 5 shipped, O3 closed, 5b's brief
         checked against what this packet left) and the spine's pointers; file
-        every PRD out-of-scope item and every leftover with the file-issue
-        skill; delete docs/work/staging-and-commit/.
+        every PRD out-of-scope item, every review refactor the phases marked
+        "follow-up issue at teardown", and the one list in state.md with the
+        file-issue skill; delete docs/work/staging-and-commit/.
 STEP 6  Branch authority follows the declared mode. In user mode, teardown lands
         through this phase's PR into feature/staging-and-commit and the session
         stops; after the user merges it, a resumed session verifies integration
@@ -55,7 +62,10 @@ not stop for permission.
 ## QA brief
 
 The merge bar's particular risk is a destructive path that drifted between
-phases: a `Consequence` computed in 03 and rendered in 07 from a different count,
+phases — and, after the redesign, a confirmation that moved: the commit box off the
+confirmation-surface roster and the Create Branch dialog on it, an amend that is destructive
+only sometimes, a skip that must not ask twice nor build two tokens from one
+acknowledgement: a `Consequence` computed in 03 and rendered in 07 from a different count,
 a verb added in 10 or 11 that never joined the roster, a chord scope widened in a
 later phase. Read every destructive operation end to end — engine, roster,
 dialog, re-check, `Performed`, the popover's entry — and read D1's paragraph in

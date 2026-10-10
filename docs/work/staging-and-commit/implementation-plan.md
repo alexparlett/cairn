@@ -8,8 +8,8 @@ cairn-ui     Local Changes ── Unstaged / Staged (multi-select, header button
                   │                        drag-selected lines, mode row
                   ├─ commit box ── subject (counter, recent) │ description (ruler) │ Amend │ Commit N Files
                   ├─ confirmation dialog ◄── Consequence (prompt rendered from it)
-                  ├─ history toolbar ── Show Lost Commits ── dimmed rows ── Create Branch Here…
-                  └─ toolbar status ── activity popover (operations, prompts, git, stderr)
+                  ├─ history toolbar ── Show Lost Commits ── dimmed rows ── New Branch… (Create Branch)
+                  └─ title-bar status box ── progress │ Activity Manager │ lock banner
                   │
 cairn-app    local write lane (own thread, FIFO, op ids, cancel a commit)
              write counter ── a status begun before the last write ended is dropped
@@ -18,7 +18,7 @@ cairn-app    local write lane (own thread, FIFO, op ids, cancel a commit)
 cairn-git    ops/   apply --cached │ apply │ add │ reset │ restore │ clean │ commit -F - │ branch
                     each destructive one: Confirmed by value, Consequence re-checked first
                     remove index.lock: the one std::fs removal, guarded to ops/
-             reads/ hash-object (no -w) │ rev-parse --git-path hooks
+             reads/ hash-object (no -w) │ stripspace --strip-comments │ config (query)
              diff/  staged side pairs renames as git diff --cached
                   │
 cairn-model  Confirmed + Consequence │ inversions of TextDiff, Selection, ChangedFile
@@ -26,7 +26,7 @@ cairn-model  Confirmed + Consequence │ inversions of TextDiff, Selection, Chan
 ```
 
 The type names above are suggestions for the phases to settle; the PRD fixes what
-they carry, not what they are called.
+they carry, not what they are called. The shape is as the redesign of 2026-10-10 leaves it.
 
 ## Phase order and why
 
@@ -53,7 +53,27 @@ they carry, not what they are called.
    it recovers.
 9. **11 activity popover** last among features, because every operation before
    it feeds it; Cairn's measured numbers and the window check close the build.
-10. **12 QA** as its own fresh session, the merge bar.
+10. **The rebuild, 12-20** (the user's redesign of 2026-10-10,
+    `docs/research/staging-and-commit/redesign-decisions-2026-10-10.md`), engine and
+    model first so each UI phase builds on its final engine:
+    - **12 output once** first: every later phase draws git's text, and the stderr cut
+      is a live bug; scrubbing at the runner removes the per-view scrub sites the UI
+      phases would otherwise rewrite twice.
+    - **13 the commit engine asks git**: amend's cost at the press, the stripspace and
+      config reads, a single cherry-pick concluded, the hook model gone, a cancel's
+      ending — the engine phase 18's box stands on. Its one open question (a confirmed
+      amend's skip) must be answered before 18.
+    - **14 Create Branch** next: small, engine and dialog together, and it moves the
+      confirmation-surface roster before 18 moves it again.
+    - **15 the discard prompts**: the `Consequence`'s rendering and the one dialog,
+      which 18's amend dialog and 19's refusals reuse.
+    - **16 one selection, then 17 one file's diff**: the selection is the input the
+      diff derives from, so it lands first; 17 then deletes the files-together view
+      and the lane flags with it.
+    - **18 the commit box** on 13's engine and 15's dialog.
+    - **19 one home for each message**, once every operation's ending is final, and
+      **20 the Activity Manager** last, since every operation before it feeds it.
+11. **21 QA** as its own fresh session, the merge bar, over the whole packet.
 
 ## Review dispatch per phase
 
@@ -75,7 +95,16 @@ repeated in the table.
 | 09 | `responsiveness-reviewer`, `test-coverage-auditor`; `destructive-ops-reviewer` — amend's confirmation surface and the skip-hooks route |
 | 10 | `responsiveness-reviewer` — the walk's extra tips and the dimming pass; `destructive-ops-reviewer` — `Create Branch Here…`; `test-coverage-auditor` |
 | 11 | `responsiveness-reviewer`, `test-coverage-auditor`; `destructive-ops-reviewer` — `Remove index.lock…` and the scrubbed stderr; `gate-integrity-reviewer` — the filesystem-mutation guard (R12.5), its matcher, self-test and exceptions roster |
-| 12 | all of the above, over the whole packet diff |
+| 12 | `destructive-ops-reviewer` — the runner's pipes and what an ending reports (its check on `process/`); `gate-integrity-reviewer` — any guard holding git's raw text out of render files; `test-coverage-auditor` — the straddling-character pin fails first |
+| 13 | `destructive-ops-reviewer` — the amend at the press, the unconfirmed amend's ops entry, the stripspace and config reads (its check 10), the cancel's ending; `gate-integrity-reviewer` — the porcelain-read guard's new row, the seal roster's prose; `test-coverage-auditor` |
+| 14 | `destructive-ops-reviewer` — the forced checkout, its fixed `Consequence`, its re-check, the dialog as a confirmation surface; `gate-integrity-reviewer` — the confirmation-surface roster's new row; `responsiveness-reviewer`; `test-coverage-auditor` |
+| 15 | `destructive-ops-reviewer` — the prompts' honesty, the worst loss in the sentence; `responsiveness-reviewer` — Show files' list; `test-coverage-auditor` |
+| 16 | `responsiveness-reviewer` — the selection's work per press and per refresh; `test-coverage-auditor` — the rule's cases |
+| 17 | `responsiveness-reviewer` — the diff's query, the content hash; `gate-integrity-reviewer` — the bare-key scope narrowed, toward fewer bare chords; `test-coverage-auditor` |
+| 18 | `destructive-ops-reviewer` — amend's confirmation and the skip; `gate-integrity-reviewer` — the commit box off the confirmation-surface roster; `responsiveness-reviewer`; `test-coverage-auditor` |
+| 19 | `responsiveness-reviewer` — the status box's timer, the lock stat, the modal state; `destructive-ops-reviewer` — the lock's retry and its removal's two routes; `test-coverage-auditor` |
+| 20 | `responsiveness-reviewer` — the one bounded store, the popover's lists, re-renders per streamed line; `test-coverage-auditor` |
+| 21 | all of the above, over the whole packet diff |
 
 ## Invariants in play
 
@@ -155,7 +184,31 @@ with the residual it cannot express stated.
 | 07-09 | `docs/systems/local-changes.md`: actions, the gesture, the commit box; the root `CLAUDE.md` status paragraph and repo map rows |
 | 10 | `docs/systems/history-graph.md`: Show Lost Commits |
 | 11 | the activity popover in `docs/systems/git-processes.md` (beside the command log) or its own section; the root `CLAUDE.md` D1 paragraph (the one deletion made without `git`) and the "only `ops/` mutates" invariant (the filesystem-mutation guard, its twin and residuals); measured numbers in `progress.md` |
-| 12 | verify all of the above, stamp the PRD, update the roadmap and spine pointers, tear down |
+| 12 | `docs/systems/git-processes.md` (the runner's pipes and line handling); the root `CLAUDE.md` where it names the scrubber and `shown_output` |
+| 13 | `docs/systems/staging.md`, `docs/systems/git-processes.md` (commit, amend, the reads); the root `CLAUDE.md` D1 paragraph (stripspace, the config read, no hooks-path read) and the seal invariant |
+| 14 | `docs/systems/staging.md`, `docs/systems/history-graph.md` (Create Branch); the root `CLAUDE.md` D1 paragraph and the seal invariant's rosters |
+| 15 | `docs/systems/staging.md`, `docs/systems/local-changes.md` (the discard dialog) |
+| 16-17 | `docs/systems/local-changes.md` (the selection, the diff, the line selection); `docs/systems/diff.md`'s accelerator table contract; the root `CLAUDE.md` modifier invariant, status paragraph, repo map and virtualization twins |
+| 18 | `docs/systems/local-changes.md` ("The commit box"); the root `CLAUDE.md` seal invariant's confirmation-surface roster |
+| 19-20 | `docs/systems/git-processes.md` (endings, the lock state, the activity popover); the root `CLAUDE.md` UI-thread residuals and repo map |
+| 21 | verify all of the above, stamp the PRD, update the roadmap and spine pointers, tear down |
+
+## The rebuild's enforcement changes (phases 12-20)
+
+Each lands with its guard in the same commit, and each fails toward more coverage:
+
+1. **The confirmation-surface roster moves**: the Create Branch dialog joins (14), the
+   commit box leaves (18); the seal invariant in `CLAUDE.md` says why each is a surface.
+2. **An amend that can be recovered takes no token** (13): a new `ops/` function off
+   `DESTRUCTIVE_OPERATIONS`, `ops::amend` keeping its row; `CLAUDE.md` states which amends
+   are destructive.
+3. **A new read, `git stripspace --strip-comments`** (13), with its own row in the
+   porcelain-read guard and a matcher self-test case.
+4. **The config read widened** (13): the `"config"` literal stays once; if its file is
+   renamed, the guard's row moves with it.
+5. **The bare-key scope narrowed** (17): bare Enter from Local Changes' file lists only.
+6. **Reads removed** (13, 14): `hooks_path`, `untracked_paths`, `change_lines`, and the
+   pins that named them, from the code, D1 and `CLAUDE.md` alike.
 
 ## Technical notes
 

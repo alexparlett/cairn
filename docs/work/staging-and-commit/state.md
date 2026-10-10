@@ -27,7 +27,47 @@ fix-now item fixed, and the user's decisions A-N on the popover (2026-10-09) app
 resolved by H; full gate green. Phase 12 (the merge bar): QA adjudicated, every fix-now item and
 the probe's verdict applied, C21 re-measured on the tip; four user decisions pending (W1, W3, F2,
 F7), listed under "Phase 12, the merge bar" below; everything to file at teardown gathered in one
-list there.**
+list there. Then (2026-10-10) an independent review, a design pass and the user's redesign
+decisions: design pass done, rebuild planned — phases 12-20 rebuild what the redesign changes and
+the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran under as phase
+12); see "The redesign" below. Next: phase 12 (`phase-12-output-once.md`).**
+
+## The redesign (2026-10-10)
+
+- **Why.** Five fresh reviewers found the UI grown by patching each QA finding where it showed
+  (`docs/research/staging-and-commit/review-*.md`); four design briefs (`brief-*.md`) and a page
+  of rules, storyboards and choices (`redesign-page-2026-10-10.html`) followed; the user checked
+  Fork for Windows 2.21.1 first-hand (`fork-observed-2026-10-10.md`) and decided
+  (`redesign-decisions-2026-10-10.md`): rules 1-8 approved; every choice answered; B1 changed to
+  Fork's forced checkout; Create Branch's Discard confirmed by the dialog's press. The PRD is
+  amended in place (dated 2026-10-10) with C25-C34 added; `docs/design/ui.md` and
+  `docs/design/engine.md` are rewritten to it.
+- **Superseded, on false Fork claims**: files drawn together (R8.1, phase 07's 4(e), phase 08's
+  ratification); Alt for Stage All (R8.2's 4(d)); `MERGE_MSG`'s comment lines committed
+  (decision E).
+- **The merge bar's pending decisions**: W1 (the amend line's cap) and W3 (Create Branch's
+  prompt) are resolved by the redesign — the line goes (C1, C6) and the prompt predicts nothing
+  (B1, B2). F2 (R2.1's wording against `TextDiff::inverted`, and a staged-rename row for C21) and
+  F7 (Escape as a literal) still wait on the user; F7 is needed by phase 19.
+- **Phases**: 12 output once; 13 the commit engine asks git; 14 Create Branch; 15 the discard
+  prompts; 16 one selection; 17 one file's diff; 18 the commit box; 19 one home for each
+  message; 20 the Activity Manager; 21 the merge bar.
+
+### Open for the user (the phases stop on each)
+
+- **A confirmed amend's skip** (phase 13, before phase 18): the token handed back in the
+  failure (two new `CONFIRMED_HOLDERS` rows), the Git Error dialog as a confirmation surface
+  (one acknowledgement, two tokens), or the skip asking again. Options in
+  `phase-13-commit-asks-git.md`.
+- **"k of n selected"** (phase 17): the user answered L1 with it; Fork draws no count (`lc2`),
+  and rule 1 would drop it. Kept as answered until the user says otherwise.
+- **The amend button's caption** (phase 18): the user answered C6 "Amend 3f2a1c9" before the Fork
+  check, which saw "Amend Last Commit" (`amd2`); kept as answered until the user says otherwise.
+- **Fork's All / User / Background tabs** in the Activity Manager (phase 20): observed (`am1`),
+  not in the redesign; filed at teardown unless the user wants them.
+- **Title Case against decision G** (phase 15): D3 says Title Case everywhere; decision G titled
+  the lock's confirmation "Remove stale lock".
+- **F2 and F7**, above.
 
 ## Phase 12, the merge bar (2026-10-09)
 
@@ -81,7 +121,8 @@ commented, not filed again.
   `numstat` would change what a prompt counts for an LFS pointer, a file past the limits and under
   `diff.algorithm`.
 - **The engine's half of #46** (comment): the command log and `Error::GitFailed` keep git's stderr
-  unscrubbed; every drawn line is scrubbed.
+  unscrubbed; every drawn line is scrubbed. (Phase 12 scrubs at the runner, before anything is
+  kept; comment #46 with what it closes.)
 - **Responsiveness 2**: while Show All is pressed, Freya's `VirtualScrollView` asks the size
   callback for every row above the viewport on each layout — bounded by `ACTIVITY_LINES` + 1, and
   stated in CLAUDE.md; laying the whole prompt out above the list would keep `ItemSize::Fixed`.
@@ -89,10 +130,18 @@ commented, not filed again.
   popover closed included, so each streamed line re-renders the window's root; reading `is_open`
   in a child component would leave a closed popover unsubscribed. Within budget (C21, phase 12).
 - **F7, Escape as a literal**, unless the user's decision makes it an action or a written
-  convention (pending).
-- **W3's residuals**, unless the user's decision changes them (pending): `checkout -f` deletes
-  ignored files at paths the commit holds, unsaid; a deleted folder's re-check compares only its
-  count and bytes.
+  convention (pending; phase 19 needs it).
+- **Responsiveness 2 and 3** above are taken by phase 20 (Show All goes; `is_open` read in a
+  child); drop them from the list if it lands them.
+- ~~**W3's residuals**~~ — resolved by the redesign (2026-10-10): Create Branch's Discard
+  predicts nothing and its fixed prompt says untracked files in the way go (phase 14).
+- **The review's refactors the rebuild does not take** (2026-10-10; each phase doc marks its
+  own): `review-code-engine.md` H1 (one witness of a path's state), M1 (per-operation
+  consequence types), M4's operation-in-progress and reflog parsers, M5 (amend's staged list as
+  a fake status), M6 (lost-commit reach), L1-L7; `review-code-app-ui.md` H2 (one pointer-drag
+  primitive), H4 (the write ledger), M1 (declarative lanes), M2's rest (one consequence ask),
+  L1-L4 — one issue per family, unless a phase took it.
+- **Fork's Activity Manager tabs** (All / User / Background), unless the user wants them built.
 - **N3** (not adjudicated): discarding an intent-to-add file is prompted as "emptied"; check
   against real git (`add -N`, then discard) whether the prompt over- or understates.
 - **GitHub, by the coordinator**: close #41; comment #46 and #87.
@@ -100,8 +149,14 @@ commented, not filed again.
 
 ## Locked decisions
 
-L1-L26 in `brainstorm.md`; the spec is `docs/prd/staging-and-commit.md`. The ones
-that most constrain implementation:
+L1-L26 in `brainstorm.md`; the spec is `docs/prd/staging-and-commit.md`. The redesign of
+2026-10-10 amends several below — L7 (bare Enter from the lists only; Shift for Stage All on
+Linux), L12 (an amend confirms in the dialog, only when a remote has `HEAD` or no reflog; the
+commit box builds no token), L13 (Create Branch's Discard is Fork's forced checkout, the
+dialog's press its confirmation), L14 (Fork's Activity Manager), L15 (the lock as a state of
+the repository) and L25 (a single cherry-pick or revert concluded; `MERGE_MSG` cleaned by
+`git stripspace`) — and the PRD carries each amendment, dated. The ones that most constrain
+implementation:
 
 - **Stash and `.gitignore` are packet 5b's** (L1). No Clean command; deleting
   untracked files is discard on untracked rows (L8).
@@ -991,4 +1046,14 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
-| 12 QA | merge-bar QA adjudicated, fixes applied, user decisions pending (W1, W3, F2, F7) |
+| 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 pending; design pass done, rebuild planned (2026-10-10) |
+| 12 output once | planned |
+| 13 the commit engine asks git | planned — one user decision open (a confirmed amend's skip) |
+| 14 Create Branch | planned |
+| 15 the discard prompts | planned |
+| 16 one selection | planned |
+| 17 one file's diff | planned |
+| 18 the commit box | planned — needs phase 13's decision |
+| 19 one home for each message | planned — needs F7 |
+| 20 the Activity Manager | planned |
+| 21 QA | planned — the merge bar over the whole packet |

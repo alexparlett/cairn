@@ -287,32 +287,27 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
 
 /// An action of the table heard on Local Changes' diff (R7.3): on the lines a drag across the
 /// diff selected (R9.2), or, with none selected, on the selection, whole, wherever it is (rule
-/// 8) — hovering is not selecting (Fork, Tracker #103).
+/// 8, R9.2 as amended) — the paths of it the lists show (`selected_rows`), as the same chord on
+/// a list takes them; hovering is not selecting (Fork, Tracker #103). Return is not heard here
+/// (observed `lc3`): the stage chord from the diff is ⌘S or Ctrl+S, which stages the whole
+/// selection (`lc4`).
 pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
     if dialog_open(view) {
         return;
     }
-    let (drawn, together) = {
-        let diff = view.diff.peek();
-        match diff.together() {
-            Some((list, _)) => (diff.together_drawn().unwrap_or(0), Some(list)),
-            None => (diff.working_drawn(), None),
-        }
-    };
-    let selected = view
-        .local
-        .lines
+    let content = view
+        .diff
         .peek()
-        .selected(drawn)
-        .map(|(file, selection)| (file, selection.clone()));
-    if let Some((file, selection)) = selected {
-        let list = together.or_else(|| {
-            view.local
-                .state
-                .peek()
-                .selection()
-                .map(LocalSelection::list)
-        });
+        .shown_working()
+        .map_or(0, cairn_model::ShownDiff::content);
+    let selected = view.local.lines.peek().selected(content).cloned();
+    if let Some(selection) = selected {
+        let list = view
+            .local
+            .state
+            .peek()
+            .selection()
+            .map(LocalSelection::list);
         let verb = match (action, list) {
             (Action::StageOrUnstage, Some(ChangeList::Unstaged)) => Some(GestureVerb::Stage),
             (Action::StageOrUnstage, Some(ChangeList::Staged)) => Some(GestureVerb::Unstage),
@@ -322,10 +317,9 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
         if let Some(verb) = verb {
             on_gesture(
                 GestureAct {
-                    file,
                     verb,
                     selection,
-                    drawn,
+                    content,
                     chunk: false,
                 },
                 view,
@@ -333,18 +327,6 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
             );
             return;
         }
-    }
-    // The paths drawn together, whole — those read and drawn, never one still being read or
-    // one the line budget left unread (the user's decision, 2026-10-09), each one the
-    // selection holds.
-    if let Some(list) = together {
-        let paths = view.diff.peek().together_read_paths();
-        match action {
-            Action::StageOrUnstage => stage_or_unstage_paths(list, paths, view, now(submit)),
-            Action::Discard => discard_rows(list, rows_of(view, list, &paths), view, submit),
-            other => act(Some(list), other, view, submit),
-        }
-        return;
     }
     act(None, action, view, submit);
 }
@@ -361,35 +343,26 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
     if *lines.peek() != LineDrag::default() {
         lines.set(LineDrag::default());
     }
-    // The diff the act was over: one of the paths drawn together, by its place, or the
-    // primary's — shared, since the lane applies exactly what was drawn — and only while it is
-    // still the answer the act was made under: a selection names that answer's lines, and
-    // against a re-read's diff it would name others (phase 08 QA item 1).
+    // The primary's diff — shared, since the lane applies exactly what was drawn — and only
+    // while it is the text the act was made over: a selection names that text's lines, and
+    // against other text it would name others (phase 08 QA item 1, R9.6).
     let drawn = {
         let diff = view.diff.peek();
-        match diff.together() {
-            Some((list, _)) => diff
-                .together_diff(act.file)
-                .filter(|_| diff.together_drawn() == Some(act.drawn))
-                .map(|shown| (list, shown.shared_diff())),
-            None => {
-                // The primary's list, the diff drawn being the primary's.
-                let list = diff
-                    .working_choice()
-                    .map(|choice| choice.list)
-                    .filter(|list| {
-                        view.local
-                            .state
-                            .peek()
-                            .selection()
-                            .is_some_and(|selection| selection.list() == *list)
-                    });
-                let shown = diff
-                    .shown_working()
-                    .filter(|_| act.file == 0 && diff.working_drawn() == act.drawn);
-                list.zip(shown.map(cairn_model::ShownDiff::shared_diff))
-            }
-        }
+        // The primary's list, the diff drawn being the primary's.
+        let list = diff
+            .working_choice()
+            .map(|choice| choice.list)
+            .filter(|list| {
+                view.local
+                    .state
+                    .peek()
+                    .selection()
+                    .is_some_and(|selection| selection.list() == *list)
+            });
+        let shown = diff
+            .shown_working()
+            .filter(|shown| shown.content() == act.content);
+        list.zip(shown.map(cairn_model::ShownDiff::shared_diff))
     };
     let Some((list, diff)) = drawn else {
         return;
@@ -555,18 +528,6 @@ fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Sub
     }
 }
 
-/// The rows of `list` that list `paths`, sorted.
-fn rows_of(view: View, list: ChangeList, paths: &[RepoPath]) -> Vec<usize> {
-    let local = view.local.state.peek();
-    let lists = drawn_changes(&local);
-    let mut rows: Vec<usize> = paths
-        .iter()
-        .filter_map(|path| lists.row_of(list, path))
-        .collect();
-    rows.sort_unstable();
-    rows
-}
-
 /// Asks `write`, kept as queued.
 fn ask(view: View, submit: Option<&dyn Fn(Request)>, write: LocalWrite) {
     let Some(submit) = submit else {
@@ -582,17 +543,6 @@ fn stage_or_unstage(view: View, submit: Option<&dyn Fn(Request)>) {
     if let Some((list, rows)) = selected_rows(view) {
         stage_or_unstage_rows(list, rows, view, submit);
     }
-}
-
-/// [`stage_or_unstage`] of `paths` of `list`: the paths drawn together.
-fn stage_or_unstage_paths(
-    list: ChangeList,
-    paths: Vec<RepoPath>,
-    view: View,
-    submit: Option<&dyn Fn(Request)>,
-) {
-    let rows = rows_of(view, list, &paths);
-    stage_or_unstage_rows(list, rows, view, submit);
 }
 
 fn stage_or_unstage_rows(

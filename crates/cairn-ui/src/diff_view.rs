@@ -32,7 +32,7 @@ use crate::diff_row_parts::{
 };
 use crate::side_by_side_rows::Columns;
 use crate::staging_gesture::{
-    Gesture, GestureLayer, Host, Source, use_drag_ends_on_focus_lost, use_pointer,
+    Gesture, GestureLayer, Host, use_drag_ends_on_focus_lost, use_pointer,
 };
 use crate::{side_by_side_rows, unified_rows};
 
@@ -322,7 +322,7 @@ impl Component for DiffView {
         let host = self.gesture.clone().map(|gesture| Host {
             gesture,
             pointer,
-            source: Source::One(self.shown.clone()),
+            source: self.shown.clone(),
             side_by_side: self.side_by_side,
             scroll,
             edge,

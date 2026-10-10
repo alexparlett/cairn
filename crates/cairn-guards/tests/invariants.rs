@@ -2205,16 +2205,23 @@ fn unasserted_calls(body: &str, calls: &[&str]) -> Vec<String> {
     found
 }
 
-/// Local Changes' bare keys, as the accelerator table's pin declares them (CLAUDE.md: exactly
-/// Enter, Backspace and Delete): a fourth key added there would be admitted by the pin's rule
-/// and its loops alike, so the declaration itself is pinned.
-const LOCAL_CHANGES_BARE_KEYS_DECLARATION: &str = "const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 3] = \
-     [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];";
+/// Local Changes' list-and-diff bare keys, as the accelerator table's pin declares them
+/// (CLAUDE.md: exactly Backspace and Delete — Enter left the diff's scope on 2026-10-10, R7.3 as
+/// amended): a key added there would be admitted by the pin's rule and its loops alike, so the
+/// declaration itself is pinned.
+const LOCAL_CHANGES_BARE_KEYS_DECLARATION: &str =
+    "const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];";
+
+/// Local Changes' lists' own bare keys (CLAUDE.md: exactly Enter, heard from the file lists and
+/// never the diff), pinned for the same reason.
+const LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION: &str =
+    "const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = [NamedKey::Enter];";
 
 /// What the accelerator table's pin rests on, over the table's code (comments and strings
 /// blanked): the pin placed where it runs, holding each rule example inside an assertion; the
-/// rule function placed beside it and reading Local Changes' bare keys; and those keys declared
-/// once, exactly as [`LOCAL_CHANGES_BARE_KEYS_DECLARATION`] reads.
+/// rule function placed beside it and reading both sets of Local Changes' bare keys; and each
+/// set declared once, exactly as [`LOCAL_CHANGES_BARE_KEYS_DECLARATION`] and
+/// [`LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION`] read.
 fn accelerator_pin_violations(code: &str) -> Vec<String> {
     let squeezed = |text: &str| {
         text.chars()
@@ -2236,34 +2243,37 @@ fn accelerator_pin_violations(code: &str) -> Vec<String> {
         ACCELERATOR_TABLE,
         "pin_violations",
         "",
-        &["LOCAL_CHANGES_BARE_KEYS.contains(&named)"],
+        &[
+            "LOCAL_CHANGES_BARE_KEYS.contains(&named)",
+            "LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named)",
+        ],
     ));
     let all = squeezed(code);
-    let declarations: usize = ["const", "static", "let", "letmut"]
-        .iter()
-        .map(|keyword| {
-            all.matches(&format!("{keyword}LOCAL_CHANGES_BARE_KEYS:"))
-                .count()
-        })
-        .sum::<usize>()
-        + ["let", "letmut"]
+    for (name, declaration) in [
+        (
+            "LOCAL_CHANGES_BARE_KEYS",
+            LOCAL_CHANGES_BARE_KEYS_DECLARATION,
+        ),
+        (
+            "LOCAL_CHANGES_LISTS_BARE_KEYS",
+            LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION,
+        ),
+    ] {
+        let declarations: usize = ["const", "static", "let", "letmut"]
             .iter()
-            .map(|keyword| {
-                all.matches(&format!("{keyword}LOCAL_CHANGES_BARE_KEYS="))
-                    .count()
-            })
-            .sum::<usize>();
-    if declarations != 1
-        || all
-            .matches(&squeezed(LOCAL_CHANGES_BARE_KEYS_DECLARATION))
-            .count()
-            != 1
-    {
-        found.push(format!(
-            "{ACCELERATOR_TABLE} no longer declares Local Changes' bare keys once, exactly as \
-             `{LOCAL_CHANGES_BARE_KEYS_DECLARATION}` ({declarations} declarations): a key added \
-             there is admitted by the pin it should fail"
-        ));
+            .map(|keyword| all.matches(&format!("{keyword}{name}:")).count())
+            .sum::<usize>()
+            + ["let", "letmut"]
+                .iter()
+                .map(|keyword| all.matches(&format!("{keyword}{name}=")).count())
+                .sum::<usize>();
+        if declarations != 1 || all.matches(&squeezed(declaration)).count() != 1 {
+            found.push(format!(
+                "{ACCELERATOR_TABLE} no longer declares `{name}` once, exactly as \
+                 `{declaration}` ({declarations} declarations): a key added there is admitted \
+                 by the pin it should fail"
+            ));
+        }
     }
     found
 }
@@ -2272,6 +2282,7 @@ fn accelerator_pin_violations(code: &str) -> Vec<String> {
 /// failing on each shape it refuses.
 const ACCELERATOR_PIN_BODY: &[&str] = &[
     "pin_violations(&rows)",
+    "pin_violations(&enter_in_the_diff)",
     "pin_violations(&moved)",
     "pin_violations(&letter)",
     "pin_violations(&press)",
@@ -5480,12 +5491,46 @@ fn the_pin_placement_check_catches_the_shapes_it_claims() {
             ),
         ),
         (
-            "a fourth bare key",
+            "Enter back in the list-and-diff keys",
             replaced(
                 &table,
+                "[NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];",
                 "[NamedKey; 3] =\n        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];",
-                "[NamedKey; 4] =\n        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete, \
-                 NamedKey::Space];",
+            ),
+        ),
+        (
+            "a second key heard from the lists alone",
+            replaced(
+                &table,
+                "[NamedKey; 1] = [NamedKey::Enter];",
+                "[NamedKey; 2] = [NamedKey::Enter, NamedKey::Space];",
+            ),
+        ),
+        (
+            "the lists' keys declared again inside the pin",
+            replaced(
+                &table,
+                &pin,
+                &format!(
+                    "{pin}\n        const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = \
+                     [NamedKey::Space];"
+                ),
+            ),
+        ),
+        (
+            "the rule no longer reading the lists' keys",
+            replaced(
+                &table,
+                "LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named)",
+                "[NamedKey::Space].contains(&named)",
+            ),
+        ),
+        (
+            "the bare Enter in the diff's scope no longer shown refused",
+            replaced(
+                &table,
+                "pin_violations(&enter_in_the_diff)",
+                "Vec::<String>::new()",
             ),
         ),
         (

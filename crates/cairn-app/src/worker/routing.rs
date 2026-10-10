@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | history (`OpenHistory`, `MoreHistory`, `FindRow`, `StopFinding`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
-//! | file diff (`FileDiff`, `Expand`, `Together`) | `cairn-diff` |
+//! | file diff (`FileDiff`, `Expand`) | `cairn-diff` |
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
@@ -254,7 +254,6 @@ pub(super) fn route(request: Request) -> Routed {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
         }
         Request::Expand(asked) => Routed::Diff(DiffQuery::Expand(asked)),
-        Request::Together(asked) => Routed::Diff(DiffQuery::Together(asked)),
         Request::FilterFiles { of, files, text } => {
             Routed::Repository(RepositoryJob::Filter { of, files, text })
         }
@@ -343,7 +342,6 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
         Routed::Diff(DiffQuery::Expand(asked)) => Request::Expand(asked),
-        Routed::Diff(DiffQuery::Together(asked)) => Request::Together(asked),
         Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
         Routed::Write { id, write } => Request::Write { id, write },

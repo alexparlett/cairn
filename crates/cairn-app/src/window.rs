@@ -1908,15 +1908,29 @@ pub(crate) mod tests {
     /// Presses `action`'s chord on this platform, as a key press reaches the window; for the
     /// other window tests too, so no other test file names a modifier.
     pub(crate) fn press_chord(test: &mut TestingRunner, action: Action) {
+        // The first chord heard wherever its action is — not the stage's bare Return, which
+        // the file lists alone hear — so the press reaches the action from a list or the diff.
         let chord = accelerators::chords(action, accelerators::Os::current())
-            .first()
+            .iter()
+            .find(|chord| {
+                accelerators::chord_heard_in(action, *chord) == accelerators::heard_in(action)
+            })
             .unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {
             name: KeyboardEventName::KeyDown,
-            key,
+            key: key.clone(),
             code,
             modifiers,
+        });
+        test.sync_and_update();
+        // Let go of, every key with it, as a keyboard does: the window's held keys are not
+        // left holding the chord's modifiers for the next press.
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyUp,
+            key,
+            code,
+            modifiers: Default::default(),
         });
         test.sync_and_update();
         test.sync_and_update();

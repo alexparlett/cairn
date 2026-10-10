@@ -87,7 +87,6 @@ fn kind(update: &Update) -> &'static str {
         Update::Changes { .. } => "changes",
         Update::FileDiff { .. } => "file diff",
         Update::Expanded { .. } => "expanded page",
-        Update::Together { .. } => "together page",
         Update::FilteredFiles { .. } => "filter",
         Update::Superseded(_) => "superseded",
         Update::DiffFailed { .. } => "diff failed",
@@ -1006,7 +1005,8 @@ const RUNS: usize = 7;
 /// unstage and discard a hunk and commit, each from the press until the refreshed lists are
 /// drawn; Show Lost Commits from the toggle to its first frame; every frame's UI-thread work
 /// while a hook runs and while a stage lands; the staging gesture hovered and dragged over a
-/// 10,000-line diff; and a thousand files selected and drawn together. It WRITES the clone —
+/// 10,000-line diff; and a thousand files selected, the primary's diff alone drawn. It WRITES
+/// the clone —
 /// every change put back with `std::fs` as it goes, so it runs no `git` of its own — and must
 /// start clean at the subject, with no hooks.
 ///
@@ -1118,7 +1118,7 @@ fn writes_check() {
         let submit = harness.submit();
         let view = harness.view;
         harness.test.run_in(|| {
-            let (selection, drawn) = {
+            let (selection, content) = {
                 let diff = view.diff.peek();
                 let shown = diff
                     .shown_working()
@@ -1129,15 +1129,14 @@ fn writes_check() {
                     .unwrap_or_else(|| panic!("the diff is no text"));
                 (
                     cairn_model::Selection::with_every_change(text),
-                    diff.working_drawn(),
+                    shown.content(),
                 )
             };
             crate::local_changes_actions::on_gesture(
                 cairn_ui::GestureAct {
-                    file: 0,
                     verb,
                     selection,
-                    drawn,
+                    content,
                     chunk: false,
                 },
                 view,
@@ -1390,7 +1389,7 @@ fn writes_check() {
     });
     harness.test.press_key(Key::Named(NamedKey::Escape));
 
-    // A thousand files selected and drawn together.
+    // A thousand files selected: the primary's diff alone drawn (R8.1 as amended).
     let files: Vec<PathBuf> = {
         let mut found = Vec::new();
         let mut stack = vec![root.join("library")];
@@ -1431,14 +1430,21 @@ fn writes_check() {
         );
     });
     let lead = selecting.elapsed();
-    let together = harness.pump(Stimulus::Nothing, 10, |view| {
+    let selected = harness.pump(Stimulus::Nothing, 10, |view| {
+        let local = view.local.state.peek();
         let diff = view.diff.peek();
-        diff.together().is_some_and(|(_, paths)| paths.len() > 1) && diff.together_drawn().is_some()
+        local.selection().is_some_and(|selection| {
+            selection.paths().len() > 1
+                && diff
+                    .working_choice()
+                    .is_some_and(|choice| choice.path == *selection.primary())
+                && diff.shown_working().is_some()
+        })
     });
-    together.report(&format!(
-        "{} files selected and drawn together ({:.1} ms from the selection)",
+    selected.report(&format!(
+        "{} files selected, the primary's diff drawn ({:.1} ms from the selection)",
         last + 1,
-        ms(lead + together.done.unwrap_or_default())
+        ms(lead + selected.done.unwrap_or_default())
     ));
 
     // Show Lost Commits: from the toggle to its first page drawn.

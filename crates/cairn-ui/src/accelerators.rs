@@ -24,10 +24,14 @@
 //! with ⌘-click or Ctrl-click; and Refresh is ⌘R on macOS and F5 elsewhere (Fork's own lists,
 //! `fork-dev/Docs` `keyboard-shortcuts-mac.md` and `keyboard-shortcuts-windows.md`: Linux
 //! takes Fork's Windows row, whose F5 is no desktop's and no other action's). In Local
-//! Changes, Fork keeps alternates — stage on Return and ⌘S, discard on Backspace, Delete and
-//! Ctrl+Shift+D — so an action holds a LIST of chords (L22), and the bare Enter, Backspace
-//! and Delete are heard in exactly one scope, a focused file list or diff in Local Changes
-//! ([`Scope::LocalChanges`]): nowhere else is a bare chord anything but a function key. Fork
+//! Changes, Fork keeps alternates — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
+//! discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a LIST of chords (L22).
+//! The bare Backspace and Delete are heard in exactly one scope, a focused file list or diff in
+//! Local Changes ([`Scope::LocalChanges`]), and the bare Return or Enter in a narrower one, a
+//! focused file list alone ([`Scope::LocalChangesLists`]): in Fork's diff Return does nothing
+//! and ⌘S or Ctrl+S stages the whole selection (observed `lc3`, `lc4`; R7.3 as amended
+//! 2026-10-10), so a chord is heard where [`chord_heard_in`] says — its action's scope, but a
+//! bare Return's. Nowhere else is a bare chord anything but a function key. Fork
 //! binds no chord to the diff's toggles, so neither does Cairn: side-by-side, ignoring
 //! whitespace, more or fewer lines and the entire file are actions without one, reached from
 //! the diff's header; and the previous or next file is the changed-file list's own ↑/↓, with
@@ -128,10 +132,11 @@ pub enum Scope {
     /// keep their meaning in a text field elsewhere (⌘↑ is the start of the document on
     /// macOS).
     Detail,
-    /// Only while a file list or the diff in Local Changes has focus: the one scope where a
-    /// bare Enter, Backspace or Delete is a chord, since no text field is in it.
+    /// Only while a file list or the diff in Local Changes has focus: a scope where a bare
+    /// Backspace or Delete is a chord, since no text field is in it.
     LocalChanges,
-    /// Only while Local Changes' Unstaged or Staged list has focus.
+    /// Only while Local Changes' Unstaged or Staged list has focus: the one scope where a bare
+    /// Return or Enter is a chord — never the diff's (R7.3 as amended, observed `lc3`).
     LocalChangesLists,
     /// Only while the commit box's subject or description has focus: commit's chord is heard
     /// there, and no list or staging chord fires — Backspace deletes a character and Enter
@@ -221,7 +226,7 @@ pub struct Chord {
 }
 
 /// The most chords one action holds on one platform: Fork's discard on Windows, Backspace,
-/// Delete and Ctrl+Shift+D.
+/// Delete and Ctrl+Shift+D, and its stage, Enter, Ctrl+S and Ctrl+Shift+S.
 const MOST_CHORDS: usize = 3;
 
 /// An action's chords on one platform, in the order the table lists them; empty for an
@@ -300,11 +305,13 @@ pub fn chords(action: Action, platform: Os) -> Chords {
             Os::Linux => Chords::of([(bare, key(NamedKey::F5))]),
             Os::MacOs => Chords::of([(command, at(Code::KeyR))]),
         },
-        // Return or ⌘S on macOS, Enter or Ctrl+Shift+S on Windows (and so Linux): the bare
-        // key heard only in Local Changes' scope.
+        // Return or ⌘S on macOS, Enter, Ctrl+S or Ctrl+Shift+S on Windows (and so Linux): the
+        // bare key heard from Local Changes' file lists alone ([`chord_heard_in`]), ⌘S and
+        // Ctrl+S from the diff too, where Fork's stages the whole selection (observed `lc4`).
         Action::StageOrUnstage => match platform {
             Os::Linux => Chords::of([
                 (bare, key(NamedKey::Enter)),
+                (command, at(Code::KeyS)),
                 (command | shift, at(Code::KeyS)),
             ]),
             Os::MacOs => Chords::of([(bare, key(NamedKey::Enter)), (command, at(Code::KeyS))]),
@@ -349,6 +356,20 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         | Action::MoreLines
         | Action::FewerLines
         | Action::EntireFile => Chords::of([]),
+    }
+}
+
+/// Where one of `action`'s chords is heard: its action's scope ([`heard_in`]), but a bare
+/// Return or Enter of Local Changes', which is heard from its file lists alone, never its diff —
+/// where Fork's Return does nothing (observed `lc3`; R7.3 as amended 2026-10-10).
+pub fn chord_heard_in(action: Action, chord: Chord) -> Scope {
+    match (heard_in(action), chord.trigger) {
+        (Scope::LocalChanges, Trigger::Named(NamedKey::Enter))
+            if chord_modifiers(chord.held).is_empty() =>
+        {
+            Scope::LocalChangesLists
+        }
+        (heard, _) => heard,
     }
 }
 
@@ -462,10 +483,9 @@ pub fn resolve_key_on(
     held: Modifiers,
 ) -> Option<Action> {
     Action::ALL.into_iter().find(|action| {
-        heard_in(*action) == heard
-            && chords(*action, platform)
-                .iter()
-                .any(|chord| chord.is_key(key, code, held))
+        chords(*action, platform)
+            .iter()
+            .any(|chord| chord_heard_in(*action, chord) == heard && chord.is_key(key, code, held))
     })
 }
 
@@ -916,6 +936,7 @@ mod tests {
                     match platform {
                         Os::Linux => vec![
                             keyed(none, NamedKey::Enter),
+                            placed(command, Code::KeyS),
                             placed(command | shift, Code::KeyS),
                         ],
                         Os::MacOs => {
@@ -978,6 +999,21 @@ mod tests {
                     "{action:?} on {platform:?}"
                 );
                 assert_eq!(heard_in(action), heard, "{action:?}");
+                // Every chord is heard in its action's scope, but the stage's bare Return,
+                // heard from the file lists alone (R7.3 as amended, observed `lc3`).
+                for chord in chords_of {
+                    let narrowed =
+                        action == Action::StageOrUnstage && chord == keyed(none, NamedKey::Enter);
+                    assert_eq!(
+                        chord_heard_in(action, chord),
+                        if narrowed {
+                            Scope::LocalChangesLists
+                        } else {
+                            heard
+                        },
+                        "{action:?}'s {chord:?} on {platform:?}"
+                    );
+                }
             }
         }
         // Spelled once more without the helpers above, so a swapped modifier cannot hide in
@@ -1005,9 +1041,10 @@ mod tests {
     }
 
     /// C13, C16: every chord of every action's list resolves back to that action through the
-    /// table, in its own scope and in no other. Caught by: an action whose row the resolver
-    /// skips, a chord of a list after its first that the resolver never reads, two actions
-    /// the resolver cannot tell apart, or a scope the resolver ignores.
+    /// table, in its own scope and in no other — the stage's bare Return in the file lists'
+    /// scope alone, never the diff's. Caught by: an action whose row the resolver skips, a chord
+    /// of a list after its first that the resolver never reads, two actions the resolver cannot
+    /// tell apart, or a scope the resolver ignores.
     #[test]
     fn every_chord_resolves_to_its_action_in_its_scope_only() {
         for platform in PLATFORMS {
@@ -1018,7 +1055,7 @@ mod tests {
                             for heard in Scope::ALL {
                                 assert_eq!(
                                     resolve_key_on(platform, heard, &key, code, held),
-                                    (heard == heard_in(action)).then_some(action),
+                                    (heard == chord_heard_in(action, chord)).then_some(action),
                                     "{action:?}'s chord {chord:?} on {platform:?} in {heard:?}"
                                 );
                             }
@@ -1071,32 +1108,43 @@ mod tests {
         }
     }
 
-    /// One row of a table as the pin reads it: an action, where it is heard, and its chords on
-    /// one platform.
+    /// One row of a table as the pin reads it: an action, where its chords are heard, and those
+    /// chords on one platform.
     type Row = (Action, Scope, Vec<Chord>);
 
-    /// The table as the pin reads it, on `platform`.
+    /// The table as the pin reads it, on `platform`: a row per action and scope its chords are
+    /// heard in ([`chord_heard_in`]), so the stage's bare Return is a row of the lists' scope.
     fn rows_of(platform: Os) -> Vec<Row> {
-        Action::ALL
-            .into_iter()
-            .map(|action| {
-                (
-                    action,
-                    heard_in(action),
-                    chords(action, platform).iter().collect(),
-                )
-            })
-            .collect()
+        let mut rows: Vec<Row> = Vec::new();
+        for action in Action::ALL {
+            for chord in chords(action, platform).iter() {
+                let heard = chord_heard_in(action, chord);
+                match rows
+                    .iter_mut()
+                    .find(|(of, where_heard, _)| *of == action && *where_heard == heard)
+                {
+                    Some((_, _, list)) => list.push(chord),
+                    None => rows.push((action, heard, vec![chord])),
+                }
+            }
+            if chords(action, platform).is_empty() {
+                rows.push((action, heard_in(action), Vec::new()));
+            }
+        }
+        rows
     }
 
-    /// The bare keys a chord may be in Local Changes' list-and-diff scope (L7): Fork's stage and
-    /// discard keys.
-    const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 3] =
-        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];
+    /// The bare keys a chord may be in Local Changes' list-and-diff scope (L7): Fork's discard
+    /// keys, heard from the lists and the diff alike.
+    const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];
+
+    /// The bare keys a chord may be in Local Changes' lists' scope alone: Fork's stage key,
+    /// which its diff does not hear (R7.3 as amended 2026-10-10, observed `lc3`).
+    const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = [NamedKey::Enter];
 
     /// What breaks the pin in `rows`: a chord listed twice — in one action's list, or shared by
     /// two actions, whatever their scopes — and a bare chord that is no function key, but for
-    /// Enter, Backspace and Delete in Local Changes' list-and-diff scope.
+    /// Backspace and Delete in Local Changes' list-and-diff scope and Enter in its lists' scope.
     fn pin_violations(rows: &[Row]) -> Vec<String> {
         let mut found = Vec::new();
         let every: Vec<(Action, Scope, Chord)> = rows
@@ -1123,8 +1171,14 @@ mod tests {
                         | NamedKey::F12
                 )
             );
-            let local_changes_key = *where_heard == Scope::LocalChanges
-                && matches!(chord.trigger, Trigger::Named(named) if LOCAL_CHANGES_BARE_KEYS.contains(&named));
+            let local_changes_key = match chord.trigger {
+                Trigger::Named(named) => match *where_heard {
+                    Scope::LocalChanges => LOCAL_CHANGES_BARE_KEYS.contains(&named),
+                    Scope::LocalChangesLists => LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named),
+                    Scope::Window | Scope::Detail | Scope::CommitBox | Scope::History => false,
+                },
+                Trigger::Physical(_) | Trigger::Press | Trigger::HeadingPress => false,
+            };
             if chord_modifiers(chord.held).is_empty() && !function_key && !local_changes_key {
                 found.push(format!(
                     "{action:?} in {where_heard:?} is a bare {chord:?}, no function key"
@@ -1139,34 +1193,65 @@ mod tests {
         found
     }
 
-    /// R7.2 (L7, L22): no chord is listed twice on one platform — not within one action's list,
-    /// and not by two actions, whatever their scopes — and every chord holds a modifier but a
-    /// function key's or, in Local Changes' list-and-diff scope alone, a bare Enter, Backspace
-    /// or Delete: an unmodified key belongs to whatever has focus (the history list's arrows,
-    /// the file list's, Tab, a letter typed in a filter or the commit box), a function key
-    /// types nothing in any of them — Fork's Windows Refresh is F5 alone — and the one scope
-    /// with bare keys is one no text field is in. The rule is checked over the table, then
-    /// shown to fail on the shapes it claims to refuse, so a rule that went blind fails too.
+    /// R7.2 (L7, L22), R7.3 as amended 2026-10-10: no chord is listed twice on one platform —
+    /// not within one action's list, and not by two actions, whatever their scopes — and every
+    /// chord holds a modifier but a function key's or, in Local Changes' list-and-diff scope
+    /// alone, a bare Backspace or Delete, and in its lists' scope alone a bare Enter: an
+    /// unmodified key belongs to whatever has focus (the history list's arrows, the file
+    /// list's, Tab, a letter typed in a filter or the commit box), a function key types nothing
+    /// in any of them — Fork's Windows Refresh is F5 alone — the scopes with bare keys are ones
+    /// no text field is in, and Return is nothing in Fork's diff (observed `lc3`). The rule is
+    /// checked over the table, then shown to fail on the shapes it claims to refuse — a bare
+    /// Enter in the diff's scope among them — so a rule that went blind fails too.
     #[test]
     fn chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own() {
         for platform in PLATFORMS {
             let rows = rows_of(platform);
             assert_eq!(pin_violations(&rows), Vec::<String>::new(), "{platform:?}");
-            // The table holds bare keys only where the rule admits them, so the admission is
+            // The table holds bare keys only where the rule admits them, so each admission is
             // in use and the shapes below are its edges.
+            for admitted in [Scope::LocalChanges, Scope::LocalChangesLists] {
+                assert!(
+                    rows.iter()
+                        .any(|(_, where_heard, list)| *where_heard == admitted
+                            && list.iter().any(|c| chord_modifiers(c.held).is_empty())),
+                    "no bare chord in {admitted:?} on {platform:?}: the admission reads nothing"
+                );
+            }
+
+            // The stage's bare Enter heard on the diff — Local Changes' list-and-diff scope —
+            // fails: in Fork's diff Return does nothing (observed `lc3`).
+            let mut enter_in_the_diff = rows.clone();
+            enter_in_the_diff
+                .iter_mut()
+                .find(|(action, where_heard, _)| {
+                    *action == Action::StageOrUnstage && *where_heard == Scope::LocalChangesLists
+                })
+                .unwrap()
+                .1 = Scope::LocalChanges;
             assert!(
-                rows.iter()
-                    .any(|(_, where_heard, list)| *where_heard == Scope::LocalChanges
-                        && list.iter().any(|c| chord_modifiers(c.held).is_empty())),
-                "no bare chord in Local Changes on {platform:?}: the admission reads nothing"
+                pin_violations(&enter_in_the_diff)
+                    .iter()
+                    .any(|v| v.contains("is a bare")),
+                "a bare Enter heard on the diff passed on {platform:?}"
             );
 
-            // A bare Enter added to any other scope fails, whichever action holds it.
+            // Each bare key added to a scope that does not admit it fails, whichever action
+            // holds it: Enter anywhere but the lists, Backspace and Delete anywhere but
+            // Local Changes' list-and-diff scope.
             for where_heard in Scope::ALL {
-                if where_heard == Scope::LocalChanges {
-                    continue;
-                }
-                for named in LOCAL_CHANGES_BARE_KEYS {
+                for named in LOCAL_CHANGES_BARE_KEYS
+                    .into_iter()
+                    .chain(LOCAL_CHANGES_LISTS_BARE_KEYS)
+                {
+                    let admitted = match where_heard {
+                        Scope::LocalChanges => LOCAL_CHANGES_BARE_KEYS.contains(&named),
+                        Scope::LocalChangesLists => LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named),
+                        Scope::Window | Scope::Detail | Scope::CommitBox | Scope::History => false,
+                    };
+                    if admitted {
+                        continue;
+                    }
                     let mut moved = rows.clone();
                     let (_, heard, list) = moved
                         .iter_mut()
@@ -1217,9 +1302,11 @@ mod tests {
             let mut twice = rows.clone();
             let (_, _, list) = twice
                 .iter_mut()
-                .find(|(action, _, _)| *action == Action::StageOrUnstage)
+                .find(|(action, where_heard, _)| {
+                    *action == Action::StageOrUnstage && *where_heard == Scope::LocalChanges
+                })
                 .unwrap();
-            let again = list[1];
+            let again = list[0];
             list.push(again);
             assert!(
                 pin_violations(&twice)
@@ -1324,19 +1411,36 @@ mod tests {
             Some(Action::NextChange)
         );
         let enter = Key::Named(NamedKey::Enter);
-        let local = Scope::LocalChanges;
+        let lists = Scope::LocalChangesLists;
         assert_eq!(
-            resolve_key_on(linux, local, &enter, Code::Enter, Modifiers::empty()),
+            resolve_key_on(linux, lists, &enter, Code::Enter, Modifiers::empty()),
             Some(Action::StageOrUnstage)
         );
         assert_eq!(
-            resolve_key_on(linux, local, &enter, Code::Enter, control),
+            resolve_key_on(linux, lists, &enter, Code::Enter, control),
             None,
             "Ctrl+Enter is the commit's, never the bare Enter's stage"
         );
         assert_eq!(
-            resolve_key_on(linux, local, &enter, Code::Enter, Modifiers::NUM_LOCK),
+            resolve_key_on(linux, lists, &enter, Code::Enter, Modifiers::NUM_LOCK),
             Some(Action::StageOrUnstage)
+        );
+        // In the diff's scope a bare Return is nothing, and Ctrl+S stages (observed `lc3`,
+        // `lc4`); Ctrl+S with Shift is the stage too, and with Alt as well Stage All.
+        let local = Scope::LocalChanges;
+        assert_eq!(
+            resolve_key_on(linux, local, &enter, Code::Enter, Modifiers::empty()),
+            None,
+            "a bare Return is heard on the diff"
+        );
+        let s = Key::Character("s".into());
+        assert_eq!(
+            resolve_key_on(linux, local, &s, Code::KeyS, control),
+            Some(Action::StageOrUnstage)
+        );
+        assert_eq!(
+            resolve_key_on(linux, local, &s, Code::KeyS, control | Modifiers::ALT),
+            None
         );
         assert_eq!(resolve_press_on(linux, Modifiers::empty()), None);
         assert_eq!(resolve_press_on(linux, control | Modifiers::SHIFT), None);
@@ -1459,11 +1563,11 @@ mod tests {
     fn a_fields_own_scope_holds_no_bare_chord() {
         for platform in PLATFORMS {
             for own in FieldScope::ALL {
-                for action in Action::ALL
-                    .into_iter()
-                    .filter(|action| heard_in(*action) == own.heard_as())
-                {
-                    for chord in chords(action, platform).iter() {
+                for action in Action::ALL {
+                    for chord in chords(action, platform)
+                        .iter()
+                        .filter(|chord| chord_heard_in(action, *chord) == own.heard_as())
+                    {
                         assert!(
                             !chord_modifiers(chord.held).is_empty(),
                             "{action:?}'s {chord:?} is bare in {own:?} on {platform:?}"

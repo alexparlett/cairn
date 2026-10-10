@@ -171,13 +171,24 @@ pub fn working_query(
     })
 }
 
-/// Local Changes' diff starts at its top, with no change moved to.
+/// Local Changes' diff starts at its top, with no change moved to and no lines selected: a
+/// selection over another file's text, or the same at other options, is let go of silently —
+/// only a re-read of the same question says it cleared one (R9.6, `session::apply`).
 fn reset_local_view(view: View) {
     let mut scroll = view.local.scroll;
     let mut cursor = view.local.cursor;
     scroll.scroll_to_x(0);
     scroll.scroll_to_y(0);
     cursor.set(None);
+    let_go_of_lines(view);
+}
+
+/// No lines selected in Local Changes' diff, and nothing said of it.
+fn let_go_of_lines(view: View) {
+    let mut lines = view.local.lines;
+    if *lines.peek() != cairn_ui::LineDrag::default() {
+        lines.set(cairn_ui::LineDrag::default());
+    }
 }
 
 /// The diff of the selection's primary in Local Changes, asked (R8.1, R9.3; rule 8): the
@@ -278,12 +289,18 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
         }
     };
     let settings = *diff_settings.peek();
+    let working_before = diff.peek().working_query().map(|query| query.options);
     let requests = diff.write().settings_changed(
         options(settings),
         in_place_options(settings),
         working_options(settings),
         asking,
     );
+    // Local Changes' diff asked at other options: lines selected over it named another
+    // question's rows, let go of silently.
+    if diff.peek().working_query().map(|query| query.options) != working_before {
+        let_go_of_lines(view);
+    }
     if !requests.is_empty() {
         change_cursor.set(None);
         local_cursor.set(None);
@@ -356,10 +373,6 @@ pub fn configured(context: Context, view: View, submit: &dyn Fn(Request)) {
 /// shown, in its diff.
 pub fn step(view: View, forward: bool) {
     if local_changes_shown(view) {
-        // Paths drawn together have no one file's changes to step through.
-        if view.diff.peek().together().is_some() {
-            return;
-        }
         let mut scroll = view.local.scroll;
         let mut cursor = view.local.cursor;
         let side_by_side = view.diff_settings.peek().side_by_side();

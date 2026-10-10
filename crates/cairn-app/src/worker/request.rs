@@ -19,7 +19,7 @@ use super::epoch::QueryLane;
 use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 
 /// What a changes query compares (R2.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Comparison {
     /// One commit against its first parent (the empty tree for a root commit).
     Commit(Oid),
@@ -48,7 +48,7 @@ pub enum WorkingSide {
 
 /// What a view asks of one file's diff — every option an answer depends on that the view
 /// chooses. R2.6's ceilings are not among them: they are fixed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct DiffOptions {
     /// The context the view groups hunks at, which git is asked at (so a change of context
     /// is a new query: git's function context is the text its hunks at that context carry).
@@ -60,7 +60,7 @@ pub struct DiffOptions {
 }
 
 /// The file a diff is of.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileTarget {
     /// One file of `of`'s change set, exactly as that answer named it.
     Committed { of: Comparison, file: ChangedFile },
@@ -69,8 +69,9 @@ pub enum FileTarget {
 }
 
 /// One file's diff as asked: what its answer names, and what the window compares with
-/// what it has selected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// what it has selected — and what its answer is keyed with ([`ShownDiff::keyed`]), so a line
+/// selection over it belongs to this question's text alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileQuery {
     pub target: FileTarget,
     pub options: DiffOptions,
@@ -86,39 +87,7 @@ pub enum DiffQuery {
     /// Files of `of`'s change set opened in place: some by name, and Expand All's from where it
     /// stands.
     Expand(ExpandQuery),
-    /// Several paths of Local Changes' lists, their diffs drawn together.
-    Together(TogetherQuery),
 }
-
-/// Several paths selected in one of Local Changes' lists, whose diffs the view draws together
-/// (staging-and-commit R8.1, the user's decision of 2026-10-09: as Fork does): each path's
-/// working-tree diff, in the order the lists show them, read on the diff thread one after
-/// another under Expand All's line budget and answered a page at a time
-/// ([`Update::Together`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TogetherQuery {
-    /// The window's number for this ask: every page answering it names it.
-    pub asked: u64,
-    /// The paths to read, each by its place among the paths drawn and the side it is asked
-    /// as; a conflicted path, which has no diff, is not among them. Shared, not copied.
-    pub files: Arc<Vec<TogetherFile>>,
-    /// What every path is asked at: always the exact diff (R8.5).
-    pub options: DiffOptions,
-}
-
-/// One path of a [`TogetherQuery`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TogetherFile {
-    /// Its place among the paths drawn together.
-    pub index: usize,
-    pub path: RepoPath,
-    pub side: WorkingSide,
-}
-
-/// One path's answer in an [`Update::Together`] page: its diff prepared for the views, `None`
-/// where git prints nothing for it, or why it could not be read, as display text — that path's
-/// alone.
-pub type TogetherOutcome = Result<Option<Box<ShownDiff>>, String>;
 
 /// Files of a change set to open in place in the Commit tab (PRD R5.3): the ones opened one at
 /// a time, by name, and — when Expand All is on its way — the rest of the change set from the
@@ -194,7 +163,7 @@ impl DiffQuery {
     pub fn lane(&self) -> QueryLane {
         match self {
             Self::Changes(_) => QueryLane::Changes,
-            Self::File(_) | Self::Expand(_) | Self::Together(_) => QueryLane::FileDiff,
+            Self::File(_) | Self::Expand(_) => QueryLane::FileDiff,
         }
     }
 }
@@ -388,10 +357,6 @@ pub enum Request {
     /// ends it between files or kills its read. One that names nothing to read asks nothing:
     /// what it is for is to supersede the one in flight (Collapse All).
     Expand(ExpandQuery),
-    /// The paths selected in one of Local Changes' lists, their diffs read to be drawn
-    /// together, answered a page at a time by [`Update::Together`]. File-diff lane work: it
-    /// supersedes the path chosen's diff and the files opened in place, and they it.
-    Together(TogetherQuery),
     /// Which of `files`' files hold `text` in a path (the Changes tab's filter, R5.4),
     /// answered by [`Update::FilteredFiles`]: a pass over every path, so run on a worker and
     /// never on the UI thread. Numbered in the file-filter lane, so the next keystroke
@@ -557,7 +522,7 @@ impl Request {
                 &[QueryLane::History]
             }
             Self::Changes { .. } => &[QueryLane::Changes],
-            Self::FileDiff(_) | Self::Expand(_) | Self::Together(_) => &[QueryLane::FileDiff],
+            Self::FileDiff(_) | Self::Expand(_) => &[QueryLane::FileDiff],
             Self::FilterFiles { .. } => &[QueryLane::FileFilter],
             // Not the status lane: a refresh never supersedes a status (R10.3 as amended).
             Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
@@ -838,14 +803,6 @@ pub enum Update {
         files: Vec<ExpandedFile>,
         all: Option<AllProgress>,
     },
-    /// A page of the paths drawn together, answering the ask numbered `asked`: each path read,
-    /// by its place, and — on the last page — where the read ended: at the last path, or with
-    /// Expand All's line budget spent before the path at `next`, which is not read.
-    Together {
-        asked: u64,
-        files: Vec<(usize, TogetherOutcome)>,
-        ended: Option<TogetherEnded>,
-    },
     /// A diff query failed: `query` is what was asked, so the window shows the failure
     /// only for the selection it names, and `message` is display text. A query that was
     /// superseded is not a failure and sends nothing.
@@ -875,7 +832,6 @@ impl Update {
                 Retired::of(None, diff.map(|shown| *shown).into_iter().collect())
             }
             Self::Expanded { files, .. } => Retired::of(None, expanded_diffs(files)),
-            Self::Together { files, .. } => Retired::of(None, together_diffs(files)),
             Self::Refs { snapshot, .. } => Some(Retired::refs(snapshot)),
             Self::AheadBehind { counts } => Retired::ahead_behind(Arc::new(counts)),
             Self::Status { changes } => Some(Retired::status(changes)),
@@ -955,24 +911,6 @@ pub struct AmendRead {
     /// list against `HEAD`'s parent (`LocalChanges::amending`) — or why amend's staged list
     /// could not be read (a partial clone's missing blob, on git 2.44 and later).
     pub lists: Result<Arc<LocalChanges>, String>,
-}
-
-/// Why the paths drawn together stopped being read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TogetherEnded {
-    /// Every path was read.
-    Every,
-    /// The line budget was spent: the paths from `next` on are not read.
-    Budget { next: usize },
-}
-
-/// The diffs a page of paths drawn together holds, for a worker to free.
-pub fn together_diffs(files: Vec<(usize, TogetherOutcome)>) -> Vec<ShownDiff> {
-    files
-        .into_iter()
-        .filter_map(|(_, outcome)| outcome.ok().flatten())
-        .map(|shown| *shown)
-        .collect()
 }
 
 /// The diffs a page of files opened in place holds, for a worker to free.

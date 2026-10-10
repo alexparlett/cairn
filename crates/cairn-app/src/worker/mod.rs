@@ -54,8 +54,7 @@ pub(crate) use refresh_tests::Refreshable;
 pub use request::{
     AllEnded, AllFrom, AllProgress, AmendRead, CheckoutRefused, CommitReads, Comparison,
     DiffOptions, DiffQuery, ExpandQuery, ExpandedFile, FileQuery, FileTarget, OpenedFile, RanBy,
-    Refreshed, Request, Retired, TogetherEnded, TogetherFile, TogetherOutcome, TogetherQuery,
-    Update, WorkingSide, expanded_diffs, together_diffs,
+    Refreshed, Request, Retired, Update, WorkingSide, expanded_diffs,
 };
 #[cfg(test)]
 pub(crate) use window_check_updates::update_within;

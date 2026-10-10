@@ -66,6 +66,7 @@ pub struct DiffHeader {
     settings: DiffSettings,
     hiding: bool,
     exact: bool,
+    said: Option<&'static str>,
     on_action: EventHandler<HeaderAction>,
     key: DiffKey,
 }
@@ -77,6 +78,7 @@ impl DiffHeader {
             settings,
             hiding: false,
             exact: false,
+            said: None,
             on_action: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
@@ -98,6 +100,13 @@ impl DiffHeader {
         self
     }
 
+    /// A line the bar says beside the path — Local Changes' "The file changed — line selection
+    /// cleared." (staging-and-commit R9.6) — for as long as the caller hands it.
+    pub fn said(mut self, said: Option<&'static str>) -> Self {
+        self.said = said;
+        self
+    }
+
     /// A button was pressed. Whether the press changes anything is the caller's to decide;
     /// a disabled button reports nothing.
     pub fn on_action(mut self, on_action: impl Into<EventHandler<HeaderAction>>) -> Self {
@@ -113,6 +122,7 @@ impl PartialEq for DiffHeader {
             && self.settings == other.settings
             && self.hiding == other.hiding
             && self.exact == other.exact
+            && self.said == other.said
             && self.key == other.key
     }
 }
@@ -244,6 +254,13 @@ impl Component for DiffHeader {
             .maybe_child((self.hiding && !self.exact).then(|| {
                 label()
                     .text(HIDDEN_CHANGES_NOTICE)
+                    .max_lines(1)
+                    .font_size(NOTICE_FONT_SIZE)
+                    .color(warning)
+            }))
+            .maybe_child(self.said.map(|said| {
+                label()
+                    .text(said)
                     .max_lines(1)
                     .font_size(NOTICE_FONT_SIZE)
                     .color(warning)

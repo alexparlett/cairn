@@ -1270,10 +1270,11 @@ fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
 }
 
 /// Phase 07's QA item 5: a refresh that takes the selected paths away moves the selection with
-/// the path chosen — so when one of them is listed again it is not selected unseen, and Return
-/// stages only what is drawn selected; and a ⌘- or Ctrl-press that toggles the last path out
-/// leaves nothing selected, so Return stages nothing. Caught by: a selection that keeps paths a
-/// refresh took away, or an emptied selection that falls back to the path toggled out.
+/// the path chosen — so when one of them is listed again it is not selected unseen, and the
+/// stage chord stages only what is drawn selected; and a ⌘- or Ctrl-press that toggles the last
+/// path out leaves nothing selected — the diff saying "No file selected" — so the stage chord
+/// stages nothing. Caught by: a selection that keeps paths a refresh took away, or an emptied
+/// selection that falls back to the path toggled out.
 #[test]
 fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
     let (mut test, view, submitted) = opened(several());
@@ -1306,6 +1307,14 @@ fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
     press_row(&mut test, "d.rs", 0);
     let_go(&mut test, view);
     assert_eq!(selected(view), Vec::<String>::new());
+    // R8.1: with nothing selected the diff says so, in Fork's words.
+    assert!(
+        crate::local_changes_tests::labels(&test)
+            .iter()
+            .any(|label| label == crate::local_changes_pane::NO_FILE_SELECTED),
+        "{:?}",
+        crate::local_changes_tests::labels(&test)
+    );
     press_chord(&mut test, Action::StageOrUnstage);
     assert_eq!(writes(&submitted)[1..], [], "a path toggled out was staged");
 }

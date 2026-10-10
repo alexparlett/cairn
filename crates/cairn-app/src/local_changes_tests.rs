@@ -32,7 +32,7 @@ use crate::worker::{FileQuery, FileTarget, Request, Update, WorkingSide};
 const WIDTH: f32 = 1200.;
 
 /// Whether `x` is left of where the diff side begins: in the lists, the filter or a menu opened
-/// over them — never one of the files drawn together, whose rows name paths too.
+/// over them — never the diff side, whose bar names a path too.
 pub(crate) fn in_lists(x: f32) -> bool {
     x > SIDEBAR_WIDTH
         && x < SIDEBAR_WIDTH
@@ -187,7 +187,10 @@ pub(crate) fn answer(
         submitted,
         Update::FileDiff {
             query: query.clone(),
-            diff: Some(diff_of(&path_of(query), line, query.options.context)),
+            // Keyed with its question, as the diff thread keys every answer.
+            diff: Some(Box::new(
+                diff_of(&path_of(query), line, query.options.context).keyed(query),
+            )),
         },
     );
 }

@@ -23,10 +23,8 @@ use crate::worker::{
     FileQuery, FileTarget, OpenedFile, Request, Retired,
 };
 
-mod together;
 mod working;
 
-pub use together::{TogetherWanted, answered_together, answered_together_paths};
 pub use working::{WorkingChoice, WorkingShown};
 
 /// An answer the window is waiting for, has, or was told failed.
@@ -62,20 +60,31 @@ struct Opening {
     shown: Expansion,
     loaded: BTreeSet<usize>,
     all: AllState,
-    /// The request for what is unanswered is the one in the file-diff lane now. The Changes
-    /// tab's file shares the lane, so asking for it takes the lane from this, and the other
-    /// way round; whichever lost it asks again when its tab is shown.
-    in_lane: bool,
 }
 
-/// Which of the two selections sharing the file-diff lane a change of settings asks for at
-/// once: the one whose tab is shown. The other is asked when its tab is shown again.
+/// Which of the three selections sharing the file-diff lane a change of settings asks for at
+/// once: the one whose view is shown. The others are asked when their view is shown again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Asking {
     File,
     Expansion,
     /// The path chosen in Local Changes, whose view is shown in place of the history.
     Working,
+}
+
+/// Who holds the file-diff lane (review-code-app-ui.md H1): the selection whose request is the
+/// lane's now. The diff thread serves one file-diff query at a time, a newer superseding it, so
+/// one holds it at most — `DiffState::lane` is one value, taken by one call
+/// (`DiffState::take_lane`), never a flag per holder that every other holder must reset. A
+/// holder that lost it, and is still waiting, asks again when its view is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneHolder {
+    /// The Changes tab's file.
+    File,
+    /// Local Changes' primary.
+    Working,
+    /// The Commit tab's files opened in place.
+    Expansion,
 }
 
 /// The diffs `opened` holds, for a worker to free.
@@ -104,23 +113,38 @@ pub struct DiffState {
     file: Option<(FileQuery, Answer<Option<ShownDiff>>)>,
     /// The files opened in place in the Commit tab, for the comparison selected.
     opening: Option<Opening>,
-    /// The file selected's request is the one in the file-diff lane now (see `Opening`).
-    file_in_lane: bool,
+    /// Whose request is the one in the file-diff lane now; `None` once a changes query
+    /// superseded it, or its holder asked for nothing more.
+    lane: Option<LaneHolder>,
     /// The Changes tab's filter over the selected change set's files (phase 07).
     filter: FileFilter,
     /// Where the file selected is in the change set, when it was chosen from it: what the
     /// Changes tab's list highlights and moves from, kept rather than searched for.
     file_index: Option<usize>,
-    /// The path chosen in Local Changes and its diff (refs-and-status R9.3).
+    /// Local Changes' primary and its diff (refs-and-status R9.3, staging-and-commit R8.1).
     working: Option<working::Working>,
-    /// The path chosen's request is the one in the file-diff lane now.
-    working_in_lane: bool,
-    /// How many working-tree answers have been kept: each one kept is numbered by it.
-    answers: u64,
-    /// The paths selected in one of Local Changes' lists, drawn together (R8.1).
-    together: Option<together::Together>,
-    /// How many times paths have been asked together: each ask is numbered by it.
-    together_asks: u64,
+}
+
+/// The file-diff lane (H1): one holder, taken and let go of here alone.
+impl DiffState {
+    /// `holder`'s request is now the one in the file-diff lane: whoever held it is asked again
+    /// when its view is shown.
+    fn take_lane(&mut self, holder: LaneHolder) {
+        self.lane = Some(holder);
+    }
+
+    /// `holder` asks for nothing more, or its request was superseded: nobody holds the lane
+    /// unless another took it since.
+    fn let_go_of_lane(&mut self, holder: LaneHolder) {
+        if self.lane == Some(holder) {
+            self.lane = None;
+        }
+    }
+
+    /// Whether `holder`'s request is the one in the lane now.
+    fn holds_lane(&self, holder: LaneHolder) -> bool {
+        self.lane == Some(holder)
+    }
 }
 
 impl DiffState {
@@ -136,10 +160,8 @@ impl DiffState {
         let file = self.file.take();
         let opening = self.opening.take();
         self.file_index = None;
-        self.file_in_lane = false;
         // The changes query supersedes the file-diff lane, whoever's request is in it.
-        self.working_in_lane = false;
-        self.together_lost_lane();
+        self.lane = None;
         self.filter.changes_selected();
         let mut shown_diffs: Vec<ShownDiff> = Vec::new();
         if let Some((_, Answer::Ready(Some(shown)))) = file {
@@ -165,7 +187,7 @@ impl DiffState {
     /// of fifty thousand lines is as many allocations to free.
     pub fn select_file(&mut self, query: FileQuery) -> Vec<Request> {
         let replaced = self.file.replace((query.clone(), Answer::Waiting));
-        self.took_lane_for_file();
+        self.take_lane(LaneHolder::File);
         let mut requests = vec![Request::FileDiff(query)];
         if let Some((_, Answer::Ready(Some(shown)))) = replaced {
             requests.extend(retire(vec![shown]));
@@ -173,43 +195,32 @@ impl DiffState {
         requests
     }
 
-    /// The file selected's request is now the one in the file-diff lane; whatever the
-    /// expansion asked is superseded, and asked again when the Commit tab is shown.
-    fn took_lane_for_file(&mut self) {
-        self.file_in_lane = true;
-        self.working_in_lane = false;
-        self.together_lost_lane();
-        if let Some(opening) = &mut self.opening {
-            opening.in_lane = false;
-        }
-    }
-
     /// Whether the file selected is awaited and its request lost the lane: what the Changes
     /// tab checks, reading only, before it asks again.
     pub fn file_needs_asking(&self) -> bool {
-        !self.file_in_lane && matches!(self.file, Some((_, Answer::Waiting)))
+        !self.holds_lane(LaneHolder::File) && matches!(self.file, Some((_, Answer::Waiting)))
     }
 
     /// Whether files opened in place are awaited and their request lost the lane.
     pub fn expansion_needs_asking(&self) -> bool {
-        self.opening.as_ref().is_some_and(|opening| {
-            !opening.in_lane
-                && (matches!(opening.all, AllState::Running(_))
+        !self.holds_lane(LaneHolder::Expansion)
+            && self.opening.as_ref().is_some_and(|opening| {
+                matches!(opening.all, AllState::Running(_))
                     || opening
                         .shown
                         .iter()
-                        .any(|(_, opened)| matches!(opened, Opened::Reading)))
-        })
+                        .any(|(_, opened)| matches!(opened, Opened::Reading))
+            })
     }
 
     /// The file selected asked again when its answer is still awaited and its request lost
     /// the lane to the files opened in place: what the Changes tab does as it is shown.
     pub fn reask_file(&mut self) -> Option<Request> {
         let query = match &self.file {
-            Some((query, Answer::Waiting)) if !self.file_in_lane => query.clone(),
+            Some((query, Answer::Waiting)) if !self.holds_lane(LaneHolder::File) => query.clone(),
             Some(_) | None => return None,
         };
-        self.took_lane_for_file();
+        self.take_lane(LaneHolder::File);
         Some(Request::FileDiff(query))
     }
 
@@ -276,7 +287,6 @@ impl DiffState {
             shown: Expansion::new(),
             loaded: BTreeSet::new(),
             all: AllState::Off,
-            in_lane: false,
         });
         Some(opening)
     }
@@ -319,19 +329,20 @@ impl DiffState {
         let closed = opening.shown.close_all();
         opening.loaded.clear();
         opening.all = AllState::Off;
+        let (of, options) = (opening.of, opening.options);
         let mut requests = Vec::new();
-        if opening.in_lane
+        if self.lane == Some(LaneHolder::Expansion)
             && let Some(Answer::Ready(changes)) = self.changes.as_ref().map(|(_, answer)| answer)
         {
             requests.push(Request::Expand(ExpandQuery {
-                of: opening.of,
+                of,
                 changes: changes.clone(),
-                options: opening.options,
+                options,
                 files: Vec::new(),
                 all: None,
                 kept_open: Vec::new(),
             }));
-            opening.in_lane = false;
+            self.lane = None;
         }
         requests.extend(retire(shown_of(closed)));
         requests
@@ -355,7 +366,7 @@ impl DiffState {
     /// The files opened in place asked again when something is unanswered and their request
     /// lost the lane to the Changes tab's file: what the Commit tab does as it is shown.
     pub fn reask_expansion(&mut self) -> Option<Request> {
-        if self.opening.as_ref().is_none_or(|opening| opening.in_lane) {
+        if self.opening.is_none() || self.holds_lane(LaneHolder::Expansion) {
             return None;
         }
         self.ask_expansion()
@@ -391,20 +402,16 @@ impl DiffState {
             Some(_) => opening.shown.iter().map(|(index, _)| index).collect(),
             None => Vec::new(),
         };
-        opening.in_lane = true;
-        self.file_in_lane = false;
-        self.working_in_lane = false;
-        if let Some(together) = &mut self.together {
-            together.in_lane = false;
-        }
-        Some(Request::Expand(ExpandQuery {
+        let asked = Request::Expand(ExpandQuery {
             of: opening.of,
             changes,
             options: opening.options,
             files,
             all,
             kept_open,
-        }))
+        });
+        self.take_lane(LaneHolder::Expansion);
+        Some(asked)
     }
 
     /// The settings moved: the file selected is asked again at `options` and the files opened
@@ -431,7 +438,6 @@ impl DiffState {
                 if let Answer::Ready(Some(shown)) = std::mem::replace(answer, Answer::Waiting) {
                     requests.extend(retire(vec![shown]));
                 }
-                self.file_in_lane = false;
                 file_asked = true;
             }
         }
@@ -448,19 +454,20 @@ impl DiffState {
                     .shown
                     .set(open.into_iter().map(|index| (index, Opened::Reading)));
                 requests.extend(retire(shown_of(replaced)));
-                opening.in_lane = false;
                 expansion_asked = true;
             }
+        }
+        // Whoever held the lane at the old options is asked again: its request is no answer.
+        if file_asked {
+            self.let_go_of_lane(LaneHolder::File);
+        }
+        if expansion_asked {
+            self.let_go_of_lane(LaneHolder::Expansion);
         }
         // The path chosen in Local Changes is asked at the Changes tab's options but always
         // exact (staging-and-commit R8.5): its view is one file's diff under the same bar.
         let (working_asked, freed) =
             self.working_settings_changed(working, asking == Asking::Working);
-        requests.extend(retire(freed));
-        // The paths drawn together likewise, and before the path chosen, which is not asked
-        // while they are drawn.
-        let (together_asked, freed) =
-            self.together_settings_changed(working, asking == Asking::Working);
         requests.extend(retire(freed));
         let asked = match asking {
             Asking::File if file_asked => self.reask_file(),
@@ -469,7 +476,6 @@ impl DiffState {
             Asking::File | Asking::Expansion => None,
         };
         let mut ordered: Vec<Request> = asked.into_iter().collect();
-        ordered.extend(together_asked);
         ordered.extend(requests);
         ordered
     }
@@ -641,7 +647,6 @@ impl DiffState {
             DiffQuery::Changes(of) => self.wants_changes(*of),
             DiffQuery::File(query) => self.wants_file(query),
             DiffQuery::Expand(asked) => self.wants_expansion(asked.of, asked.options),
-            DiffQuery::Together(asked) => self.wants_together(asked.asked),
         }
     }
 
@@ -729,10 +734,9 @@ impl DiffState {
                             .map(|index| (index, Opened::Failed(message.clone()))),
                     );
                     opening.all = AllState::Off;
-                    opening.in_lane = false;
                 }
+                self.let_go_of_lane(LaneHolder::Expansion);
             }
-            DiffQuery::Together(_) => self.together_failed(&message),
         }
         true
     }

@@ -1,7 +1,8 @@
-//! Headless tests for the diff's staging gesture (staging-and-commit R9, criterion C19): a
-//! hovered chunk's actions, a drag-selection across rows the virtual list unmounts, a
-//! side-by-side selection kept to its column, no gesture where none is handed, and one
-//! viewport of rows built with the gesture drawn.
+//! Headless tests for the diff's staging gesture (staging-and-commit R9, criteria C19 and C26's
+//! headless half): a hovered chunk's actions, a drag-selection across rows the virtual list
+//! unmounts, a side-by-side selection kept to its column, no gesture where none is handed, a
+//! selection kept over a re-read of the same text and nothing over other text, and one viewport
+//! of rows built with the gesture drawn.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,9 +12,8 @@ use cairn_model::{
     FileDiff, LineNumber, LineSpan, RepoPath, Selection, ShownDiff, TextDiff,
 };
 use cairn_ui::{
-    DIFF_ROW_HEIGHT, DISCARD_CHUNK_CAPTION, DiffView, Expansion, Gesture, GestureAct, GestureSide,
-    GestureVerb, LineDrag, Opened, STAGE_CHUNK_CAPTION, StackedDiff, UNSTAGE_CHUNK_CAPTION,
-    lines_caption,
+    DIFF_ROW_HEIGHT, DISCARD_CHUNK_CAPTION, DiffView, Gesture, GestureAct, GestureSide,
+    GestureVerb, LineDrag, STAGE_CHUNK_CAPTION, UNSTAGE_CHUNK_CAPTION, lines_caption,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -23,18 +23,31 @@ const HEIGHT: f32 = 400.;
 const ROW: f64 = DIFF_ROW_HEIGHT as f64;
 
 /// `lines` lines, `line {n}`, with line `first` and every `every`-th after it replaced by
-/// `LINE {n}`.
+/// `LINE {n}`; keyed as a working-tree diff's answer is, so its content is its text's.
 fn edited(lines: u32, every: u32, first: u32, context: Context) -> ShownDiff {
+    edited_ending(lines, every, first, context, None)
+}
+
+/// [`edited`], its last line reading `last` on both sides when one is given.
+fn edited_ending(
+    lines: u32,
+    every: u32,
+    first: u32,
+    context: Context,
+    last: Option<&str>,
+) -> ShownDiff {
     let is_edited = |n: u32| n >= first && (n - first).is_multiple_of(every);
-    let old: Vec<DiffLine> = (0..lines)
-        .map(|n| DiffLine::terminated(format!("line {n}")))
-        .collect();
+    let plain = |n: u32| match last {
+        Some(last) if n + 1 == lines => last.to_owned(),
+        _ => format!("line {n}"),
+    };
+    let old: Vec<DiffLine> = (0..lines).map(|n| DiffLine::terminated(plain(n))).collect();
     let new: Vec<DiffLine> = (0..lines)
         .map(|n| {
             DiffLine::terminated(if is_edited(n) {
                 format!("LINE {n}")
             } else {
-                format!("line {n}")
+                plain(n)
             })
         })
         .collect();
@@ -60,13 +73,13 @@ fn edited(lines: u32, every: u32, first: u32, context: Context) -> ShownDiff {
         },
         context,
     )
+    .keyed(&"src/lib.rs, unstaged")
 }
 
 #[derive(Clone)]
 struct Fixture {
     shown: State<ShownDiff>,
     lines: State<LineDrag>,
-    drawn: State<u64>,
     acts: Rc<RefCell<Vec<GestureAct>>>,
     side: Option<GestureSide>,
     side_by_side: bool,
@@ -90,7 +103,7 @@ fn launch(shown: ShownDiff, side: Option<GestureSide>, side_by_side: bool) -> La
             let gesture = fixture.side.map(|side| {
                 Gesture::new(
                     side,
-                    *fixture.drawn.read(),
+                    fixture.shown.read().content(),
                     fixture.lines,
                     move |act: GestureAct| acts.borrow_mut().push(act),
                 )
@@ -110,7 +123,6 @@ fn launch(shown: ShownDiff, side: Option<GestureSide>, side_by_side: bool) -> La
                 let fixture = Fixture {
                     shown: State::create(shown),
                     lines: State::create(LineDrag::default()),
-                    drawn: State::create(1),
                     acts: recording,
                     side,
                     side_by_side,
@@ -205,7 +217,7 @@ fn a_hovered_chunks_actions_take_exactly_its_changes() {
     let acts = wide.fixture.acts.borrow().clone();
     assert_eq!(acts.len(), 1, "{acts:?}");
     assert_eq!(acts[0].verb, GestureVerb::Stage);
-    assert_eq!(acts[0].file, 0);
+    assert_eq!(acts[0].content, wide.fixture.shown.peek().content());
     // Sixty lines edited every eight from line 4: 4, 12, ..., 52 — one hunk at context ten.
     let every: Vec<u32> = (0..7).map(|k| k * 8 + 4).collect();
     assert_eq!(numbers(&acts[0].selection), (every.clone(), every));
@@ -275,18 +287,14 @@ fn a_drag_narrows_the_actions_to_its_lines() {
         "{:?}",
         captions(&view.test)
     );
-    let selected = view
-        .fixture
-        .lines
-        .peek()
-        .selected(1)
-        .map(|(file, s)| (file, numbers(s)));
-    assert_eq!(selected, Some((0, (vec![6], vec![2]))));
+    let content = view.fixture.shown.peek().content();
+    let selected = view.fixture.lines.peek().selected(content).map(numbers);
+    assert_eq!(selected, Some((vec![6], vec![2])));
     press_caption(&mut view.test, &caption);
     let acts = view.fixture.acts.borrow().clone();
     assert_eq!(numbers(&acts[0].selection), (vec![6], vec![2]));
     assert_eq!(
-        view.fixture.lines.peek().selected(1),
+        view.fixture.lines.peek().selected(content),
         None,
         "the selection outlived its act"
     );
@@ -296,10 +304,10 @@ fn a_drag_narrows_the_actions_to_its_lines() {
     view.test.move_cursor((300., row_y(4)));
     view.test.release_cursor((300., row_y(4)));
     view.test.sync_and_update();
-    assert!(view.fixture.lines.peek().selected(1).is_some());
+    assert!(view.fixture.lines.peek().selected(content).is_some());
     view.test.click_cursor((300., row_y(9)));
     view.test.sync_and_update();
-    assert_eq!(view.fixture.lines.peek().selected(1), None);
+    assert_eq!(view.fixture.lines.peek().selected(content), None);
 }
 
 /// The QA brief's second risk: a drag from row 10 to row 5,000 of a 10,000-line diff, the list
@@ -340,12 +348,7 @@ fn a_drag_across_unmounted_rows_selects_every_line_between_its_ends() {
         "the span holds {} lines",
         expected.len()
     );
-    let selected = view
-        .fixture
-        .lines
-        .peek()
-        .selected(1)
-        .map(|(_, selection)| selection.clone());
+    let selected = view.fixture.lines.peek().selected(shown.content()).cloned();
     assert_eq!(selected.as_ref().map(Selection::len), Some(expected.len()));
     assert_eq!(selected, Some(expected));
 }
@@ -367,12 +370,8 @@ fn side_by_side_a_drag_keeps_to_its_column() {
         view.test.move_cursor((WIDTH as f64 - x, row_y(7)));
         view.test.release_cursor((WIDTH as f64 - x, row_y(7)));
         view.test.sync_and_update();
-        let selected = view
-            .fixture
-            .lines
-            .peek()
-            .selected(1)
-            .map(|(_, s)| numbers(s));
+        let content = view.fixture.shown.peek().content();
+        let selected = view.fixture.lines.peek().selected(content).map(numbers);
         let expected = if removed {
             (vec![2, 6], vec![])
         } else {
@@ -384,8 +383,8 @@ fn side_by_side_a_drag_keeps_to_its_column() {
 
 /// The QA brief's third risk, and Fork's Tracker #480: after Stage, with the pointer still,
 /// the actions are gone while the old rows are drawn; once the diff is drawn again they follow
-/// whatever is now under the pointer. A selection made under one answer is nothing under the
-/// next. Caught by: actions left on rows already acted on, or hidden for good.
+/// whatever is now under the pointer. A selection made over one text is nothing over the next.
+/// Caught by: actions left on rows already acted on, or hidden for good.
 #[test]
 fn after_an_action_the_actions_follow_the_new_rows_or_none() {
     let mut view = launch(
@@ -405,8 +404,6 @@ fn after_an_action_the_actions_follow_the_new_rows_or_none() {
     // next one's.
     let mut shown = view.fixture.shown;
     shown.set(edited(60, 8, 12, Context::lines(3)));
-    let mut drawn = view.fixture.drawn;
-    drawn.set(2);
     view.test.sync_and_update();
     hover(&mut view.test, 300., row_y(2));
     assert!(
@@ -418,15 +415,79 @@ fn after_an_action_the_actions_follow_the_new_rows_or_none() {
     let acts = view.fixture.acts.borrow().clone();
     assert_eq!(numbers(&acts[1].selection), (vec![12], vec![12]));
 
-    // A selection under answer 2 is nothing once answer 3 is drawn.
+    // A selection over this text is nothing once other text is drawn.
     view.test.press_cursor((300., row_y(3)));
     view.test.move_cursor((300., row_y(4)));
     view.test.release_cursor((300., row_y(4)));
     view.test.sync_and_update();
-    assert!(view.fixture.lines.peek().selected(2).is_some());
-    drawn.set(3);
+    let before = shown.peek().content();
+    assert!(view.fixture.lines.peek().selected(before).is_some());
+    shown.set(edited(60, 8, 20, Context::lines(3)));
     view.test.sync_and_update();
-    assert!(view.fixture.lines.peek().selected(3).is_none());
+    let after = shown.peek().content();
+    assert_ne!(before, after);
+    assert!(view.fixture.lines.peek().selected(after).is_none());
+}
+
+/// R9.6, L4 (C26, headless): a finished selection survives the diff drawn again from a re-read
+/// whose text is the same in every byte — a new answer, built apart — its tint, its actions and
+/// its lines intact, and pressing its action then takes exactly those lines; drawn from a
+/// re-read whose text differs by one byte, far from the selection, it is nothing — no action
+/// over it, nothing taken. Caught by: a selection keyed to the answer rather than its text (a
+/// refresh with the file untouched dropping it), or to the drawn rows alone (a byte changed
+/// outside them keeping it).
+#[test]
+fn a_selection_survives_a_redraw_of_the_same_text_and_no_other() {
+    let mut view = launch(
+        edited(60, 4, 2, Context::lines(3)),
+        Some(GestureSide::Unstaged),
+        false,
+    );
+    view.test.press_cursor((300., row_y(4)));
+    view.test.move_cursor((300., row_y(6)));
+    view.test.move_cursor((300., row_y(8)));
+    view.test.release_cursor((300., row_y(8)));
+    view.test.sync_and_update();
+    let caption = lines_caption(GestureVerb::Stage, 2);
+    assert!(captions(&view.test).contains(&caption));
+
+    let mut shown = view.fixture.shown;
+    shown.set(edited(60, 4, 2, Context::lines(3)));
+    view.test.sync_and_update();
+    hover(&mut view.test, 300., row_y(20));
+    assert!(
+        captions(&view.test).contains(&caption),
+        "a re-read of the same text dropped the selection: {:?}",
+        captions(&view.test)
+    );
+    press_caption(&mut view.test, &caption);
+    let acts = view.fixture.acts.borrow().clone();
+    assert_eq!(numbers(&acts[0].selection), (vec![6], vec![2]));
+    assert_eq!(acts[0].content, shown.peek().content());
+
+    // Selected again, then the last line — far below the rows selected — reads one byte other.
+    view.test.press_cursor((300., row_y(4)));
+    view.test.move_cursor((300., row_y(6)));
+    view.test.move_cursor((300., row_y(8)));
+    view.test.release_cursor((300., row_y(8)));
+    view.test.sync_and_update();
+    assert!(captions(&view.test).contains(&caption));
+    shown.set(edited_ending(60, 4, 2, Context::lines(3), Some("line 5!")));
+    view.test.sync_and_update();
+    hover(&mut view.test, 300., row_y(20));
+    assert!(
+        !captions(&view.test).contains(&caption),
+        "a selection outlived its text: {:?}",
+        captions(&view.test)
+    );
+    assert!(
+        view.fixture
+            .lines
+            .peek()
+            .selected(shown.peek().content())
+            .is_none()
+    );
+    assert_eq!(view.fixture.acts.borrow().len(), 1);
 }
 
 /// C19's viewport twin: a 10,000-line diff with the gesture drawn — hovered, a selection made
@@ -468,146 +529,6 @@ fn the_gesture_builds_one_viewport_over_a_10000_line_diff() {
     view.test.sync_and_update();
     hover(&mut view.test, 300., 120.);
     within(&view.test, "at the end");
-}
-
-#[derive(Clone)]
-struct StackedFixture {
-    files: State<Expansion>,
-    paths: State<Vec<RepoPath>>,
-    lines: State<LineDrag>,
-    acts: Rc<RefCell<Vec<GestureAct>>>,
-}
-
-/// Several files' diffs drawn together, each answered.
-fn launch_stacked(diffs: Vec<ShownDiff>) -> (TestingRunner, StackedFixture) {
-    let acts = Rc::new(RefCell::new(Vec::new()));
-    let kept: Rc<RefCell<Option<StackedFixture>>> = Rc::new(RefCell::new(None));
-    let keeping = kept.clone();
-    let (mut test, _) = TestingRunner::new(
-        move || {
-            let fixture = use_consume::<StackedFixture>();
-            let scroll = use_scroll_controller(ScrollConfig::default);
-            let acts = fixture.acts.clone();
-            rect()
-                .expanded()
-                .child(
-                    StackedDiff::new(fixture.files, fixture.paths, scroll).gesture(Some(
-                        Gesture::new(
-                            GestureSide::Unstaged,
-                            1,
-                            fixture.lines,
-                            move |act: GestureAct| acts.borrow_mut().push(act),
-                        ),
-                    )),
-                )
-                .into_element()
-        },
-        (WIDTH, HEIGHT).into(),
-        move |runner| {
-            runner.provide_root_context(move || {
-                let paths: Vec<RepoPath> = (0..diffs.len())
-                    .map(|n| RepoPath::from(format!("file{n}.rs").as_str()))
-                    .collect();
-                let mut files = Expansion::new();
-                files.set(
-                    diffs
-                        .into_iter()
-                        .enumerate()
-                        .map(|(n, shown)| (n, Opened::Shown(Box::new(shown)))),
-                );
-                let fixture = StackedFixture {
-                    files: State::create(files),
-                    paths: State::create(paths),
-                    lines: State::create(LineDrag::default()),
-                    acts,
-                };
-                *keeping.borrow_mut() = Some(fixture.clone());
-                fixture
-            })
-        },
-        1.,
-    );
-    test.sync_and_update();
-    let fixture = kept
-        .borrow()
-        .clone()
-        .unwrap_or_else(|| panic!("the fixture was not provided"));
-    (test, fixture)
-}
-
-/// R8.1 (the user's decision) with R9: files drawn together are each under their own row, and a
-/// hovered chunk of the second file stages its lines named as that file; a drag begun in the
-/// first file stays inside it, however far into the second it is carried. Caught by: a chunk
-/// read from the wrong file's rows, or a drag running across files.
-#[test]
-fn files_drawn_together_each_take_their_own_gesture() {
-    // Two files of twenty lines, edits at lines 4 and 12, at context three: each file is its
-    // own row, then a header and rows 1-3 of context before the first edit.
-    let (mut test, fixture) = launch_stacked(vec![
-        edited(20, 8, 4, Context::lines(3)),
-        edited(20, 8, 4, Context::lines(3)),
-    ]);
-    let drawn = captions(&test);
-    assert!(drawn.iter().any(|c| c == "file0.rs"), "{drawn:?}");
-    assert!(drawn.iter().any(|c| c == "file1.rs"), "{drawn:?}");
-    let first_rows = fixture
-        .files
-        .peek()
-        .get(0)
-        .map_or(0, |opened| match opened {
-            Opened::Shown(shown) => shown.rows(false),
-            Opened::Reading | Opened::Failed(_) => 0,
-        });
-    // The second file's own row is after the first file's row and rows.
-    let second_file_row = 1 + first_rows;
-    hover(&mut test, 300., row_y(second_file_row + 2));
-    press_caption(&mut test, STAGE_CHUNK_CAPTION);
-    let acts = fixture.acts.borrow().clone();
-    assert_eq!(acts.len(), 1, "{acts:?}");
-    assert_eq!(acts[0].file, 1, "the act named another file");
-    assert_eq!(numbers(&acts[0].selection), (vec![4], vec![4]));
-
-    // A drag from the first file's first edit carried into the second file: the first file's
-    // rows alone, to its last.
-    test.press_cursor((300., row_y(1 + 4)));
-    test.move_cursor((300., row_y(1 + 8)));
-    test.move_cursor((300., row_y(second_file_row + 2)));
-    test.release_cursor((300., row_y(second_file_row + 2)));
-    test.sync_and_update();
-    let selected = fixture
-        .lines
-        .peek()
-        .selected(1)
-        .map(|(file, selection)| (file, numbers(selection)));
-    assert_eq!(selected, Some((0, (vec![4, 12], vec![4, 12]))));
-}
-
-/// C19's viewport twin for files drawn together: fifty files of 10,000 lines each, drawn
-/// whole, with the gesture over them, build one viewport of rows at the top, deep and at the
-/// end. Caught by: a list of files that builds every file's rows.
-#[test]
-fn files_drawn_together_build_one_viewport() {
-    let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
-    let diffs: Vec<ShownDiff> = (0..50)
-        .map(|_| edited(10_000, 50, 25, Context::EntireFile))
-        .collect();
-    let per_file = diffs[0].rows(false);
-    let (mut test, _fixture) = launch_stacked(diffs);
-    let total = 50 * (1 + per_file);
-    for (place, offset) in [
-        ("at the top", 0.0),
-        ("deep", -(total as f64 / 2.) * ROW),
-        ("at the end", -(total as f64) * ROW * 2.),
-    ] {
-        test.scroll((300., 100.), (0., offset));
-        test.sync_and_update();
-        hover(&mut test, 300., 150.);
-        let built = built_rows(&test);
-        assert!(
-            built <= viewport_rows + 2 + cairn_ui::with_end_room(1, DIFF_ROW_HEIGHT),
-            "{built} rows built for a {viewport_rows}-row viewport {place}"
-        );
-    }
 }
 
 /// Phase 08 QA item 12: after an action with no diff drawn again, the actions come back once

@@ -341,7 +341,13 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 crate::worker::FileTarget::WorkingTree { .. } => {
                     // Kept only for the path chosen in Local Changes, asked as it is now.
                     let (_, freeing) = if diff.peek().wants_file(&query) {
-                        diff.write().working_arrived(&query, answer)
+                        let drawn = |diff: &crate::diff_state::DiffState| {
+                            diff.shown_working().map(cairn_model::ShownDiff::content)
+                        };
+                        let before = drawn(&diff.peek());
+                        let kept = diff.write().working_arrived(&query, answer);
+                        lines_follow(view, before, drawn(&diff.peek()));
+                        kept
                     } else {
                         (
                             false,
@@ -376,23 +382,26 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 retire(Retired::of(None, expanded_diffs(files)), worker);
             }
         }
-        // A page of the paths drawn together: kept only for the ask drawn now.
-        Update::Together {
-            asked,
-            files,
-            ended,
-        } => {
-            let freeing = diff.write().together_arrived(asked, files, ended);
-            if let Some(request) = freeing {
-                (worker.submit)(request);
-            }
-        }
         Update::DiffFailed { query, message } => {
             if diff.peek().wants(&query) {
                 diff.write().failed(&query, message);
             }
         }
         Update::Superseded(retired) => retire(Some(retired), worker),
+    }
+}
+
+/// The primary's diff was drawn again (R9.6, L4, C26): a finished line selection made over
+/// the text drawn `before` is kept while the text drawn `after` is the same — its content equal,
+/// so it names the same lines — and is let go of when it differs, the diff's bar saying so once
+/// (`cairn_ui::SELECTION_CLEARED`) until the next key or press. A selection over no text drawn
+/// before — another path's, or the same at other options, each let go of as it was asked — says
+/// nothing.
+fn lines_follow(view: View, before: Option<u64>, after: Option<u64>) {
+    let mut lines = view.local.lines;
+    let live = before.is_some_and(|content| lines.peek().selected(content).is_some());
+    if live && after != before {
+        lines.set(cairn_ui::LineDrag::cleared_by_a_change());
     }
 }
 

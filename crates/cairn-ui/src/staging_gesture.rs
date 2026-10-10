@@ -29,22 +29,24 @@
 //! a second press cannot act twice on rows the first already took (Fork, Tracker #480); then
 //! they follow whatever is under the pointer, which the layer reads afresh from the new rows.
 //!
-//! **Which answer a selection belongs to.** A selection names rows, and the rows of another
-//! answer are other lines: the view is handed a number for the answer it draws (`drawn`), each
-//! selection carries the number it was made under, and one made under another number is
-//! nothing.
+//! **Which text a selection belongs to** (R9.6, L4). A selection names rows, and the rows of
+//! other text are other lines: the view is handed the content of the diff it draws
+//! ([`cairn_model::ShownDiff::content`], a hash of the question and every byte of the answer),
+//! each selection carries the content it was made over, and one made over another is nothing. So
+//! a refresh that re-reads the file unchanged keeps the selection, its tint and its actions, and
+//! one that reads other text leaves it nothing — which the window lets go of, saying so once
+//! ([`SELECTION_CLEARED`]).
 
 use std::ops::Range;
 
 use cairn_model::{FileMode, Selection, ShownDiff, SideColumn};
 use freya::prelude::*;
 
-use crate::diff_notice::{DiffNotice, header_lines};
+use crate::diff_notice::header_lines;
 use crate::diff_palette::{CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, GROUND};
 use crate::diff_view::{DIFF_ROW_HEIGHT, number_column_width, text_width};
 use crate::edge_scroll::EdgeScroll;
 use crate::end_room::SCROLLBAR_THICKNESS;
-use crate::expansion::{Expansion, Item, Opened};
 use crate::local_changes_drag::DRAG_THRESHOLD;
 use crate::side_by_side_rows::{Columns, MIDDLE_WIDTH};
 
@@ -54,6 +56,10 @@ pub const STAGE_CHUNK_CAPTION: &str = "Stage";
 pub const DISCARD_CHUNK_CAPTION: &str = "Discard Changes…";
 /// A hovered chunk's action over the staged diff (Fork's).
 pub const UNSTAGE_CHUNK_CAPTION: &str = "Unstage";
+/// Said once in the diff's bar when a refresh drew other text under a finished line selection,
+/// which is let go of (R9.6, L4 — where Fork drops it silently, observed `ln2`); gone at the
+/// next key or press.
+pub const SELECTION_CLEARED: &str = "The file changed — line selection cleared.";
 
 /// How many layers the gesture's layer is lifted above the view's root: past the depth of
 /// the rows the virtualising view builds (about a dozen), below `Layer::Overlay`.
@@ -116,16 +122,14 @@ pub fn mode_caption(verb: GestureVerb) -> &'static str {
     }
 }
 
-/// What a person asked of the gesture: `verb` on `selection` of the file at `file` — the one
-/// file a single diff draws is file 0; the files drawn together are numbered in their order —
-/// under the answer numbered `drawn`. The selection names lines of that answer alone: whoever
-/// acts on it refuses it once another answer is drawn (phase 08 QA item 1).
+/// What a person asked of the gesture: `verb` on `selection` of the diff whose content is
+/// `content`. The selection names lines of that text alone: whoever acts on it refuses it once
+/// a diff of other content is drawn (phase 08 QA item 1, R9.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GestureAct {
-    pub file: usize,
     pub verb: GestureVerb,
     pub selection: Selection,
-    pub drawn: u64,
+    pub content: u64,
     /// Whether the selection is the hovered chunk's own — its floating action pressed — rather
     /// than lines a drag selected or the mode row's mode: a discard's prompt names it as the
     /// chunk (staging-and-commit phase 15).
@@ -137,31 +141,31 @@ pub struct GestureAct {
 /// writes it as the pointer moves.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LineDrag {
-    /// The answer drawn when it began; under another it is nothing.
-    drawn: u64,
+    /// The content of the diff drawn when it began; over another it is nothing.
+    content: u64,
     phase: Phase,
+    /// A finished selection was let go of because a refresh drew other text: said in the bar
+    /// until the next key or press ([`SELECTION_CLEARED`]).
+    cleared: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 enum Phase {
     #[default]
     Idle,
-    /// Pressed on `anchor`, a row of `file`, not yet moved past the drag threshold.
+    /// Pressed on the row `anchor`, not yet moved past the drag threshold.
     Armed {
-        file: usize,
         column: Option<SideColumn>,
         anchor: usize,
         at: CursorPoint,
     },
     /// Dragging from `anchor`: the other end is the row under the pointer.
     Dragging {
-        file: usize,
         column: Option<SideColumn>,
         anchor: usize,
     },
-    /// Released: `rows` of `file` selected, and the changed lines they hold.
+    /// Released: `rows` selected, and the changed lines they hold.
     Selected {
-        file: usize,
         column: Option<SideColumn>,
         rows: Range<usize>,
         selection: Selection,
@@ -169,23 +173,45 @@ enum Phase {
 }
 
 impl LineDrag {
-    /// The changed lines selected under the answer `drawn`, and the file they are of; `None`
-    /// with nothing selected, or a selection made under another answer.
-    pub fn selected(&self, drawn: u64) -> Option<(usize, &Selection)> {
-        match self.phase_under(drawn) {
-            Phase::Selected {
-                file, selection, ..
-            } => Some((*file, selection)),
+    /// The changed lines selected over the diff whose content is `content`; `None` with
+    /// nothing selected, or a selection made over other text.
+    pub fn selected(&self, content: u64) -> Option<&Selection> {
+        match self.phase_under(content) {
+            Phase::Selected { selection, .. } => Some(selection),
             Phase::Idle | Phase::Armed { .. } | Phase::Dragging { .. } => None,
         }
     }
 
-    /// Whether a drag is on under the answer `drawn`.
-    pub fn is_dragging(&self, drawn: u64) -> bool {
-        match self.phase_under(drawn) {
+    /// Whether a drag is on over the diff whose content is `content`.
+    pub fn is_dragging(&self, content: u64) -> bool {
+        match self.phase_under(content) {
             Phase::Dragging { .. } => true,
             Phase::Idle | Phase::Armed { .. } | Phase::Selected { .. } => false,
         }
+    }
+
+    /// Whether a finished selection made over text other than `content` is held: what a
+    /// refresh that drew `content` in its place lets go of, saying so (R9.6).
+    pub fn outlived_by(&self, content: u64) -> bool {
+        self.content != content
+            && match self.phase {
+                Phase::Selected { .. } => true,
+                Phase::Idle | Phase::Armed { .. } | Phase::Dragging { .. } => false,
+            }
+    }
+
+    /// Nothing selected, because the file changed under a selection: the bar says
+    /// [`SELECTION_CLEARED`] until [`Self::says_cleared`] is let go of at the next key or press.
+    pub fn cleared_by_a_change() -> Self {
+        Self {
+            cleared: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the bar says [`SELECTION_CLEARED`].
+    pub fn says_cleared(&self) -> bool {
+        self.cleared
     }
 
     /// Whether a drag is on, under whichever answer it began.
@@ -196,9 +222,9 @@ impl LineDrag {
         }
     }
 
-    fn phase_under(&self, drawn: u64) -> &Phase {
+    fn phase_under(&self, content: u64) -> &Phase {
         static IDLE: Phase = Phase::Idle;
-        if self.drawn == drawn {
+        if self.content == content {
             &self.phase
         } else {
             &IDLE
@@ -206,12 +232,12 @@ impl LineDrag {
     }
 }
 
-/// The gesture a diff view draws: the side it is over, the number of the answer it draws, the
+/// The gesture a diff view draws: the side it is over, the content of the diff it draws, the
 /// drag the window keeps, and where its actions go. A view handed none draws no gesture.
 #[derive(Clone)]
 pub struct Gesture {
     side: GestureSide,
-    drawn: u64,
+    content: u64,
     lines: State<LineDrag>,
     on_act: EventHandler<GestureAct>,
 }
@@ -219,13 +245,13 @@ pub struct Gesture {
 impl Gesture {
     pub fn new(
         side: GestureSide,
-        drawn: u64,
+        content: u64,
         lines: State<LineDrag>,
         on_act: impl Into<EventHandler<GestureAct>>,
     ) -> Self {
         Self {
             side,
-            drawn,
+            content,
             lines,
             on_act: on_act.into(),
         }
@@ -243,7 +269,7 @@ impl Gesture {
 // Hand-written: `EventHandler` never compares equal, and its identity is stable.
 impl PartialEq for Gesture {
     fn eq(&self, other: &Self) -> bool {
-        self.side == other.side && self.drawn == other.drawn && self.lines == other.lines
+        self.side == other.side && self.content == other.content && self.lines == other.lines
     }
 }
 
@@ -251,94 +277,30 @@ impl std::fmt::Debug for Gesture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Gesture")
             .field("side", &self.side)
-            .field("drawn", &self.drawn)
+            .field("content", &self.content)
             .finish_non_exhaustive()
     }
 }
 
-/// The rows a view draws, as the gesture reads them: one file's diff, or several files drawn
-/// together, each under its own row.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Places<'a> {
-    One(&'a ShownDiff),
-    Stacked(&'a Expansion),
-}
-
-/// The diff `file` draws as rows, if it draws rows: a file opened together whose answer is a
-/// notice, or is not here yet, draws none the gesture acts on.
-fn drawn_rows(expansion: &Expansion, file: usize) -> Option<&ShownDiff> {
-    match expansion.get(file)? {
-        Opened::Shown(shown) => DiffNotice::of(shown).is_none().then_some(&**shown),
-        Opened::Reading | Opened::Failed(_) => None,
-    }
-}
-
-impl<'a> Places<'a> {
-    /// The file and its own row that list row `row` is, for a row of a diff's lines; `None`
-    /// for a file's own row, a notice's, or past the end.
-    pub(crate) fn place(self, row: usize, side_by_side: bool) -> Option<(usize, usize)> {
-        match self {
-            Self::One(shown) => (row < shown.rows(side_by_side)).then_some((0, row)),
-            Self::Stacked(expansion) => match expansion.item(row, side_by_side) {
-                Item::File(_) => None,
-                Item::Under { file, row } => {
-                    let shown = drawn_rows(expansion, file)?;
-                    let local = row.checked_sub(usize::from(shown.hides_changes()))?;
-                    (local < shown.rows(side_by_side)).then_some((file, local))
-                }
-            },
-        }
-    }
-
-    /// The diff `file` draws as rows.
-    pub(crate) fn shown(self, file: usize) -> Option<&'a ShownDiff> {
-        match self {
-            Self::One(shown) => (file == 0).then_some(shown),
-            Self::Stacked(expansion) => drawn_rows(expansion, file),
-        }
-    }
-
-    /// The list row of `file`'s first row of lines.
-    pub(crate) fn start(self, file: usize, side_by_side: bool) -> Option<usize> {
-        match self {
-            Self::One(_) => (file == 0).then_some(0),
-            Self::Stacked(expansion) => {
-                let shown = drawn_rows(expansion, file)?;
-                Some(
-                    expansion.position(file, side_by_side) + 1 + usize::from(shown.hides_changes()),
-                )
-            }
-        }
-    }
-}
-
-/// A chunk under the pointer: its file, its hunk, and the list rows it takes.
+/// A chunk under the pointer: its hunk, and the rows it takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Chunk {
-    pub(crate) file: usize,
     pub(crate) hunk: usize,
     pub(crate) rows: Range<usize>,
 }
 
-/// The chunk list row `row` falls in.
-pub(crate) fn chunk_at(places: Places<'_>, side_by_side: bool, row: usize) -> Option<Chunk> {
-    let (file, local) = places.place(row, side_by_side)?;
-    let shown = places.shown(file)?;
+/// The chunk row `row` of `shown` falls in; `None` past the end or outside every chunk.
+pub(crate) fn chunk_at(shown: &ShownDiff, side_by_side: bool, row: usize) -> Option<Chunk> {
     let (hunk, rows) = if side_by_side {
         let layout = shown.side_by_side_layout()?;
-        let hunk = layout.hunk_at(local)?;
+        let hunk = layout.hunk_at(row)?;
         (hunk, layout.hunk_rows(hunk)?)
     } else {
         let layout = shown.layout()?;
-        let hunk = layout.hunk_at(local)?;
+        let hunk = layout.hunk_at(row)?;
         (hunk, layout.hunk_rows(hunk)?)
     };
-    let start = places.start(file, side_by_side)?;
-    Some(Chunk {
-        file,
-        hunk,
-        rows: start + rows.start..start + rows.end,
-    })
+    Some(Chunk { hunk, rows })
 }
 
 /// Every changed line a chunk draws: what its actions take.
@@ -370,31 +332,6 @@ pub(crate) fn rows_selection(
     }
 }
 
-/// What the gesture reads its rows from: a handle, peeked in a handler and read in the layer.
-#[derive(Clone, PartialEq)]
-pub(crate) enum Source {
-    One(Readable<ShownDiff>),
-    Stacked(Readable<Expansion>),
-}
-
-impl Source {
-    /// `with` given the rows as they are, without subscribing: for a handler.
-    fn peeked<R>(&self, with: impl FnOnce(Places<'_>) -> R) -> R {
-        match self {
-            Self::One(shown) => with(Places::One(&shown.peek())),
-            Self::Stacked(expansion) => with(Places::Stacked(&expansion.peek())),
-        }
-    }
-
-    /// `with` given the rows as they are, subscribing the caller: for the layer.
-    fn read<R>(&self, with: impl FnOnce(Places<'_>) -> R) -> R {
-        match self {
-            Self::One(shown) => with(Places::One(&shown.read())),
-            Self::Stacked(expansion) => with(Places::Stacked(&expansion.read())),
-        }
-    }
-}
-
 /// Where the pointer is over the list, and where the list is: the view's own, written by its
 /// listeners and read by its layer. Copy, as Freya's handles are.
 #[derive(Clone, Copy, PartialEq)]
@@ -403,7 +340,7 @@ pub(crate) struct Pointer {
     at: State<Option<(f32, f32)>>,
     /// The list in window coordinates: left, top, width, height.
     frame: State<(f32, f32, f32, f32)>,
-    /// The answer an action was last taken under, and where the pointer was: the actions hide
+    /// The content an action was last taken over, and where the pointer was: the actions hide
     /// until either moves.
     acted: State<Option<(u64, (f32, f32))>>,
 }
@@ -421,7 +358,8 @@ pub(crate) fn use_pointer() -> Pointer {
 pub(crate) struct Host {
     pub(crate) gesture: Gesture,
     pub(crate) pointer: Pointer,
-    pub(crate) source: Source,
+    /// The diff drawn: peeked in a handler, read in the layer.
+    pub(crate) source: Readable<ShownDiff>,
     pub(crate) side_by_side: bool,
     pub(crate) scroll: ScrollController,
     pub(crate) edge: EdgeScroll,
@@ -470,25 +408,18 @@ impl Host {
         }
         let side_by_side = self.side_by_side;
         let scroll = self.scroll;
-        let armed = row_at(y, scroll).and_then(|row| {
-            self.source.peeked(|places| {
-                let (file, anchor) = places.place(row, side_by_side)?;
-                let column = if side_by_side {
-                    Some(column_at(x, width, places.shown(file)?, scroll))
-                } else {
-                    None
-                };
-                Some(Phase::Armed {
-                    file,
-                    column,
-                    anchor,
-                    at,
-                })
+        let armed = row_at(y, scroll).and_then(|anchor| {
+            let shown = self.source.peek();
+            (anchor < shown.rows(side_by_side)).then(|| Phase::Armed {
+                column: side_by_side.then(|| column_at(x, width, &shown, scroll)),
+                anchor,
+                at,
             })
         });
         lines.set(LineDrag {
-            drawn: self.gesture.drawn,
+            content: self.gesture.content,
             phase: armed.unwrap_or_default(),
+            cleared: false,
         });
     }
 
@@ -496,16 +427,14 @@ impl Host {
     /// moved far enough begins a drag.
     fn moved(&self, at: CursorPoint) {
         let (x, y, inside) = self.relative(at);
-        let drawn = self.gesture.drawn;
+        let content = self.gesture.content;
         let mut lines = self.gesture.lines;
-        let began = match lines.peek().phase_under(drawn) {
+        let began = match lines.peek().phase_under(content) {
             Phase::Armed {
-                file,
                 column,
                 anchor,
                 at: from,
             } if from.distance_to(at) > DRAG_THRESHOLD => Some(Phase::Dragging {
-                file: *file,
                 column: *column,
                 anchor: *anchor,
             }),
@@ -515,13 +444,14 @@ impl Host {
         };
         if let Some(began) = began {
             lines.set(LineDrag {
-                drawn,
+                content,
                 phase: began,
+                cleared: false,
             });
             let mut edge = self.edge;
             edge.begin();
         }
-        let dragging = lines.peek().is_dragging(drawn);
+        let dragging = lines.peek().is_dragging(content);
         let mut pointer = self.pointer.at;
         pointer.set_if_modified((inside || dragging).then_some((x, y)));
     }
@@ -529,10 +459,10 @@ impl Host {
     /// The button came up: an armed press without a drag selects nothing, and a drag selects
     /// the changed lines between its ends.
     fn released(&self) {
-        let drawn = self.gesture.drawn;
+        let content = self.gesture.content;
         let mut lines = self.gesture.lines;
         // Read in place: a selection is as long as its lines, and this runs on every release.
-        let dragging = match lines.peek().phase_under(drawn) {
+        let dragging = match lines.peek().phase_under(content) {
             Phase::Armed { .. } => Some(false),
             Phase::Dragging { .. } => Some(true),
             Phase::Idle | Phase::Selected { .. } => None,
@@ -544,52 +474,48 @@ impl Host {
         }
     }
 
-    /// A drag ends where the pointer last was: the rows between its ends, inside the file it
-    /// began in, and the changed lines they hold — nothing selected when they hold none.
+    /// A drag ends where the pointer last was: the rows between its ends and the changed
+    /// lines they hold — nothing selected when they hold none.
     pub(crate) fn finish(&self) {
-        let drawn = self.gesture.drawn;
+        let content = self.gesture.content;
         let mut lines = self.gesture.lines;
-        // Read in place, the three fields copied: this runs on every press.
-        let (file, column, anchor) = match lines.peek().phase_under(drawn) {
-            Phase::Dragging {
-                file,
-                column,
-                anchor,
-            } => (*file, *column, *anchor),
+        // Read in place, the two fields copied: this runs on every press.
+        let (column, anchor) = match lines.peek().phase_under(content) {
+            Phase::Dragging { column, anchor } => (*column, *anchor),
             Phase::Idle | Phase::Armed { .. } | Phase::Selected { .. } => return,
         };
         let pointer = *self.pointer.at.peek();
-        let side_by_side = self.side_by_side;
-        let scroll = self.scroll;
-        let selected = self.source.peeked(|places| {
-            let focus = dragged_to(places, side_by_side, file, pointer, scroll).unwrap_or(anchor);
+        let selected = {
+            let shown = self.source.peek();
+            let focus =
+                dragged_to(&shown, self.side_by_side, pointer, self.scroll).unwrap_or(anchor);
             let rows = anchor.min(focus)..anchor.max(focus) + 1;
-            let selection = rows_selection(places.shown(file)?, column, rows.clone())?;
-            (!selection.is_empty()).then_some(Phase::Selected {
-                file,
-                column,
-                rows,
-                selection,
-            })
-        });
+            rows_selection(&shown, column, rows.clone())
+                .filter(|selection| !selection.is_empty())
+                .map(|selection| Phase::Selected {
+                    column,
+                    rows,
+                    selection,
+                })
+        };
         lines.set(LineDrag {
-            drawn,
+            content,
             phase: selected.unwrap_or_default(),
+            cleared: false,
         });
     }
 
     /// `verb` on what the actions are over: the selection, or the chunk under the pointer.
-    fn act(&self, verb: GestureVerb, file: usize, selection: Selection, chunk: bool) {
+    fn act(&self, verb: GestureVerb, selection: Selection, chunk: bool) {
         let mut lines = self.gesture.lines;
         lines.set(LineDrag::default());
         let mut acted = self.pointer.acted;
         let at = self.pointer.at.peek().unwrap_or((-1.0, -1.0));
-        acted.set(Some((self.gesture.drawn, at)));
+        acted.set(Some((self.gesture.content, at)));
         self.gesture.on_act.call(GestureAct {
-            file,
             verb,
             selection,
-            drawn: self.gesture.drawn,
+            content: self.gesture.content,
             chunk,
         });
     }
@@ -631,8 +557,7 @@ impl Host {
     /// Escape lets a selection go; `true` when it did.
     pub(crate) fn escaped(&self) -> bool {
         let mut lines = self.gesture.lines;
-        let drawn = self.gesture.drawn;
-        if lines.peek().selected(drawn).is_some() {
+        if lines.peek().selected(self.gesture.content).is_some() {
             lines.set(LineDrag::default());
             return true;
         }
@@ -640,20 +565,16 @@ impl Host {
     }
 }
 
-/// The row of `file` a drag has reached: the row under `pointer`, held inside `file`'s rows.
+/// The row a drag has reached: the row under `pointer`, held inside the diff's rows.
 fn dragged_to(
-    places: Places<'_>,
+    shown: &ShownDiff,
     side_by_side: bool,
-    file: usize,
     pointer: Option<(f32, f32)>,
     scroll: ScrollController,
 ) -> Option<usize> {
     let (_, y) = pointer?;
-    let rows = places.shown(file)?.rows(side_by_side);
-    let last = rows.checked_sub(1)?;
-    let start = places.start(file, side_by_side)?;
-    let row = row_at(y, scroll).unwrap_or(0);
-    Some(row.saturating_sub(start).min(last))
+    let last = shown.rows(side_by_side).checked_sub(1)?;
+    Some(row_at(y, scroll).unwrap_or(0).min(last))
 }
 
 /// Lets a drag go when the window loses focus: its release may be heard by another window
@@ -704,36 +625,36 @@ enum Takes {
     Chunk { hunk: usize },
 }
 
-/// Where the floating actions stand, the file they act on and what they take.
+/// Where the floating actions stand and what they take.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Actions {
     top: f32,
-    file: usize,
     takes: Takes,
 }
 
 impl Component for GestureLayer {
     fn render(&self) -> impl IntoElement {
         let host = &self.host;
-        let drawn_as = host.gesture.drawn;
+        let content = host.gesture.content;
         let (_, _, width, height) = *host.pointer.frame.read();
         let (scrolled_x, scrolled) = <(i32, i32)>::from(host.scroll);
         let pointer = *host.pointer.at.read();
         // Read, never copied: a selection is as long as the lines it holds.
         let lines = host.gesture.lines.read();
         let acted = *host.pointer.acted.read();
-        let hidden = acted.is_some_and(|(under, at)| under == drawn_as && Some(at) == pointer);
+        let hidden = acted.is_some_and(|(under, at)| under == content && Some(at) == pointer);
         let side_by_side = host.side_by_side;
         let scroll = host.scroll;
 
-        let drawn = host.source.read(|places| {
-            let column_span = |file: usize, column: Option<SideColumn>| -> (f32, f32) {
-                match (column, places.shown(file)) {
-                    (Some(column), Some(shown)) => {
+        let drawn = {
+            let shown = host.source.read();
+            let column_span = |column: Option<SideColumn>| -> (f32, f32) {
+                match column {
+                    Some(column) => {
                         let columns = Columns::of(
                             width,
-                            number_column_width(shown),
-                            text_width(shown),
+                            number_column_width(&shown),
+                            text_width(&shown),
                             scrolled_x as f32,
                         );
                         match column {
@@ -741,28 +662,18 @@ impl Component for GestureLayer {
                             SideColumn::New => (columns.column + MIDDLE_WIDTH, columns.column),
                         }
                     }
-                    (None, _) | (_, None) => (0.0, width),
+                    None => (0.0, width),
                 }
             };
-            let global = |file: usize, rows: &Range<usize>| -> Option<Range<usize>> {
-                let start = places.start(file, side_by_side)?;
-                Some(start + rows.start..start + rows.end)
-            };
-            match lines.phase_under(drawn_as) {
-                Phase::Dragging {
-                    file,
-                    column,
-                    anchor,
-                } => {
+            match lines.phase_under(content) {
+                Phase::Dragging { column, anchor } => {
                     let focus =
-                        dragged_to(places, side_by_side, *file, pointer, scroll).unwrap_or(*anchor);
+                        dragged_to(&shown, side_by_side, pointer, scroll).unwrap_or(*anchor);
                     let rows = (*anchor).min(focus)..(*anchor).max(focus) + 1;
-                    let tint = global(*file, &rows)
-                        .and_then(|rows| span(&rows, scrolled, height))
-                        .map(|(top, bottom)| {
-                            let (left, wide) = column_span(*file, *column);
-                            (top, bottom, left, wide)
-                        });
+                    let tint = span(&rows, scrolled, height).map(|(top, bottom)| {
+                        let (left, wide) = column_span(*column);
+                        (top, bottom, left, wide)
+                    });
                     Drawn {
                         outline: None,
                         tint,
@@ -770,20 +681,17 @@ impl Component for GestureLayer {
                     }
                 }
                 Phase::Selected {
-                    file,
                     column,
                     rows,
                     selection,
                 } => {
-                    let visible =
-                        global(*file, rows).and_then(|rows| span(&rows, scrolled, height));
+                    let visible = span(rows, scrolled, height);
                     let tint = visible.map(|(top, bottom)| {
-                        let (left, wide) = column_span(*file, *column);
+                        let (left, wide) = column_span(*column);
                         (top, bottom, left, wide)
                     });
                     let actions = visible.filter(|_| !hidden).map(|(top, _)| Actions {
                         top,
-                        file: *file,
                         takes: Takes::Selection {
                             count: selection.len(),
                         },
@@ -798,7 +706,7 @@ impl Component for GestureLayer {
                     let chunk = pointer
                         .filter(|_| !hidden)
                         .and_then(|(_, y)| row_at(y, scroll))
-                        .and_then(|row| chunk_at(places, side_by_side, row));
+                        .and_then(|row| chunk_at(&shown, side_by_side, row));
                     let visible = chunk
                         .as_ref()
                         .and_then(|chunk| span(&chunk.rows, scrolled, height));
@@ -807,13 +715,12 @@ impl Component for GestureLayer {
                         tint: None,
                         actions: chunk.zip(visible).map(|(chunk, (top, _))| Actions {
                             top,
-                            file: chunk.file,
                             takes: Takes::Chunk { hunk: chunk.hunk },
                         }),
                     }
                 }
             }
-        });
+        };
 
         let accent = CURRENT_CHANGE;
         let mut layer = rect()
@@ -846,7 +753,7 @@ impl Component for GestureLayer {
                     .border(Border::new().fill(accent).width(1.)),
             );
         }
-        if let Some(Actions { top, file, takes }) = drawn.actions {
+        if let Some(Actions { top, takes }) = drawn.actions {
             let mut actions = rect().horizontal().spacing(4.).position(
                 Position::new_absolute()
                     .top(top + 2.)
@@ -866,18 +773,18 @@ impl Component for GestureLayer {
                             .gesture
                             .lines
                             .peek()
-                            .selected(acting.gesture.drawn)
-                            .map(|(_, selection)| selection.clone()),
-                        Takes::Chunk { hunk } => acting.source.peeked(|places| {
-                            chunk_selection(places.shown(file)?, acting.side_by_side, hunk)
-                        }),
+                            .selected(acting.gesture.content)
+                            .cloned(),
+                        Takes::Chunk { hunk } => {
+                            chunk_selection(&acting.source.peek(), acting.side_by_side, hunk)
+                        }
                     };
                     if let Some(taken) = taken {
                         let chunk = match takes {
                             Takes::Selection { .. } => false,
                             Takes::Chunk { .. } => true,
                         };
-                        acting.act(verb, file, taken, chunk);
+                        acting.act(verb, taken, chunk);
                     }
                 }));
             }
@@ -915,17 +822,17 @@ pub struct ModeRow {
     old: FileMode,
     new: FileMode,
     side: GestureSide,
-    drawn: u64,
+    content: u64,
     on_act: EventHandler<GestureAct>,
 }
 
 impl ModeRow {
-    /// The mode row of `file`'s change — in the answer numbered `drawn` — when its mode changed
-    /// and the gesture is over it.
+    /// The mode row of `file`'s change — in the diff whose content is `content` — when its mode
+    /// changed and the gesture is over it.
     pub fn of(
         file: &cairn_model::ChangedFile,
         side: GestureSide,
-        drawn: u64,
+        content: u64,
         on_act: impl Into<EventHandler<GestureAct>>,
     ) -> Option<Self> {
         let (Some(old), Some(new)) = (file.old_mode, file.new_mode) else {
@@ -935,7 +842,7 @@ impl ModeRow {
             old,
             new,
             side,
-            drawn,
+            content,
             on_act: on_act.into(),
         })
     }
@@ -955,7 +862,7 @@ impl PartialEq for ModeRow {
         self.old == other.old
             && self.new == other.new
             && self.side == other.side
-            && self.drawn == other.drawn
+            && self.content == other.content
     }
 }
 
@@ -973,7 +880,7 @@ impl Component for ModeRow {
             new_id: None,
         };
         let words = header_lines(&file).join("  ");
-        let (side, drawn) = (self.side, self.drawn);
+        let (side, content) = (self.side, self.content);
         let on_act = self.on_act.clone();
         rect()
             .horizontal()
@@ -1007,10 +914,9 @@ impl Component for ModeRow {
                             let mut selection = Selection::empty();
                             selection.select_mode();
                             on_act.call(GestureAct {
-                                file: 0,
                                 verb,
                                 selection,
-                                drawn,
+                                content,
                                 chunk: false,
                             });
                         }));
@@ -1070,49 +976,65 @@ mod tests {
     #[test]
     fn a_rows_chunk_is_the_hunk_drawn_around_it() {
         let wide = shown(3);
-        let places = Places::One(&wide);
-        let first = chunk_at(places, false, 0).expect("a chunk at the first row");
+        let first = chunk_at(&wide, false, 0).expect("a chunk at the first row");
         assert_eq!(first.hunk, 0);
         let selection = chunk_selection(&wide, false, first.hunk).expect("exact");
         assert_eq!(selection.len(), 4, "both edits, both sides");
         assert_eq!(
-            chunk_at(places, false, first.rows.end).map(|c| c.hunk),
+            chunk_at(&wide, false, first.rows.end).map(|c| c.hunk),
             Some(1)
         );
-        assert_eq!(chunk_at(places, false, wide.rows(false)), None);
+        assert_eq!(chunk_at(&wide, false, wide.rows(false)), None);
 
         let narrow = shown(1);
-        let places = Places::One(&narrow);
-        let first = chunk_at(places, false, 0).expect("a chunk");
+        let first = chunk_at(&narrow, false, 0).expect("a chunk");
         assert_eq!(
             chunk_selection(&narrow, false, first.hunk).map(|s| s.len()),
             Some(2)
         );
-        let side = chunk_at(places, true, 0).expect("side by side");
+        let side = chunk_at(&narrow, true, 0).expect("side by side");
         assert_eq!(
             chunk_selection(&narrow, true, side.hunk).map(|s| s.len()),
             Some(2)
         );
     }
 
-    /// A selection is nothing under another answer, and is the lines under its own. Caught
-    /// by: a selection kept across answers (lines of another diff acted on).
+    /// R9.6: a selection is the lines over the text it was made over and nothing over other
+    /// text; a finished one is outlived by other content and not by its own, a drag in progress
+    /// never (it is cancelled, not said cleared), and a selection let go of for a change is said
+    /// once. Caught by: a selection kept across contents (lines of other text acted on), or a
+    /// drag reported as a selection cleared.
     #[test]
-    fn a_selection_belongs_to_the_answer_it_was_made_under() {
+    fn a_selection_belongs_to_the_text_it_was_made_over() {
         let mut selection = Selection::empty();
         selection.select_added(cairn_model::LineNumber::from_index(3));
         let drag = LineDrag {
-            drawn: 7,
+            content: 7,
             phase: Phase::Selected {
-                file: 0,
                 column: None,
                 rows: 2..4,
                 selection: selection.clone(),
             },
+            cleared: false,
         };
-        assert_eq!(drag.selected(7), Some((0, &selection)));
+        assert_eq!(drag.selected(7), Some(&selection));
         assert_eq!(drag.selected(8), None);
         assert!(!drag.is_dragging(7));
+        assert!(!drag.outlived_by(7));
+        assert!(drag.outlived_by(8));
+        let dragging = LineDrag {
+            content: 7,
+            phase: Phase::Dragging {
+                column: None,
+                anchor: 2,
+            },
+            cleared: false,
+        };
+        assert!(!dragging.outlived_by(8));
+        assert!(!LineDrag::default().outlived_by(8));
+        let cleared = LineDrag::cleared_by_a_change();
+        assert!(cleared.says_cleared() && cleared.selected(0).is_none());
+        assert!(!drag.says_cleared());
     }
 
     /// The captions: Fork's for a chunk, a count of lines for a selection (R9.2), the mode's

@@ -611,7 +611,8 @@ impl Component for ListSection {
 }
 
 /// The keys of a focused list (R7.3): the table's stage, stage-all and discard chords on its
-/// selection (`Scope::LocalChanges`); Shift+↑/↓ extending the selection from its anchor
+/// selection (`Scope::LocalChanges`, and the bare Return the lists alone hear,
+/// `Scope::LocalChangesLists`); Shift+↑/↓ extending the selection from its anchor
 /// (`Scope::LocalChangesLists`); ↑ and ↓ over the rows `data`'s list shows, from the
 /// selection's primary. Every other key, and every chord of the window or the detail pane, is
 /// left unhandled. No primary in the list: either arrow starts at its first row.
@@ -628,12 +629,19 @@ fn keyboard(
         data.on_intent.clone(),
     );
     move |e: Event<KeyboardEventData>| {
-        if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
-            e.stop_propagation();
-            on_intent.call(ListIntent::Act(list, action));
-            return;
-        }
-        let extending = accelerators::resolve_key(&e, Scope::LocalChangesLists);
+        let heard = accelerators::resolve_key(&e, Scope::LocalChanges)
+            .or_else(|| accelerators::resolve_key(&e, Scope::LocalChangesLists));
+        let extending = match heard {
+            Some(action @ (Action::ExtendSelectionUp | Action::ExtendSelectionDown)) => {
+                Some(action)
+            }
+            Some(action) => {
+                e.stop_propagation();
+                on_intent.call(ListIntent::Act(list, action));
+                return;
+            }
+            None => None,
+        };
         if extending.is_none()
             && accelerators::is_chord(&e, &[Scope::LocalChanges, Scope::LocalChangesLists])
         {

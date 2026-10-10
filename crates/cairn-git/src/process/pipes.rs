@@ -139,7 +139,7 @@ impl Lines {
             } else {
                 self.pending.push(byte);
                 if self.pending.len() >= PIECE_BYTES {
-                    let whole = whole_characters(&self.pending);
+                    let whole = piece_end(&self.pending);
                     out.push(
                         self.scrubber
                             .piece(&String::from_utf8_lossy(&self.pending[..whole])),
@@ -155,6 +155,36 @@ impl Lines {
         if !self.pending.is_empty() {
             out.push(self.scrubber.line(&String::from_utf8_lossy(&self.pending)));
         }
+    }
+}
+
+/// Where a piece of `bytes` ends: at a character's end ([`whole_characters`]), and before a
+/// terminal escape sequence the piece would cut open, so the scrubber, which strips escapes
+/// before it reads a URL, sees each sequence whole — an escape split by a cut would otherwise
+/// leave its tail in the next piece, between a scheme and its `://`. A sequence begun at the
+/// piece's very start is cut where it is, since the piece must move on.
+fn piece_end(bytes: &[u8]) -> usize {
+    let whole = whole_characters(bytes);
+    match bytes[..whole].iter().rposition(|byte| *byte == 0x1b) {
+        Some(at) if at > 0 && !escape_complete(&bytes[at + 1..whole]) => at,
+        Some(_) | None => whole,
+    }
+}
+
+/// Whether the escape sequence after an `ESC` is whole in `after`: a CSI (`[`) ended by a byte
+/// in `@`..=`~`, an OSC (`]`) by BEL or `ESC \`, any other by a byte past its intermediates
+/// (` `..=`/`) — as `cairn_model::strip_ansi` reads them.
+fn escape_complete(after: &[u8]) -> bool {
+    match after.split_first() {
+        None => false,
+        Some((b'[', rest)) => rest.iter().any(|byte| (0x40..=0x7e).contains(byte)),
+        Some((b']', rest)) => {
+            rest.contains(&0x07) || rest.windows(2).any(|pair| pair == [0x1b, b'\\'])
+        }
+        Some((first, rest)) if (0x20..=0x2f).contains(first) => {
+            rest.iter().any(|byte| !(0x20..=0x2f).contains(byte))
+        }
+        Some(_) => true,
     }
 }
 
@@ -366,8 +396,51 @@ mod tests {
                 !seen.contains("SECRET") && !seen.contains("user:"),
                 "cut {at} bytes into the URL"
             );
-            assert!(seen.ends_with("host/r"), "cut {at}: the host lost");
+            assert!(seen.ends_with("/r"), "cut {at}: the path lost");
         }
+        // A password holding an `@`, cut at every byte by the piece limit (the phase 12 QA).
+        let url = "https://u:SEC@RET@host/y";
+        for at in 0..url.len() {
+            let mut long = vec![b'x'; PIECE_BYTES - at];
+            long.extend_from_slice(url.as_bytes());
+            long.push(b'\n');
+            let seen = split(&[&long]).concat();
+            assert!(
+                !seen.contains("SEC") && !seen.contains("RET"),
+                "cut {at} bytes into the URL: {}",
+                &seen[seen.len().saturating_sub(40)..]
+            );
+            assert!(seen.ends_with("/y"), "cut {at}");
+        }
+    }
+
+    /// The phase 12 QA: an escape sequence between a scheme and its `://`, straddling the piece
+    /// limit at every byte, neither hides the URL nor reaches the next piece. Caught by: a piece
+    /// cut inside an escape, its tail left between the scheme and the `://`.
+    #[test]
+    fn an_escape_straddling_the_piece_limit_hides_no_url() {
+        let url = "https:\x1b[0m//u:SECRET@host/r";
+        for at in 0..url.len() {
+            let mut long = vec![b'x'; PIECE_BYTES - at];
+            long.extend_from_slice(url.as_bytes());
+            long.push(b'\n');
+            let seen = split(&[&long]).concat();
+            assert!(
+                !seen.contains("SECRET") && !seen.contains("u:"),
+                "cut {at} bytes into the URL: {}",
+                &seen[seen.len().saturating_sub(40)..]
+            );
+            assert!(!seen.contains('\x1b') && seen.ends_with("/r"), "cut {at}");
+        }
+        assert_eq!(piece_end(b"ab\x1b[3"), 2, "a CSI cut open");
+        assert_eq!(piece_end(b"ab\x1b[3m"), 6, "a CSI whole");
+        assert_eq!(piece_end(b"ab\x1b]0;t"), 2, "an OSC cut open");
+        assert_eq!(piece_end(b"ab\x1b]0;t\x07"), 8, "an OSC whole");
+        assert_eq!(
+            piece_end(b"\x1b[3"),
+            3,
+            "a sequence at the start is cut where it is"
+        );
     }
 
     /// Caught by: retaining everything, or keeping the head instead of the end.

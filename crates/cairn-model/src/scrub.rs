@@ -4,7 +4,10 @@
 //! that is not a [`crate::Secret`].
 //!
 //! **Scrubbed once, as whole lines.** The engine's runner splits git's output into whole lines
-//! and hands each to a [`Scrubber`] as it is split, before anything is cut or kept; what it keeps
+//! and hands each to a [`Scrubber`] as it is split, before anything is cut or kept. The scrubber
+//! strips a line's terminal control sequences first ([`strip_ansi`]), so an escape or a control
+//! character between a scheme and its `://`, or inside a userinfo, cannot hide a URL from the
+//! rule and leave a credential for a later strip to put back together; what it keeps
 //! and hands on is a [`ScrubbedLine`] or [`ScrubbedLines`], which only a scrubber's output can
 //! fill. So git's text crosses into the application only scrubbed, and no view scrubs again.
 //!
@@ -55,7 +58,7 @@ impl Scrubber {
     /// A whole line — or the last piece of one longer than a piece — with the userinfo of every
     /// URL in it removed. Nothing is carried to the next line: git writes a URL whole on one.
     pub fn line(&mut self, line: &str) -> ScrubbedLine {
-        let shown = self.scrubbed(line);
+        let shown = self.scrubbed(line, true);
         self.carried = Carried::Nothing;
         ScrubbedLine(shown)
     }
@@ -64,10 +67,16 @@ impl Scrubber {
     /// a URL its end cuts is carried to the next piece, which [`Scrubber::piece`] or
     /// [`Scrubber::line`] reads next.
     pub fn piece(&mut self, piece: &str) -> ScrubbedLine {
-        ScrubbedLine(self.scrubbed(piece))
+        ScrubbedLine(self.scrubbed(piece, false))
     }
 
-    fn scrubbed(&mut self, line: &str) -> String {
+    /// `text` stripped of terminal controls ([`strip_ansi`]) — so no escape between a scheme and
+    /// its `://`, or inside a userinfo, hides a URL from the rule — and then scrubbed. `ends_line`
+    /// says whether `text`'s end is its line's end, where an authority ends, or a piece's, where
+    /// one is cut and carried.
+    fn scrubbed(&mut self, text: &str, ends_line: bool) -> String {
+        let stripped = strip_ansi(text);
+        let line = stripped.as_str();
         let mut shown = String::with_capacity(line.len());
         let mut rest = line;
         let carried = std::mem::take(&mut self.carried);
@@ -81,13 +90,19 @@ impl Scrubber {
         };
         if let Some(length) = separator_rest {
             shown.push_str(&rest[..length]);
-            match self.authority(&rest[length..], &mut shown) {
+            match self.authority(&rest[length..], &mut shown, ends_line) {
                 Some(after) => rest = after,
                 None => return shown,
             }
         } else if carried == Carried::Authority {
-            // The rest of a userinfo a cut separated from its URL: up to its last `@`.
+            // The rest of an authority a cut separated from its URL: its userinfo is up to its
+            // last `@`. A run filling a piece may all be userinfo yet, so it is removed and
+            // carried again.
             let run = authority_end(rest);
+            if run == rest.len() && !ends_line {
+                self.carried = Carried::Authority;
+                return shown;
+            }
             if let Some(at) = rest[..run].rfind('@') {
                 rest = &rest[at + 1..];
             }
@@ -101,7 +116,7 @@ impl Scrubber {
                 rest = after;
                 continue;
             }
-            match self.authority(after, &mut shown) {
+            match self.authority(after, &mut shown, ends_line) {
                 Some(after) => rest = after,
                 None => return shown,
             }
@@ -121,11 +136,17 @@ impl Scrubber {
     }
 
     /// The authority at `text`'s start, its userinfo removed and its host copied to `shown`;
-    /// what follows it, or `None` when the text ends inside it before any `@` — removed, and
-    /// carried to the next piece.
-    fn authority<'a>(&mut self, text: &'a str, shown: &mut String) -> Option<&'a str> {
+    /// what follows it. At a line's end the authority ends there, its host kept; at a piece's
+    /// end it may go on in the next piece, any of it userinfo — an `@` already seen can be one a
+    /// password holds — so all of it is removed and carried (`None`).
+    fn authority<'a>(
+        &mut self,
+        text: &'a str,
+        shown: &mut String,
+        ends_line: bool,
+    ) -> Option<&'a str> {
         let end = authority_end(text);
-        if end == text.len() && !text.contains('@') {
+        if end == text.len() && !ends_line {
             self.carried = Carried::Authority;
             return None;
         }
@@ -191,9 +212,11 @@ impl std::fmt::Display for ScrubbedLine {
 /// ```
 ///
 /// ```
-/// // The passing scaffold the two refusals above each change one line of.
+/// // The passing scaffold the refusals above, `ScrubbedLine`'s two among them, each change one
+/// // line of: both types are exported under these names, so each refusal is the one it says.
+/// let line: cairn_model::ScrubbedLine = cairn_model::Scrubber::new().line("https://u:p@h/x");
 /// let mut lines = cairn_model::ScrubbedLines::default();
-/// lines.push(cairn_model::Scrubber::new().line("https://u:p@h/x"));
+/// lines.push(line);
 /// assert_eq!(lines.text(), "https://h/x");
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -370,6 +393,54 @@ impl PartialEq<String> for ScrubbedLines {
     }
 }
 
+/// `line` without its terminal control sequences (R10.5; Fork Tracker #1218 prints them raw):
+/// every CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or `ESC \`) and two-byte escape, and every
+/// other control character but a tab — a carriage return a progress meter writes among them.
+pub fn strip_ansi(line: &str) -> String {
+    let mut shown = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                // CSI: parameters and intermediates, ended by a byte in `@`..=`~`.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: ended by BEL or ST (`ESC \`).
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                // Any other escape: intermediates (` `..=`/`) and one final character, such as
+                // a character set chosen (`ESC ( B`).
+                Some(' '..='/') => {
+                    for c in chars.by_ref() {
+                        if !(' '..='/').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(_) | None => {}
+            },
+            '\t' => shown.push(c),
+            c if c.is_control() => {}
+            c => shown.push(c),
+        }
+    }
+    shown
+}
+
 /// Where an authority beginning at `text`'s start ends: at the first character no authority
 /// holds — whitespace, `/`, `?`, `#` or an angle bracket — or the end. A quote does not end it:
 /// an apostrophe is legal in a userinfo (git splits a URL's credentials at `/`, `?` and `#`
@@ -472,9 +543,13 @@ mod tests {
         let mut scrubber = Scrubber::new();
         assert_eq!(scrubber.piece("see https://exam").as_str(), "see https://");
         assert_eq!(scrubber.line("ple.com/x").as_str(), "ple.com/x");
-        // A whole line ending inside an authority carries nothing: the next line is its own.
+        // A whole line's authority ends with it, its host kept, and nothing is carried: the next
+        // line is its own.
         let mut scrubber = Scrubber::new();
-        assert_eq!(scrubber.line("see https://exam").as_str(), "see https://");
+        assert_eq!(
+            scrubber.line("see https://exam").as_str(),
+            "see https://exam"
+        );
         assert_eq!(
             scrubber.line("ada:x@example.com wrote").as_str(),
             "ada:x@example.com wrote"
@@ -499,7 +574,9 @@ mod tests {
                 !shown.contains("tok") && !shown.contains("user"),
                 "cut at {cut}: {shown:?}"
             );
-            assert!(shown.contains("host/r' failed"), "cut at {cut}: {shown:?}");
+            // A cut inside the authority removes what of the host lies before it too, since
+            // a piece's end cannot tell a host from more userinfo.
+            assert!(shown.ends_with("/r' failed"), "cut at {cut}: {shown:?}");
         }
         let mut scrubber = Scrubber::new();
         assert_eq!(scrubber.piece("see https:").as_str(), "see https:");
@@ -542,6 +619,86 @@ mod tests {
         );
         assert!(!lines.older_dropped());
         assert_eq!(lines.to_string(), lines.text());
+    }
+
+    /// The phase 12 QA's first finding: a terminal control character or escape sequence
+    /// between a scheme and its `://` hid the URL from the scrubber, and the window, stripping
+    /// escapes after, drew the credential whole. A line is stripped of them first, so what is
+    /// kept and drawn carries no userinfo. Caught by: scrubbing the line as git wrote it.
+    #[test]
+    fn an_escape_inside_a_url_does_not_hide_it() {
+        for line in [
+            "https\x07://u:TOKEN@h/x",
+            "https:\x1b[0m//u:TOKEN@h/x",
+            "\x1b[31mhttps://u:TOK\x1b[0mEN@h/x",
+            "https://u:TOKEN\x1b]8;;x\x07@h/x",
+        ] {
+            let kept = ScrubbedLines::scrubbing(line);
+            assert!(!kept.contains("TOK"), "{line:?} kept as {kept:?}");
+            assert!(!strip_ansi(kept.text()).contains("TOK"), "{line:?}");
+            assert_eq!(strip_ansi(kept.text()), "https://h/x", "{line:?}");
+        }
+        let mut scrubber = Scrubber::new();
+        assert_eq!(scrubber.piece("see https:\x1b[0m").as_str(), "see https:");
+        assert_eq!(scrubber.line("//u:TOKEN@h/x").as_str(), "//h/x");
+    }
+
+    /// The phase 12 QA's fifth finding: a whole line's authority ends at the line's end, so a URL
+    /// ending a line keeps its host — `From https://github.com` drawn whole, as git wrote it —
+    /// and loses only its userinfo. Caught by: a host at a line's end taken for a cut userinfo.
+    #[test]
+    fn a_url_ending_a_line_keeps_its_host() {
+        assert_eq!(
+            scrubbed("From https://github.com"),
+            "From https://github.com"
+        );
+        assert_eq!(scrubbed("https://u:T@host"), "https://host");
+        assert_eq!(scrubbed("see https://exam"), "see https://exam");
+        assert_eq!(scrubbed("to https://u:p@ss@h"), "to https://h");
+    }
+
+    /// The phase 12 QA's fourth finding: a piece ending inside a userinfo — after an `@` of a
+    /// password that holds one, or anywhere in one longer than a piece — never draws any of it.
+    /// Caught by: a carry made only when no `@` was seen, or a carried run filling a piece drawn.
+    #[test]
+    fn a_userinfo_cut_by_pieces_is_never_drawn() {
+        let line = "x https://u:SEC@RET@host/y z";
+        for cut in 1..line.len() {
+            let mut scrubber = Scrubber::new();
+            let shown = format!(
+                "{}{}",
+                scrubber.piece(&line[..cut]),
+                scrubber.line(&line[cut..])
+            );
+            assert!(
+                !shown.contains("SEC") && !shown.contains("RET") && !shown.contains("u:"),
+                "cut at {cut}: {shown:?}"
+            );
+            assert!(shown.ends_with("/y z"), "cut at {cut}: {shown:?}");
+        }
+        // A userinfo three pieces long: none of its middle piece is drawn.
+        let mut scrubber = Scrubber::new();
+        let first = scrubber.piece("see https://user:aaaa");
+        let middle = scrubber.piece(&"b".repeat(64));
+        let last = scrubber.line("cccc@host/x done");
+        assert_eq!(format!("{first}{middle}{last}"), "see https://host/x done");
+    }
+
+    /// R10.5: a hook's coloured output reads as its text — colours, cursor moves and window
+    /// titles gone, a carriage return gone, a tab kept. Caught by: an escape's tail left in
+    /// (`[31m`), or an OSC swallowing the text after it.
+    #[test]
+    fn ansi_sequences_and_control_characters_are_stripped() {
+        assert_eq!(
+            strip_ansi("\u{1b}[1;31merror:\u{1b}[0m lint failed"),
+            "error: lint failed"
+        );
+        assert_eq!(
+            strip_ansi("\u{1b}]0;title\u{7}after\u{1b}]8;;url\u{1b}\\link"),
+            "afterlink"
+        );
+        assert_eq!(strip_ansi("50%\r100%\tdone\u{1b}(B"), "50%100%\tdone");
+        assert_eq!(strip_ansi("plain"), "plain");
     }
 
     /// `://` with no scheme before it, and a scheme starting with a digit, are not read as a

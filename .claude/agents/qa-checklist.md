@@ -154,6 +154,19 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     from the chord the table lists — the guard sees each literal is one held key's
     name, not that the name follows the table's chord; and whether a new chord is
     right for each platform and clear of the desktop's and Fork's.
+12. **Scrubbing git's diagnostic output** (any diff under `crates/cairn-git/src/process/`,
+    `crates/cairn-git/src/ops/` or `crates/cairn-git/src/error.rs`, any diff naming
+    `ScrubbedLines`, `ScrubbedLine`, `Scrubber`, `strip_ansi` or `Error::shown`, or any new
+    `Update` or engine surface carrying git's words): the invariant "git's diagnostic output
+    reaches the application only scrubbed" is held by the type, so what it cannot see is yours
+    — a new engine surface that hands git's stderr, a commit's stdout, progress, a command
+    record or an error's arguments on as a `String` rather than `ScrubbedLines` (or the runner's
+    scrubbed argument copy); an error whose `Display` quotes a value beside git's words — a
+    configuration value, a record git printed — read by the application with `to_string` or
+    `format!("{error}")` where it should use `Error::shown`; a lane or view that scrubs again
+    (a second owner) or keeps an offset into a text where it was cut; and a read's answer
+    wrongly scrubbed (reads stay as git gave them, for parity). A URL a test splits by a `\n`
+    proves nothing: git splits nothing there; the carry is across a line's pieces.
 
 ## Review dispatch
 

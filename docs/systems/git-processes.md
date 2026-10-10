@@ -765,9 +765,15 @@ which waits, but for the drop's no-thread fallback below.
   a character split across two reads arrives whole; one longer than
   `PIECE_BYTES` (256 KiB) is handed on in pieces, each cut where a character
   ends, never inside one. Each line, and each piece, passes a
-  `cairn_model::Scrubber` as it is split — a URL's userinfo removed before
-  anything keeps or cuts it (R12.2), the scrubber carrying across the pieces of
-  one line and nothing across a line's end — and becomes a
+  `cairn_model::Scrubber` as it is split — its terminal control sequences
+  stripped first (`cairn_model::strip_ansi`), so an escape between a scheme and
+  its `://` cannot hide a URL, then a URL's userinfo removed before anything
+  keeps or cuts it (R12.2): at a line's end an authority ends and its host is
+  kept; at a piece's end all of the authority so far is removed and carried,
+  since an `@` seen may be one a password holds, and a carried run filling a
+  whole piece is removed and carried again; nothing is carried across a line's
+  end. A piece is never cut inside an escape sequence (`piece_end`). Each
+  becomes a
   `cairn_model::ScrubbedLine`, gathered into the `ScrubbedLines` one read
   completed. Each read's lines cross to the driver as one event, so what git
   wrote before it exited is a handful of events however many lines it was; they
@@ -791,10 +797,8 @@ which waits, but for the drop's no-thread fallback below.
   `a_final_burst_of_stderr_is_kept_whole_though_a_holder_keeps_the_pipe` (a
   burst written just before git fails, with a slow progress callback and a pipe
   still held: its last line arrives) and the unit tests in `pipes.rs` and
-  `cairn_model`'s `scrub.rs`. Residual: the scrubber reads a URL by its
-  `scheme://`, so a terminal escape sequence written between a scheme and its
-  `://` hides the URL from it, and the window, which strips escapes after, would
-  then draw its userinfo — no remote or hook is known to write one there.
+  `cairn_model`'s `scrub.rs`, with `an_escape_straddling_the_piece_limit_hides_no_url`
+  and `stdouts_last_line_without_a_newline_is_handed_on_kept_and_recorded`.
 - **Thread hygiene.** Every thread is counted while it runs;
   `every_thread_an_invocation_starts_ends_with_it` sees the three names started
   and the count back at zero once the invocation is over. The one thread that
@@ -1036,8 +1040,8 @@ and `every_handle_on_a_repository_shares_its_log`.
 
 A record is a `cairn_model::CommandRecord`: the arguments after the program,
 lossily decoded and each scrubbed of a URL's userinfo as the record is booked
-(`Registration::new`; Cairn passes none, and an error's arguments are scrubbed
-the same way, `cli::describe`); the directory it ran in; when it started, by
+(Cairn passes none; one scrubbed copy, `cli::scrubbed_arguments`, is what the
+record books and every error the runner builds names); the directory it ran in; when it started, by
 the wall clock; how long until it was over; how it ended (`CommandExit`: a
 code, a signal, never started, or unknown); whether it was cancelled; and the
 runner's tail, `ScrubbedLines` — stderr's, and a commit's stdout's with it. There is no field for the environment, so the askpass token an

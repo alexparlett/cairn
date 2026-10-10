@@ -373,8 +373,11 @@ mod tests {
     /// C31 for a commit (R4.10, R6.5): a hook's output reaches the commit's output and its
     /// failure as the runner's whole lines — a URL's userinfo written across two writes never
     /// handed on, kept or recorded; a multi-byte character whole; a `\r` redraw split as a line
-    /// of its own — and the failure keeps what was handed on, in order. Caught by: commit's own
-    /// splitter back, a scrub after the cut, or a failure built from another text.
+    /// of its own — and the failure keeps what was handed on, in order. git runs a hook with its
+    /// stdout sent to git's stderr, so every line here, the hook's "stdout" ones included,
+    /// travels git's stderr; git's own stdout is the next test's, and `\r` on stdout is
+    /// `pipes.rs`'s `lines_end_at_either_terminator_across_reads`. Caught by: a scrub after the
+    /// cut, or a failure built from another text.
     #[test]
     fn a_hooks_output_reaches_the_commit_as_whole_scrubbed_lines() {
         use std::os::unix::fs::PermissionsExt as _;

@@ -749,21 +749,25 @@ Project invariants:
   (`let b = s.expose_secret(); format!("{b:?}")`) are not seen; and whether a
   prompt's text, which IS rendered, could carry a secret (git puts the prompt
   on `argv`, so it never should) is a judgement, not a token.
-- **git's text reaches the application only scrubbed of a URL's userinfo, as whole lines**
-  (staging-and-commit R4.10, R12.2). Primary enforcement is the type, and no guard is written: the
-  runner splits git's output into whole lines and passes each through `cairn_model::Scrubber` as
-  it is split (`crates/cairn-git/src/process/pipes.rs`), and every engine surface that carries
-  git's output — `Error::GitFailed`'s `stderr`, `CommandRecord::stderr`, `CommitWatch::output`,
-  `FetchInProgress::finish`'s progress — is a `cairn_model::ScrubbedLines`, whose lines only a
-  scrubber's output (`ScrubbedLine`, its field private) or its own scrubbing constructor can fill,
-  pinned by the `compile_fail` doctests in `crates/cairn-model/src/scrub.rs` (a literal of either
-  type, a conversion from text, a `String` pushed) beside their passing scaffold; an error's text
-  is the engine's `Error::shown`, its `Display` scrubbed whole. So no lane and no view scrubs, and
-  nothing keeps an offset where a text was cut. Residual review obligations, `qa-checklist`'s: a
-  new engine surface handing git's output on as a `String`; an error whose `Display` quotes a
-  value beside git's words read by the application with `to_string` rather than `shown`; and a
-  terminal escape sequence written between a scheme and its `://`, which hides the URL from the
-  scrubber (stated in `docs/systems/git-processes.md`, "The runner").
+- **git's diagnostic output reaches the application only scrubbed of a URL's userinfo, as
+  whole lines** (staging-and-commit R4.10, R12.2): stderr, a commit's stdout, a fetch's
+  progress, the command log's records and an error's text. Out of scope, deliberately: a read's
+  answer — a diff, a status, a configuration value — reaches it as git gave it, for parity.
+  Primary enforcement is the type, and no guard is written: the runner splits git's output into
+  whole lines and passes each through `cairn_model::Scrubber` as it is split
+  (`crates/cairn-git/src/process/pipes.rs`), which strips its terminal control sequences
+  (`cairn_model::strip_ansi`) before it scrubs, so no escape hides a URL; and every engine
+  surface that carries that output — `Error::GitFailed`'s `stderr` and its `arguments`,
+  `CommandRecord::stderr` and its arguments, `CommitWatch::output`, `FetchInProgress::finish`'s
+  progress — is a `cairn_model::ScrubbedLines` (or, for the arguments, `cli`'s one scrubbed copy),
+  whose lines only a scrubber's output (`ScrubbedLine`, its field private) or its own scrubbing
+  constructor can fill, pinned by the `compile_fail` doctests in `crates/cairn-model/src/scrub.rs`
+  (a literal of either type, a conversion from text, a `String` pushed) beside their passing
+  scaffold, which names both types; an error's text is the engine's `Error::shown`, its `Display`
+  scrubbed whole. So no lane and no view scrubs, and nothing keeps an offset where a text was
+  cut. Residual review obligations, `qa-checklist`'s (its item 12): a new engine surface
+  handing git's diagnostic output on as a `String`; and an error whose `Display` quotes a value
+  beside git's words read by the application with `to_string` rather than `shown`.
 - **Destructive operations take `cairn_model::Confirmed` by value, the token
   carries the `Consequence` the engine computed and the prompt rendered from it,
   and only a confirmation surface builds one.** Primary enforcement is the type:

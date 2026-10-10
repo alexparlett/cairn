@@ -89,7 +89,7 @@ pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
 pub use row_selection::SideColumn;
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
-pub use scrub::{ScrubbedLine, ScrubbedLines, Scrubber};
+pub use scrub::{ScrubbedLine, ScrubbedLines, Scrubber, strip_ansi};
 pub use secret::Secret;
 pub use sidebar_rows::{
     Disclosure, SidebarRow, SidebarSection, folder_name, folder_path, natural_order,

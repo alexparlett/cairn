@@ -38,7 +38,7 @@ use cairn_model::{CommandExit, CommandRecord};
 use super::command_log::{CommandLog, Origin};
 use super::group::{Group, TERMINATION_GRACE};
 use super::runner::DRAIN_BOUND;
-use cairn_model::{ScrubbedLines, Scrubber};
+use cairn_model::ScrubbedLines;
 
 /// How long closing a repository waits for its invocations to be reaped: 3 s.
 ///
@@ -166,23 +166,18 @@ pub(super) struct Registration {
 }
 
 impl Registration {
-    /// Booked as starting now, with what the invocation was given — each
-    /// argument scrubbed of a URL's userinfo as it is booked (R12.2), though
-    /// Cairn passes none. Nothing from its environment: the record has nowhere
-    /// to put it.
+    /// Booked as starting now, with what the invocation was given: its
+    /// arguments as `cli` scrubbed them for every report of it (R12.2).
+    /// Nothing from its environment: the record has nowhere to put it.
     pub(super) fn new(
         processes: &Arc<Processes>,
         arguments: Vec<String>,
         directory: Option<PathBuf>,
     ) -> Self {
-        let mut scrubber = Scrubber::new();
         Self {
             processes: Arc::clone(processes),
             id: None,
-            arguments: arguments
-                .iter()
-                .map(|argument| scrubber.line(argument).into_string())
-                .collect(),
+            arguments,
             directory,
             started: SystemTime::now(),
             clock: Instant::now(),
@@ -451,9 +446,16 @@ mod tests {
             handed.iter().all(|line| !line.contains("SEC")),
             "{handed:?}"
         );
-        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+        let Err(Error::GitFailed {
+            stderr, arguments, ..
+        }) = outcome
+        else {
             panic!("expected the failure, got {outcome:?}");
         };
+        assert_eq!(
+            arguments, "stub https://host/r",
+            "the failure's arguments kept a token"
+        );
         assert!(stderr.older_dropped(), "older lines let go of, unsaid");
         assert!(stderr.bytes() <= super::super::pipes::TAIL_BYTES);
         assert!(
@@ -474,6 +476,26 @@ mod tests {
             "the log keeps what the failure carries"
         );
         assert_eq!(record.arguments, ["stub", "https://host/r"]);
+    }
+
+    /// stdout read as lines: its last line, written with no newline, is handed on, kept in the
+    /// failure and recorded (the phase 12 QA). Caught by: the stdout splitter's last line left
+    /// unfinished when the stream ends.
+    #[test]
+    fn stdouts_last_line_without_a_newline_is_handed_on_kept_and_recorded() {
+        let stub = stub("printf 'first\\n'; printf 'last words'; exit 1");
+        let repo = repo();
+        let processes = processes(&repo);
+        let mut handed = Vec::new();
+        let outcome = started(&stub, &repo).lines(&CancelSignal::new(), |lines| {
+            handed.extend(lines.lines().map(str::to_owned));
+        });
+        assert_eq!(handed, ["first", "last words"]);
+        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+            panic!("expected the failure, got {outcome:?}");
+        };
+        assert_eq!(stderr, "first\nlast words");
+        assert_eq!(the_one_record(&processes).stderr, "first\nlast words");
     }
 
     /// A failure is recorded as what it was: its status, and what it said.

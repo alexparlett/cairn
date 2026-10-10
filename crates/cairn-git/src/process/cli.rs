@@ -296,15 +296,11 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
+        // The one copy of the arguments anything keeps or reports — the log's record and every
+        // error the runner builds — scrubbed of a URL's userinfo here, once (R12.2).
+        let arguments = scrubbed_arguments(&self.arguments);
         let registration = self.processes.as_ref().map(|processes| {
-            Registration::new(
-                processes,
-                self.arguments
-                    .iter()
-                    .map(|argument| argument.to_string_lossy().into_owned())
-                    .collect(),
-                self.directory.clone(),
-            )
+            Registration::new(processes, arguments.clone(), self.directory.clone())
         });
         let child = match command.spawn() {
             Ok(child) => child,
@@ -322,7 +318,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             child,
             self.input,
             self.kind,
-            describe(&self.arguments),
+            arguments.join(" "),
             self.dirs,
             registration,
             spawner,
@@ -379,15 +375,15 @@ fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> 
     location
 }
 
-/// The arguments as a user would have typed them, for an error message — each scrubbed of a
-/// URL's userinfo (R12.2), though Cairn passes none, so an error's text carries no token.
-fn describe(arguments: &[OsString]) -> String {
+/// The arguments as a user would have typed them, lossily decoded, each scrubbed of a URL's
+/// userinfo (R12.2) though Cairn passes none: what the command log records and, joined by
+/// spaces, what every error about the invocation names — so neither carries a token.
+fn scrubbed_arguments(arguments: &[OsString]) -> Vec<String> {
     let mut scrubber = Scrubber::new();
     arguments
         .iter()
         .map(|argument| scrubber.line(&argument.to_string_lossy()).into_string())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
 /// What a successful invocation wrote.
@@ -473,10 +469,17 @@ mod tests {
         assert_eq!(output.stdout(), b"only");
     }
 
+    /// The arguments as typed, each scrubbed of a URL's userinfo: the one copy the log records
+    /// and the runner's errors name (R12.2). Caught by: a raw argument reported.
     #[test]
-    fn arguments_are_described_as_typed() {
+    fn arguments_are_described_as_typed_and_scrubbed() {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
-        assert_eq!(describe(&arguments), "fetch --prune");
+        assert_eq!(scrubbed_arguments(&arguments), ["fetch", "--prune"]);
+        let quoting = [
+            OsString::from("fetch"),
+            OsString::from("https://u:SECRET@h/r"),
+        ];
+        assert_eq!(scrubbed_arguments(&quoting), ["fetch", "https://h/r"]);
     }
 
     /// Runs the test at `path` (from the crate root) in this test binary again, with

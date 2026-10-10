@@ -3,6 +3,25 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 16 built (packet mode)
+
+What shipped is state.md's "Phase 16". Notes for the record:
+
+- **Decided here**: the primary is the file clicked first (observed `lc2`), so brief 3.1's "a
+  row toggled in becomes primary" is not built; the rule finds a vanished path's place in the
+  lists' order (both lists are in `path_order` before and after a refresh) rather than counting
+  rows, which makes `before` matter only for "did it show a row" and keeps the rule's cost to the
+  selection; Stage All's held key became a trigger of its own, a press on a heading's button,
+  since Shift was already the range press on a row and the table's pin refuses one chord on two
+  actions; the selection's paths are kept in the lists' order rather than by bytes, so the first
+  selected path is the first held.
+- **Found on the way**: the UI-thread guard's waiting roster names `select` (a channel select),
+  so neither a function nor a method in `cairn-app` may be called `select`
+  (`make_selection`, `set_selection`); and a test that pressed a.rs alone after files were drawn
+  together no longer sees a new ask — a.rs, the file clicked first, was the primary throughout,
+  its answer still kept — so it now asserts the diff kept is a.rs's.
+- **Stopping rules**: neither triggered (state.md's "Phase 16").
+
 ## 2026-10-10 — phase 15's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p15/adjudication.md`): FIX NOW 4 and 5; CARRY 3 and U1 to

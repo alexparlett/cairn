@@ -24,7 +24,8 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
 - **Left**, behind a draggable splitter (its share kept for the session,
   `LocalChangesView::list_width`): a filter field — the only control above the lists — then
   **Unstaged** above **Staged**, each under its heading — its name, its Stage or Unstage
-  button, and over Unstaged Fork's double chevron, Stage All — and each one flat, virtualised list
+  button, and a small double chevron, ⇊ Stage All over Unstaged (Fork's) and ⇈ Unstage All over
+  Staged — and each one flat, virtualised list
   (`cairn_ui::LocalChangesList`, `crates/cairn-ui/src/local_changes.rs`), with a draggable
   splitter between the two (the user's decision, 2026-10-07; its share kept for the session and
   never beyond it, `LocalChangesView::lists_split`, `LocalChangesList::split`). A row is a badge
@@ -39,7 +40,7 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   write running and how many wait behind it, or the first queued — or why the last action
   asked nothing, or how the last write ended when it did not do what was asked
   (`local_changes_actions::acting_line`, staging-and-commit R8.6).
-- **Right**: the chosen path's diff under the diff view's bar — previous and next change,
+- **Right**: the selection's primary's diff under the diff view's bar — previous and next change,
   ignore whitespace (drawn off and disabled here: the diff is always the exact one,
   staging-and-commit R8.5), context, entire file, side by side, the shared settings — unified
   or side by side; or the notice of a state that is not text, with Load Diff for a file past the
@@ -97,17 +98,23 @@ worker), so a path left in both lists is one file; the window keeps N with the r
 
 ## Choosing a path, and asking its diff
 
-A row pressed, or reached with ↑ or ↓ in its focused list, is chosen by its list and its path
-(`diff_actions::choose_working`), and its diff is asked through the working-tree query as its
-list says (R9.3, `diff_actions::working_query`): its staged diff (`WorkingSide::Staged`) from
+The diff shown is the selection's primary's (staging-and-commit R8.1, rule 8; "The selection",
+below): never chosen on its own, but derived from the primary and the lists drawn and asked by
+one function (`diff_actions::show_primary`) whenever the selection or the lists move. It is
+asked through the working-tree query as its list says (R9.3, `diff_actions::working_query`): its staged diff (`WorkingSide::Staged`) from
 Staged, its unstaged diff (`WorkingSide::Unstaged`) from Unstaged, its untracked diff
 (`WorkingSide::Untracked`) for a path git does not track; a conflicted path asks nothing. It is
 asked at the Changes tab's options — the shared context and whitespace setting, and the entire
-file — since the view is one file's diff under the same bar. With nothing chosen, the first
-path the lists show is chosen as the view opens — Unstaged's first row, else Staged's (R9.3).
+file — since the view is one file's diff under the same bar. With nothing selected, the first
+path the lists show is selected as the view opens — Unstaged's first row, else Staged's (R9.3)
+— and as the lists' first status, or files appearing after none, is drawn. It is asked at once
+while Local Changes is shown, and as the view is shown otherwise, so a status arriving while
+the history is shown never takes the file-diff lane from the commit's file.
 
-The path chosen and its diff live in the diff selection beside the commit's
-(`crates/cairn-app/src/diff_state/working.rs`, `DiffState::choose_working`), because the three —
+The primary's diff lives in the diff selection beside the commit's
+(`crates/cairn-app/src/diff_state/working.rs`, `DiffState::choose_working`), keyed by what it was
+asked for (`WorkingChoice`: the primary's list and path and the lists it was asked in, written
+by `show_primary` alone), because the three —
 the Changes tab's file, the files opened in place in the Commit tab, and this path — share the
 file-diff lane: whichever asks takes it, and the others are asked again, whole, when their view
 is shown (`working_needs_asking`, `reask_working`; `diff.md`, "The file-diff lane is shared").
@@ -116,25 +123,22 @@ when their tab is shown (`Asking::Working`). A changes query supersedes the lane
 it.
 
 **An answer is drawn only for the query it names.** `Update::FileDiff` for a working-tree
-query is kept only when it names exactly the query the path chosen is asked as now — its path,
+query is kept only when it names exactly the query the primary is asked as now — its path,
 its side and its options (`DiffState::working_arrived`) — so a path in both lists draws each
 list's diff and an answer for the list chosen before, arriving late, is not drawn; one not kept
 is handed to a worker to free.
 
-**A refresh follows the path.** Each status drawn is numbered (`LocalChangesState::serial`), and
-the path chosen remembers the lists it was chosen or last found in. When other lists are drawn,
-the view looks for it in them by its list and path (`local_changes_pane::follow_the_lists`):
-still listed, it is asked again as it is listed now — the file may have changed under the same
-status — and its last diff stays drawn until the new one comes (`DiffState::refresh_working`);
-gone from the status, the first path shown is chosen in its place, so no diff is drawn for a
-path the status no longer lists; with no path shown, a path chosen is let go of. The filter
-follows the Changes tab's rule: a path it hides stays chosen — its diff drawn, no row
-highlighted — and is asked again on each refresh; only the status taking it away chooses
-another. What is done is decided by a pure function (`local_changes_pane::follow`: keep, ask
-again, choose the first, let go, or nothing), and the effect that runs it writes only when
-there is something to write, so it never wakes itself for good. This runs only while the view
-is shown: a status that arrives while the history is shown asks nothing until Local Changes
-is.
+**A refresh moves the selection by one rule.** Each status drawn is numbered
+(`LocalChangesState::serial`). When other lists are drawn, or the filter's rows change, the
+selection is moved by the one pure rule (`crate::next_selection`, "Where the selection goes",
+below) inside `LocalChangesState` — as the status and the filter's answers arrive, in
+`session::apply`, never from a render effect — and its primary's diff is asked there and then
+(`a_refresh_moves_the_selection_and_asks_its_diff_without_a_render`). A primary still listed and
+shown is asked again as it is listed now — the file may have changed under the same status —
+and its last diff stays drawn until the new one comes (`DiffState::refresh_working`); one the
+status took away, or the filter hides (the redesign's L3, superseding the Changes tab's rule of
+keeping a hidden path chosen), gives its place to the row that took it, so no diff is drawn for
+a path the lists do not show; with nothing selected, the diff is let go of.
 
 Every status, diff and set of lists the window lets go of is handed to a worker to free
 (`Request::Retire`): the refresh's answers and the lists drawn each hand their own hold over,
@@ -146,26 +150,45 @@ What a person does to the lists is reported by the component as a choice or a
 `cairn_ui::ListIntent`, and decided by `crates/cairn-app/src/local_changes_actions.rs`; the
 component decides nothing about what is staged.
 
-**The selection** (R8.1, `cairn_ui::ListSelection`): the paths selected in one list, sorted by
-their bytes, with the path a range extends from. A plain press, or ↑ or ↓, selects one path and
-chooses it; a press with the table's extending press held (⌘- or Ctrl-click,
-`Action::ExtendSelection`, resolved from `HeldKeys` since a pointer event carries no modifiers
-here) toggles a path — a selection made of the path chosen when none is made yet — and a press
-with the range press held (Shift-click), or Shift+↑/↓ on the focused list, selects every row the
-list shows from the anchor to it. With one path selected the diff shows it; with several it
-draws their diffs together ("Several paths, drawn together", below), the path last pressed in —
-or, once it is toggled out, another the selection holds — staying the path chosen, the anchor a
-range extends from; a toggle that takes out the last path leaves nothing
-selected in that list, so nothing there is drawn selected or acted on. A row is drawn selected
-by a binary search as it is built; the path chosen is drawn selected only while no selection is
-made in its list. Selecting in the other list starts a selection there. A refresh that keeps
-the path chosen costs the selection nothing — a path it names that the lists no longer list is
-left out where it is acted on — and one that moves or lets go of the path chosen
-(`local_changes_pane::follow_the_lists`) moves the selection with it, so a path the status took
-away never comes back selected unseen.
+**The selection** (R8.1, the redesign's rule 8 and L1; `cairn_ui::LocalSelection`, owned by
+`LocalChangesState` alone): one value — the list it is in, its paths (never none, kept in the
+lists' own order, `cairn_model::path_order`), a primary among them and an anchor — or none,
+which is the only way nothing is selected. A plain press, or ↑ or ↓ (from the primary), makes
+its row the selection, primary and anchor; a press with the table's extending press held (⌘- or
+Ctrl-click, `Action::ExtendSelection`, resolved from `HeldKeys` since a pointer event carries no
+modifiers here) toggles a row: toggled in, it is where a range extends from next and the primary
+stays **the file clicked first** (observed in Fork for Windows 2.21.1, `lc2`); toggled out, the
+primary or the anchor moves to the nearest path still selected — the one after it, else the one
+before — and the last path toggled out leaves nothing selected. A press with the range press
+held (Shift-click), or Shift+↑/↓ on the focused list, selects every row the list shows from the
+anchor to it, that row the primary. With one path selected the diff shows it; with several it
+draws their diffs together ("Several paths, drawn together", below) until phase 17 of the
+packet makes it the primary's alone. A row is drawn selected by a binary search as it is built;
+nothing else is drawn selected. Selecting in the other list starts a selection there.
 
-**Which paths an action takes**: the selection's paths the lists drawn still list — each found
-by a binary search — or, with no selection made in that list, the path chosen; a whole-file
+**Where the selection goes** (R8.3, the redesign's L5 and L3, C25; `crate::next_selection`, a
+pure function): the selected paths the lists still show, and an action did not take, stay
+selected, the primary kept or moved to the nearest of them and the anchor kept or moved to the
+primary — so a refresh with nothing changed leaves the selection, its primary and its anchor
+exactly as they were. When none stays, the row that took the first selected path's place is
+selected — the first row shown at or after it in the lists' order, past any the action took,
+found by a binary search (`LocalChanges::row_from`, `ShownFiles::row_from`), so it is the right
+row however many rows above it went too — else the nearest row above; with no row left in that
+list, nothing, as Fork leaves the diff blank once the last file is staged (Tracker #1663). With
+nothing selected, the first row shown is selected only when the lists before showed none — the
+first status, files appearing. It runs after an action at once, with the paths the action took
+leaving (`LocalChangesState::acted`, `next_selection::Leaving`; Stage All and Unstage All as
+every row of their list, named without walking it), so the next file's diff is asked before the
+status that shows the write arrives — whose own turn of the rule then changes nothing — and as
+each status and each filter answer arrives, with none leaving. Whoever moved the files — a
+stage, a commit made in a terminal (observed `lc5`: f5 committed, f6 selected), a filter — it
+is the same rule. The filter prunes the selection to the rows it shows (L3), so nothing hidden
+is ever acted on; while the filter's first rows are on their way the selection is left as it
+was, and nothing is acted on meanwhile, since an action takes only the rows shown.
+
+**Which paths an action takes** (rule 8: every route acts on the selection, wherever focus
+is): the selection's paths the lists drawn still show — each found by a binary search —
+and nothing else; nothing while nothing is selected. A whole-file
 action names a rename's source beside its path (`LocalChanges::whole_file_paths`), so a staged
 rename unstages whole (`git reset -q -- <old> <new>`) while a rename's source listed as a row of
 its own resets alone. Every path is one `git status` listed: the engine trusts its caller with
@@ -176,10 +199,12 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
 **Fork's five routes** (R8.2), each asking `LocalWrite::StageFiles` from Unstaged or
 `LocalWrite::UnstageFiles` (back to `HEAD`) from Staged through `local_writes::ask`:
 
-- a double press on a row — the first press makes the row the selection, so it stages that row;
-- the table's chords on a focused list (`Scope::LocalChanges`): Enter or Ctrl+Shift+S (Return
-  or ⌘S), and, for the whole list, Ctrl+Alt+Shift+S (⌥⇧⌘S) — heard by the list's own key
-  handler, so nowhere else, and never from a text field, which keeps Enter and Backspace;
+- a double press on a row — the first press makes the row the selection, and the double press
+  acts on the selection, so it stages that row;
+- the table's chords on either focused list (`Scope::LocalChanges`): Enter or Ctrl+Shift+S
+  (Return or ⌘S) on the selection, wherever it is, and, for the list heard, Ctrl+Alt+Shift+S
+  (⌥⇧⌘S) — heard by the lists' own key handler and the diff's, so nowhere else, and never from
+  a text field, which keeps Enter and Backspace;
 - a drag from one list released over the other (`cairn_ui`'s `local_changes_drag`): tracked
   by the two lists together, never a row, with the path it began on, so it survives its row
   unmounting or a status replacing the lists; a release over the same list, outside both, or
@@ -187,11 +212,19 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   window could not hear it) or the window losing focus ends it — a press over the lists or
   their filter by the platform's mouse-down, which a text field cannot cancel, and elsewhere
   by the global pointer-down; while it is on, the list it
-  would drop on scrolls at its edges (`EdgeScroll`); it drops the selection it began in, or
-  the path it began on alone;
-- each list's button — Stage or Unstage, dimmed with nothing to act on, and Stage All or
-  Unstage All while the table's Stage All press is held (⌥, Alt on Linux) — and the double
-  chevron's Stage All in Unstaged's heading;
+  would drop on scrolls at its edges (`EdgeScroll`); begun on a selected row it drops the
+  selection, and begun on a row the selection does not hold it makes that row the selection
+  as it drops, as a native list's drag carries the row it began on, and drops it;
+- each list's button — Stage or Unstage on the selection, greyed while the selection is in the
+  other list or there is none (rule 8, Fork's TrackerWin #2429) — which, while the table's
+  heading press is held (`Trigger::HeadingPress`, `HeldKeys::heading_press`: Shift on Linux, as
+  Fork for Windows, TrackerWin #2429 and #2466, and ⌥ on macOS; the redesign's L2, superseding
+  Alt, which xfwm, openbox and Plasma 5 take with a click), reads Stage All in Unstaged and
+  Unstage All in Staged, both enabled whatever is selected while the list shows a row; and the
+  small double chevrons always drawn, ⇊ Stage All in Unstaged's heading and ⇈ Unstage All in
+  Staged's (a deviation: Fork for Windows shows Unstage All only while Shift is held). The
+  heading press is told apart from a row's: Shift on a row is still the range press, and a held
+  Alt does nothing on Linux;
 - the context menu (`local_changes_menu`): Stage or Unstage, Discard Changes… (greyed on the
   staged side, its reason beneath it), Stage All or Unstage All, Copy Path; a right-press on a
   row outside the selection chooses it first; each item closes the menu as it is chosen.
@@ -203,12 +236,11 @@ hides, a conflicted one among them, is never staged or unstaged unseen; nothing 
 filter's rows are on their way. Their paths are gathered on the local lane, never on the UI
 thread, which copies at most the filter's row indices.
 
-**After a stage or an unstage** (R8.3) the selection moves to the nearest path left in the list
-it left — the row that slides into the first acted row's place, else the nearest above it
-(`cairn_ui::nearest_remaining`) — and its diff is asked at once; with none left, nothing is
-selected. For a selection with gaps it is measured from where the selection began: the row in
-the first acted row's place, else the nearest above it — the rule the user ratified on
-2026-10-09. The same holds after a confirmed discard.
+**After a stage or an unstage** (R8.3, L5) the selection moves by the rule above, the acted
+paths leaving — the row that slides into the first acted row's place, else the nearest above it
+(observed `lc4`: f2 and f4 staged, f3 selected) — and its diff is asked at once; with none left,
+nothing is selected. After Stage All or Unstage All a selection in that list goes, and one in
+the other stays. The same holds after a confirmed discard.
 
 **A discard** (R8.4) is offered on the unstaged side only, and never takes a submodule (R8.8),
 a conflicted path (R8.7) or a nested repository — an untracked row git lists as its directory,
@@ -262,8 +294,8 @@ sets the confirmation aside, kept unanswered, and the confirmation is drawn agai
 prompt is answered or refused (`window::window`).
 
 **The diff hears the same chords** (`Scope::LocalChanges`): on the lines a drag across it
-selected ("The diff's staging gesture", below), or with none on the file it shows — or the paths
-drawn together — whole, in the list it was chosen from (`local_changes_actions::on_the_diff`).
+selected ("The diff's staging gesture", below), or with none on the selection — or the paths
+drawn together — whole (`local_changes_actions::on_the_diff`).
 Hovering is not selecting (Fork, Tracker #103): a chunk under the pointer changes nothing the
 chords do.
 
@@ -300,7 +332,7 @@ names them in its dialog, the first three and how many more (`Consequence::promp
 
 The same paths asked again — a refresh, the settings moved — keep what they draw until their
 answers arrive, under a new number; other paths are drawn afresh, from the top. While paths are
-drawn together the path chosen stays chosen but is not asked (`choose_working` asks nothing then,
+drawn together the primary's diff is kept but not asked (`choose_working` asks nothing then,
 and `working_needs_asking` is false), so the two never take the lane from each other; once one
 path, or none, is selected, the paths drawn together are let go of — handed to a worker to free —
 and the path chosen is asked again as the view renders. An ask that lost the lane before its
@@ -542,13 +574,17 @@ typed, the arrows are the editor's.
   `every_chord_of_the_lists_actions_is_reported_on_its_list`,
   `a_double_press_stages_or_unstages_its_row`,
   `the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything`,
+  `only_the_platforms_key_turns_the_headings_into_stage_all`,
   `a_drag_drops_on_the_other_list_only_and_survives_its_row`,
   `a_drag_between_the_lists_scrolls_the_one_it_would_drop_on`,
   `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed`,
   `a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop`, and with every one of
   50,000 paths selected `a_status_of_50000_paths_all_selected_builds_one_viewport`
   (`tests/local_changes.rs`); the pure parts
-  (`a_selection_toggles_spans_and_holds_paths_of_one_list`,
+  (`a_toggle_adds_a_path_and_the_file_clicked_first_stays_primary`,
+  `the_primary_toggled_out_moves_to_the_nearest_path_and_the_last_leaves_none`,
+  `a_range_spans_from_the_anchor_and_its_row_is_primary`,
+  `a_selection_keeps_its_primary_and_anchor_while_they_stay`,
   `the_nearest_row_left_is_the_one_that_takes_the_first_acted_rows_place`,
   `a_press_becomes_a_drag_past_the_threshold_and_drops_on_the_other_list_only`,
   `a_discard_is_refused_only_where_nothing_can_be_discarded`,
@@ -618,7 +654,10 @@ typed, the arrows are the editor's.
   `local_changes_diff_is_always_exact_and_leaves_the_setting_alone`,
   `a_write_is_drawn_queued_running_and_stale_where_it_was_asked`,
   `a_discard_names_only_paths_the_lists_drawn_still_list`,
-  `the_extending_press_toggles_out_and_the_diff_follows_the_selection`; through the real
+  `the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first`,
+  `every_route_takes_the_selection_and_nothing_the_person_did_not_select`; the table's held key
+  (`crates/cairn-ui/src/accelerators.rs`): `a_press_resolves_against_the_keys_the_window_heard`
+  and `the_table_is_forks_chords_and_no_others`; through the real
   boundary (`worker/local_lane_tests.rs`):
   `a_discards_consequence_is_counted_after_the_writes_asked_before_it`,
   `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection` and
@@ -647,9 +686,14 @@ typed, the arrows are the editor's.
   (`crates/cairn-app/src/local_changes_state.rs`):
   `with_no_filter_a_status_is_drawn_as_it_arrives`,
   `with_a_filter_a_status_is_drawn_once_its_rows_arrive`,
-  `clearing_the_filter_draws_the_newest_lists_whole`; following the lists
-  (`local_changes_pane.rs`): `an_empty_status_lets_a_path_go_once_and_then_decides_nothing`,
-  `the_path_chosen_follows_the_lists_as_decided`; the count
+  `clearing_the_filter_draws_the_newest_lists_whole`; where the selection goes
+  (`crates/cairn-app/src/next_selection.rs`, C25):
+  `after_an_action_the_row_in_the_first_acted_rows_place_is_selected`,
+  `after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor`,
+  `a_vanished_selection_gives_its_place_to_the_row_that_took_it`,
+  `a_filter_prunes_the_selection_to_the_rows_it_shows`,
+  `nothing_selected_becomes_the_first_row_only_as_files_appear`, with a path's place in a list
+  `a_path_is_given_its_place_in_a_list_listed_or_not` (`cairn-model`); the count
   (`the_count_beside_local_changes_is_of_distinct_paths`, `sidebar_pane.rs`).
 - The window (`crates/cairn-app/src/local_changes_tests.rs`, headless, updates applied through
   `session::apply`):
@@ -660,7 +704,8 @@ typed, the arrows are the editor's.
   `typing_in_the_filter_asks_a_worker_and_the_lists_draw_its_answer`,
   `the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once`,
   `next_change_moves_local_changes_own_diff`, `a_status_that_could_not_be_read_is_said`,
-  `a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn`; and
+  `a_filter_hiding_the_primary_selects_the_row_shown_in_its_place`,
+  `a_refresh_moves_the_selection_and_asks_its_diff_without_a_render`; and
   `local_changes_and_all_commits_switch_the_main_region` (`sidebar_tests.rs`).
 - The worker, through the real boundary (`crates/cairn-app/src/worker/refresh_tests.rs`):
   `untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted`,
@@ -725,12 +770,13 @@ typed, the arrows are the editor's.
   in the selected files?" with no count but the button's (the redesign's D2; observed `dc1`).
 - Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
   follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
-  All once nothing is left to stage. Unstage All is the Staged button with the press held, the
-  menu's item and the chord.
-- The Stage All press is ⌥ on macOS and Alt on Linux — Fork for Windows' own is not recorded.
-  xfwm, openbox and Plasma 5 take Alt with the first button to move a window, so there the press
-  never reaches Cairn and the button stays Stage or Unstage: it fails safe, and the chevron, the
-  menu and the chord still reach Stage All and Unstage All (the user's decision, 2026-10-09).
+  All once nothing is left to stage. Unstage All has its own small chevron, ⇈, always drawn in
+  Staged's heading, where Fork for Windows shows Unstage All only while Shift is held (the
+  redesign's L2), beside the Staged button with the key held, the menu's item and the chord.
+- The key held over the headings for Stage All and Unstage All is Fork for Windows' Shift on
+  Linux (TrackerWin #2429, #2466) and Fork for Mac's ⌥ on macOS (the redesign's L2, superseding
+  the Alt of 2026-10-09, which rested on a false Fork claim and which xfwm, openbox and Plasma 5
+  take with a click to move a window); a held Alt does nothing.
 - A discard asked on the staged side by the chord does nothing, as Fork's does; the menu
   offers its Discard Changes… greyed with "Staged changes can't be discarded. Unstage them
   first." beneath it (the redesign, rule 4, replacing the line under the lists of 2026-10-09).

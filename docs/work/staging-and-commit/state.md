@@ -40,7 +40,8 @@ fine"): see "Resolved after phase 13's QA" below. Phase 14 (Create Branch as For
 built in packet mode after its stopping rule was decided (2026-10-10), full gate green; see
 "Phase 14" below. QA is the coordinator's. Phase 15 (the discard prompts) built in packet mode after
 the user's answers to its six questions (2026-10-10), full gate green; see "Phase 15" below. QA
-is the coordinator's.**
+is the coordinator's. Phase 16 (one selection) built in packet mode, full gate green, neither
+stopping rule triggered; see "Phase 16" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -84,6 +85,88 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 16 of the rebuild, one selection (2026-10-10)
+
+- **Built** (`phase-16-one-selection.md`, C18, C25 but the diff's half, C27): (1) the value —
+  `cairn_ui::LocalSelection` (`crates/cairn-ui/src/list_selection.rs`): its list, its paths in
+  the lists' order (`path_order`, never none), a primary and an anchor; `None` the only "nothing
+  selected"; owned by `LocalChangesState` alone (`selection`, `set_selection`, `selection_of` for
+  the list); a press selects its row; a ⌘/Ctrl-press toggles — toggled in, the anchor moves to it
+  and the primary stays the file clicked first (observed `lc2`, over brief 3.1); toggled out, the
+  primary or anchor moves to the nearest path still selected (after it, else before); the last
+  out leaves `None`; a range spans anchor..row, the row primary. The diff is derived:
+  `diff_actions::show_primary` (one function, called after every press and action, from
+  `session::apply`'s `Status` and `FilteredLocalChanges` arms, the commit box's status arrivals,
+  the filter's text and once as the pane is shown) asks the primary's diff, `WorkingChoice` now
+  only the key of what was asked. (2) The rule — `crate::next_selection::next_selection(selection,
+  before, after, leaving)` (`crates/cairn-app/src/next_selection.rs`), run inside
+  `LocalChangesState` whenever other lists are drawn or the filter's rows change, and at once after
+  an action (`LocalChangesState::acted`, `Leaving::of` the acted paths, `Leaving::every(list)` for
+  Stage All / Unstage All): kept paths kept, primary kept or nearest, anchor kept or primary; else
+  the row in the first one's place — found in the lists' order by a binary search
+  (`LocalChanges::row_from`, new in `cairn-model` with its test; `ShownFiles::row_from`), past any
+  leaving — else the nearest above; `None` when the list shows none; with nothing selected, the
+  first row shown only when the lists before showed none (first status, files appearing; Fork
+  Tracker #2333, #1663). The filter prunes to the rows shown (L3); while its rows are `Waiting` the
+  selection is left. Removed: `Follow`, `follow`, `follow_the_lists`, `first_shown` and their two
+  tests; `ListSelection` and its emptied-but-still-the-list's state; `acted_rows`' chosen-path
+  fallback, `toggle`'s synthesis, `range`'s anchor fallback, `chosen_is`, `move_to`,
+  `next_after`, `everything`'s own reset, the `Acted` enum; `LocalChangesView::selection`;
+  `LocalChangesList::chosen`; `diff_actions::choose_working(list, row, ..)`. (3) Every route on the
+  selection, wherever focus is: the heading's Stage / Unstage greyed while the selection is in the
+  other list (enabled iff it is in this one); a chord on either list or the diff acts on the
+  selection; a double press selects its row then acts on the selection; a drop carries the
+  selection when begun on a selected row, else selects the row it began on and acts on it (F26);
+  the menu as before (R7.4a); every route takes the selection's paths the lists still SHOW (two
+  binary searches). (4) Stage All: a new trigger, `Trigger::HeadingPress`, a press on a list
+  heading's button, told apart from a row's `Trigger::Press`, so Shift is a range on a row and
+  Stage All on a heading; `StageOrUnstageAll`'s press is `(Shift, HeadingPress)` on Linux and
+  `(⌥, HeadingPress)` on macOS; `HeldKeys::heading_press`, `resolve_heading_press_on`; both
+  headings read Stage All and Unstage All while it is held, enabled while the list shows a row;
+  ⇊ (`Glyph::StageAll`) in Unstaged and ⇈ (`Glyph::UnstageAll`, new) in Staged, always drawn;
+  Alt does nothing. Pinned: `next_selection`'s five unit tests
+  (`after_an_action_the_row_in_the_first_acted_rows_place_is_selected`,
+  `after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor`,
+  `a_vanished_selection_gives_its_place_to_the_row_that_took_it`,
+  `a_filter_prunes_the_selection_to_the_rows_it_shows`,
+  `nothing_selected_becomes_the_first_row_only_as_files_appear`), `LocalSelection`'s four
+  (`a_toggle_adds_a_path_and_the_file_clicked_first_stays_primary`,
+  `the_primary_toggled_out_moves_to_the_nearest_path_and_the_last_leaves_none`,
+  `a_range_spans_from_the_anchor_and_its_row_is_primary`,
+  `a_selection_keeps_its_primary_and_anchor_while_they_stay`),
+  `a_path_is_given_its_place_in_a_list_listed_or_not` (model), the window's
+  `a_refresh_moves_the_selection_and_asks_its_diff_without_a_render` (the request there before any
+  render), `a_filter_hiding_the_primary_selects_the_row_shown_in_its_place` (rewritten from the
+  Changes-tab rule), `a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row`
+  (the row in its place, not the first), `the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first`,
+  `every_route_takes_the_selection_and_nothing_the_person_did_not_select`; headless
+  `the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything` (greyed in the
+  other list, ⇈) and `only_the_platforms_key_turns_the_headings_into_stage_all` (Alt inert on
+  Linux); the table's `a_press_resolves_against_the_keys_the_window_heard` and
+  `the_table_is_forks_chords_and_no_others`, the chord and modifier guards green.
+- **Stopping rules, neither triggered**: Shift on Linux collides with nothing Fork for Windows
+  does not show — the heading press is its own trigger, so Shift on a row is still a range and
+  Shift on a heading is Stage All, and the headings turning while Shift is held for a range is
+  what Fork for Windows draws (TrackerWin #2429). The primary toggled out then a range is settled
+  by the phase doc's own rules, step by step: the primary toggled out moves to the nearest
+  selected (R8.1), and a range spans anchor..row with the row primary (step 2.1); the anchor
+  after its own row is toggled out moves to the primary (brief 3.1: the anchor is one of the
+  paths).
+- **Decided here**: (a) the rule reads places in the lists' order, not row positions, so "the
+  row that took its place" is right however many rows above it went (an outside commit of
+  several files) and it needs `before` only to know whether it showed a row; (b) the diff is
+  asked only while Local Changes is shown, else once as the view is shown, so a refresh in All
+  Commits never takes the file-diff lane from the commit's file; (c) a plain press of a row whose
+  diff failed asks it again (as before); (d) the stage chord heard on the list WITHOUT the
+  selection acts on the selection (rule 8, "wherever focus is"), while the Stage All chord takes
+  the list it is heard on, and from the diff the selection's list; (e) `NO_PATH_CHOSEN`'s words
+  are left to phase 17, which owns "No file selected".
+- **Carried to phase 17**: the files drawn together (`together_wanted` reads the new selection;
+  the chords over them still take `together_read_paths`), "No file selected", Ctrl+S from the
+  diff and bare Return from the lists only, H1 (the lane owner). **To teardown**: H2 (one
+  pointer-drag primitive), a follow-up issue — on the one list below. QA is the coordinator's
+  (not run here).
 
 ## Phase 15 of the rebuild, the discard prompts (2026-10-10)
 
@@ -382,6 +465,8 @@ Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carrie
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
 
+- **From phase 16** (review-code-app-ui.md H2, file as an issue): one pointer-drag primitive for
+  the lists' drag and the diff's line drag — phase 16 left the drag's lifecycle as it was.
 - **From phase 13's QA** (file as issues): a `post-commit` hook that makes a commit leaves a made
   commit reported `CommitUnconfirmed` (its child's first parent is Cairn's commit) — robust only by
   reading `HEAD`'s reflog for git's own `commit:` entry, which needs the reflog on (item 10); and
@@ -1365,8 +1450,8 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 12 output once | done — C31 pinned; QA adjudicated, fix-now items fixed, full gate green |
 | 13 the commit engine asks git | built in packet mode, full gate green — the token hand-back (a′) and the stripspace parity fix by the coordinator's decisions (2026-10-10); QA the coordinator's |
 | 14 Create Branch | built in packet mode after its stopping rule was decided (2026-10-10), full gate green; QA the coordinator's |
-| 15 the discard prompts | planned |
-| 16 one selection | planned |
+| 15 the discard prompts | built in packet mode after the user's answers (2026-10-10), QA fixes applied, full gate green |
+| 16 one selection | built in packet mode, full gate green, neither stopping rule triggered; QA the coordinator's |
 | 17 one file's diff | planned |
 | 18 the commit box | planned |
 | 19 one home for each message | planned — F7 decided (2026-10-10) |

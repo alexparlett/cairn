@@ -892,7 +892,9 @@ Project invariants:
   a prompt that IS rendered from it is honest and sufficient; which operations are
   destructive at all (an operation left off the roster that takes no token is not
   seen); a roster surface building the token from anything but the `Consequence`
-  it drew; and, since `Consequence` is `Clone`, a surface building two tokens from
+  it drew — or, for the Create Branch dialog, which draws none (B2), from anything but
+  the engine's `Consequence` for the name and commit it shows, on Discard chosen plus
+  the press; and, since `Consequence` is `Clone`, a surface building two tokens from
   one acknowledgement. `qa-checklist`'s: the matchers read spellings, so a token
   reached through a macro, a closure in `ops/` taking one, and a public function
   in `cairn-model` or `cairn-git` that builds a `Consequence` from values its

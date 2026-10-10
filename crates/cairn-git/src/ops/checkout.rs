@@ -92,7 +92,8 @@ pub fn checkout_discarding_consequence(
 /// holds (R1.4) — `HEAD` is the commit it was, the commit can still be read, and the name is
 /// still one git takes and no branch has — refusing with [`Error::CheckoutChangedSinceConfirmed`],
 /// writing nothing, when any moved; nothing else is compared, so an edit made since is discarded
-/// with the rest. An operation begun since is refused as at the confirmation. Every target is
+/// with the rest. An operation begun since is refused as at the confirmation, read last before
+/// git runs. Every target is
 /// read from the confirmation, never from a parameter beside it. Invalidates the refs, the index
 /// and the working tree.
 pub fn create_branch_discarding(
@@ -112,11 +113,6 @@ pub fn create_branch_discarding(
             });
         }
     };
-    if let Some(operation) = repo.operation_in_progress() {
-        return Err(Error::CheckoutRefused {
-            why: CheckoutRefusal::InProgress(operation),
-        });
-    }
     let moved = |what| Err(Error::CheckoutChangedSinceConfirmed { what });
     if head_commit(repo)? != head {
         return moved(CheckoutMoved::Head);
@@ -127,6 +123,15 @@ pub fn create_branch_discarding(
     match repo.branch_name(git, &branch, &CancelSignal::new())? {
         BranchName::Free => {}
         BranchName::Refused(_) => return moved(CheckoutMoved::Name { name: branch }),
+    }
+    // Last before the run, after the name's re-check ran its `git` (phase 14's QA, DO#2): an
+    // operation begun in a terminal since is refused, never abandoned by `-f` unseen. One begun
+    // between this read and git's own start is not seen — the residual race
+    // `docs/systems/staging.md` states.
+    if let Some(operation) = repo.operation_in_progress() {
+        return Err(Error::CheckoutRefused {
+            why: CheckoutRefusal::InProgress(operation),
+        });
     }
     let before = locks_now(repo);
     run(
@@ -195,9 +200,9 @@ mod tests {
 
     /// R11.3's argv, kept and discarding: `checkout -q -b`, Fork's `--no-track -f` only when
     /// discarding (C34), the name as `-b`'s value, the commit by its full id, `--` after it; a
-    /// write's environment. Caught by: `-f` on the kept checkout, `--no-track` dropped (an
-    /// upstream set from `branch.autoSetupMerge` where Fork sets none), a name or a commit read
-    /// as a path, a short id.
+    /// write's environment. Caught by: `-f` on the kept checkout, `--no-track` dropped (Fork's
+    /// argv, held literal here: from a full id git sets no upstream either way, so no effect
+    /// test can see it), a name or a commit read as a path, a short id.
     #[test]
     fn the_checkouts_run_as_r11_names_them() {
         let id = Oid::parse("07da224c7ec04501dfb451be161fa962effe1dc1").unwrap();
@@ -292,5 +297,55 @@ mod tests {
             ]
         );
         forced.assert_a_write();
+    }
+
+    /// Phase 14's QA (DO#2): the in-progress check runs after the name's re-check, whose `git
+    /// check-ref-format` is a process an operation could begin during — so a merge begun while
+    /// the re-check ran is refused, the forced checkout never run and the merge left. The
+    /// `git` here begins one (writes `MERGE_HEAD`) when asked `check-ref-format`, then runs the
+    /// real git. Caught by: the in-progress check made before the name's re-check.
+    #[test]
+    fn an_operation_begun_during_the_recheck_is_refused_before_git_runs() {
+        let fixture = RecordingStub::new();
+        let repo = fixture.repository();
+        let head = model_id(&repo.inner().head_id().unwrap()).unwrap();
+        let program = GitBinary::discover(&super::super::Askpass::new(
+            crate::process::stub_git::StubGit::HELPER,
+            None,
+        ))
+        .unwrap()
+        .path()
+        .to_owned();
+        let stub = crate::process::stub_git::StubGit::with_git(&format!(
+            "dir=\n\
+             for a in \"$@\"; do case \"$a\" in --git-dir=*) dir=\"${{a#--git-dir=}}\";; esac; done\n\
+             case \" $* \" in *\" check-ref-format \"*) printf '%s\\n' {head} > \"$dir/MERGE_HEAD\";; esac\n\
+             exec '{git}' \"$@\"",
+            git = program.display(),
+        ));
+        let git = crate::process::stub_git::discover_retrying(stub.environment()).unwrap();
+        let consequence = checkout_discarding_consequence(&repo, "late", head).unwrap();
+        assert!(!repo.git_dir().join("MERGE_HEAD").exists());
+        let refused = create_branch_discarding(&git, &repo, Confirmed::by_user(consequence), None);
+        assert!(
+            matches!(
+                refused,
+                Err(Error::CheckoutRefused {
+                    why: CheckoutRefusal::InProgress(cairn_model::OperationInProgress::Merge)
+                })
+            ),
+            "{refused:?}"
+        );
+        assert!(
+            repo.git_dir().join("MERGE_HEAD").exists(),
+            "the merge abandoned"
+        );
+        assert!(
+            repo.inner()
+                .try_find_reference("refs/heads/late")
+                .unwrap()
+                .is_none(),
+            "a branch was written"
+        );
     }
 }

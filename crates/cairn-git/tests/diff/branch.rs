@@ -300,8 +300,9 @@ fn tree(repo: &Repo) -> Vec<(PathBuf, Vec<u8>)> {
 /// nothing at kept — on the new branch at the commit; the consequence it was confirmed with is
 /// fixed, naming no file, and is the prompt recorded. The oracle is Fork's observed command,
 /// `git checkout --no-track -b <name> <commit> --force`, run on an identical fixture. Caught by:
-/// a kept checkout run, a prediction put back, `--no-track` dropped (an upstream set where
-/// Fork's sets none), or anything lost or kept otherwise than Fork's command does.
+/// a kept checkout run, a prediction put back, or anything lost or kept otherwise than Fork's
+/// command does. (`--no-track` is held by the literal argv of `the_checkouts_run_as_r11_names_them`:
+/// from a full id git sets no upstream with or without it.)
 #[test]
 fn a_discarding_checkout_leaves_what_forks_command_leaves() {
     let (repo, older) = dirty();

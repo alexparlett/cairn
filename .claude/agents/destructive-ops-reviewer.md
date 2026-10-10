@@ -61,6 +61,17 @@ CRITICAL, each one a finding on its own:
    rather than at the acknowledgement handler, a prompt assembled differently in
    the UI than in the token, or a `Confirmed::by_user` given a `Consequence`
    other than the one whose prompt the surface drew, each defeats the seal.
+   One roster surface draws no prompt, by the user's decision (staging-and-commit
+   B2, 2026-10-10): the Create Branch dialog, whose Create and Checkout — or
+   Return — with Discard chosen is the acknowledgement. There the check is that
+   the token is built only on that deliberate choice plus the press, and only
+   from the engine's `Consequence` for the exact name and commit the dialog
+   shows: the answer keyed by the name it was asked for, the press's handler
+   re-checking that Discard is still chosen and that the token's consequence is
+   the one for the name shown, and nothing asked while a Git Error is up
+   (`crates/cairn-app/src/create_branch.rs`'s `discard_confirmed`). A token built
+   for another name, a previous choice, or a consequence the engine did not
+   answer for that name is a finding.
 4. **Counts and names computed after the prompt.** If the prompt says "3 commits"
    but the number is read again inside the operation, the user agreed to a
    different thing than what runs. The quantities in the prompt must be the

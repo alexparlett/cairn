@@ -753,6 +753,236 @@ fn an_operation_in_progress_refuses_discard_in_the_dialog() {
     assert_eq!(writes(&submitted).len(), 1, "Don't change held back");
 }
 
+/// The write `id` ended in git's refusal to check out over a local change.
+fn failed(id: OperationId) -> Update {
+    Update::WriteEnded {
+        id,
+        ending: WriteEnding::Failed {
+            message: "git failed".to_owned(),
+            locks: Vec::new(),
+            command: Some("git --literal-pathspecs checkout -q -b topic abab --".to_owned()),
+            output: cairn_model::ScrubbedLines::scrubbing(
+                "error: Your local changes to the following files would be overwritten by \
+                 checkout:\n",
+            ),
+        },
+        read_again: crate::worker::ReadAgain::Everything,
+    }
+}
+
+/// The window's submit, for a test calling the dialog's handlers directly.
+fn submitter(submitted: &Submitted) -> impl Fn(Request) + use<> {
+    let submitted = submitted.clone();
+    move |request| submitted.borrow_mut().push(request)
+}
+
+/// Phase 14's QA (TC#1): what Discard would be confirmed as is kept for the name it was asked
+/// for, and is never the token for another name shown. Discard is answered for "rescue"; the
+/// name becomes "rescue2", which the name check answers free before Discard's answer for it
+/// arrives: the button is not ready and neither a press nor Return builds a token. Once
+/// "rescue2"'s answer is in, the token names "rescue2". Caught by: the answer kept unkeyed (the
+/// filter on its name dropped), a token for a branch the dialog no longer shows.
+#[test]
+fn an_older_names_discard_answer_never_builds_the_token() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Ok(discarding("rescue")),
+        },
+    );
+    type_name(&mut test, view, "rescue2");
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::BranchName {
+            name: "rescue2".to_owned(),
+            outcome: Ok(BranchName::Free),
+        },
+    );
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    assert!(
+        discards_asked(&submitted).is_empty(),
+        "a token built from another name's answer: {:?}",
+        discards_asked(&submitted)
+    );
+    let (newer, name) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("the new name was not asked"));
+    assert_eq!(name, "rescue2");
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked: newer,
+            outcome: Ok(discarding("rescue2")),
+        },
+    );
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(discards_asked(&submitted), [discarding("rescue2")]);
+}
+
+/// Phase 14's QA (DO#3): the press's handler takes the token only while Discard is still chosen
+/// and the token's consequence is the one asked for the name shown — a token built at the last
+/// render, for another name or before the radio moved, is let go of. Caught by: a token spent
+/// for a state the dialog no longer shows.
+#[test]
+fn a_token_for_another_name_or_choice_is_let_go_of() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Ok(discarding("rescue")),
+        },
+    );
+    let submit = submitter(&submitted);
+    // A token for a name not shown.
+    test.run_in(|| {
+        crate::create_branch::discard_confirmed(
+            view,
+            cairn_model::Confirmed::by_user(discarding("other")),
+            Some(&submit),
+        )
+    });
+    settle(&mut test);
+    assert!(
+        discards_asked(&submitted).is_empty(),
+        "another name's token spent"
+    );
+    // "Don't change" chosen since the token was built.
+    click(&mut test, DONT_CHANGE_CAPTION);
+    test.run_in(|| {
+        crate::create_branch::discard_confirmed(
+            view,
+            cairn_model::Confirmed::by_user(discarding("rescue")),
+            Some(&submit),
+        )
+    });
+    settle(&mut test);
+    assert!(
+        discards_asked(&submitted).is_empty() && writes(&submitted).is_empty(),
+        "a token spent with Don't change chosen"
+    );
+    // The one for the state shown is taken.
+    click(&mut test, DISCARD_LOCAL_CAPTION);
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked again"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Ok(discarding("rescue")),
+        },
+    );
+    test.run_in(|| {
+        crate::create_branch::discard_confirmed(
+            view,
+            cairn_model::Confirmed::by_user(discarding("rescue")),
+            Some(&submit),
+        )
+    });
+    settle(&mut test);
+    assert_eq!(discards_asked(&submitted), [discarding("rescue")]);
+}
+
+/// Phase 14's QA (RS#1): while a create's Git Error is up over the dialog, nothing more is
+/// asked — neither the create nor a discard — though the dialog beneath is ready again. Caught
+/// by: a second forced checkout run under the Git Error, kept from it only by where focus sits.
+#[test]
+fn nothing_is_asked_while_a_creates_git_error_is_up() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Ok(discarding("rescue")),
+        },
+    );
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    let (id, _) = writes(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    apply(&mut test, view, &submitted, failed(id));
+    assert!(drawn(&test, GIT_ERROR_TITLE));
+    let submit = submitter(&submitted);
+    test.run_in(|| {
+        crate::create_branch::discard_confirmed(
+            view,
+            cairn_model::Confirmed::by_user(discarding("rescue")),
+            Some(&submit),
+        )
+    });
+    settle(&mut test);
+    assert_eq!(
+        writes(&submitted).len(),
+        1,
+        "a discard asked under the Git Error"
+    );
+    click(&mut test, DONT_CHANGE_CAPTION);
+    test.run_in(|| crate::create_branch::create(view, Some(&submit)));
+    settle(&mut test);
+    assert_eq!(
+        writes(&submitted).len(),
+        1,
+        "a create asked under the Git Error"
+    );
+}
+
+/// Phase 14's QA (TC#3): a press outside, or Escape, heard by the dialog beneath while a
+/// create's Git Error is over it does not close it: Close returns to it as it was left. Caught
+/// by: `cancel` taking the dialog away under the Git Error, its name and choices lost.
+#[test]
+fn a_cancel_under_the_git_error_leaves_the_dialog_as_it_was() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    click(&mut test, DONT_CHANGE_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    let (id, _) = writes(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    apply(&mut test, view, &submitted, failed(id));
+    test.run_in(|| crate::create_branch::cancel(view));
+    settle(&mut test);
+    click(&mut test, cairn_ui::CLOSE_CAPTION);
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "the dialog went under the Git Error"
+    );
+    assert_eq!(view.branch.name.peek().as_str(), "rescue");
+    assert!(drawn(&test, LOCAL_CHANGES_LABEL), "its choices were lost");
+}
+
 /// R11.3 and C34: a create that fails opens Fork's Git Error dialog over git's words, OVER the
 /// dialog, which stays open beneath it as it was left — its name, its box and its choice — so
 /// Close returns to it; Escape closes the Git Error alone. Caught by: a failure shown nowhere,
@@ -780,19 +1010,6 @@ fn a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was() {
         },
     );
     click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
-    let failed = |id| Update::WriteEnded {
-        id,
-        ending: WriteEnding::Failed {
-            message: "git failed".to_owned(),
-            locks: Vec::new(),
-            command: Some("git --literal-pathspecs checkout -q -b topic abab --".to_owned()),
-            output: cairn_model::ScrubbedLines::scrubbing(
-                "error: Your local changes to the following files would be overwritten by \
-                 checkout:\n",
-            ),
-        },
-        read_again: crate::worker::ReadAgain::Everything,
-    };
     let (id, _) = writes(&submitted)
         .pop()
         .unwrap_or_else(|| panic!("nothing asked"));
@@ -840,8 +1057,8 @@ fn a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was() {
 }
 
 /// R11.3, C28 and the review's M5: while Create Branch is open — and while a create's Git Error
-/// is up — the window's keys are inert: a window chord does nothing. Caught by: the dialog left
-/// out of `keys_inert`.
+/// is up, the dialog gone — the window's keys are inert: a window chord does nothing. Caught by:
+/// the dialog, or its Git Error, left out of `keys_inert`.
 #[test]
 fn the_windows_keys_are_inert_while_create_branch_is_up() {
     let (mut test, view, submitted) = launch();
@@ -865,5 +1082,37 @@ fn the_windows_keys_are_inert_while_create_branch_is_up() {
         refreshes(&submitted),
         heard,
         "a chord acted under the dialog"
+    );
+
+    // A create's Git Error alone (phase 14's QA, TC#2): the dialog cancelled while its write ran,
+    // the write then failing.
+    type_name(&mut test, view, "topic");
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::BranchName {
+            name: "topic".to_owned(),
+            outcome: Ok(BranchName::Free),
+        },
+    );
+    click(&mut test, CREATE_CAPTION);
+    let (id, _) = writes(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    test.run_in(|| crate::create_branch::cancel(view));
+    settle(&mut test);
+    assert!(!drawn(&test, CREATE_BRANCH_TITLE));
+    apply(&mut test, view, &submitted, failed(id));
+    assert!(drawn(&test, GIT_ERROR_TITLE));
+    assert!(crate::shortcuts::keys_inert(view));
+    // The write's ending asks its own read again; counted from here.
+    let heard = refreshes(&submitted);
+    press_chord(&mut test, Action::Refresh);
+    settle(&mut test);
+    assert_eq!(
+        refreshes(&submitted),
+        heard,
+        "a chord acted under a create's Git Error"
     );
 }

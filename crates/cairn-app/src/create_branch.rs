@@ -334,6 +334,10 @@ pub fn create(view: View, submit: Option<&dyn Fn(Request)>) {
     let typed = view.branch.name.peek().clone();
     let write = {
         let state = view.branch.state.peek();
+        // Nothing is asked while a create's Git Error is over the dialog (phase 14's QA, RS#1).
+        if state.error.is_some() {
+            return;
+        }
         let Some(opened) = state.open.as_ref() else {
             return;
         };
@@ -357,22 +361,29 @@ pub fn create(view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// The dialog's button, or Return in its field, with Discard chosen: the press built `token`
-/// from the consequence the dialog was handed, and the discarding write is asked with it.
+/// from the consequence the dialog was handed, and the discarding write is asked with it — only
+/// while Discard is still chosen, the token's consequence is the one asked for the name shown,
+/// no write of this opening's runs and no create's Git Error is up (phase 14's QA, DO#3, RS#1):
+/// the dialog's handler was built at its last render, and a radio press or a keystroke handled
+/// since must not spend a token for a state no longer shown. Otherwise the token is let go of.
 pub fn discard_confirmed(view: View, token: Confirmed, submit: Option<&dyn Fn(Request)>) {
     let Some(submit) = submit else {
         return;
     };
-    if view
-        .branch
-        .state
-        .peek()
-        .open
-        .as_ref()
-        .is_none_or(|opened| opened.writing.is_some())
-    {
-        return;
+    let typed = view.branch.name.peek().clone();
+    let takes = {
+        let state = view.branch.state.peek();
+        state.error.is_none()
+            && state.open.as_ref().is_some_and(|opened| {
+                opened.writing.is_none()
+                    && discards(view, &state, opened)
+                    && ready(opened, &typed, true)
+                    && consequence_for(opened, &typed).as_ref() == Some(token.consequence())
+            })
+    };
+    if takes {
+        asked(view, submit, LocalWrite::CreateBranchDiscarding(token));
     }
-    asked(view, submit, LocalWrite::CreateBranchDiscarding(token));
 }
 
 /// `write` asked for the open dialog, which stays open until it ends.

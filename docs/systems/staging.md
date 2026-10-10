@@ -124,7 +124,9 @@ is pinned against real git on the host's git and, through
   command leaves (`a_discarding_checkout_leaves_what_forks_command_leaves`, against Fork's
   command run on an identical fixture): staged and unstaged changes and a staged new file gone,
   an untracked file at a path the commit holds overwritten, an untracked file it holds nothing
-  at kept, no upstream set. Over a submodule's change it runs as Fork's does, and git leaves the
+  at kept. (No upstream is set with or without Fork's `--no-track`, since the start point is
+  a full id, so `--no-track` is held by the literal argv alone,
+  `the_checkouts_run_as_r11_names_them`.) Over a submodule's change it runs as Fork's does, and git leaves the
   submodule's change in place — its checkout on the moved commit, the edits inside it, and a
   staged change of its commit listed again as unstaged — while it discards the rest; over a
   conflicted path with no operation in progress git discards the conflict
@@ -134,7 +136,12 @@ is pinned against real git on the host's git and, through
   a rebase, a cherry-pick, a revert or `git am` it is refused before git runs —
   `CheckoutRefusal::InProgress`, both when the consequence is read and again before the run —
   since git's forced checkout abandons the operation without a word, a merge's `MERGE_HEAD` and
-  `MERGE_MSG` removed (`a_merge_in_progress_is_refused_with_git_not_run`). Its re-check, just
+  `MERGE_MSG` removed (`a_merge_in_progress_is_refused_with_git_not_run`). The run's check is
+  the last thing before git starts — after the re-check below, whose name check runs a `git`
+  an operation could begin during (`an_operation_begun_during_the_recheck_is_refused_before_git_runs`).
+  Residual race, stated: an operation begun in a terminal between that read and git's own start
+  is not seen, and the forced checkout abandons it: the window can be narrowed to that read and
+  git's start, not closed. Its re-check, just
   before git runs, is that `HEAD` is still the commit it was, the commit can still be read, and
   the name is still free (`Repository::branch_name`) — `Error::CheckoutChangedSinceConfirmed`
   with `CheckoutMoved::Head`, `Commit` or `Name`, writing nothing — and nothing else: a file

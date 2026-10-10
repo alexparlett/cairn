@@ -269,7 +269,7 @@ never enters `cairn-git` and never enters application state.
   `Error::RemoteConfig`, and no fetch starts
   (`an_unreadable_remote_configuration_is_reported_and_starts_nothing`;
   `a_failed_or_cancelled_read_is_an_error_never_an_unset_key` in
-  `reads/fetch_settings.rs`), except that a read ended because the
+  `reads/config.rs`), except that a read ended because the
   repository is closing is the fetch cancelled before it started,
   `Error::GitCancelled` with no lock files, as a close of a running fetch
   reports it (`a_fetch_closed_as_it_starts_is_still_ended`, in `cairn-app`);

@@ -3,6 +3,37 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 13 built, the commit engine asks git (packet mode)
+
+Built on `feature/staging-and-commit` from d81f3ef. What shipped is state.md's "Phase 13". Notes
+for the record:
+
+- **Evidence gathered first, on 2.56.0, 2.30.9 and 2.32.7.** `git commit` with an editor leaves
+  exactly what `git stripspace --strip-comments` leaves under the default cleanup with `#` or `;`,
+  and under `scissors` where the merge's own message holds no comment-character line; it keeps
+  more under `whitespace`, `verbatim`, `scissors` with such a line, and `core.commentChar=auto`
+  (git's commit then picks another comment character). `git commit -F -` during a single
+  cherry-pick keeps the picked author and removes `CHERRY_PICK_HEAD`; during a single revert it
+  removes `REVERT_HEAD`; git keeps no `sequencer/` for one commit and does for two. `git config
+  --type=bool --get` parses every value of a key, so it fails on `always` anywhere above the last
+  value; git's own reading takes `always` case-insensitively (`ALWAYS` logs tags). A failing
+  `pre-commit` leaves `.git/index` rewritten and two loose tree objects written — the stopping
+  rule's evidence.
+- **Decided here**: carried #10 — a commit or amend reported made must leave `HEAD` the commit it
+  made (first parent the old `HEAD`; an amend, the replaced commit's parents, the same object
+  allowed after git's exit 0); `CommitCancelledBeforeRunning` is `Cancelled` (the user cancelled
+  it), not `NotRun`; an amend at the press is a `LocalWrite` so it queues, runs and cancels as a
+  commit does; the config file renamed `reads/config.rs`.
+- **Removed**: `crates/cairn-git/src/commit_hooks.rs`, `crates/cairn-git/src/reads/hooks_path.rs`,
+  `crates/cairn-model/src/commit_hooks.rs` and their pins
+  (`the_hooks_path_read_writes_nothing_and_runs_nothing`,
+  `the_hooks_directory_is_gits_own_answer_made_absolute`,
+  `a_hook_counts_where_access_would_let_its_owner_run_it`,
+  `the_skip_is_offered_exactly_where_either_hook_would_run`); `Consequence::Amend`'s subject,
+  `replaces`, `force_push_warning`, `needs_force_push`, `amend_replaces`, `amend_force_push`;
+  `amend.rs`'s gix `reflog` read and `subject`; `commit.rs`'s gix `utf8_messages`;
+  `WriteEnding::MayHaveTakenEffect` and `Outcome::MayHaveTakenEffect`.
+
 ## 2026-10-10 — phase 12's QA fixes (packet mode)
 
 The coordinator's adjudication confirmed 13 findings (3 dismissed: #3, #9, #14). Fixed, test

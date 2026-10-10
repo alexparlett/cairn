@@ -198,10 +198,13 @@ shows its elapsed time and the local lane waits for it.
 ## Failure
 
 A failed invocation reports its arguments, its exit status and the retained tail
-of its stderr, so "git failed" is never the whole message. A cancelled read is not
-a cancelled write: a read reports that it was cancelled and nothing more, while a
-cancelled or unwatched write reports that it may have taken effect — the refresh
-after it shows what did — and which lock files it left. Every local write's
+of its stderr, so "git failed" is never the whole message. A cancelled read reports
+that it was cancelled and nothing more. A cancelled write is the user's cancel, never
+a guess at what it did: a commit or an amend — the writes that can be cancelled —
+reads `HEAD` once its `git` is reaped, so one git had already made is reported made
+and one it had not is cancelled; and a write whose `git` Cairn lost hold of is a
+failure, saying the lists and history show anything it had already done. Each names
+the lock files it left. Every local write's
 outcome carries the lock files present before it and stranded after it. When a
 write fails and a lock file it needs is present, Cairn names the file — another
 git process, or a stale lock — rather than retrying: git never waits on

@@ -32,8 +32,11 @@ decisions: design pass done, rebuild planned — phases 12-20 rebuild what the r
 the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran under as phase
 12); see "The redesign" below. The user's answers to the six open questions recorded
 (2026-10-10). Phase 12 of the rebuild (git's output read once) built in packet mode, full gate
-green; its QA is the coordinator's. Next: phase 12's QA, then phase 13
-(`phase-13-commit-asks-git.md`).**
+green, its QA fixes applied. Phase 13 (the commit engine asks git) built in packet mode, full gate
+green, all but one step: a confirmed amend's unspent token handed back (step 5, option (a)) is
+NOT built — its stopping rule triggered (git writes the index and tree objects before
+`pre-commit` runs, on every git), and the question is the user's; see "Phase 13" below. QA is the
+coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -77,6 +80,51 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 13 of the rebuild, the commit engine asks git (2026-10-10)
+
+- **Built** (`phase-13-commit-asks-git.md`): (1) amend at the press — `ops::amend_unconfirmed`
+  reads the cost and runs an amend git logs and no remote has with no token, or answers its
+  `Consequence` (`AmendAnswer::NeedsConfirming`); `LocalWrite::AmendAtPress` runs it as one lane
+  job, ending `Done` or `WriteEnding::NeedsConfirming` (phase 18's box asks it; dead code in the
+  binary until then, `expect(dead_code)`); `Consequence::Amend` is `{ commit, published, reflog }`,
+  its prompt R10.6's fixed sentences, button "Amend", `needs_confirming()` the one rule;
+  `ops::amend`'s re-check compares no display field. (2) `core.logAllRefUpdates` and
+  `i18n.commitEncoding` through `reads/config.rs` (renamed from `fetch_settings.rs`, the guard's
+  row moved, its self-test refusing the old path): the last value as `--get` prints it, `always`
+  in any case first, then git's boolean rules (`diff::git_config::parse_bool`) — `--type=bool`
+  parses every value and fails on a global `always` beneath `init`'s `true`; an empty value asks
+  git's boolean parse. No gix configuration read is left for either. (3) `reads/stripspace.rs`,
+  `git stripspace --strip-comments`, with its guard row (`STRIPSPACE_READ_FILE`,
+  `STRIPSPACE_OPTIONS`), its self-test cases, and `Repository::prepared_message`. (4) A single
+  cherry-pick or revert concluded by Commit; sequences (`CherryPickSequence`, `RevertSequence`), a
+  rebase and `git am` refuse, the refusal naming `git <cmd> --continue or --abort`; a detached
+  `HEAD` commits. (5) `commit_hooks.rs`, `reads/hooks_path.rs`, `CommitHooks`, `CommitReads::hooks`
+  and the hooks-path pin removed; the skip offered on every failure. (6) Made read from `HEAD`
+  after the reap: a cancelled commit or amend git made is `Done`, one it had not is
+  `WriteEnding::Cancelled`; `MayHaveTakenEffect` gone; `GitUnwatched` is `Failed` with R4.7's
+  sentence; carried #10 decided — git's exit 0 with `HEAD` not the commit made is
+  `Error::CommitUnconfirmed`, pinned beside "HEAD moved in between".
+- **Interim commit box** (phase 18 rebuilds): the in-place line gone; the amend button reads
+  "Amend Last Commit" (`AMEND_BUTTON_CAPTION`, the user's answer 3) — the toggle and the dialog's
+  button both read "Amend"; `AmendButton` refuses what `needs_confirming` says (an unlogged amend
+  now goes through the dialog too); `AMEND_TITLE` "Amend Commit"; a merge, single pick or revert
+  fills an empty draft with the cleaned message; the skip offered on every failure.
+- **NOT built — needs the user (step 5's option (a))**: the stopping rule "a token could come back
+  from a run in which git wrote anything" holds on every git: a commit or amend whose `pre-commit`
+  fails has already rewritten `.git/index` (refreshed stat data, the cache tree) and written loose
+  tree objects (git 2.30.9 and 2.56.0, reproduced), so no hook-failed run writes nothing. The skip
+  of a confirmed amend still works as before (`AmendSkip` builds a new token). The question, with
+  options, is in the phase's report.
+- **Divergence pinned, for the user's eye**: C32's `git stripspace --strip-comments` is git's
+  editor only under `strip`/default cleanup with an explicit comment character; under
+  `commit.cleanup` `whitespace`/`verbatim`/`scissors` (a comment-character line of the merge's own
+  above the scissors line) and `core.commentChar=auto`, git's editor keeps lines the strip drops
+  (`where_gits_editor_is_not_the_strip_of_comments_it_is_pinned`). Built as C32 says.
+- **Carried**: `Publication::SomeRemote` names no ref ("is already on a remote") — naming one
+  would cost a walk per remote ref; an amend at the press has no way back in the activity popover
+  yet (`LocalWrite::replaces` is `None` for it; phase 20); `prepared_message` reads `MERGE_MSG`
+  lossily as UTF-8 (a non-UTF-8 encoding is refused at commit anyway).
 
 ## Phase 12 of the rebuild, git's output read once (2026-10-10)
 
@@ -1113,7 +1161,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
 | 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 by the user's answers (2026-10-10); design pass done, rebuild planned (2026-10-10) |
 | 12 output once | done — C31 pinned; QA adjudicated, fix-now items fixed, full gate green |
-| 13 the commit engine asks git | planned — the confirmed amend's skip decided (option (a), 2026-10-10) |
+| 13 the commit engine asks git | built in packet mode, full gate green — all but step 5's token hand-back, whose stopping rule triggered (needs the user); QA the coordinator's |
 | 14 Create Branch | planned |
 | 15 the discard prompts | planned |
 | 16 one selection | planned |

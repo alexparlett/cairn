@@ -170,8 +170,8 @@ worktree's `includeIf "gitdir:..."` against the common directory where git uses
 the worktree's own git directory, reads the system file from its own path, and
 decides trust by an owner rule of its own, and each of those once let through a
 fetch git then made. So git answers: `git config --includes --null` with
-`--type=bool --get <key>` or `--get-all <key>`, query form only, never a setter
-(`reads::fetch_settings`), the second porcelain mode a read runs, accepted by
+`--type=bool --get <key>`, `--get <key>` or `--get-all <key>`, query form only, never a
+setter (`reads::fetch_settings`), the second porcelain mode a read runs, accepted by
 the user; the check fails closed when the read fails.
 
 The fourth case is status: which paths are staged, changed, untracked or in
@@ -317,9 +317,9 @@ those users a diff `git diff` does not, and would hand staging a patch built fro
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git
 does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
-the top of the working tree (`./-` for `-`) — one of the three porcelain modes
-a read runs (the others are `git config` in query form and `git stash show` in raw
-form, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
+the top of the working tree (`./-` for `-`) — one of the four porcelain modes
+a read runs (the others are `git config` in query form, `git stash show` in raw
+form and `git stripspace --strip-comments`, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
 diff (`git diff-index --cached`) reads only objects; a staged rename or copy is

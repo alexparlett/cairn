@@ -10,7 +10,7 @@ are the model's (`docs/systems/diff.md`, "Stage, unstage and discard"); how ever
 `git` process is built and run, and the local write lane each verb runs on, is
 `docs/systems/git-processes.md`.
 
-**What exists:** the engine half and the lane. Eleven verbs, four `Consequence`
+**What exists:** the engine half and the lane. The verbs below, the `Consequence`
 builders and the reads they stand on; the application runs every verb on its local
 write lane (`docs/systems/git-processes.md`, "The local write lane"). Local Changes and
 the commit box ask for the staging, discarding and committing verbs
@@ -245,8 +245,8 @@ did not move — when anything it names moved (R1.4).
 
 ## Commit and amend
 
-`ops::commit` and `ops::amend` (`crates/cairn-git/src/ops/commit.rs`) run `git
-commit -q -F -` and `git commit -q --amend -F -`, the message on stdin byte for
+`ops::commit`, `ops::amend_unconfirmed` and `ops::amend` (`crates/cairn-git/src/ops/commit.rs`)
+run `git commit -q -F -` and `git commit -q --amend -F -`, the message on stdin byte for
 byte, as a write with the operation's askpass token (R6.1, R6.2, R6.5) — and never
 `--literal-pathspecs`: a commit takes no pathspec, and git would export the mode to
 every hook it runs, where a `pre-commit` hook's own `git diff -- '*.rs'` would then
@@ -255,6 +255,7 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
 | Verb | `git` | stdin | Destructive |
 | --- | --- | --- | --- |
 | `commit` | `commit -q [--no-verify] -F -` | the message | no |
+| `amend_unconfirmed` | `commit -q --amend [--no-verify] -F -`, only where git logs it and no remote has `HEAD` | the message | no |
 | `amend` | `commit -q --amend [--no-verify] -F -` | the message | yes |
 
 - **The message is git's to clean.** No `--cleanup` is passed, so `commit.cleanup`
@@ -267,18 +268,20 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   `crates/cairn-git/tests/diff/commit.rs`). The message never reaches `argv`, so
   neither the process table nor the command log holds it.
 - **A non-UTF-8 `i18n.commitEncoding`** is refused before git runs
-  (`Error::CommitRefused`, `CommitRefusal::CommitEncoding`), its name read as git
+  (`Error::CommitRefused`, `CommitRefusal::CommitEncoding`): the setting as `git config`
+  answers it (`reads::commit_encoding`, R6.11 — a linked worktree's `includeIf`, the system
+  file and trust read as git reads them, never by gix:
+  `a_linked_worktrees_conditional_include_sets_the_commits_settings`), its name read as git
   reads it — `UTF-8` or `UTF8` in any case
   (`a_non_utf8_commit_encoding_is_refused_before_git_runs`,
   `utf8_is_named_as_git_names_it`).
 - **Hooks run as git runs them.** `Hooks::Skip` — `--no-verify`, which skips
-  `pre-commit` and `commit-msg` and nothing else — is passed only for the hook
-  failure's skip (R10.5). `Repository::commit_hooks` says which of the two git
-  would run (R6.6, `CommitHooks`): in the directory `reads::hooks_path` resolves
-  (`git rev-parse --git-path hooks`, so `core.hooksPath` counts), a file `access(2)`
-  would let this process execute, following a link
-  (`a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits`,
-  `a_hook_counts_where_access_would_let_its_owner_run_it`). A failing hook fails
+  `pre-commit` and `commit-msg` and nothing else — is passed only for the skip a failed
+  commit or amend offers, which it offers on every failure (R10.5 as C4 amended it): Cairn
+  keeps no model of which hooks git would run, so a `core.hooksPath` git resolves, or a hook
+  declared in configuration, is git's to find
+  (`a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits`). A
+  failing hook fails
   the commit with git's output — the runner's tail of stdout's and stderr's lines
   in the order they arrived, whole and scrubbed (`Invocation::lines`, R4.10),
   since git says "nothing to commit" and "would make it empty" on stdout — and
@@ -293,24 +296,64 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   `a_commit_cancelled_before_git_runs_writes_nothing`) — is handed an
   `ops::CommitCancel` as git starts, which ends git's process group as a fetch's
   cancel does, and is given every line git or a hook writes as it arrives.
+- **Made is read from `HEAD`** (R4.7; phase 12's QA item #10). After git is reaped `HEAD` is
+  read again: a commit was made when `HEAD` is a commit whose first parent is the `HEAD` it
+  ran on (none, on an unborn branch); an amend, when `HEAD`'s parents are the replaced
+  commit's, as the object names them (a shallow boundary's included). So a commit or an amend
+  cancelled after git made it — its `post-commit` hook running — is reported made, and one
+  cancelled before is `Error::GitCancelled`
+  (`a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so`); git's exit 0 with
+  `HEAD` anything else — something moved it while git ran — is
+  `Error::CommitUnconfirmed`, never made
+  (`a_commit_git_says_it_made_with_head_elsewhere_is_unconfirmed`, beside "HEAD moved in
+  between", `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`); an
+  amend that makes the very object it replaced — one second, the same tree and message — is
+  made (`an_amend_that_makes_the_same_commit_is_made`). Where `HEAD` cannot be read, git's
+  exit decides.
 - **What it invalidates:** the refs, the index (a hook may stage) and the objects.
 
 **The operation in progress** (R6.9, L25) is `Repository::operation_in_progress`
 (`crates/cairn-git/src/operation_in_progress.rs`), the files git's `wt_status`
-reads — `MERGE_HEAD` (with `MERGE_MSG`), `rebase-apply/` (`applying` in it for
-`git am`), `rebase-merge/`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and the sequencer's
-next command — rather than gix's `Repository::state`, which checks in another order
-and never reads the sequencer, so a cherry-pick sequence whose stopped pick was
-committed would read as nothing. A rebase, `git am`, a cherry-pick or a revert
-refuses a commit and an amend before git runs, naming it; a merge's commit is the
-merge commit, its parents `HEAD` and `MERGE_HEAD`, and an amend is refused during
-it
-(`a_merge_in_progress_commits_the_merge_and_refuses_an_amend`,
-`a_rebase_am_cherry_pick_or_revert_in_progress_refuses_commit_and_amend`, each
-state made by real git and checked against what `git status` says).
+reads — `MERGE_HEAD`, `rebase-apply/` (`applying` in it for `git am`), `rebase-merge/`,
+`CHERRY_PICK_HEAD`, `REVERT_HEAD` and the sequencer's next command — rather than gix's
+`Repository::state`, which checks in another order and never reads the sequencer, so a
+cherry-pick sequence whose stopped pick was committed would read as nothing. A merge, a
+single cherry-pick and a single revert are concluded by the commit, as `git commit` concludes
+them: a merge's commit is the merge commit, its parents `HEAD` and `MERGE_HEAD`
+(`a_merge_in_progress_commits_the_merge_and_refuses_an_amend`); a single pick's keeps the
+picked commit's author and git removes `CHERRY_PICK_HEAD`, a single revert's is the
+committer's and git removes `REVERT_HEAD`, each equal to what `git commit -F` makes
+(`a_single_cherry_pick_is_concluded_by_commit_keeping_its_author`,
+`a_single_revert_is_concluded_by_commit`; git keeps no sequencer state for one commit). A
+rebase, `git am` and a sequence of picks or reverts (`sequencer/`) refuse a commit and an
+amend before git runs, naming git's own command to continue or abort it
+(`OperationInProgress::git_command`;
+`a_rebase_am_or_sequence_in_progress_refuses_commit_and_amend`), and an amend is refused
+during any operation, as git refuses it. A detached `HEAD` is no operation: the refs
+snapshot says so, and a commit there is made on no branch, refused by nothing
+(`a_commit_on_a_detached_head_is_made`). Each state is made by real git and checked against
+what `git status` says.
+
+**The message git prepared** for the commit that concludes a merge, a cherry-pick or a revert
+is `Repository::prepared_message`: `MERGE_MSG` cleaned of git's commentary by
+`reads::stripspace`, `git stripspace --strip-comments` with the message on stdin, run in the
+repository so git reads `core.commentChar` itself (R6.10, C32). Under the default cleanup
+and an explicit comment character, what it leaves is what `git commit` with an editor leaves
+— `# Conflicts:` gone, a scissors section gone, a `#123` line of the merge's own message
+dropped where `#` is the comment character and kept where `;` is — and what the box then
+commits is that, on git 2.30.9, 2.32.7 and the host's
+(`merge_msg_is_cleaned_and_committed_as_gits_editor_leaves_it`). It writes nothing and runs
+nothing (`the_stripspace_read_writes_nothing_and_runs_nothing`). Where git's editor is not
+`strip`'s cleaning, C32's strip is kept and the difference pinned
+(`where_gits_editor_is_not_the_strip_of_comments_it_is_pinned`): under `commit.cleanup=
+scissors` the editor keeps a comment-character line of the merge's own above the scissors
+line, under `whitespace` (and `verbatim`) it keeps `# Conflicts:`, and under
+`core.commentChar=auto` git's commit picks another comment character because a line starts
+with `#`, keeping `# Conflicts:`, where `stripspace` reads `auto` as `#`.
 
 **What the commit box reads** beside the verbs, each on a worker:
-`Repository::recent_messages`, the messages of the last `RECENT_MESSAGES` (ten)
+`Repository::operation_in_progress` and, while one a commit concludes is in progress,
+`Repository::prepared_message`; `Repository::recent_messages`, the messages of the last `RECENT_MESSAGES` (ten)
 commits `HEAD` reaches in `git log`'s order, each as written
 (`recent_messages_are_git_logs_last_ten`); and `Repository::amend_staged`, amend's
 staged list (R6.3): the index against `HEAD`'s parent — the empty tree for a root
@@ -326,13 +369,27 @@ uses them is `docs/systems/local-changes.md`, "The commit box".
 Amend is unavailable on an unborn branch (`amend_is_unavailable_on_an_unborn_branch`);
 a root commit amends (`a_root_commits_amend_works_and_unstages_with_rm_cached`).
 
-### Amend, sealed
+### Amend, at the press and sealed
+
+What an amend costs is read when Amend is pressed, in the job that then runs it (R6.4, rules
+2 and 3 of the redesign), never on a refresh: `ops::amend_unconfirmed` reads it and, where git
+logs the amend and no remote has `HEAD` — recoverable from Show Lost Commits — runs it at once,
+taking no token and recording no prompt (`an_amend_git_logs_and_no_remote_has_runs_at_once`,
+the replaced commit then in the reflog git wrote and drawn lost by Show Lost Commits); any other
+it answers without running git (`AmendAnswer::NeedsConfirming`, `HEAD` and the index
+untouched: `an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run`, a remote's ref, a
+`false` with no log, and a `false` set only through a linked worktree's `includeIf`), for the
+confirmation dialog, whose token `amend` then takes. Which is which is
+`Consequence::needs_confirming`. `amend_unconfirmed` is off the destructive-operation roster:
+what it runs loses nothing.
 
 `amend` takes a `Confirmed` by value and is a row of the destructive-operation
 roster. Its `Consequence::Amend` is computed by `ops::amend_consequence`
-(`crates/cairn-git/src/ops/amend.rs`), from the repository now:
+(`crates/cairn-git/src/ops/amend.rs`), from the repository now, and holds what the amend's
+freshness rests on and nothing drawn for display alone — no subject
+(`the_amends_consequence_names_head_and_why_it_is_confirmed`):
 
-- **`HEAD`'s id and subject**, as the history draws it.
+- **`HEAD`'s id.**
 - **Whether a remote already has it** (`Publication`, R6.4). With an upstream that
   is a remote-tracking ref and exists, whether it reaches `HEAD` — its ahead count
   is zero — answered by the walk `HEAD --not <upstream>`, which stops at the first
@@ -347,18 +404,33 @@ roster. Its `Consequence::Amend` is computed by `ops::amend_consequence`
   when `core.logAllRefUpdates` is `true` or `always` — or, unset, unless the
   repository is bare, which a linked worktree of a bare repository is not — or,
   whatever it is set to, when `HEAD`'s or the branch's log already exists, since git
-  appends to a log it finds. Each arm checked against the entry git then writes
-  (`whether_the_reflog_is_written_is_what_git_then_does`: the default, `false` with
-  no log and with one, `always`, and a bare repository's worktree with the setting
-  unset and `false`).
+  appends to a log it finds. The setting is `git config`'s answer
+  (`reads::log_all_ref_updates`, R6.11): its last value as written, `always` in any case taken
+  first, as git's own reading does, and any other parsed by git's boolean rules — so an
+  `always` in the user's global configuration beneath the `true` `git init` writes is read as
+  git reads it, which `git config --type=bool` would refuse; a bare key or an empty value is
+  asked of git's boolean parse, which tells them apart
+  (`the_commits_settings_are_read_as_git_reads_them`). Each arm checked against the entry git
+  then writes (`whether_the_reflog_is_written_is_what_git_then_does`: the default, `false`
+  with no log and with one, `always`, and a bare repository's worktree with the setting unset
+  and `false`).
+
+Its prompt is the fixed sentences of R10.6 — "<id> is already on <remote ref>. Amending it
+rewrites history others may have." (a remote's ref by its short name, or "a remote" where no
+upstream holds it and another remote-tracking ref does) and "<id> can't be recovered after
+this: this repository keeps no reflog.", both where both hold — its button "Amend".
 
 Refused before any of it: an unborn branch and any operation in progress, a merge
 among them. Before git runs, `amend` computes the `Consequence` again and refuses
 with `Error::AmendChangedSinceConfirmed`, writing nothing, when it differs from the
 confirmed one — `HEAD` moved, a remote came to hold it, the reflog setting changed
-(R1.4, `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`);
+(R1.4, `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`,
+`an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed`);
 its `Performed` quotes the accepted prompt (R1.6,
-`an_amend_records_its_prompt_and_a_commit_invalidates_what_it_moves`).
+`an_amend_records_its_prompt_and_a_commit_invalidates_what_it_moves`). An amend git refused
+before amending — a hook failed — does not yet hand its unspent token back (R1.1's option
+(a)); the window's skip builds a new one from the same consequence (`AmendSkip`), until the
+token's return is settled.
 
 **What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
 `c999cef531e`, 13 remote-tracking refs, release build, warm; the
@@ -377,7 +449,8 @@ own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for 
 object walk and git's 10 ms
 (`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
-twice (consequence, re-check) and, while Amend is ticked, once per status the window reads
+at the press, again in a confirmed amend's re-check, and, while Amend is ticked, once per
+status the window reads
 (phase 09's QA item 9, measured and not split: 0.14 ms for the consequence and 2.6 ms for
 amend's staged list with `HEAD` at a remote tip).
 

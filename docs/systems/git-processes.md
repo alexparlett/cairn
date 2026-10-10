@@ -95,7 +95,7 @@ crates/cairn-git/src/
     recording_stub.rs  (tests) a `git` that records its argv, environment and stdin, then
                     runs the real one
     refspec_policy.rs  the remotes fetch refuses, decided over git's own answer
-                       (reads/fetch_settings.rs; docs/systems/credentials.md)
+                       (reads/config.rs; docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
   reads/        each read `git` answers, one named function each; its tests run a read
                 built from a `GitBinary` copy, on a thread, stopped by an epoch
@@ -104,9 +104,10 @@ crates/cairn-git/src/
                     for the content query, one file or a whole comparison (docs/systems/diff.md)
     attributes.rs   diff_attributes — `git check-attr --stdin -z diff`, whether a path's diff
                     driver names its own algorithm (docs/systems/diff.md)
-    fetch_settings.rs  fetch_settings — `git config --includes --null` in query form, what a
-                    fetch of a remote will read, for fetch's refspec check
-                    (docs/systems/credentials.md)
+    config.rs       fetch_settings, commit_encoding, log_all_ref_updates — `git config
+                    --includes --null` in query form, what a fetch of a remote will read, for
+                    fetch's refspec check (docs/systems/credentials.md), and what a commit and
+                    an amend will (docs/systems/staging.md)
     status.rs       status — `git status --porcelain=v2 -z`, the working tree's status, read
                     again with `--untracked-files=all` where the first answer collapsed an
                     untracked directory (docs/systems/status.md)
@@ -117,8 +118,9 @@ crates/cairn-git/src/
     hash_object.rs  hash_object — `git hash-object --path=<p> -- <p>`, never `-w`: a
                     working-tree file's id in git's form, for a discard's stale check
                     (docs/systems/staging.md)
-    hooks_path.rs   hooks_path — `git rev-parse --git-path hooks`, where git runs hooks from,
-                    for `Repository::commit_hooks` (docs/systems/staging.md)
+    stripspace.rs   stripspace — `git stripspace --strip-comments`, the message on stdin: a
+                    merge's, cherry-pick's or revert's `MERGE_MSG` cleaned as git's editor
+                    cleans it, git reading `core.commentChar` (docs/systems/staging.md)
     branch_name.rs  branch_name — `git check-ref-format --branch <name>`, whether git takes a
                     name for a new branch, and its reason when it refuses one (Create Branch)
     change_lines.rs change_lines — `git diff-index --cached --numstat -z <HEAD>` and `git
@@ -326,22 +328,25 @@ Why each variable is there, with its evidence, is beside it in
   index byte-identical (`a_status_read_leaves_the_index_byte_identical`); under a
   split index it advances `sharedindex.*`'s mtime and under a sparse index the
   loose tree objects' mtimes, bytes unchanged, as the user's own `git status`
-  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the three porcelain
+  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the four porcelain
   exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
   untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
   `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
   no index, with its presentation
   settings pinned to git's defaults by `-c` (2026-10-03); and `git config
-  --includes --null` with `--type=bool --get <key>` or `--get-all <key>`, query
-  form only, in `reads/fetch_settings.rs`, which asks git what a fetch will read
+  --includes --null` with `--type=bool --get <key>`, `--get <key>` or `--get-all <key>`,
+  query form only, in `reads/config.rs`, which asks git what a fetch will read
   for fetch's refspec check, so the check decides on exactly what the fetch's
-  own git reads (2026-10-04); and `git stash show --raw -z --no-abbrev
+  own git reads (2026-10-04), and what a commit and an amend will — `i18n.commitEncoding`
+  and `core.logAllRefUpdates` (2026-10-10); and `git stripspace --strip-comments`, the
+  message on stdin, in `reads/stripspace.rs`, a merge's message cleaned as git's editor
+  cleans it, git reading its comment character (2026-10-10); and `git stash show --raw -z --no-abbrev
   --no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash
   commit>`, in `reads/stash_changes.rs`, which lists what a stash changed with
   its untracked files paired as git pairs them, git reading
   `stash.showIncludeUntracked` itself (2026-10-07) — as the module's own docs say
-  (`reads/mod.rs`, "What a read may run"); all three are pinned by
-  `the_porcelain_reads_are_the_three_named_queries`, and
+  (`reads/mod.rs`, "What a read may run"); all four are pinned by
+  `the_porcelain_reads_are_the_named_queries`, and
   `destructive-ops-reviewer` check 10 names them.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
   working tree, the path's clean filter driver — no other program.**
@@ -490,7 +495,7 @@ another user's, and gix's lookups (`try_find_remote` above all) then filter
 the repository's own sections out. So there is no other open: fetch's
 refspec check (`ops/refspec_policy.rs`), which once opened the repository a
 second time, asks git for the remote's configuration instead
-(`reads/fetch_settings.rs`), and a repository git admits that gix's rule
+(`reads/config.rs`), and a repository git admits that gix's rule
 would not — a command-line `safe.directory`, `.`, a normalised entry — has
 its `remote.<name>.mirror` seen and the fetch refused
 (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
@@ -958,9 +963,9 @@ a completed invocation reported as cancelled (accepted by the user on
      have taken effect, in part or whole — the signal can land after git made
      its change and before it exited — so an operation that must know
      compares the repository's state before and after, as fetch does with its
-     refs. Whether that comparison becomes a review obligation for every write
-     verb, and the cancelled message says a write may have taken effect, is
-     for the first local write (issue #45).
+     refs. A commit and an amend — the local writes that can be cancelled — do:
+     they read `HEAD` after the reap, and one git had made is reported made
+     (`docs/systems/staging.md`, "Made is read from `HEAD`").
 4. A non-zero exit is `Error::GitFailed { arguments, status, stderr,
    present_locks }`, `stderr` the retained tail; for a write, `present_locks`
    lists the lock files present, which is what a write fails on and git never
@@ -1118,7 +1123,7 @@ Fork's Activity popover (staging-and-commit R12, `docs/design/ui.md`, "Activity"
 bar's status box opens it over the window (`crate::activity::popover`, drawn by
 `cairn_ui::ActivityPopover`), on the left the session's operations — every local write and
 every fetch — newest first, each its name, its status (`running`, `succeeded`, `failed`, `not
-run`, `may have taken effect`, `partly done`, `cancelled`) and when it started, with Fork's ×
+run`, `partly done`, `cancelled`) and when it started, with Fork's ×
 beside a running one that can be cancelled (a commit, an amend, a fetch); on the right the one
 selected: its status, when it started and how long it took, what its ending said, the prompt it
 confirmed — however it ended, failed, cancelled part way or never run included: the write's
@@ -1375,10 +1380,14 @@ which is a length of time, is waited out.
   `Stale` — a patch the writes ahead of it made stale, or a file edited since its
   discard was confirmed, dropped naming its path, and the writes behind it still
   run; `Refused`; `Failed`, with the lock files git failed beside; `Incomplete`,
-  a discard of files that did not take every file; `MayHaveTakenEffect`, a
-  cancelled or unwatched write, with what it stranded; and `NotRun`, a write
-  whose turn came as the repository closed, or a commit cancelled before its
-  `git` started. A commit refused before git runs — a rebase in progress, a
+  a discard of files that did not take every file; `Cancelled`, a commit or an
+  amend the user cancelled that git had not made — `HEAD` read after the reap, or
+  the cancel heard before git started — with what it stranded (R4.7: one git had
+  made is `Done`); `NeedsConfirming`, an amend at the press that a remote has or
+  git keeps no reflog for, nothing run, its `Consequence` for the dialog; and
+  `NotRun`, a write whose turn came as the repository closed. A write whose `git`
+  Cairn lost hold of is `Failed`, saying the lists and history show anything it had
+  already done. A commit refused before git runs — a rebase in progress, a
   non-UTF-8 commit encoding — is `Refused`, and an amend whose `Consequence`
   moved since its confirmation is `Stale` at `HEAD`. A failure while no prompt
   could have been answered says why, as a fetch's does.
@@ -1444,12 +1453,21 @@ which is a length of time, is waited out.
   the command that ran and git's own words beside its message
   (`WriteEnding::Failed`'s `command` and `output`), which the dialog shows when
   nothing streamed.
-- **What the commit box reads, in the lane's order** (staging-and-commit R6.6, R6.7,
-  R6.3, R6.4, R10). `Request::CommitReads` — asked as the box is shown and as each
+- **Amend pressed is one job** (staging-and-commit R6.4, rules 2 and 3 of the redesign).
+  `LocalWrite::AmendAtPress` runs `ops::amend_unconfirmed` as a commit runs — cancellable,
+  quiet behind — which reads what the amend costs and, in the same job, amends where git logs
+  it and no remote has `HEAD`, ending `Done` with no prompt, or runs no git and ends
+  `NeedsConfirming` with the `Consequence` for the dialog, whose token then asks
+  `LocalWrite::Amend` (`amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog`).
+  Phase 18's commit box asks it as Amend is pressed.
+- **What the commit box reads, in the lane's order** (staging-and-commit R6.7, R6.9,
+  R6.10, R6.3, R6.4, R10). `Request::CommitReads` — asked as the box is shown and as each
   refresh's refs arrive — is a job of the lane's (`LocalJob::CommitReads`), read after
   the writes asked before it, so a commit's message is among the recent ones once it has
-  ended: the operation in progress, the hooks git would run and the last ten messages,
-  each answer or its failure, as `Update::CommitReads`. `Request::Amending { status }` —
+  ended: the operation in progress, the message git prepared for the commit that concludes a
+  merge, a cherry-pick or a revert in progress — `MERGE_MSG` through `git stripspace
+  --strip-comments` — and the last ten messages, each answer or its failure, as
+  `Update::CommitReads`. `Request::Amending { status }` —
   asked while Amend is ticked, over each status that arrives — reads what an amend would
   replace (`ops::amend_consequence`), the message of the commit it names, and amend's
   staged list laid out with the status's unstaged one (`LocalChanges::amending`), as

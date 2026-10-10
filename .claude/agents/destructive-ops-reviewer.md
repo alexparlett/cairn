@@ -109,10 +109,12 @@ WARNING tier:
    index, so it has none to refresh. The exception is that mode alone: `git
    diff` without `--no-index`, or `--no-index` against anything but
    `/dev/null` and that path, or built anywhere else, is still a finding.
-   The second (the user's decision of 2026-10-04): `git config --includes
-   --null` with `--type=bool --get <key>` or `--get-all <key>`, built only by
-   `reads::fetch_settings` for fetch's refspec check, over `remote.<name>.*`
-   and `fetch.*` keys. Query form is the exception: any setter — `--add`,
+   The second (the user's decisions of 2026-10-04 and 2026-10-10): `git config
+   --includes --null` with `--type=bool --get <key>`, `--get <key>` or `--get-all
+   <key>`, built only in `reads/config.rs` — `reads::fetch_settings` for fetch's
+   refspec check, over `remote.<name>.*` and `fetch.*` keys, and
+   `reads::commit_encoding` and `reads::log_all_ref_updates` for a commit's and an
+   amend's `i18n.commitEncoding` and `core.logAllRefUpdates`. Query form is the exception: any setter — `--add`,
    `--unset`, `--unset-all`, `--replace-all`, `--edit`, `--rename-section`,
    `--remove-section`, or the 2.46 subcommands `set`, `unset`, `edit`,
    `rename-section`, `remove-section` — or another file chosen (`--file`,
@@ -135,10 +137,16 @@ WARNING tier:
    written and the network reached — where rename detection needs a blob only
    the promisor holds, since those gits ignore `GIT_NO_LAZY_FETCH` (2.30 and
    2.31 list no untracked half, so have no untracked file to pair); 2.44 and
-   later fail closed. All three are pinned by
-   `the_porcelain_reads_are_the_three_named_queries` — the verbs, the stash
-   read's options against `STASH_SHOW_OPTIONS` (and `STASH_SHOW_REQUIRED`
-   present), the writing subcommands — run it; what it cannot see, a verb, an
+   later fail closed. The fourth (the user's decision of 2026-10-10, C2): `git
+   stripspace --strip-comments`, the message on stdin, built only by
+   `reads::stripspace`, a merge's, cherry-pick's or revert's `MERGE_MSG` cleaned
+   as git's editor cleans it, git reading `core.commentChar`; it reads its
+   stdin and the configuration and nothing else. Any other option (`-s`,
+   `--comment-lines`), or `stripspace` built anywhere else, is a finding. All
+   four are pinned by `the_porcelain_reads_are_the_named_queries` — the verbs,
+   the stash read's options against `STASH_SHOW_OPTIONS` (and
+   `STASH_SHOW_REQUIRED` present), the stripspace read's against
+   `STRIPSPACE_OPTIONS`, the writing subcommands — run it; what it cannot see, a verb, an
    option or a revision built at run time, is this check.
    A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still

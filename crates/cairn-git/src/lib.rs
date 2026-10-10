@@ -29,7 +29,9 @@ pub use diff::{
     ChangesRequest, ContentOptions, DiffInputs, DiffSession, LineBudget, Offered, PAGE_FILES,
     PAGE_LINES, Page, StagedInputs, WorkingTreeDiff,
 };
-pub use error::{CheckoutRefusal, CommitRefusal, Error, LockRefusal, Refusal, RefusedWrite};
+pub use error::{
+    CheckoutMoved, CheckoutRefusal, CommitRefusal, Error, LockRefusal, Refusal, RefusedWrite,
+};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
 pub use recent_messages::RECENT_MESSAGES;
 pub use refs::{RefsCost, RefsRead};

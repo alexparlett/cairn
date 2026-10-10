@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use cairn_model::{
-    ChangeLoss, ChangedKind, CommandExit, CommandRecord, Confirmed, Consequence, LostChange, Oid,
-    Publication, Reflog, RepoPath, ScrubbedLines, UnstagedChange,
+    CommandExit, CommandRecord, Confirmed, Consequence, Oid, Publication, Reflog, ScrubbedLines,
+    UnstagedChange,
 };
 use cairn_ui::{
     ACTIVITY_TITLE, CANCEL_CAPTION, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
@@ -453,17 +453,6 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         branch: "topic".to_owned(),
         at: Oid::from_bytes(&[0xcd; 20]).unwrap(),
         head: Some(Oid::from_bytes(&[1; 20]).unwrap()),
-        changes: vec![LostChange {
-            path: RepoPath::from("a.rs"),
-            loss: ChangeLoss::Changed {
-                kind: ChangedKind::Modified,
-                index: Some(Oid::from_bytes(&[2; 20]).unwrap()),
-                working_tree: Some(Oid::from_bytes(&[3; 20]).unwrap()),
-                executable: false,
-                lines: Some(4),
-            },
-        }],
-        kept_untracked: 0,
     };
     let lock = index_lock();
     let prompts = [amend.prompt(), discarding.prompt(), lock.prompt()];

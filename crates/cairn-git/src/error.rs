@@ -412,6 +412,13 @@ pub enum Error {
     #[error("{why}; nothing was written")]
     CheckoutRefused { why: CheckoutRefusal },
 
+    /// What Create Branch's Discard was confirmed for moved between the press and the run
+    /// (R1.4; the user's decision of 2026-10-10): `HEAD`, the commit or the name — nothing else
+    /// is compared. The checkout refused, writing nothing — an outcome of its own, never git's
+    /// failure.
+    #[error("{what}; nothing was discarded")]
+    CheckoutChangedSinceConfirmed { what: CheckoutMoved },
+
     /// A commit or an amend was refused before any `git` ran (`docs/prd/staging-and-commit.md`
     /// R6.1, R6.3, R6.9): `why` says what, for the caller to show. Nothing was written.
     #[error("{why}; nothing was committed")]
@@ -629,10 +636,8 @@ impl std::fmt::Display for Refusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutRefusal {
     /// git is in the middle of an operation — a merge, a rebase, `git am`, a cherry-pick or a
-    /// revert — whose state a forced checkout would leave behind or lose.
+    /// revert — which a forced checkout would abandon without a word.
     InProgress(cairn_model::OperationInProgress),
-    /// No tracked file has a staged or an unstaged change: there is nothing to discard.
-    NothingToDiscard,
     /// The discard was handed a confirmation of another operation.
     NotWhatWasConfirmed,
 }
@@ -642,13 +647,34 @@ impl std::fmt::Display for CheckoutRefusal {
         match self {
             Self::InProgress(operation) => write!(
                 f,
-                "{} is in progress: continue or abort it first",
+                "{} is in progress: finish or abort it first",
                 operation.name()
             ),
-            Self::NothingToDiscard => f.write_str("there are no changes to discard"),
             Self::NotWhatWasConfirmed => {
                 f.write_str("what the discard was handed is not what its confirmation names")
             }
+        }
+    }
+}
+
+/// What moved between Create Branch's Discard being confirmed and its run; see
+/// [`Error::CheckoutChangedSinceConfirmed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutMoved {
+    /// `HEAD` is another commit, or another branch's, than when it was confirmed.
+    Head,
+    /// The commit the branch was to be created at can no longer be read.
+    Commit { at: cairn_model::Oid },
+    /// The name can no longer be created: a branch has it now, or one clashes with it.
+    Name { name: String },
+}
+
+impl std::fmt::Display for CheckoutMoved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Head => f.write_str("HEAD moved since you confirmed"),
+            Self::Commit { at } => write!(f, "commit {} can no longer be read", at.short()),
+            Self::Name { name } => write!(f, "the branch {name} can no longer be created"),
         }
     }
 }

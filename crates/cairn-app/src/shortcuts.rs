@@ -29,12 +29,13 @@ pub fn of_header(pressed: HeaderAction) -> Action {
 }
 
 /// Whether the window's chords and the views' keys do nothing now: while a credential prompt,
-/// a confirmation or the Git Error dialog is up, and while the activity popover is open, which
-/// Escape alone closes (the user's decision I, 2026-10-09).
+/// a confirmation, a Git Error dialog, or Create Branch is up (R11.3, C28), and while the
+/// activity popover is open, which Escape alone closes (the user's decision I, 2026-10-09).
 pub fn keys_inert(view: View) -> bool {
     view.prompt.peek().is_some()
         || view.confirming.peek().is_some()
         || view.local.commit.state.peek().error().is_some()
+        || view.branch.state.peek().is_up()
         || view.activity.peek().is_open()
 }
 
@@ -83,7 +84,7 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         | Action::Commit
         | Action::ShowLostCommits => {}
         // Fork's New Branch, at `HEAD`, wherever focus is (R11.3).
-        Action::NewBranch => crate::create_branch::open_at_head(view, submit),
+        Action::NewBranch => crate::create_branch::open_at_head(view),
         // Read again on the worker; the window only asks (R10.1).
         Action::Refresh => {
             if let Some(submit) = submit {

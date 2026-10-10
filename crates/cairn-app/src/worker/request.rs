@@ -500,10 +500,12 @@ pub enum Request {
     /// answered by [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's
     /// ask supersedes it, its `git` read ended.
     CheckBranchName { name: String },
-    /// What creating the branch `name` at `at` and checking it out with its changes discarded
-    /// would lose (`ops::checkout_discarding_consequence`), counted on the local lane after the
-    /// writes asked before it and answered by [`Update::CheckoutConsequence`] under `asked`
-    /// (R11.3, the user's decision 3). Numbered in the checkout-count lane.
+    /// What Create Branch's Discard of the branch `name` at `at` would be confirmed as
+    /// (`ops::checkout_discarding_consequence`: the branch, the commit and `HEAD`, or the
+    /// refusal of an operation in progress), read on the local lane after the writes asked
+    /// before it — asked as Discard is chosen and as the name changes while it is — and
+    /// answered by [`Update::CheckoutConsequence`] under `asked` (R11.3, the user's decisions
+    /// of 2026-10-10). Numbered in the checkout-count lane: a newer ask supersedes it.
     CheckoutConsequence {
         asked: OperationId,
         name: String,
@@ -588,6 +590,16 @@ pub enum Refreshed {
     Refs,
     AheadBehind,
     Status,
+}
+
+/// Why Create Branch's Discard cannot be confirmed now, as the local lane answers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutRefused {
+    /// git is in the middle of an operation the forced checkout would abandon without a word
+    /// (the user's decision of 2026-10-10): refused before git runs, worded by the dialog.
+    InProgress(OperationInProgress),
+    /// The engine could not read what the consequence holds (the commit, `HEAD`): its words.
+    Failed(String),
 }
 
 /// A request is answered by a stream of these. Everything about a fetch or a
@@ -766,12 +778,12 @@ pub enum Update {
         name: String,
         outcome: Result<BranchName, String>,
     },
-    /// What creating a branch and checking it out with its changes discarded would lose, asked
-    /// under `asked`: the `Consequence` the confirmation draws, or why the engine refused
-    /// before any prompt (display text).
+    /// What Create Branch's Discard would be confirmed as, asked under `asked`: the
+    /// `Consequence` the dialog's press builds its token from, or why it cannot be confirmed
+    /// now.
     CheckoutConsequence {
         asked: OperationId,
-        outcome: Result<Consequence, String>,
+        outcome: Result<Consequence, CheckoutRefused>,
     },
     /// What the commit box reads beside a commit, as the latest ask read it.
     CommitReads(Box<CommitReads>),

@@ -21,6 +21,22 @@ pub enum WorkingTreeStatus {
     NoWorkingTree,
 }
 
+impl WorkingTreeStatus {
+    /// Whether a tracked path has a staged or an unstaged change, or a path is conflicted:
+    /// what a checkout could carry over or discard, which untracked files alone are not
+    /// (Create Branch's "Local changes:", staging-and-commit R11.3). Searched among every
+    /// entry, never read from where git lists them. `false` where git listed nothing.
+    pub fn has_tracked_changes(&self) -> bool {
+        match self {
+            Self::Listed(entries) => entries.iter().any(|entry| match entry {
+                StatusEntry::Changed(_) | StatusEntry::Conflicted(_) => true,
+                StatusEntry::Untracked(_) => false,
+            }),
+            Self::IndexUnreadable(_) | Self::NoWorkingTree => false,
+        }
+    }
+}
+
 /// Why the git in use could not read the index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnreadableIndex {
@@ -195,6 +211,31 @@ impl ConflictKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Caught by: untracked files alone counted as changes, a change found only where git
+    /// lists it first, or an unreadable index read as changed.
+    #[test]
+    fn tracked_changes_are_found_among_every_entry_and_never_in_untracked_files_alone() {
+        let changed = StatusEntry::Changed(ChangedEntry {
+            path: RepoPath::from("z.rs"),
+            staged: None,
+            unstaged: Some(UnstagedChange::Modified),
+            submodule: None,
+        });
+        let conflicted = StatusEntry::Conflicted(ConflictedEntry {
+            path: RepoPath::from("c.rs"),
+            kind: ConflictKind::BothModified,
+            submodule: None,
+        });
+        let untracked = StatusEntry::Untracked(RepoPath::from("a.txt"));
+        let listed = |entries: Vec<StatusEntry>| WorkingTreeStatus::Listed(entries);
+        assert!(!listed(Vec::new()).has_tracked_changes());
+        assert!(!listed(vec![untracked.clone()]).has_tracked_changes());
+        assert!(listed(vec![untracked.clone(), changed]).has_tracked_changes());
+        assert!(listed(vec![untracked, conflicted]).has_tracked_changes());
+        assert!(!WorkingTreeStatus::IndexUnreadable(UnreadableIndex::Sparse).has_tracked_changes());
+        assert!(!WorkingTreeStatus::NoWorkingTree.has_tracked_changes());
+    }
 
     /// Caught by: two kinds swapped in the table (`UD` read as deleted by us), a code
     /// that two kinds share, or a code outside the seven accepted.

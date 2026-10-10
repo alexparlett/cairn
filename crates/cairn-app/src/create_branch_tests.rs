@@ -1,22 +1,24 @@
-//! Create Branch in the window, headless (staging-and-commit R11.3; the user's decisions,
-//! 2026-10-09): "New Branch…" on a commit row opens Fork's dialog, each name typed is asked of
-//! the engine and the button follows its answer, "Check out after create" is sticky for the
-//! session, "Local changes:" is drawn only over changes and starts on "Don't change", a discard
-//! is counted and confirmed before its write, and a failure opens the Git Error dialog with the
-//! name kept for the next opening. Updates are applied through `session::apply`, as the
+//! Create Branch in the window, headless (staging-and-commit R11.3; the user's decisions of
+//! 2026-10-09 and 2026-10-10): "New Branch…" on a commit row opens Fork's dialog, each name
+//! typed is asked of the engine and the button follows its answer, "Check out after create" is
+//! sticky for the session, "Local changes:" is drawn only over changes and starts on "Don't
+//! change", Discard's press is its confirmation — the token built from the engine's consequence,
+//! no second dialog — the dialog stays open under a failure's Git Error dialog, and the
+//! window's keys are inert while it is up. Updates are applied through `session::apply`, as the
 //! worker's stream applies them, and requests read back from the window's submit.
 
 use std::sync::Arc;
 
 use cairn_model::{
-    BranchName, ChangeLoss, ChangedKind, Consequence, GraphRow, HeadState, Lane, LostChange, Oid,
+    BranchName, Consequence, GraphRow, HeadState, Lane, NameRefusal, Oid, OperationInProgress,
     PagedCommit, Ref, RefKind, RefName, RefTarget, RefsSnapshot, RepoPath, RowsPage, StagedChange,
     UnstagedChange,
 };
 use cairn_ui::accelerators::Action;
 use cairn_ui::{
     CHECK_OUT_AFTER_CREATE, CREATE_AND_CHECKOUT_CAPTION, CREATE_BRANCH_TITLE, CREATE_CAPTION,
-    DISCARD_LOCAL_CAPTION, GIT_ERROR_TITLE, LOCAL_CHANGES_LABEL, NEW_BRANCH_CAPTION,
+    DISCARD_LOCAL_CAPTION, DONT_CHANGE_CAPTION, GIT_ERROR_TITLE, LOCAL_CHANGES_LABEL,
+    NEW_BRANCH_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -25,7 +27,7 @@ use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use crate::local_changes_tests::{Submitted, apply, changed, labels, launch, status, untracked};
 use crate::window::View;
 use crate::window::tests::press_chord;
-use crate::worker::{LocalWrite, OperationId, Request, Update, WriteEnding};
+use crate::worker::{CheckoutRefused, Done, LocalWrite, OperationId, Request, Update, WriteEnding};
 
 fn settle(test: &mut TestingRunner) {
     for _ in 0..4 {
@@ -116,9 +118,10 @@ fn writes(submitted: &Submitted) -> Vec<(OperationId, String)> {
 
 /// The user's decision (2026-10-09): "New Branch…" opens Create Branch at the row's commit; a
 /// name typed is asked of the engine, the button disabled until the engine says it is free and
-/// for the text shown; a taken name is refused in Fork's words; a free one is created and the
-/// dialog closes. Caught by: a create before the engine answered, an answer for another text
-/// trusted, or the write naming another commit or name.
+/// for the text shown; a taken name is refused in Fork's words; a free one is created, the
+/// dialog staying open, its button disabled, until the write is done. Caught by: a create
+/// before the engine answered, an answer for another text trusted, the write naming another
+/// commit or name, a second press asking a second write, or the dialog left open once done.
 #[test]
 fn new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free() {
     let (mut test, view, submitted) = launch();
@@ -146,7 +149,7 @@ fn new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free()
         &submitted,
         Update::BranchName {
             name: "test".to_owned(),
-            outcome: Ok(BranchName::Taken),
+            outcome: Ok(BranchName::Refused(NameRefusal::Taken)),
         },
     );
     assert!(drawn(&test, "Branch test already exists"));
@@ -191,7 +194,35 @@ fn new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free()
         matches!(asked.as_slice(), [LocalWrite::CreateBranch { name, at }] if name == "topic" && *at == oid(0xab)),
         "{asked:?}"
     );
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "closed before the write ended"
+    );
+    click(&mut test, CREATE_CAPTION);
+    assert_eq!(
+        writes(&submitted).len(),
+        1,
+        "a second write asked while the first ran"
+    );
+    let (id, _) = writes(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    apply(&mut test, view, &submitted, done(id));
     assert!(!drawn(&test, CREATE_BRANCH_TITLE), "the dialog stayed open");
+}
+
+/// The write `id` ended done.
+fn done(id: OperationId) -> Update {
+    Update::WriteEnded {
+        id,
+        ending: WriteEnding::Done(Done {
+            description: "created".to_owned(),
+            acknowledged: None,
+            locks_before: Vec::new(),
+            locks_after: Vec::new(),
+        }),
+        read_again: crate::worker::ReadAgain::Everything,
+    }
 }
 
 /// Decision 1, and Fork's "Local changes:": the box is sticky for the session; the choices are
@@ -256,10 +287,10 @@ fn check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes()
 }
 
 /// "Local changes:" over a tree of untracked files alone, and over one whose untracked file
-/// sorts before its changed one by name (phase 10's QA, item 17). `git status` lists changed
-/// and conflicted entries before untracked ones whatever their names, so the first entry
-/// decides. Caught by: the choices drawn over untracked files alone (a checkout keeps them),
-/// or the entries searched in path order (the untracked `a.txt` first).
+/// is listed before its changed one (phase 10's QA, item 17): the status is asked by name
+/// whether a tracked path has a change (`has_tracked_changes`), never read from its first
+/// entry. Caught by: the choices drawn over untracked files alone (a checkout keeps them), or
+/// a change missed behind an untracked entry listed first.
 #[test]
 fn local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone() {
     let (mut test, view, submitted) = launch();
@@ -283,8 +314,8 @@ fn local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone(
         view,
         &submitted,
         status(vec![
-            changed("b.rs", None, Some(UnstagedChange::Modified)),
             untracked("a.txt"),
+            changed("b.rs", None, Some(UnstagedChange::Modified)),
         ]),
     );
     new_branch(&mut test);
@@ -498,93 +529,122 @@ fn a_name_check_waiting_behind_a_write_says_which_write() {
     );
 }
 
-/// What Create Branch's discard would lose at `at` for `branch`.
+/// What Create Branch's Discard of `branch` at `0xab` is confirmed as.
 fn discarding(branch: &str) -> Consequence {
     Consequence::CheckoutDiscarding {
         branch: branch.to_owned(),
         at: oid(0xab),
         head: Some(oid(1)),
-        changes: vec![LostChange {
-            path: RepoPath::from("a.rs"),
-            loss: ChangeLoss::Changed {
-                kind: ChangedKind::Modified,
-                index: Some(oid(2)),
-                working_tree: Some(oid(3)),
-                executable: false,
-                lines: Some(4),
-            },
-        }],
-        kept_untracked: 0,
     }
 }
 
-/// Decision 3: Discard counts what it would lose first, and the engine's refusal is said in
-/// the dialog; once counted the dialog closes and the confirmation opens on that consequence,
-/// its button asking the discarding write with the token. Caught by: a discard written before
-/// its confirmation, a refusal lost, or the token spent on another write.
-#[test]
-fn discard_is_counted_and_confirmed_before_its_write() {
-    let (mut test, view, submitted) = launch();
-    with_a_commit(&mut test, view, &submitted);
+/// The asks of what Discard would be confirmed as, in order: the id and the name.
+fn discard_asks(submitted: &Submitted) -> Vec<(OperationId, String)> {
+    submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::CheckoutConsequence { asked, name, at } => {
+                assert_eq!(*at, oid(0xab));
+                Some((*asked, name.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The discarding writes asked, each with the consequence its token carries.
+fn discards_asked(submitted: &Submitted) -> Vec<Consequence> {
+    submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::Write {
+                write: LocalWrite::CreateBranchDiscarding(token),
+                ..
+            } => Some(token.consequence().clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Opens the dialog over a staged change, ticks the box, chooses Discard and types `name`,
+/// which the engine answers free.
+fn discard_chosen(test: &mut TestingRunner, view: View, submitted: &Submitted, name: &str) {
     apply(
-        &mut test,
+        test,
         view,
-        &submitted,
+        submitted,
         status(vec![changed("a.rs", Some(StagedChange::Modified), None)]),
     );
-    new_branch(&mut test);
-    click(&mut test, CHECK_OUT_AFTER_CREATE);
-    click(&mut test, DISCARD_LOCAL_CAPTION);
-    type_name(&mut test, view, "rescue");
+    new_branch(test);
+    click(test, CHECK_OUT_AFTER_CREATE);
+    click(test, DISCARD_LOCAL_CAPTION);
+    type_name(test, view, name);
+    apply(
+        test,
+        view,
+        submitted,
+        Update::BranchName {
+            name: name.to_owned(),
+            outcome: Ok(BranchName::Free),
+        },
+    );
+}
+
+/// C34, B2 and the user's decision of 2026-10-10: with Discard chosen, what it would be
+/// confirmed as is asked as the name changes; the button waits for the engine's answer to the
+/// latest ask, for the name shown; then the press — or Return — IS the confirmation: the dialog builds the token
+/// from that consequence and the discarding write is asked with it, no second dialog opening.
+/// A press with "Don't change" builds none. Caught by: a token built before the engine answered
+/// or from an older ask's answer, a confirmation dialog opened, Return not pressing, a token
+/// built for "Don't change", or the token's consequence not the engine's.
+#[test]
+fn discards_press_is_its_confirmation_and_builds_the_token_from_the_engines_consequence() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let asks = discard_asks(&submitted);
+    let Some((asked, name)) = asks.last().cloned() else {
+        panic!("what Discard would be confirmed as was not asked: {asks:?}");
+    };
+    assert_eq!(name, "rescue");
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert!(
+        discards_asked(&submitted).is_empty() && writes(&submitted).is_empty(),
+        "written before the engine answered"
+    );
+    // The name changes: what was asked for the old one is not this one's, even arriving late.
+    type_name(&mut test, view, "rescue2");
     apply(
         &mut test,
         view,
         &submitted,
         Update::BranchName {
-            name: "rescue".to_owned(),
+            name: "rescue2".to_owned(),
             outcome: Ok(BranchName::Free),
         },
     );
-    let counted = |submitted: &Submitted| -> Option<OperationId> {
-        submitted
-            .borrow()
-            .iter()
-            .rev()
-            .find_map(|request| match request {
-                Request::CheckoutConsequence { asked, name, at } => {
-                    assert_eq!((name.as_str(), *at), ("rescue", oid(0xab)));
-                    Some(*asked)
-                }
-                _ => None,
-            })
-    };
-    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
-    let asked = counted(&submitted).unwrap_or_else(|| panic!("the discard was not counted"));
-    assert!(
-        writes(&submitted).is_empty(),
-        "written before its confirmation"
-    );
+    let (newer, name) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("the new name was not asked"));
+    assert_eq!(name, "rescue2");
     apply(
         &mut test,
         view,
         &submitted,
         Update::CheckoutConsequence {
             asked,
-            outcome: Err("a merge is in progress: continue or abort it first".to_owned()),
+            outcome: Ok(discarding("rescue")),
         },
     );
-    assert!(drawn(
-        &test,
-        "a merge is in progress: continue or abort it first"
-    ));
-    assert!(
-        drawn(&test, CREATE_BRANCH_TITLE),
-        "the dialog closed on a refusal"
-    );
-
     click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
-    let asked = counted(&submitted).unwrap_or_else(|| panic!("the discard was not counted again"));
-    let consequence = discarding("rescue");
+    assert!(
+        discards_asked(&submitted).is_empty(),
+        "an older name's answer was trusted"
+    );
+    let asked = newer;
+    let consequence = discarding("rescue2");
     apply(
         &mut test,
         view,
@@ -594,28 +654,121 @@ fn discard_is_counted_and_confirmed_before_its_write() {
             outcome: Ok(consequence.clone()),
         },
     );
+    test.press_key(Key::Named(NamedKey::Enter));
     settle(&mut test);
-    assert!(
-        !drawn(&test, CREATE_BRANCH_TITLE),
-        "the dialog stayed over the confirmation"
+    assert_eq!(
+        discards_asked(&submitted),
+        std::slice::from_ref(&consequence),
+        "Return did not confirm"
     );
-    assert!(view.confirming.peek().is_some(), "no confirmation opened");
-    click(&mut test, &consequence.action());
-    let asked: Vec<String> = writes(&submitted)
-        .into_iter()
-        .map(|(_, what)| what)
-        .collect();
-    assert_eq!(asked, ["creating a branch, discarding changes"]);
-}
+    assert!(view.confirming.peek().is_none(), "a second dialog opened");
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "closed before the write ended"
+    );
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(
+        discards_asked(&submitted).len(),
+        1,
+        "a second token built while it ran"
+    );
 
-/// Fork's Git Error dialog over git's words when a create fails, and the name kept for the
-/// next opening (Fork: "Remember branch name if create branch failed"). Caught by: a failure
-/// shown nowhere, or the name lost.
-#[test]
-fn a_failed_create_opens_the_git_error_and_keeps_its_name() {
+    // The button, in a fresh opening; and "Don't change" builds none.
     let (mut test, view, submitted) = launch();
     with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Ok(discarding("rescue")),
+        },
+    );
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(discards_asked(&submitted), [discarding("rescue")]);
+    assert!(view.confirming.peek().is_none(), "a second dialog opened");
+
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "kept");
+    click(&mut test, DONT_CHANGE_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert!(
+        discards_asked(&submitted).is_empty(),
+        "Don't change built a token"
+    );
+    assert!(
+        matches!(
+            writes(&submitted).as_slice(),
+            [(_, what)] if what.contains("kept")
+        ),
+        "{:?}",
+        writes(&submitted)
+    );
+}
+
+/// The user's decision of 2026-10-10: an operation in progress refuses Discard in the dialog's
+/// refusal row, "<Operation> is in progress. Finish or abort it first.", Create and Checkout
+/// disabled while Discard is chosen — and enabled again for "Don't change". Caught by: the
+/// refusal unsaid, a discard asked over a merge, or "Don't change" held back too.
+#[test]
+fn an_operation_in_progress_refuses_discard_in_the_dialog() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    discard_chosen(&mut test, view, &submitted, "rescue");
+    let (asked, _) = discard_asks(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("not asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::CheckoutConsequence {
+            asked,
+            outcome: Err(CheckoutRefused::InProgress(OperationInProgress::Merge)),
+        },
+    );
+    assert!(drawn(
+        &test,
+        "A merge is in progress. Finish or abort it first."
+    ));
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    assert!(
+        writes(&submitted).is_empty(),
+        "a discard asked over a merge"
+    );
+    click(&mut test, DONT_CHANGE_CAPTION);
+    assert!(!drawn(
+        &test,
+        "A merge is in progress. Finish or abort it first."
+    ));
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(writes(&submitted).len(), 1, "Don't change held back");
+}
+
+/// R11.3 and C34: a create that fails opens Fork's Git Error dialog over git's words, OVER the
+/// dialog, which stays open beneath it as it was left — its name, its box and its choice — so
+/// Close returns to it; Escape closes the Git Error alone. Caught by: a failure shown nowhere,
+/// the dialog closed under it, its state reset, or Escape closing both.
+#[test]
+fn a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(vec![changed("a.rs", None, Some(UnstagedChange::Modified))]),
+    );
     new_branch(&mut test);
+    click(&mut test, CHECK_OUT_AFTER_CREATE);
     type_name(&mut test, view, "topic");
     apply(
         &mut test,
@@ -626,35 +779,91 @@ fn a_failed_create_opens_the_git_error_and_keeps_its_name() {
             outcome: Ok(BranchName::Free),
         },
     );
-    click(&mut test, CREATE_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    let failed = |id| Update::WriteEnded {
+        id,
+        ending: WriteEnding::Failed {
+            message: "git failed".to_owned(),
+            locks: Vec::new(),
+            command: Some("git --literal-pathspecs checkout -q -b topic abab --".to_owned()),
+            output: cairn_model::ScrubbedLines::scrubbing(
+                "error: Your local changes to the following files would be overwritten by \
+                 checkout:\n",
+            ),
+        },
+        read_again: crate::worker::ReadAgain::Everything,
+    };
     let (id, _) = writes(&submitted)
         .pop()
         .unwrap_or_else(|| panic!("nothing asked"));
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        Update::WriteEnded {
-            id,
-            ending: WriteEnding::Failed {
-                message: "git failed".to_owned(),
-                locks: Vec::new(),
-                command: Some("git --literal-pathspecs branch -- topic abab".to_owned()),
-                output: cairn_model::ScrubbedLines::scrubbing(
-                    "fatal: a branch named 'topic' already exists\n",
-                ),
-            },
-            read_again: crate::worker::ReadAgain::Everything,
-        },
-    );
+    apply(&mut test, view, &submitted, failed(id));
     assert!(drawn(&test, GIT_ERROR_TITLE));
-    assert!(drawn(&test, "fatal: a branch named 'topic' already exists"));
+    assert!(drawn(
+        &test,
+        "error: Your local changes to the following files would be overwritten by checkout:"
+    ));
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "the dialog closed under the error"
+    );
     click(&mut test, cairn_ui::CLOSE_CAPTION);
     assert!(!drawn(&test, GIT_ERROR_TITLE));
-    new_branch(&mut test);
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "Close did not return to the dialog"
+    );
     assert_eq!(
         view.branch.name.peek().as_str(),
         "topic",
-        "the name was not kept"
+        "the name was reset"
+    );
+    assert!(
+        drawn(&test, CREATE_AND_CHECKOUT_CAPTION),
+        "the box was reset"
+    );
+    assert!(drawn(&test, LOCAL_CHANGES_LABEL));
+
+    // Again, closed by Escape: the Git Error alone goes.
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    let (id, _) = writes(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked again"));
+    apply(&mut test, view, &submitted, failed(id));
+    assert!(drawn(&test, GIT_ERROR_TITLE));
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(!drawn(&test, GIT_ERROR_TITLE), "Escape left the Git Error");
+    assert!(
+        drawn(&test, CREATE_BRANCH_TITLE),
+        "Escape closed the dialog beneath"
+    );
+}
+
+/// R11.3, C28 and the review's M5: while Create Branch is open — and while a create's Git Error
+/// is up — the window's keys are inert: a window chord does nothing. Caught by: the dialog left
+/// out of `keys_inert`.
+#[test]
+fn the_windows_keys_are_inert_while_create_branch_is_up() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    let refreshes = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .filter(|request| matches!(request, Request::Refresh))
+            .count()
+    };
+    press_chord(&mut test, Action::Refresh);
+    settle(&mut test);
+    let heard = refreshes(&submitted);
+    assert!(heard > 0, "the chord is not heard at all");
+    new_branch(&mut test);
+    assert!(crate::shortcuts::keys_inert(view));
+    press_chord(&mut test, Action::Refresh);
+    settle(&mut test);
+    assert_eq!(
+        refreshes(&submitted),
+        heard,
+        "a chord acted under the dialog"
     );
 }

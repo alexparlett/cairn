@@ -44,16 +44,13 @@ mod text_filter;
 
 pub use action_patch::{PatchAction, action_patch};
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
-pub use branch_name::BranchName;
+pub use branch_name::{BranchName, NameRefusal};
 pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
 pub use command_log::{CommandExit, CommandRecord};
 pub use commit_details::{CommitDetails, Signature, Timestamp};
 pub use confirm::Confirmed;
-pub use consequence::{
-    ChangeLoss, ChangedKind, Consequence, DiscardedFile, FileLoss, LostChange, Publication, Reflog,
-    RemovedKind,
-};
+pub use consequence::{Consequence, DiscardedFile, FileLoss, Publication, Reflog};
 pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
 pub use diff_function_context::FunctionContext;
 pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};

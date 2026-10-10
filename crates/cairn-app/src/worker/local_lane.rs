@@ -59,7 +59,7 @@ use cairn_model::{
 use super::epoch::{Epoch, Superseded};
 use super::output_flow::{OutputFlow, OutputReceipt};
 use super::pool::Outbox;
-use super::request::{AmendRead, CommitReads, RanBy, Update};
+use super::request::{AmendRead, CheckoutRefused, CommitReads, RanBy, Update};
 
 /// Names one local write from the moment the window asks for it: what its start, its
 /// ending and a cancel of it name. Never reused within the application.
@@ -758,6 +758,11 @@ impl WriteEnding {
             | Error::CheckoutRefused { .. }
             | Error::LockRefused { .. } => Self::Refused { message },
             Error::LockChangedSinceConfirmed { path } => Self::Stale { path, message },
+            // Create Branch's Discard re-checks `HEAD`, the commit and the name (R1.4).
+            Error::CheckoutChangedSinceConfirmed { what } => Self::Stale {
+                path: what.to_string(),
+                message,
+            },
             Error::CommitCancelledBeforeRunning => Self::Cancelled {
                 message,
                 locks: Vec::new(),
@@ -874,8 +879,9 @@ pub(super) enum LocalJob {
         epoch: Epoch,
         cancel: Superseded,
     },
-    /// What Create Branch's Discard would lose (`ops::checkout_discarding_consequence`), in the
-    /// lane's order, after every write asked before it; a newer ask ends it.
+    /// What Create Branch's Discard would be confirmed as (`ops::checkout_discarding_consequence`),
+    /// in the lane's order, after every write asked before it; one superseded while it waited is
+    /// not read.
     CheckoutConsequence {
         asked: OperationId,
         name: String,
@@ -1186,16 +1192,16 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 at,
                 cancel,
             } => {
-                let counting = Counting {
-                    superseded: &cancel,
-                    lane: serving.lane,
-                };
-                let outcome =
-                    ops::checkout_discarding_consequence(serving.git, &repo, &name, at, &counting);
-                let outcome = match outcome {
-                    Err(Error::ConsequenceCancelled | Error::GitReadCancelled { .. }) => continue,
+                // Superseded while it waited its turn — a newer name, or Discard let go of.
+                if cairn_git::Cancel::is_cancelled(&cancel) || serving.lane.is_closing() {
+                    continue;
+                }
+                let outcome = match ops::checkout_discarding_consequence(&repo, &name, at) {
                     Ok(consequence) => Ok(consequence),
-                    Err(error) => Err(error.to_string()),
+                    Err(Error::CheckoutRefused {
+                        why: cairn_git::CheckoutRefusal::InProgress(operation),
+                    }) => Err(CheckoutRefused::InProgress(operation)),
+                    Err(error) => Err(CheckoutRefused::Failed(error.to_string())),
                 };
                 serving
                     .outbox

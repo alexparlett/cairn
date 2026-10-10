@@ -1,13 +1,17 @@
 //! staging-and-commit's `Create Branch Here…` against real `git` (R11.3, C20): the branch
 //! `ops::create_branch` makes is the one `git branch -- <name> <commit>` makes — at the same
 //! commit, logged with the same message — on a commit only a reflog still reaches, and a
-//! name git refuses is refused with git's reason and nothing written. Run on the host's git
-//! and, through `scripts/git-floor.sh`, on 2.30.9 and 2.32.7.
+//! name git refuses is refused with git's reason and nothing written; a name is taken or
+//! refused as `git branch` and `git checkout -b` take it (C32); and Create Branch's Discard
+//! runs Fork's forced checkout, leaving what Fork's command leaves, re-checking `HEAD`, the
+//! commit and the name and nothing else, and refusing an operation in progress before git runs
+//! (C34; the user's decision of 2026-10-10). Run on the host's git and, through
+//! `scripts/git-floor.sh`, on 2.30.9 and 2.32.7.
 
 use std::path::{Path, PathBuf};
 
-use cairn_git::{CancelSignal, CheckoutRefusal, Error, Refusal, Repository, ops};
-use cairn_model::{BranchName, ChangeLoss, ChangedKind, Confirmed, Consequence, Oid};
+use cairn_git::{CancelSignal, CheckoutMoved, CheckoutRefusal, Error, Repository, ops};
+use cairn_model::{BranchName, Confirmed, Consequence, NameRefusal, Oid, OperationInProgress};
 
 use super::repositories::Repo;
 use super::{git, ok};
@@ -157,7 +161,7 @@ fn a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing() {
     for (name, expected) in [
         ("topic", BranchName::Free),
         ("feature/x", BranchName::Free),
-        ("main", BranchName::Taken),
+        ("main", BranchName::Refused(NameRefusal::Taken)),
     ] {
         assert_eq!(
             ok(engine.branch_name(git(), name, &CancelSignal::new()), name),
@@ -178,8 +182,10 @@ fn a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing() {
     ] {
         let answer = ok(engine.branch_name(git(), name, &CancelSignal::new()), name);
         match (answer, gits_own_refusal(&repo, name)) {
-            (BranchName::Refused { reason }, Some(gits)) => assert_eq!(reason, gits, "{name:?}"),
-            (BranchName::Free | BranchName::Taken, None) => {}
+            (BranchName::Refused(NameRefusal::Invalid { reason }), Some(gits)) => {
+                assert_eq!(reason, gits, "{name:?}")
+            }
+            (BranchName::Free | BranchName::Refused(NameRefusal::Taken), None) => {}
             (answer, gits) => panic!("{name:?}: Cairn said {answer:?}, git {gits:?}"),
         }
     }
@@ -240,87 +246,74 @@ fn a_kept_checkout_carries_the_changes_or_is_refused_by_git_writing_nothing() {
     );
 }
 
-/// "Discard" (the user's decision 3, 2026-10-09): its consequence names every staged and
-/// unstaged change to a tracked file — each kind as git's status reads it, its lines as git's
-/// numstat counts them — every untracked file the commit's tree overwrites, and how many other
-/// untracked files stay; run, it creates and checks out the branch with exactly those losses,
-/// and nothing else gone. Caught by: a staged-only change or a staged new file left
-/// unnamed, an overwritten untracked file unsaid, a kept untracked file lost, or the lines
-/// counted otherwise than git counts them.
-#[test]
-fn a_discarding_checkout_names_every_loss_and_then_loses_exactly_those() {
-    let (repo, older) = two_commits();
+/// What `git status` lists, every untracked file named.
+fn status(repo: &Repo) -> String {
+    repo.git(&["status", "--porcelain=v1", "-uall"])
+}
+
+/// The consequence Discard is confirmed with, read now.
+fn discarding(repo: &Repo, branch: &str, at: Oid) -> Consequence {
+    ok(
+        ops::checkout_discarding_consequence(&engine(repo), branch, at),
+        "the consequence",
+    )
+}
+
+/// A working tree Discard is pressed over: a staged edit to `f`, an unstaged edit to `g`, a
+/// staged new file, `only-later.txt` deleted, an untracked file at a path `older` holds
+/// (`in-the-way.txt`, which `main`'s tip does not), and one `older` holds nothing at.
+fn dirty() -> (Repo, Oid) {
+    let repo = Repo::new("discarding");
+    repo.write("f", b"1\n");
+    repo.write("g", b"g1\n");
+    repo.write("in-the-way.txt", b"committed\n");
+    let older = repo.commit("first");
+    repo.git(&["rm", "-q", "in-the-way.txt"]);
+    repo.write("f", b"2\n");
+    repo.write("only-later.txt", b"later\n");
+    repo.commit("second");
     repo.write("f", b"staged\n");
     repo.git(&["add", "f"]);
     repo.write("g", b"g one\ng two\n");
     repo.write("new.txt", b"brand new\n");
     repo.git(&["add", "new.txt"]);
-    std::fs::remove_file(repo.path().join("only-later.txt")).unwrap_or_default();
-    // Untracked: one the older commit's tree has no file at, one it has.
+    repo.remove("only-later.txt");
+    repo.write("in-the-way.txt", b"my untracked work\n");
     repo.write("scratch.txt", b"keep me\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "rescue",
-            older,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    let Consequence::CheckoutDiscarding {
-        branch,
-        at,
-        changes,
-        kept_untracked,
-        ..
-    } = &consequence
-    else {
-        panic!("{consequence:?}");
-    };
-    assert_eq!(
-        (branch.as_str(), *at, *kept_untracked),
-        ("rescue", older, 1)
-    );
-    let named: Vec<(String, Option<ChangedKind>)> = changes
-        .iter()
-        .map(|change| {
-            let kind = match &change.loss {
-                ChangeLoss::Changed { kind, .. } => Some(*kind),
-                ChangeLoss::Overwritten { .. } | ChangeLoss::Removed { .. } => None,
-            };
-            (change.path.to_string(), kind)
-        })
-        .collect();
-    assert_eq!(
-        named,
-        [
-            ("f".to_owned(), Some(ChangedKind::Modified)),
-            ("g".to_owned(), Some(ChangedKind::Modified)),
-            ("new.txt".to_owned(), Some(ChangedKind::Added)),
-            ("only-later.txt".to_owned(), Some(ChangedKind::Deleted)),
-        ]
-    );
-    // Lines, as git's own numstat counts staged and unstaged changes together.
-    let numstat = |args: &[&str]| -> u64 {
-        repo.git(args)
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split('\t');
-                Some(fields.next()?.parse::<u64>().ok()? + fields.next()?.parse::<u64>().ok()?)
-            })
-            .sum()
-    };
-    let gits_lines = numstat(&["diff", "--cached", "--numstat"]) + numstat(&["diff", "--numstat"]);
-    let ours: u64 = changes
-        .iter()
-        .map(|change| match &change.loss {
-            ChangeLoss::Changed { lines, .. } => lines.unwrap_or_default() as u64,
-            ChangeLoss::Overwritten { .. } | ChangeLoss::Removed { .. } => 0,
-        })
-        .sum();
-    assert_eq!(ours, gits_lines, "lines counted as git counts them");
+    (repo, older)
+}
 
+/// Every file under the working tree but `.git`, with its bytes, sorted.
+fn tree(repo: &Repo) -> Vec<(PathBuf, Vec<u8>)> {
+    snapshot(repo.path())
+        .into_iter()
+        .filter_map(|(path, bytes)| {
+            let relative = path.strip_prefix(repo.path()).ok()?.to_owned();
+            (!relative.starts_with(".git")).then_some((relative, bytes))
+        })
+        .collect()
+}
+
+/// C34, B1 and the user's decision of 2026-10-10: Discard runs Fork's command, and leaves
+/// exactly what Fork's own command leaves — staged and unstaged changes and a staged new file
+/// gone, an untracked file at a path the commit holds overwritten, an untracked file it holds
+/// nothing at kept — on the new branch at the commit; the consequence it was confirmed with is
+/// fixed, naming no file, and is the prompt recorded. The oracle is Fork's observed command,
+/// `git checkout --no-track -b <name> <commit> --force`, run on an identical fixture. Caught by:
+/// a kept checkout run, a prediction put back, `--no-track` dropped (an upstream set where
+/// Fork's sets none), or anything lost or kept otherwise than Fork's command does.
+#[test]
+fn a_discarding_checkout_leaves_what_forks_command_leaves() {
+    let (repo, older) = dirty();
+    let consequence = discarding(&repo, "rescue", older);
+    assert_eq!(
+        consequence,
+        Consequence::CheckoutDiscarding {
+            branch: "rescue".to_owned(),
+            at: older,
+            head: Some(repo.rev("HEAD")),
+        }
+    );
     let performed = ok(
         ops::create_branch_discarding(
             git(),
@@ -340,322 +333,334 @@ fn a_discarding_checkout_names_every_loss_and_then_loses_exactly_those() {
     );
     assert_eq!(repo.rev("HEAD"), older);
     assert_eq!(
-        repo.git(&["status", "--porcelain=v1", "-uall"]),
+        status(&repo),
         "?? scratch.txt\n",
-        "every change gone, the kept untracked file kept"
-    );
-    assert_eq!(
-        std::fs::read(repo.path().join("f")).unwrap_or_default(),
-        b"1\n"
-    );
-}
-
-/// An untracked file at a path the commit holds a file at is named overwritten, by its size,
-/// and the checkout writes the commit's file over it.
-#[test]
-fn an_untracked_file_in_the_way_is_named_overwritten() {
-    let repo = Repo::new("overwritten");
-    repo.write("f", b"1\n");
-    repo.write("in-the-way.txt", b"committed\n");
-    let older = repo.commit("first");
-    repo.git(&["rm", "-q", "in-the-way.txt"]);
-    repo.write("f", b"2\n");
-    repo.commit("second");
-    repo.write("in-the-way.txt", b"untracked, 21 bytes\n");
-    repo.write("f", b"edited\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "b",
-            older,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    assert!(
-        consequence
-            .prompt()
-            .contains("1 untracked file overwritten (20 bytes)"),
-        "{}",
-        consequence.prompt()
-    );
-    ok(
-        ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(consequence), None),
-        "the checkout",
+        "every change gone, scratch kept"
     );
     assert_eq!(
         std::fs::read(repo.path().join("in-the-way.txt")).unwrap_or_default(),
-        b"committed\n"
+        b"committed\n",
+        "the untracked file in the way overwritten"
+    );
+
+    let (forks, older) = dirty();
+    forks.git(&[
+        "checkout",
+        "--no-track",
+        "-b",
+        "rescue",
+        &older.to_string(),
+        "--force",
+    ]);
+    assert_eq!(status(&repo), status(&forks));
+    assert_eq!(
+        tree(&repo),
+        tree(&forks),
+        "the working tree as Fork's leaves it"
+    );
+    assert_eq!(
+        repo.try_git(&["config", "branch.rescue.merge"], &[], None)
+            .ok(),
+        forks
+            .try_git(&["config", "branch.rescue.merge"], &[], None)
+            .ok(),
+        "the upstream as Fork's sets it"
     );
 }
 
-/// R1.4: a file edited, or another deleted, after the confirmation refuses the checkout, naming
-/// the path, and writes nothing — no branch, no file. Caught by: a checkout that runs on what
-/// it was told then, not what is there now.
+/// The user's decision of 2026-10-10 on phase 14's stopping rule: over a submodule's change,
+/// Discard runs as Fork's does — git discards the rest and leaves the submodule's change in
+/// place, its checkout on the moved commit and a staged change of its commit listed again as
+/// unstaged — and over a conflicted path with no operation in progress git discards the
+/// conflict. Neither is refused before git runs. Caught by: either refused, or git's handling
+/// of them differing on this git from the probe's.
 #[test]
-fn a_discarding_checkout_refuses_what_changed_since_its_confirmation() {
-    for late in ["edited", "deleted"] {
-        let (repo, older) = two_commits();
-        repo.write("f", b"edited once\n");
-        let consequence = ok(
-            ops::checkout_discarding_consequence(
+fn a_submodules_change_survives_the_discard_and_a_conflict_is_discarded() {
+    for staged in [false, true] {
+        let repo = Repo::new("submodule-change");
+        repo.write("a.txt", b"a\n");
+        let inner = Repo::borrowed(&repo.path().join("sub"));
+        ok(std::fs::create_dir_all(inner.path()), "making sub");
+        inner.git(&["init", "--quiet", "--initial-branch=main", "."]);
+        inner.write("s", b"1\n");
+        inner.commit("s1");
+        repo.git(&["add", "a.txt", "sub"]);
+        let head = repo.commit("with a submodule");
+        inner.write("s", b"2\n");
+        let moved = inner.commit("s2");
+        if staged {
+            repo.git(&["add", "sub"]);
+        }
+        repo.write("a.txt", b"edited\n");
+        let before = status(&repo);
+        assert!(before.contains("sub\n"), "{before}");
+        ok(
+            ops::create_branch_discarding(
                 git(),
                 &engine(&repo),
-                "late",
-                older,
-                &CancelSignal::new(),
+                Confirmed::by_user(discarding(&repo, "away", head)),
+                None,
             ),
-            "the consequence",
+            "the discarding checkout over a submodule",
         );
-        let path = if late == "edited" {
-            repo.write("f", b"edited twice\n");
-            "f"
-        } else {
-            std::fs::remove_file(repo.path().join("only-later.txt")).unwrap_or_default();
-            repo.git(&["rm", "-q", "--cached", "only-later.txt"]);
-            "only-later.txt"
-        };
-        let before = refs(&repo);
-        match ops::create_branch_discarding(
+        assert_eq!(
+            status(&repo),
+            " M sub\n",
+            "staged {staged}: the rest discarded, the submodule's change left unstaged"
+        );
+        assert_eq!(inner.rev("HEAD"), moved, "the submodule left on its commit");
+    }
+
+    let repo = Repo::new("stash-conflict");
+    repo.write("a.txt", b"base\n");
+    let base = repo.commit("base");
+    repo.write("a.txt", b"stashed\n");
+    repo.git(&["stash", "-q"]);
+    repo.write("a.txt", b"conflicting\n");
+    repo.commit("conflicting");
+    assert!(repo.try_git(&["stash", "apply", "-q"], &[], None).is_err());
+    assert_eq!(status(&repo), "UU a.txt\n");
+    assert_eq!(engine(&repo).operation_in_progress(), None);
+    ok(
+        ops::create_branch_discarding(
             git(),
             &engine(&repo),
-            Confirmed::by_user(consequence),
+            Confirmed::by_user(discarding(&repo, "away", base)),
             None,
-        ) {
-            Err(Error::ChangedSinceConfirmed { path: named }) => assert_eq!(named, path, "{late}"),
-            other => panic!("{late}: {other:?}"),
+        ),
+        "the discarding checkout over a conflict",
+    );
+    assert_eq!(status(&repo), "", "the conflict discarded");
+    assert_eq!(repo.rev("HEAD"), base);
+}
+
+/// The user's decision of 2026-10-10: an operation in progress is refused before git runs,
+/// since git's forced checkout would abandon it without a word — at the confirmation, and again
+/// at the run when one began after it. Nothing is written and no `git checkout` runs: the merge
+/// and its conflict stay. Caught by: the refusal dropped (the merge silently abandoned), or a
+/// checkout started anyway.
+#[test]
+fn a_merge_in_progress_is_refused_with_git_not_run() {
+    let repo = Repo::new("merging");
+    repo.write("a.txt", b"base\n");
+    let base = repo.commit("base");
+    repo.git(&["checkout", "-q", "-b", "other"]);
+    repo.write("a.txt", b"other\n");
+    repo.commit("other");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("a.txt", b"main\n");
+    repo.commit("main");
+    // Confirmed before the merge began: the run refuses it all the same.
+    let confirmed_before = discarding(&repo, "away", base);
+    assert!(repo.try_git(&["merge", "-q", "other"], &[], None).is_err());
+    assert_eq!(status(&repo), "UU a.txt\n");
+    let engine = engine(&repo);
+    let mark = engine.command_mark();
+    assert!(matches!(
+        ops::checkout_discarding_consequence(&engine, "away", base),
+        Err(Error::CheckoutRefused {
+            why: CheckoutRefusal::InProgress(OperationInProgress::Merge)
+        })
+    ));
+    let refs_before = refs(&repo);
+    assert!(matches!(
+        ops::create_branch_discarding(git(), &engine, Confirmed::by_user(confirmed_before), None),
+        Err(Error::CheckoutRefused {
+            why: CheckoutRefusal::InProgress(OperationInProgress::Merge)
+        })
+    ));
+    assert!(
+        engine.commands_since(mark).iter().all(|record| !record
+            .arguments
+            .iter()
+            .any(|argument| argument == "checkout")),
+        "a git checkout ran"
+    );
+    assert_eq!(refs(&repo), refs_before, "a branch was written");
+    assert!(
+        repo.path().join(".git/MERGE_HEAD").exists(),
+        "the merge abandoned"
+    );
+    assert_eq!(status(&repo), "UU a.txt\n");
+}
+
+/// C34, R1.4 as the user decided it (2026-10-10): between the press and the run, `HEAD` moved,
+/// the commit gone or the name taken each refuses, writing nothing — and nothing else is
+/// compared, so a file edited after the press is discarded with the rest. Caught by: a checkout
+/// run on what was confirmed then, a re-check left out, or the old prediction's comparison
+/// (any edit refusing) kept.
+#[test]
+fn the_recheck_refuses_head_the_commit_or_the_name_moved_and_nothing_else() {
+    // HEAD moved.
+    let (repo, older) = dirty();
+    let confirmed = discarding(&repo, "late", older);
+    repo.git(&["commit", "-q", "-m", "moved"]);
+    let before = refs(&repo);
+    match ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(confirmed), None)
+    {
+        Err(Error::CheckoutChangedSinceConfirmed {
+            what: CheckoutMoved::Head,
+        }) => {}
+        other => panic!("HEAD moved: {other:?}"),
+    }
+    assert_eq!(refs(&repo), before, "HEAD moved: a branch was written");
+
+    // The commit gone: a commit only a reflog reached, its reflog expired and pruned.
+    let (repo, lost) = amended();
+    repo.write("f", b"dirty\n");
+    let confirmed = discarding(&repo, "late", lost);
+    repo.git(&[
+        "reflog",
+        "expire",
+        "--expire=now",
+        "--expire-unreachable=now",
+        "--all",
+    ]);
+    repo.git(&["gc", "-q", "--prune=now"]);
+    let before = refs(&repo);
+    match ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(confirmed), None)
+    {
+        Err(Error::CheckoutChangedSinceConfirmed {
+            what: CheckoutMoved::Commit { at },
+        }) => assert_eq!(at, lost),
+        other => panic!("the commit gone: {other:?}"),
+    }
+    assert_eq!(refs(&repo), before, "the commit gone: a branch was written");
+
+    // The name taken.
+    let (repo, older) = dirty();
+    let confirmed = discarding(&repo, "late", older);
+    repo.git(&["branch", "late"]);
+    let before = (refs(&repo), status(&repo));
+    match ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(confirmed), None)
+    {
+        Err(Error::CheckoutChangedSinceConfirmed {
+            what: CheckoutMoved::Name { name },
+        }) => assert_eq!(name, "late"),
+        other => panic!("the name taken: {other:?}"),
+    }
+    assert_eq!(
+        (refs(&repo), status(&repo)),
+        before,
+        "the name taken: something was written"
+    );
+
+    // Nothing else: an edit after the press is discarded with the rest.
+    let (repo, older) = dirty();
+    let confirmed = discarding(&repo, "late", older);
+    repo.write("g", b"edited after the press\n");
+    repo.write("another.txt", b"untracked after the press\n");
+    ok(
+        ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(confirmed), None),
+        "an edit after the press",
+    );
+    assert_eq!(
+        status(&repo),
+        "?? another.txt\n?? scratch.txt\n",
+        "every change gone, the untracked files kept"
+    );
+}
+
+/// C32 and the review's M3, dismissed against real git: a name is taken or refused as `git
+/// branch -- <name>` and `git checkout -b <name>` take it. Both verbs resolve `@{-N}` to the
+/// previous branch's name, as `git check-ref-format --branch` does — so it is the oracle they
+/// agree with — while `git check-ref-format refs/heads/<name>`, the review's proposal, takes
+/// `-x` and `HEAD`, which both verbs refuse. Cairn refuses a name holding `@{` before git is
+/// asked (decision F), and every name it answers free both verbs take, every one it refuses
+/// both refuse. Caught by: the oracle swapped for `refs/heads/<name>`, a taken name or a folder
+/// clash passed as free, or a name the verbs take refused.
+#[test]
+fn a_name_is_taken_or_refused_as_gits_verbs_take_it() {
+    let (repo, _) = amended();
+    repo.git(&["branch", "prev"]);
+    repo.git(&["checkout", "-q", "prev"]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["branch", "taken"]);
+    repo.git(&["branch", "folder/inner"]);
+    repo.git(&["branch", "leaf"]);
+    let head = repo.rev("HEAD").to_string();
+    let engine = engine(&repo);
+    // Why `--branch` and not `refs/heads/<name>`: the verbs resolve `@{-1}` — `prev` here, the
+    // branch checked out before `main` — as `--branch` does, and refuse `-x` and `HEAD` (below),
+    // which `refs/heads/<name>` takes.
+    let refused = repo
+        .try_git(&["branch", "--", "@{-1}", &head], &[], None)
+        .err()
+        .unwrap_or_default();
+    assert!(refused.contains("'prev' already exists"), "{refused}");
+    assert_eq!(
+        repo.git(&["check-ref-format", "--branch", "@{-1}"]).trim(),
+        "prev"
+    );
+    let made = || repo.git(&["for-each-ref", "--format=%(refname)", "refs/heads/"]);
+    let before = made();
+    // Back on `main` only after a checkout that moved `HEAD`, so `@{-N}` still names `prev` and
+    // `main` while the names holding it are asked, which come first.
+    let undo = || {
+        if repo.git(&["symbolic-ref", "HEAD"]).trim() != "refs/heads/main" {
+            repo.git(&["checkout", "-q", "main"]);
         }
-        assert_eq!(refs(&repo), before, "{late}: a branch was written");
+        for created in made().lines() {
+            if !before.lines().any(|kept| kept == created) {
+                repo.git(&["update-ref", "-d", created]);
+            }
+        }
+    };
+    // Whether each verb takes `name`, every branch it made removed again.
+    let verbs_take = |name: &str| -> (bool, bool) {
+        let branch = repo
+            .try_git(&["branch", "--", name, &head], &[], None)
+            .is_ok();
+        undo();
+        let checkout = repo
+            .try_git(&["checkout", "-q", "-b", name, &head, "--"], &[], None)
+            .is_ok();
+        undo();
+        (branch, checkout)
+    };
+    for name in [
+        "@{-1}",
+        "@{-2}",
+        "x@{y",
+        "a..b",
+        "-x",
+        "HEAD",
+        "taken",
+        "folder",
+        "leaf/child",
+        "topic",
+        "@",
+    ] {
+        let answer = ok(engine.branch_name(git(), name, &CancelSignal::new()), name);
+        let (branch, checkout) = verbs_take(name);
+        assert_eq!(branch, checkout, "{name:?}: the verbs disagree");
+        assert_eq!(
+            answer == BranchName::Free,
+            branch,
+            "{name:?}: Cairn said {answer:?}"
+        );
+    }
+    for name in ["-x", "HEAD"] {
+        assert!(
+            repo.try_git(
+                &["check-ref-format", &format!("refs/heads/{name}")],
+                &[],
+                None
+            )
+            .is_ok(),
+            "{name}: refs/heads/ refused it, so it is no longer the wrong oracle"
+        );
+        assert!(
+            repo.try_git(&["check-ref-format", "--branch", name], &[], None)
+                .is_err()
+        );
     }
 }
 
-/// The discard is refused before any confirmation where it cannot count what it loses: during
-/// a merge (git's `MERGE_HEAD`), for a conflicted path, for a submodule's change, and when
-/// nothing is changed. Caught by: a forced checkout offered over an operation's state, a
-/// submodule's inside, or nothing at all.
-#[test]
-fn a_discarding_checkout_is_refused_where_it_cannot_count_the_loss() {
-    let consequence = |repo: &Repo, at: Oid| {
-        ops::checkout_discarding_consequence(git(), &engine(repo), "x", at, &CancelSignal::new())
-    };
-    let (clean, older) = two_commits();
-    assert!(matches!(
-        consequence(&clean, older),
-        Err(Error::CheckoutRefused {
-            why: CheckoutRefusal::NothingToDiscard
-        })
-    ));
-
-    let (merging, older) = two_commits();
-    merging.write("f", b"dirty\n");
-    let head = merging.rev("HEAD");
-    ok(
-        std::fs::write(merging.path().join(".git/MERGE_HEAD"), format!("{head}\n")),
-        "writing MERGE_HEAD",
-    );
-    assert!(matches!(
-        consequence(&merging, older),
-        Err(Error::CheckoutRefused {
-            why: CheckoutRefusal::InProgress(_)
-        })
-    ));
-
-    let (submodule, older) = two_commits();
-    let head = submodule.rev("HEAD").to_string();
-    submodule.git(&[
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        &format!("160000,{head},sub"),
-    ]);
-    assert!(matches!(
-        consequence(&submodule, older),
-        Err(Error::Refused {
-            why: Refusal::Submodule,
-            ..
-        })
-    ));
-}
-
-/// What a discarding checkout's consequence names, by path: each loss as a word, and the
-/// untracked files it says are kept.
-fn losses(consequence: &Consequence) -> (Vec<(String, String)>, usize) {
-    let Consequence::CheckoutDiscarding {
-        changes,
-        kept_untracked,
-        ..
-    } = consequence
-    else {
-        panic!("{consequence:?}");
-    };
-    let named = changes
-        .iter()
-        .map(|change| {
-            let word = match &change.loss {
-                ChangeLoss::Changed { kind, .. } => format!("{kind:?}"),
-                ChangeLoss::Overwritten { .. } => "overwritten".to_owned(),
-                ChangeLoss::Removed {
-                    kind,
-                    files,
-                    bytes: _,
-                } => format!("removed {kind:?} of {files}"),
-            };
-            (change.path.to_string(), word)
-        })
-        .collect();
-    (named, *kept_untracked)
-}
-
-/// QA 1 (phase 10, CRITICAL): untracked files under a directory where the checked-out commit
-/// holds a FILE are deleted by `git checkout -f` with the directory; the consequence names the
-/// directory and what is in it, and never says they are kept — and the variant where a tracked
-/// file was replaced by an untracked directory. Caught by: only an untracked file's own path
-/// looked up in the commit's tree (gix stops at the file on the way).
-#[test]
-fn untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost() {
-    let repo = Repo::new("dir-in-the-way");
-    repo.write("d", b"a file\n");
-    repo.write("f", b"1\n");
-    let older = repo.commit("d is a file");
-    repo.git(&["rm", "-q", "d"]);
-    repo.commit("d gone");
-    std::fs::create_dir_all(repo.path().join("d/e")).unwrap_or_default();
-    repo.write("d/n.txt", b"mine\n");
-    repo.write("d/e/m.txt", b"also mine\n");
-    repo.write("f", b"edited\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "b",
-            older,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    let (named, kept) = losses(&consequence);
-    assert_eq!(
-        named,
-        [
-            ("d".to_owned(), "removed Directory of 2".to_owned()),
-            ("f".to_owned(), "Modified".to_owned()),
-        ]
-    );
-    assert_eq!(kept, 0, "{}", consequence.prompt());
-    assert!(
-        !consequence.prompt().contains("kept"),
-        "{}",
-        consequence.prompt()
-    );
-    ok(
-        ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(consequence), None),
-        "the checkout",
-    );
-    assert!(
-        !repo.path().join("d/n.txt").exists(),
-        "git kept what was named lost"
-    );
-
-    // A tracked file replaced by an untracked directory, the checkout of HEAD itself.
-    let repo = Repo::new("file-replaced-by-dir");
-    repo.write("x", b"tracked\n");
-    let head = repo.commit("x");
-    std::fs::remove_file(repo.path().join("x")).unwrap_or_default();
-    std::fs::create_dir_all(repo.path().join("x")).unwrap_or_default();
-    repo.write("x/f", b"untracked\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "b",
-            head,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    let (named, kept) = losses(&consequence);
-    assert_eq!(
-        named,
-        [
-            ("x".to_owned(), "Deleted".to_owned()),
-            ("x".to_owned(), "removed Directory of 1".to_owned()),
-        ]
-    );
-    assert_eq!(kept, 0);
-}
-
-/// QA 2 (phase 10, CRITICAL): a nested repository where the commit holds a file is deleted
-/// whole — its work and its own `.git` — so the consequence names it as a repository lost.
-/// Caught by: a status record ending in `/` counted as kept.
-#[test]
-fn a_nested_repository_the_commit_holds_a_file_at_is_named_lost() {
-    let repo = Repo::new("nested-in-the-way");
-    repo.write("nested", b"a file\n");
-    repo.write("f", b"1\n");
-    let older = repo.commit("nested is a file");
-    repo.git(&["rm", "-q", "nested"]);
-    repo.commit("nested gone");
-    let inner = Repo::borrowed(&repo.path().join("nested"));
-    std::fs::create_dir_all(inner.path()).unwrap_or_default();
-    inner.git(&["init", "--quiet", "."]);
-    inner.write("work.txt", b"my work\n");
-    repo.write("f", b"edited\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "b",
-            older,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    let (named, kept) = losses(&consequence);
-    assert!(
-        named
-            .iter()
-            .any(|(path, word)| path == "nested" && word.starts_with("removed Repository")),
-        "{named:?}"
-    );
-    assert_eq!(kept, 0, "{}", consequence.prompt());
-}
-
-/// QA 3 (phase 10, CRITICAL): with `status.showUntrackedFiles=no` an untracked file the commit
-/// holds is still named overwritten: the untracked files are read whatever the display setting
-/// says. Caught by: the untracked list taken from a status that honours `no`.
-#[test]
-fn an_untracked_file_in_the_way_is_named_whatever_status_shows() {
-    let repo = Repo::new("untracked-hidden");
-    repo.write("u.txt", b"committed\n");
-    repo.write("f", b"1\n");
-    let older = repo.commit("u.txt");
-    repo.git(&["rm", "-q", "u.txt"]);
-    repo.commit("u.txt gone");
-    repo.config("status.showUntrackedFiles", "no");
-    repo.write("u.txt", b"my untracked work\n");
-    repo.write("f", b"edited\n");
-    let consequence = ok(
-        ops::checkout_discarding_consequence(
-            git(),
-            &engine(&repo),
-            "b",
-            older,
-            &CancelSignal::new(),
-        ),
-        "the consequence",
-    );
-    let (named, _) = losses(&consequence);
-    assert!(
-        named.contains(&("u.txt".to_owned(), "overwritten".to_owned())),
-        "{named:?}: {}",
-        consequence.prompt()
-    );
-}
-
 /// Phase 10's QA, item 15: a name a branch's directory holds (`foo` beside `foo/bar`), or one
-/// under a branch's name (`baz/qux` beside `baz`), is refused before git runs, in the words
-/// git's own refusal uses — git cannot lock such a ref — and a name beside them is free.
+/// under a branch's name (`baz/qux` beside `baz`), is refused before git runs, the
+/// branch each clashes with named, as git's own refusal names it — git cannot lock such a ref —
+/// and a name beside them is free.
 /// Caught by: only `refs/heads/<name>` looked up.
 #[test]
 fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
@@ -667,21 +672,24 @@ fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
     for (name, clash) in [
         (
             "foo",
-            "'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'",
+            NameRefusal::HoldsABranch {
+                branch: "refs/heads/foo/bar".to_owned(),
+            },
         ),
         (
             "baz/qux",
-            "'refs/heads/baz' exists; cannot create 'refs/heads/baz/qux'",
+            NameRefusal::InsideABranch {
+                branch: "refs/heads/baz".to_owned(),
+            },
         ),
         (
             "baz/qux/deeper",
-            "'refs/heads/baz' exists; cannot create 'refs/heads/baz/qux/deeper'",
+            NameRefusal::InsideABranch {
+                branch: "refs/heads/baz".to_owned(),
+            },
         ),
     ] {
-        match check(name) {
-            BranchName::Refused { reason } => assert_eq!(reason, clash, "{name}"),
-            other => panic!("{name}: {other:?}"),
-        }
+        assert_eq!(check(name), BranchName::Refused(clash), "{name}");
         assert!(
             repo.try_git(&["branch", "--", name, "HEAD"], &[], None)
                 .is_err(),
@@ -693,10 +701,9 @@ fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
     }
 }
 
-/// The user's decision F (2026-10-09): a name holding `@{` is refused in Cairn's words before
-/// git is asked — git's `check-ref-format` refuses it too, in words about a ref, not a branch
-/// name. Caught by: the name handed to git and git's reason shown, or a name with `@` alone
-/// or `{` alone refused.
+/// The user's decision F (2026-10-09): a name holding `@{` is refused before git is asked —
+/// git would read `@{-1}` as another branch's name. Caught by: the name handed to git, or a
+/// name with `@` alone or `{` alone refused.
 #[test]
 fn a_name_holding_at_brace_is_refused_in_cairns_words() {
     let (repo, _) = amended();
@@ -704,9 +711,7 @@ fn a_name_holding_at_brace_is_refused_in_cairns_words() {
     for name in ["topic@{1}", "@{", "a@{b"] {
         assert_eq!(
             ok(engine.branch_name(git(), name, &CancelSignal::new()), name),
-            BranchName::Refused {
-                reason: "A branch name can't contain '@{'".to_owned()
-            },
+            BranchName::Refused(NameRefusal::AtBrace),
             "{name}"
         );
     }

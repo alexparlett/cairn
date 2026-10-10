@@ -1,23 +1,33 @@
-//! Fork's Create Branch dialog (`docs/prd/staging-and-commit.md` R11.3; the user's decision,
-//! 2026-10-09; evidence `docs/research/staging-and-commit/fork-create-branch-evidence.md`),
-//! opened by "New Branch…" on any commit row, or at `HEAD` by its chord: under the title Fork's
-//! line on folders, then "Create branch at:" the commit — its short id and subject, read only —
-//! a "Branch name:" field, "Check out after create", and, while that is ticked and the working
-//! tree has changes, "Local changes:" with "Don't change" and "Discard". Its button reads
-//! "Create", or "Create and Checkout" while the box is ticked.
+//! Fork's Create Branch dialog (`docs/prd/staging-and-commit.md` R11.3; the user's decisions
+//! of 2026-10-09 and 2026-10-10; evidence `docs/research/staging-and-commit/
+//! fork-create-branch-evidence.md` and `fork-observed-2026-10-10.md`), opened by "New Branch…"
+//! on any commit row, or at `HEAD` by its chord: under the title Fork's line on folders, then
+//! "Create branch at:" the commit — its short id and subject, read only — a "Branch name:"
+//! field, "Check out after create", and, while that is ticked and the working tree has changes,
+//! "Local changes:" with Fork's three choices in Fork's order — "Don't change", "Stash and
+//! reapply", drawn greyed with "Comes with stashing." beside it until packet 5b builds stashing
+//! (B4), and "Discard", with Fork's ⚠ beside it while it is chosen. Its button reads "Create",
+//! or "Create and Checkout" while the box is ticked, whatever is chosen (B3).
+//!
+//! **A confirmation surface** (staging-and-commit R1.1, on the seal guard's roster; the user's
+//! decision of 2026-10-10, B2): with Discard chosen, pressing Create and Checkout — or Return in
+//! the name field — IS the acknowledgement, and builds the `Confirmed` here from the
+//! `Consequence` the engine computed for it, handed in by the window; no second dialog opens.
+//! The acknowledgement is the radio chosen plus the press, as in Fork. Without that consequence
+//! the press does nothing.
 //!
 //! A name is refused inline, before git runs: the button stays disabled until the engine has
 //! answered that git takes the name and no branch has it, and a refusal is said in the buttons'
-//! row, left of them, behind Fork's warning triangle — Fork's words for a name taken, git's for
-//! one it does not take. Return in the name
-//! field presses the button when it is enabled; Escape, Cancel and a press outside cancel.
+//! row, left of them, behind Fork's warning triangle — worded here from the engine's typed
+//! answer ([`name_refusal`]): Fork's words for a name taken, git's for one it does not take or
+//! cannot lock. Discard during an operation in progress is refused there too
+//! ([`discard_refusal`]). Return in the name field presses the button when it is enabled;
+//! Escape, Cancel and a press outside cancel.
 //!
-//! What the dialog holds is the window's: the name, the box, the choice and the engine's answer
-//! come in as props, and every change goes out through a handler. "Stash and reapply", Fork's
-//! third choice, waits for packet 5b, which builds stashing (the user's decision 2, a stated
-//! deviation from Fork).
+//! What the dialog holds is the window's: the name, the box, the choice, the engine's answers
+//! and the consequence come in as props, and every change goes out through a handler.
 
-use cairn_model::Oid;
+use cairn_model::{Confirmed, Consequence, NameRefusal, Oid, OperationInProgress};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
@@ -43,7 +53,12 @@ pub const CHECK_OUT_AFTER_CREATE: &str = "Check out after create";
 pub const LOCAL_CHANGES_LABEL: &str = "Local changes:";
 /// Keep the changes and check out over them, Fork's default.
 pub const DONT_CHANGE_CAPTION: &str = "Don't change";
-/// Throw the changes away, confirmed first.
+/// Fork's second choice, drawn greyed until packet 5b builds stashing (B4).
+pub const STASH_AND_REAPPLY_CAPTION: &str = "Stash and reapply";
+/// Why "Stash and reapply" is greyed, beside it (rule 4: a refusal known in advance is a
+/// greyed control with its reason).
+pub const COMES_WITH_STASHING: &str = "Comes with stashing.";
+/// Throw the changes away: chosen, the button's press is the confirmation.
 pub const DISCARD_LOCAL_CAPTION: &str = "Discard";
 /// The button while the box is unticked.
 pub const CREATE_CAPTION: &str = "Create";
@@ -62,8 +77,38 @@ const FONT_SIZE: f32 = 13.0;
 pub enum LocalChoice {
     /// "Don't change": carried over, or git refuses.
     Keep,
-    /// "Discard": thrown away, confirmed first.
+    /// "Discard": thrown away by Fork's forced checkout, the press confirming it.
     Discard,
+}
+
+/// Why a name typed cannot be a new branch's, as the dialog says it beside its buttons: Fork's
+/// words for a name taken ("Branch test already exists"), decision F's for `@{`, and git's own
+/// for a name it refuses or a ref it cannot lock beside a branch.
+pub fn name_refusal(name: &str, why: &NameRefusal) -> String {
+    match why {
+        NameRefusal::AtBrace => "A branch name can't contain '@{'".to_owned(),
+        NameRefusal::Invalid { reason } => reason.clone(),
+        NameRefusal::Taken => format!("Branch {name} already exists"),
+        NameRefusal::InsideABranch { branch } | NameRefusal::HoldsABranch { branch } => {
+            format!("'{branch}' exists; cannot create 'refs/heads/{name}'")
+        }
+    }
+}
+
+/// Why Discard is refused while git is in the middle of an operation, which its forced
+/// checkout would abandon (the user's decision of 2026-10-10): "A merge is in progress. Finish
+/// or abort it first."
+pub fn discard_refusal(operation: &OperationInProgress) -> String {
+    let named = match operation {
+        OperationInProgress::Merge => "A merge",
+        OperationInProgress::CherryPick { .. } | OperationInProgress::CherryPickSequence => {
+            "A cherry-pick"
+        }
+        OperationInProgress::Revert { .. } | OperationInProgress::RevertSequence => "A revert",
+        OperationInProgress::Rebase => "A rebase",
+        OperationInProgress::ApplyingPatches => "git am",
+    };
+    format!("{named} is in progress. Finish or abort it first.")
 }
 
 pub struct CreateBranchDialog {
@@ -76,9 +121,11 @@ pub struct CreateBranchDialog {
     waiting: Option<String>,
     checkout: bool,
     local: Option<LocalChoice>,
+    discarding: Option<Consequence>,
     on_checkout: EventHandler<bool>,
     on_local: EventHandler<LocalChoice>,
     on_create: EventHandler<()>,
+    on_confirmed: EventHandler<Confirmed>,
     on_cancel: EventHandler<()>,
     platform: Os,
     key: DiffKey,
@@ -98,9 +145,11 @@ impl CreateBranchDialog {
             waiting: None,
             checkout: false,
             local: None,
+            discarding: None,
             on_checkout: EventHandler::new(|_: bool| {}),
             on_local: EventHandler::new(|_: LocalChoice| {}),
             on_create: EventHandler::new(|()| {}),
+            on_confirmed: EventHandler::new(|_: Confirmed| {}),
             on_cancel: EventHandler::new(|()| {}),
             platform: Os::current(),
             key: DiffKey::None,
@@ -140,6 +189,14 @@ impl CreateBranchDialog {
         self
     }
 
+    /// What Discard's press confirms: the `Consequence` the engine computed for the name and
+    /// the commit shown, which the press builds the `Confirmed` from. Without it, a press with
+    /// Discard chosen does nothing.
+    pub fn discarding(mut self, consequence: Option<Consequence>) -> Self {
+        self.discarding = consequence;
+        self
+    }
+
     pub fn on_checkout(mut self, on_checkout: impl Into<EventHandler<bool>>) -> Self {
         self.on_checkout = on_checkout.into();
         self
@@ -150,9 +207,17 @@ impl CreateBranchDialog {
         self
     }
 
-    /// The button, or Return in the name field, while the name is ready.
+    /// The button, or Return in the name field, while the name is ready and Discard is not
+    /// chosen.
     pub fn on_create(mut self, on_create: impl Into<EventHandler<()>>) -> Self {
         self.on_create = on_create.into();
+        self
+    }
+
+    /// The button, or Return in the name field, while the name is ready and Discard is chosen:
+    /// the token the press built from [`CreateBranchDialog::discarding`]'s consequence.
+    pub fn on_confirmed(mut self, on_confirmed: impl Into<EventHandler<Confirmed>>) -> Self {
+        self.on_confirmed = on_confirmed.into();
         self
     }
 
@@ -182,6 +247,7 @@ impl PartialEq for CreateBranchDialog {
             && self.waiting == other.waiting
             && self.checkout == other.checkout
             && self.local == other.local
+            && self.discarding == other.discarding
             && self.platform == other.platform
             && self.key == other.key
     }
@@ -209,11 +275,24 @@ impl Component for CreateBranchDialog {
     fn render(&self) -> impl IntoElement {
         let colours = get_theme_or_default().read().colors().clone();
         let ready = self.ready;
+        // Discard chosen: the press is the acknowledgement, and builds the token from the
+        // consequence the engine computed (B2); otherwise it asks the create.
         let create = {
             let on_create = self.on_create.clone();
+            let on_confirmed = self.on_confirmed.clone();
+            let local = self.local;
+            let discarding = self.discarding.clone();
             move || {
-                if ready {
-                    on_create.call(());
+                if !ready {
+                    return;
+                }
+                match local {
+                    Some(LocalChoice::Discard) => {
+                        if let Some(consequence) = &discarding {
+                            on_confirmed.call(Confirmed::by_user(consequence.clone()));
+                        }
+                    }
+                    Some(LocalChoice::Keep) | None => on_create.call(()),
                 }
             }
         };
@@ -273,15 +352,43 @@ impl Component for CreateBranchDialog {
             let option = |text: &'static str, this: LocalChoice| {
                 radio(text, choice == this, {
                     let on_local = self.on_local.clone();
-                    move || on_local.call(this)
+                    Some(move || on_local.call(this))
                 })
             };
+            // Fork's order (observed cb2): Don't change, Stash and reapply, Discard.
+            let stash = rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(8.)
+                .child(radio(STASH_AND_REAPPLY_CAPTION, false, None::<fn()>))
+                .child(
+                    label()
+                        .text(COMES_WITH_STASHING)
+                        .font_size(12.)
+                        .color(colours.text_secondary),
+                );
+            let discard = rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(6.)
+                .child(option(DISCARD_LOCAL_CAPTION, LocalChoice::Discard))
+                // Fork's ⚠ beside Discard while it is chosen (observed cb3).
+                .maybe(choice == LocalChoice::Discard, |discard| {
+                    discard.child(
+                        rect()
+                            .key(RefGlyph::Gone)
+                            .width(Size::px(GLYPH_SIZE))
+                            .height(Size::px(GLYPH_SIZE))
+                            .child(RefGlyph::Gone.draw(colours.warning)),
+                    )
+                });
             content = content.child(row(
                 LOCAL_CHANGES_LABEL,
                 rect()
                     .spacing(6.)
                     .child(option(DONT_CHANGE_CAPTION, LocalChoice::Keep))
-                    .child(option(DISCARD_LOCAL_CAPTION, LocalChoice::Discard))
+                    .child(stash)
+                    .child(discard)
                     .into(),
             ));
         }
@@ -387,9 +494,11 @@ fn commit_glyph(colour: Color) -> Rect {
 }
 
 /// One choice of "Local changes:": a radio button to assistive technology, its state set,
-/// pressed by the pointer or, focused, by Space or Return.
-fn radio(caption: &'static str, selected: bool, pressed: impl Fn() + 'static) -> Element {
+/// pressed by the pointer or, focused, by Space or Return — or, given no press, greyed and
+/// inert, its caption in the disabled colour.
+fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'static>) -> Element {
     let colours = get_theme_or_default().read().colors().clone();
+    let enabled = pressed.is_some();
     let dot = rect()
         .width(Size::px(14.))
         .height(Size::px(14.))
@@ -409,25 +518,38 @@ fn radio(caption: &'static str, selected: bool, pressed: impl Fn() + 'static) ->
                 .corner_radius(3.)
                 .background(colours.primary)
         }));
-    rect()
+    let choice = rect()
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(6.)
         .a11y_role(AccessibilityRole::RadioButton)
         .a11y_alt(caption)
-        .a11y_focusable(true)
-        .a11y_builder(move |node| node.set_toggled(Toggled::from(selected)))
-        .cursor(CursorIcon::Pointer)
-        .on_press(move |e: Event<PressEventData>| {
-            e.stop_propagation();
-            pressed();
+        .a11y_focusable(enabled)
+        .a11y_builder(move |node| {
+            node.set_toggled(Toggled::from(selected));
+            if !enabled {
+                node.set_disabled();
+            }
         })
         .child(dot)
         .child(
             label()
                 .text(caption)
                 .font_size(FONT_SIZE)
-                .color(colours.text_primary),
-        )
-        .into()
+                .color(if enabled {
+                    colours.text_primary
+                } else {
+                    colours.text_secondary
+                }),
+        );
+    match pressed {
+        Some(pressed) => choice
+            .cursor(CursorIcon::Pointer)
+            .on_press(move |e: Event<PressEventData>| {
+                e.stop_propagation();
+                pressed();
+            })
+            .into(),
+        None => choice.into(),
+    }
 }

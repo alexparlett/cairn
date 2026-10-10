@@ -37,10 +37,10 @@
 //! editor session leaves it, under `commit.cleanup` and the comment character it reads
 //! (staging-and-commit R6.10); and one for
 //! Create Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git
-//! takes a name as a branch's is git's rule to apply (staging-and-commit R11.3), with
-//! [`change_lines`] beside it, `git diff-index --cached --numstat` and `git diff-files
-//! --numstat`, the lines Create Branch's discard counts, and [`untracked_paths`], `git ls-files
-//! --others --exclude-standard`, every untracked path whatever the display setting says.
+//! takes a name as a branch's is git's rule to apply (staging-and-commit R11.3) — and resolves
+//! `@{-N}` exactly as `git branch` and `git checkout -b` do, where `check-ref-format
+//! refs/heads/<name>` would take `-x` and `HEAD`, which both verbs refuse
+//! (`a_name_is_taken_or_refused_as_gits_verbs_take_it`).
 //!
 //! # What a read may run
 //!
@@ -226,7 +226,6 @@
 
 mod attributes;
 mod branch_name;
-mod change_lines;
 mod changes;
 mod config;
 mod hash_object;
@@ -234,12 +233,10 @@ mod patches;
 mod stash_changes;
 mod status;
 mod stripspace;
-mod untracked;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use branch_name::branch_name;
-pub(crate) use change_lines::change_lines;
 pub(crate) use changes::{Detection, Submodules, changes};
 pub(crate) use config::{
     CommitCleanup, FetchSettings, LogRefUpdates, comment_char_is_auto, commit_cleanup,
@@ -252,7 +249,6 @@ pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, S
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
 pub(crate) use stripspace::as_the_editor_leaves;
-pub(crate) use untracked::untracked_paths;
 pub(crate) use working_tree::{
     Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, staged_since,
     work_tree_relative, working_tree_patch,

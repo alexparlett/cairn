@@ -5822,10 +5822,6 @@ const CONSEQUENCE_TYPES: &[&str] = &[
     "FileLoss",
     "Publication",
     "Reflog",
-    "LostChange",
-    "ChangeLoss",
-    "ChangedKind",
-    "RemovedKind",
 ];
 
 /// Traits that would duplicate the token or build one without the constructor.
@@ -5855,12 +5851,16 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 /// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
 /// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
 /// and presses the button that accepts it (staging-and-commit R1.1): the confirmation dialog,
-/// and the commit box — its amend button drawn with the line it confirms, and the skip of a
-/// hook that failed an amend, drawn with the prompt the amend was confirmed with. A row whose
+/// the commit box — its amend button drawn with the line it confirms, and the skip of a
+/// hook that failed an amend, drawn with the prompt the amend was confirmed with — and the
+/// Create Branch dialog, whose Create and Checkout (or Return) with Discard chosen is the
+/// acknowledgement (the user's decision of 2026-10-10, B2): the radio chosen plus the press,
+/// as in Fork, the token built from the `Consequence` the engine computed for it. A row whose
 /// file no longer names the constructor fails.
 const CONFIRMATION_SURFACES: &[&str] = &[
     "crates/cairn-ui/src/confirm_dialog.rs",
     "crates/cairn-ui/src/commit_box.rs",
+    "crates/cairn-ui/src/create_branch_dialog.rs",
 ];
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
@@ -5880,8 +5880,9 @@ const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
         "crates/cairn-git/src/ops/remove_lock.rs",
         "remove_index_lock",
     ),
-    // Create Branch's Discard: the checkout that discards staged and unstaged changes (the
-    // user's decision 3, 2026-10-09).
+    // Create Branch's Discard: Fork's forced checkout, which discards staged and unstaged
+    // changes and untracked files in the way (the user's decisions 3, 2026-10-09, and B1,
+    // 2026-10-10).
     (
         "crates/cairn-git/src/ops/checkout.rs",
         "create_branch_discarding",

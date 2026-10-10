@@ -1,44 +1,37 @@
-//! Create Branch's checkout (`docs/prd/staging-and-commit.md` R11.3; the user's decision,
-//! 2026-10-09): a branch created at a commit and checked out, with the working tree's changes
-//! kept — "Don't change", `git checkout -q -b <name> <id> --`, which git refuses, writing
-//! nothing, where a change or an untracked file would be overwritten — or discarded —
-//! "Discard", `git checkout -q -f -b <name> <id> --`, destructive and sealed: its
-//! [`Consequence::CheckoutDiscarding`] names every staged and unstaged change to a tracked file
-//! it throws away and every untracked file the commit's tree overwrites, and is computed again
-//! and compared before git runs (R1.4). It is the one operation that discards a staged change
-//! (R1.5's stated exception).
+//! Create Branch's checkout (`docs/prd/staging-and-commit.md` R11.3): a branch created at a
+//! commit and checked out, with the working tree's changes kept — "Don't change", `git checkout
+//! -q -b <name> <id> --`, which git refuses, writing nothing, where a change or an untracked file
+//! would be overwritten — or discarded — "Discard", Fork's forced checkout, `git checkout -q
+//! --no-track -f -b <name> <id> --` (Fork's command, observed in its Activity Manager, with
+//! Cairn's `-q` and `--`; the user's decision of 2026-10-10). Discard is destructive and sealed:
+//! its [`Consequence::CheckoutDiscarding`] is fixed and generic — the branch, the commit and
+//! `HEAD` — predicting nothing of what git deletes (the redesign's rule 7: git decides), and the
+//! Create Branch dialog's press with Discard chosen is its confirmation. Its re-check is that
+//! `HEAD`, the commit and the name are unchanged, and nothing else (R1.4). It is the one
+//! operation that discards a staged change (R1.5's stated exception).
+//!
+//! What git does with it, on 2.56.0, 2.30.9 and 2.32.7 alike
+//! (`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`): staged and
+//! unstaged changes and a staged new file are gone, an untracked file at a path the commit holds
+//! is overwritten, other untracked files are kept; a conflicted path is discarded; a
+//! submodule's change is left in place (its checkout, the edits inside it, and a staged change
+//! of its commit listed again as unstaged), as Fork's command leaves it. During an operation —
+//! a merge, a rebase, a cherry-pick, a revert, `git am` — git would abandon it without a word (a
+//! merge's `MERGE_HEAD` and `MERGE_MSG` removed), so an operation in progress is refused before
+//! git runs, when the consequence is read and again before the run.
 //!
 //! The name is `-b`'s value, which git reads as the name whatever it begins with; the commit is
 //! its full id, and the `--` after it says it is no path. Checking out is this packet's only
 //! through Create Branch; checking out a branch is branch-ops'.
-//!
-//! The untracked files are read whatever `status.showUntrackedFiles` says
-//! (`reads::untracked_paths`), and every proper prefix of each is looked up in the commit's
-//! tree: a file the tree holds at the path is overwritten; untracked files under a directory
-//! the tree holds a file at are deleted with that directory; a repository nested in the working
-//! tree where the tree holds anything is deleted whole — each named in the `Consequence` with
-//! what is under it (phase 10's QA, items 1-3).
-//!
-//! What the seal does not count: an ignored file or directory at a path the commit holds a
-//! file at, which git deletes on any checkout, kept or discarding, as the user's own `git
-//! checkout` does — a whole ignored directory included; and a submodule's or a conflicted
-//! path's state, which the discard refuses before any prompt. A directory or nested repository
-//! named lost is compared again by the count and the bytes of what is under it, so an edit that
-//! keeps a file's size inside it is not seen by the re-check.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use cairn_model::{
-    AskpassToken, ChangeLoss, ChangedKind, Confirmed, Consequence, LostChange, Oid, RemovedKind,
-    RepoPath, StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
-};
+use cairn_model::{AskpassToken, BranchName, Confirmed, Consequence, Oid};
 
-use super::fresh_state::{IndexNow, IndexSide, on_disk};
 use super::local_write::{locks_around, locks_now, run};
 use super::{GitBinary, Invalidated, Performed};
 use crate::object_id::{model_id, object_id};
-use crate::{Cancel, CheckoutRefusal, Error, Refusal, Repository};
+use crate::{CancelSignal, CheckoutMoved, CheckoutRefusal, Error, Repository};
 
 /// Creates the branch `name` at `commit` and checks it out, keeping the working tree's changes:
 /// `git checkout -q -b <name> <id> --`, a write. git refuses — creating no branch — where a
@@ -69,18 +62,15 @@ pub fn create_branch_and_checkout(
     .with_locks(locks_around(repo, before)))
 }
 
-/// What creating `branch` at `at` and checking it out with `git checkout -f` would lose, read
-/// now: every tracked path with a staged or an unstaged change, and every untracked file at a
-/// path `at`'s tree holds; the rest of the untracked files counted as kept. Refused before any
-/// prompt during a merge, a rebase, `git am`, a cherry-pick or a revert, for a conflicted path
-/// or a submodule with changes, and when nothing is changed. Runs `git status` and two numstat
-/// reads; `cancel` stops them.
+/// What creating `branch` at `at` and checking it out with Fork's forced checkout would be
+/// confirmed as, read now: the branch, the commit and `HEAD`, nothing predicted of what git
+/// deletes. Refused before any confirmation during a merge, a rebase, `git am`, a cherry-pick or
+/// a revert ([`CheckoutRefusal::InProgress`]), which git would abandon; and when `at` cannot be
+/// read. Reads no working tree and runs no `git`.
 pub fn checkout_discarding_consequence(
-    git: &GitBinary,
     repo: &Repository,
     branch: &str,
     at: Oid,
-    cancel: &impl Cancel,
 ) -> Result<Consequence, Error> {
     if let Some(operation) = repo.operation_in_progress() {
         return Err(Error::CheckoutRefused {
@@ -88,102 +78,31 @@ pub fn checkout_discarding_consequence(
         });
     }
     let head = head_commit(repo)?;
-    let entries = match repo.status(git, cancel)? {
-        WorkingTreeStatus::Listed(entries) => entries,
-        WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree => {
-            return Err(Error::CheckoutRefused {
-                why: CheckoutRefusal::NothingToDiscard,
-            });
-        }
-    };
-    let lines = crate::reads::change_lines(git, repo, head, cancel)?;
-    let index = IndexNow::read(repo)?;
-    let target = target_tree(repo, at)?;
-    // By path, so the prompt and the re-check read them in one order.
-    let mut kinds: BTreeMap<RepoPath, ChangedKind> = BTreeMap::new();
-    for entry in entries {
-        match entry {
-            StatusEntry::Conflicted(conflict) => {
-                return Err(Error::Refused {
-                    path: conflict.path.to_string(),
-                    why: Refusal::Conflicted,
-                });
-            }
-            StatusEntry::Changed(changed) => {
-                if changed.submodule.is_some() {
-                    return Err(Error::Refused {
-                        path: changed.path.to_string(),
-                        why: Refusal::Submodule,
-                    });
-                }
-                for (path, kind) in kinds_of(&changed) {
-                    kinds.entry(path).or_insert(kind);
-                }
-            }
-            // Read again below, whatever the display setting hides.
-            StatusEntry::Untracked(_) => {}
-        }
-    }
-    if kinds.is_empty() {
-        return Err(Error::CheckoutRefused {
-            why: CheckoutRefusal::NothingToDiscard,
-        });
-    }
-    let mut changes = Vec::with_capacity(kinds.len());
-    for (path, kind) in kinds {
-        if cancel.is_cancelled() {
-            return Err(Error::ConsequenceCancelled);
-        }
-        let index_id = match index.side(&path)? {
-            IndexSide::Entry { id, .. } => Some(id),
-            IndexSide::Absent => None,
-            IndexSide::Conflicted => {
-                return Err(Error::Refused {
-                    path: path.to_string(),
-                    why: Refusal::Conflicted,
-                });
-            }
-        };
-        let disk = on_disk(repo, &path)?;
-        let counted = lines.get(&path).copied().unwrap_or(Some(0));
-        changes.push(LostChange {
-            loss: ChangeLoss::Changed {
-                kind,
-                index: index_id,
-                working_tree: disk.id().copied(),
-                executable: disk.executable(),
-                lines: counted,
-            },
-            path,
-        });
-    }
-    let (lost, kept_untracked) = untracked_losses(git, repo, &target, cancel)?;
-    changes.extend(lost);
-    // By path, a tracked change before an untracked loss at the same path.
-    changes.sort_by(|one, other| one.path.cmp(&other.path));
+    commit_is_there(repo, at)?;
     Ok(Consequence::CheckoutDiscarding {
         branch: branch.to_owned(),
         at,
         head,
-        changes,
-        kept_untracked,
     })
 }
 
 /// Creates the branch the confirmation names at the commit it names and checks it out with
-/// `git checkout -q -f -b <name> <id> --`, discarding exactly what the confirmation names:
-/// the consequence is computed again first, and any difference — a file edited, `HEAD` moved,
-/// an untracked file added in the way — refuses with [`Error::ChangedSinceConfirmed`], writing
-/// nothing (R1.4). Every target is read from the confirmation, never from a parameter beside
-/// it. Invalidates the refs, the index and the working tree.
+/// `git checkout -q --no-track -f -b <name> <id> --`, discarding local changes and any untracked
+/// files in the way as git does. Immediately before, it re-checks exactly what the confirmation
+/// holds (R1.4) — `HEAD` is the commit it was, the commit can still be read, and the name is
+/// still one git takes and no branch has — refusing with [`Error::CheckoutChangedSinceConfirmed`],
+/// writing nothing, when any moved; nothing else is compared, so an edit made since is discarded
+/// with the rest. An operation begun since is refused as at the confirmation. Every target is
+/// read from the confirmation, never from a parameter beside it. Invalidates the refs, the index
+/// and the working tree.
 pub fn create_branch_discarding(
     git: &GitBinary,
     repo: &Repository,
     confirmed: Confirmed,
     token: Option<&AskpassToken>,
 ) -> Result<Performed, Error> {
-    let (branch, at) = match confirmed.consequence() {
-        Consequence::CheckoutDiscarding { branch, at, .. } => (branch.clone(), *at),
+    let (branch, at, head) = match confirmed.consequence() {
+        Consequence::CheckoutDiscarding { branch, at, head } => (branch.clone(), *at, *head),
         Consequence::DiscardLines { .. }
         | Consequence::DiscardFiles { .. }
         | Consequence::Amend { .. }
@@ -193,9 +112,21 @@ pub fn create_branch_discarding(
             });
         }
     };
-    let now = checkout_discarding_consequence(git, repo, &branch, at, &crate::CancelSignal::new())?;
-    if let Some(moved) = first_difference(confirmed.consequence(), &now) {
-        return Err(Error::ChangedSinceConfirmed { path: moved });
+    if let Some(operation) = repo.operation_in_progress() {
+        return Err(Error::CheckoutRefused {
+            why: CheckoutRefusal::InProgress(operation),
+        });
+    }
+    let moved = |what| Err(Error::CheckoutChangedSinceConfirmed { what });
+    if head_commit(repo)? != head {
+        return moved(CheckoutMoved::Head);
+    }
+    if commit_is_there(repo, at).is_err() {
+        return moved(CheckoutMoved::Commit { at });
+    }
+    match repo.branch_name(git, &branch, &CancelSignal::new())? {
+        BranchName::Free => {}
+        BranchName::Refused(_) => return moved(CheckoutMoved::Name { name: branch }),
     }
     let before = locks_now(repo);
     run(
@@ -216,11 +147,12 @@ pub fn create_branch_discarding(
     .with_locks(locks_around(repo, before)))
 }
 
-/// `checkout -q [-f] -b <name> <id> --`.
+/// `checkout -q -b <name> <id> --`, or, discarding, Fork's `checkout -q --no-track -f -b <name>
+/// <id> --`.
 fn checkout_arguments(name: &str, commit: Oid, discarding: bool) -> Vec<OsString> {
     let mut arguments = vec![OsString::from("checkout"), OsString::from("-q")];
     if discarding {
-        arguments.push(OsString::from("-f"));
+        arguments.extend([OsString::from("--no-track"), OsString::from("-f")]);
     }
     arguments.extend([
         OsString::from("-b"),
@@ -237,61 +169,6 @@ fn checkout_invalidates() -> Invalidated {
         .and(Invalidated::working_tree())
 }
 
-/// The paths a status entry's changes touch, each with how it differs from `HEAD`: a rename's
-/// source too, which the checkout puts back.
-fn kinds_of(changed: &cairn_model::ChangedEntry) -> Vec<(RepoPath, ChangedKind)> {
-    let mut kinds = Vec::with_capacity(2);
-    let own = match (&changed.staged, &changed.unstaged) {
-        (Some(StagedChange::Added), _)
-        | (Some(StagedChange::Renamed { .. } | StagedChange::Copied { .. }), _)
-        | (
-            None,
-            Some(
-                UnstagedChange::IntentToAdd
-                | UnstagedChange::Renamed { .. }
-                | UnstagedChange::Copied { .. },
-            ),
-        ) => ChangedKind::Added,
-        (Some(StagedChange::Deleted), _) | (_, Some(UnstagedChange::Deleted)) => {
-            ChangedKind::Deleted
-        }
-        (Some(StagedChange::Modified | StagedChange::TypeChanged), _)
-        | (None, Some(UnstagedChange::Modified | UnstagedChange::TypeChanged))
-        | (None, None) => ChangedKind::Modified,
-    };
-    kinds.push((changed.path.clone(), own));
-    for from in [
-        match &changed.staged {
-            Some(StagedChange::Renamed { from, .. }) => Some(from),
-            Some(
-                StagedChange::Added
-                | StagedChange::Modified
-                | StagedChange::Deleted
-                | StagedChange::TypeChanged
-                | StagedChange::Copied { .. },
-            )
-            | None => None,
-        },
-        match &changed.unstaged {
-            Some(UnstagedChange::Renamed { from, .. }) => Some(from),
-            Some(
-                UnstagedChange::Modified
-                | UnstagedChange::Deleted
-                | UnstagedChange::TypeChanged
-                | UnstagedChange::IntentToAdd
-                | UnstagedChange::Copied { .. },
-            )
-            | None => None,
-        },
-    ]
-    .into_iter()
-    .flatten()
-    {
-        kinds.push((from.clone(), ChangedKind::Deleted));
-    }
-    kinds
-}
-
 /// `HEAD`'s commit; `None` on an unborn branch.
 fn head_commit(repo: &Repository) -> Result<Option<Oid>, Error> {
     match repo.inner().head_id() {
@@ -300,208 +177,15 @@ fn head_commit(repo: &Repository) -> Result<Option<Oid>, Error> {
     }
 }
 
-/// `at`'s tree.
-fn target_tree(repo: &Repository, at: Oid) -> Result<gix::Tree<'_>, Error> {
-    let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
-        id: at.to_string(),
-        source,
-    };
+/// Whether `at` is a commit the repository can read.
+fn commit_is_there(repo: &Repository, at: Oid) -> Result<(), Error> {
     repo.inner()
         .find_commit(object_id(&at)?)
-        .map_err(|source| read(Box::new(source)))?
-        .tree()
-        .map_err(|source| read(Box::new(source)))
-}
-
-/// What `tree` holds at `parts`: nothing, a tree, or something else (a file, a link, a
-/// submodule).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Held {
-    Nothing,
-    Tree,
-    File,
-}
-
-fn held(tree: &gix::Tree<'_>, parts: &[&[u8]]) -> Result<Held, Error> {
-    let entry = tree
-        .lookup_entry(parts.iter().copied())
+        .map(|_| ())
         .map_err(|source| Error::ReadCommit {
-            id: tree.id.to_string(),
+            id: at.to_string(),
             source: Box::new(source),
-        })?;
-    Ok(match entry {
-        None => Held::Nothing,
-        Some(entry) if entry.mode().is_tree() => Held::Tree,
-        Some(_) => Held::File,
-    })
-}
-
-/// Every untracked path `git checkout -f` of `tree` would lose, and how many it keeps (phase
-/// 10's QA, items 1-3): the untracked paths read whatever `status.showUntrackedFiles` says; a
-/// file at a path the tree holds is overwritten; everything under a directory the tree holds a
-/// file at — any directory on the way, the deepest file-held one taken — is deleted with that
-/// directory, named once; and a nested repository at, or under, a path the tree holds is
-/// deleted whole, its own `.git` among it.
-fn untracked_losses(
-    git: &GitBinary,
-    repo: &Repository,
-    tree: &gix::Tree<'_>,
-    cancel: &impl Cancel,
-) -> Result<(Vec<LostChange>, usize), Error> {
-    let mut overwritten = Vec::new();
-    // By path, and whether it is a nested repository rather than a directory.
-    let mut removed: BTreeMap<(RepoPath, bool), (usize, u64)> = BTreeMap::new();
-    let mut kept = 0usize;
-    for path in crate::reads::untracked_paths(git, repo, cancel)? {
-        if cancel.is_cancelled() {
-            return Err(Error::ConsequenceCancelled);
-        }
-        let nested = path.as_bytes().ends_with(b"/");
-        let trimmed = path
-            .as_bytes()
-            .strip_suffix(b"/")
-            .unwrap_or(path.as_bytes());
-        let parts: Vec<&[u8]> = trimmed.split(|byte| *byte == b'/').collect();
-        // The first directory on the way the tree holds a file at.
-        let mut blocked_at = None;
-        let mut whole = Held::Nothing;
-        for end in 1..=parts.len() {
-            let here = held(tree, parts.get(..end).unwrap_or_default())?;
-            if end < parts.len() {
-                match here {
-                    Held::Tree => continue,
-                    Held::File => blocked_at = Some(end),
-                    Held::Nothing => {}
-                }
-                break;
-            }
-            whole = here;
-        }
-        let (count, bytes) = if nested {
-            content_under(repo, trimmed)?
-        } else {
-            let disk = on_disk(repo, &RepoPath::new(trimmed.to_vec()))?;
-            (1, disk.bytes().unwrap_or(0))
-        };
-        match (blocked_at, nested, whole) {
-            (Some(end), _, _) => {
-                let directory = RepoPath::new(parts.get(..end).unwrap_or_default().join(&b'/'));
-                let tally = removed.entry((directory, false)).or_default();
-                tally.0 += count;
-                tally.1 = tally.1.saturating_add(bytes);
-            }
-            (None, true, Held::Tree | Held::File) => {
-                let tally = removed
-                    .entry((RepoPath::new(trimmed.to_vec()), true))
-                    .or_default();
-                tally.0 += count;
-                tally.1 = tally.1.saturating_add(bytes);
-            }
-            (None, false, Held::Tree | Held::File) => {
-                let disk = on_disk(repo, &path)?;
-                match (disk.id(), disk.bytes()) {
-                    (Some(id), Some(bytes)) => overwritten.push(LostChange {
-                        path,
-                        loss: ChangeLoss::Overwritten {
-                            working_tree: *id,
-                            executable: disk.executable(),
-                            bytes,
-                        },
-                    }),
-                    _ => kept += 1,
-                }
-            }
-            (None, _, Held::Nothing) => kept += 1,
-        }
-    }
-    let mut lost = overwritten;
-    lost.extend(
-        removed
-            .into_iter()
-            .map(|((path, repository), (files, bytes))| LostChange {
-                path,
-                loss: ChangeLoss::Removed {
-                    kind: if repository {
-                        RemovedKind::Repository
-                    } else {
-                        RemovedKind::Directory
-                    },
-                    files,
-                    bytes,
-                },
-            }),
-    );
-    Ok((lost, kept))
-}
-
-/// The files under the working tree's `relative` directory and their bytes, links not
-/// followed: what a nested repository deleted whole holds.
-fn content_under(repo: &Repository, relative: &[u8]) -> Result<(usize, u64), Error> {
-    let top = repo.workdir().unwrap_or(repo.git_dir());
-    let root = top.join(gix::path::from_byte_slice(relative));
-    let mut pending = vec![root.clone()];
-    let (mut files, mut bytes) = (0usize, 0u64);
-    while let Some(directory) = pending.pop() {
-        let entries = std::fs::read_dir(&directory).map_err(|source| Error::ReadWorkingTree {
-            path: String::from_utf8_lossy(relative).into_owned(),
-            source,
-        })?;
-        for entry in entries.flatten() {
-            let Ok(metadata) = entry.path().symlink_metadata() else {
-                continue;
-            };
-            if metadata.is_dir() {
-                pending.push(entry.path());
-            } else {
-                files += 1;
-                bytes = bytes.saturating_add(metadata.len());
-            }
-        }
-    }
-    Ok((files, bytes))
-}
-
-/// The first thing `now` differs from `confirmed` in, named for the refusal: a path, or
-/// `HEAD`.
-fn first_difference(confirmed: &Consequence, now: &Consequence) -> Option<String> {
-    if confirmed == now {
-        return None;
-    }
-    match (confirmed, now) {
-        (
-            Consequence::CheckoutDiscarding {
-                head: was,
-                changes: confirmed_changes,
-                ..
-            },
-            Consequence::CheckoutDiscarding {
-                head: is,
-                changes: now_changes,
-                ..
-            },
-        ) => {
-            if was != is {
-                return Some("HEAD".to_owned());
-            }
-            let moved = confirmed_changes
-                .iter()
-                .zip(now_changes.iter())
-                .find(|(was, is)| was != is)
-                .map(|(was, _)| was.path.to_string())
-                .or_else(|| {
-                    let longer = if confirmed_changes.len() > now_changes.len() {
-                        confirmed_changes
-                    } else {
-                        now_changes
-                    };
-                    longer
-                        .get(confirmed_changes.len().min(now_changes.len()))
-                        .map(|change| change.path.to_string())
-                });
-            Some(moved.unwrap_or_else(|| "the untracked files".to_owned()))
-        }
-        _ => Some("HEAD".to_owned()),
-    }
+        })
 }
 
 #[cfg(test)]
@@ -509,9 +193,11 @@ mod tests {
     use super::*;
     use crate::ops::recording_stub::RecordingStub;
 
-    /// R11.3's argv, kept and discarding: `checkout -q -b`, `-f` only when discarding, the name
-    /// as `-b`'s value, the commit by its full id, `--` after it; a write's environment.
-    /// Caught by: `-f` on the kept checkout, a name or a commit read as a path, a short id.
+    /// R11.3's argv, kept and discarding: `checkout -q -b`, Fork's `--no-track -f` only when
+    /// discarding (C34), the name as `-b`'s value, the commit by its full id, `--` after it; a
+    /// write's environment. Caught by: `-f` on the kept checkout, `--no-track` dropped (an
+    /// upstream set from `branch.autoSetupMerge` where Fork sets none), a name or a commit read
+    /// as a path, a short id.
     #[test]
     fn the_checkouts_run_as_r11_names_them() {
         let id = Oid::parse("07da224c7ec04501dfb451be161fa962effe1dc1").unwrap();
@@ -537,6 +223,7 @@ mod tests {
             [
                 "checkout",
                 "-q",
+                "--no-track",
                 "-f",
                 "-b",
                 "-x",
@@ -572,5 +259,38 @@ mod tests {
             ]
         );
         checkout.assert_a_write();
+
+        // Discard, as the stub git records it (C34): Fork's command with Cairn's `-q` and `--`.
+        let consequence = checkout_discarding_consequence(&repo, "discarded", head).unwrap();
+        create_branch_discarding(&git, &repo, Confirmed::by_user(consequence), None).unwrap();
+        let recorded = stub.recorded();
+        let discarding: Vec<_> = recorded
+            .iter()
+            .filter(|record| {
+                record
+                    .arguments_after_location()
+                    .contains(&"discarded".to_owned())
+                    && record
+                        .arguments_after_location()
+                        .contains(&"checkout".to_owned())
+            })
+            .collect();
+        assert_eq!(discarding.len(), 1, "one forced checkout");
+        let forced = discarding.first().unwrap();
+        assert_eq!(
+            forced.arguments_after_location(),
+            [
+                "--literal-pathspecs",
+                "checkout",
+                "-q",
+                "--no-track",
+                "-f",
+                "-b",
+                "discarded",
+                head.to_string().as_str(),
+                "--"
+            ]
+        );
+        forced.assert_a_write();
     }
 }

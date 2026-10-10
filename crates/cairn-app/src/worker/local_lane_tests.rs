@@ -31,7 +31,7 @@ use super::fetch_tests::{
 use super::lifecycle_tests::StubGit;
 use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 use super::pool::{Replier, RepositoryHandle, Updates, open};
-use super::request::{RanBy, Request, Update};
+use super::request::{CheckoutRefused, RanBy, Request, Update};
 use super::startup::Startup;
 
 /// The real `git` on this process's `PATH`, which a stub hands every other verb to.
@@ -1969,9 +1969,10 @@ fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits
 }
 
 /// Create Branch's reads through the lane (staging-and-commit R11.3): a name is answered for
-/// the text asked — taken, free, or refused in git's words — and Discard's count is answered
-/// under the id asked with the engine's `Consequence`. Caught by: an answer under another
-/// name or id, or a query routed where no `git` runs it.
+/// the text asked — taken, free, or refused in git's words — and what Discard would be
+/// confirmed as is answered under the id asked with the engine's `Consequence`, or, during a
+/// merge, the operation it would abandon. Caught by: an answer under another name or id, a
+/// query routed where no `git` runs it, or the refusal lost in words.
 #[test]
 fn create_branchs_reads_are_answered_on_the_lane() {
     let fixture = to_commit("cairn-lane-branch-reads", &["a"]);
@@ -1982,7 +1983,12 @@ fn create_branchs_reads_are_answered_on_the_lane() {
     until_ended(&mut updates, committed);
     let at = head_commit(&fixture.path);
     for (name, expected) in [
-        ("main", Some(cairn_model::BranchName::Taken)),
+        (
+            "main",
+            Some(cairn_model::BranchName::Refused(
+                cairn_model::NameRefusal::Taken,
+            )),
+        ),
         ("topic", Some(cairn_model::BranchName::Free)),
         ("bad..name", None),
     ] {
@@ -2001,7 +2007,12 @@ fn create_branchs_reads_are_answered_on_the_lane() {
                 match expected {
                     Some(expected) => assert_eq!(answer, &expected, "{name}"),
                     None => assert!(
-                        matches!(answer, cairn_model::BranchName::Refused { .. }),
+                        matches!(
+                            answer,
+                            cairn_model::BranchName::Refused(
+                                cairn_model::NameRefusal::Invalid { .. }
+                            )
+                        ),
                         "{name}: {answer:?}"
                     ),
                 }
@@ -2027,6 +2038,25 @@ fn create_branchs_reads_are_answered_on_the_lane() {
             assert_eq!(*answered, asked);
             assert!(consequence.prompt().contains("rescue"), "{consequence:?}");
         }
+        other => panic!("{other:?}"),
+    }
+    // A merge in progress, as git records it: Discard would abandon it, so it is refused.
+    std::fs::write(fixture.path.join(".git/MERGE_HEAD"), format!("{at}\n"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let asked = OperationId::next();
+    handle.submit(Request::CheckoutConsequence {
+        asked,
+        name: "rescue".to_owned(),
+        at,
+    });
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::CheckoutConsequence { .. })
+    });
+    match seen.last() {
+        Some(Update::CheckoutConsequence {
+            asked: answered,
+            outcome: Err(CheckoutRefused::InProgress(cairn_model::OperationInProgress::Merge)),
+        }) => assert_eq!(*answered, asked),
         other => panic!("{other:?}"),
     }
 }

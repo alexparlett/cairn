@@ -264,8 +264,16 @@ pub fn window(
         // A commit's Git Error dialog (staging-and-commit R10.5): its skip may open the amend's
         // confirmation in its place.
         .maybe_child(crate::commit_box_pane::git_error(view, erring).filter(|_| prompt.is_none()))
-        // Create Branch's dialog, or a create's Git Error dialog (R11.3).
-        .maybe_child(crate::create_branch::dialogs(view, branching).filter(|_| prompt.is_none()))
+        // A create's Git Error dialog over Create Branch's dialog, which stays open beneath it
+        // as it was left, so Close returns to it (R11.3, C34). It paints one overlay above the
+        // dialog, and comes first in the tree so its Escape is heard first: Freya fires global
+        // key listeners in document order, and a popup's Escape consumes the key.
+        .maybe_child(
+            crate::create_branch::git_error(view)
+                .filter(|_| prompt.is_none())
+                .map(|error| rect().layer(Layer::Overlay).child(error).into_element()),
+        )
+        .maybe_child(crate::create_branch::dialog(view, branching).filter(|_| prompt.is_none()))
         .maybe_child(
             confirming
                 .filter(|_| prompt.is_none())
@@ -394,7 +402,6 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let choosing = submit.clone();
     let extending = submit.clone();
     let acting = submit.clone();
-    let branching = submit.clone();
     let second = view
         .pair
         .read()
@@ -446,7 +453,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     })
     // "New Branch…" on a commit row opens Create Branch (R11.3, the user's decision).
     .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
-        crate::create_branch::open(view, at, subject, branching.as_deref());
+        crate::create_branch::open(view, at, subject);
     })
     // The history's own chord, Show Lost Commits (staging-and-commit R7.3, R11.1).
     .on_action(move |action| crate::lost_commits::history_action(action, view, acting.as_deref()))

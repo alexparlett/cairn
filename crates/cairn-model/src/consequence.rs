@@ -97,87 +97,19 @@ pub enum Consequence {
         device: u64,
         inode: u64,
     },
-    /// A branch created at a commit and checked out with git's `checkout -f`: every staged
-    /// and unstaged change to a tracked file discarded, every untracked file the commit's tree
-    /// holds a file at overwritten, and every untracked directory or nested repository where
-    /// it holds a file deleted, each named by its path (staging-and-commit R11.3; the user's
-    /// decision 3, 2026-10-09 — Create Branch's "Discard", the one exception to "a staged
-    /// change is never discarded" — and decision A of the same day, its words). Never empty
-    /// when the engine builds it.
+    /// A branch created at a commit and checked out with Fork's forced checkout (`git checkout
+    /// -q --no-track -f -b <branch> <at> --`; staging-and-commit R11.3, the user's decision of
+    /// 2026-10-10): the local changes and any untracked files in the way discarded, as git
+    /// decides. Fixed and generic — it predicts nothing of what git deletes (the redesign's rule
+    /// 7) — and what the re-check holds: `HEAD`, the commit and the name, nothing else (R1.4).
     CheckoutDiscarding {
         /// The branch created, as typed.
         branch: String,
         /// The commit it is created at, and checked out.
         at: Oid,
-        /// `HEAD`'s commit when this was read: the changes are counted against it, and the
-        /// re-check holds it.
+        /// `HEAD`'s commit when this was read; `None` on an unborn branch. The re-check holds it.
         head: Option<Oid>,
-        changes: Vec<LostChange>,
-        /// Untracked files the checkout leaves where they are, said so in the prompt.
-        kept_untracked: usize,
     },
-}
-
-/// One path a [`Consequence::CheckoutDiscarding`] loses.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LostChange {
-    pub path: RepoPath,
-    pub loss: ChangeLoss,
-}
-
-/// What a checkout that discards loses at one path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChangeLoss {
-    /// A tracked file's staged and unstaged changes since `HEAD`.
-    Changed {
-        kind: ChangedKind,
-        /// The index entry's blob as read; `None` where the index holds none.
-        index: Option<Oid>,
-        /// The file's bytes on disk, hashed with no filter (a symlink as its target); `None`
-        /// where it is not there.
-        working_tree: Option<Oid>,
-        /// Whether it is executable on disk; compared by the re-check.
-        executable: bool,
-        /// Changed lines of its staged diff and its unstaged diff together; `None` where
-        /// either is not text.
-        lines: Option<usize>,
-    },
-    /// An untracked file at a path the checked-out commit holds a file at: git's `checkout
-    /// -f` writes the commit's file over it.
-    Overwritten {
-        /// The file's bytes on disk, hashed with no filter.
-        working_tree: Oid,
-        executable: bool,
-        bytes: u64,
-    },
-    /// Untracked content at a path the checked-out commit holds a file at — the path itself,
-    /// or a directory on the way to it — which git's `checkout -f` deletes whole with
-    /// everything under it: the files counted, and their bytes.
-    Removed {
-        kind: RemovedKind,
-        files: usize,
-        bytes: u64,
-    },
-}
-
-/// What untracked content a checkout that discards deletes whole.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemovedKind {
-    /// A directory of untracked files.
-    Directory,
-    /// A repository nested in the working tree, its own `.git` among what is deleted.
-    Repository,
-}
-
-/// How a tracked path differs from `HEAD`, for the prompt's words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChangedKind {
-    /// In `HEAD` and still there, changed.
-    Modified,
-    /// Not in `HEAD`: staged as a new file, which the checkout deletes.
-    Added,
-    /// In `HEAD`, deleted in the index or the working tree.
-    Deleted,
 }
 
 /// One file a [`Consequence::DiscardFiles`] destroys.
@@ -294,9 +226,12 @@ impl Consequence {
                 branch,
                 at,
                 head: _,
-                changes,
-                kept_untracked,
-            } => checkout_discarding_prompt(branch, *at, changes, *kept_untracked),
+            } => format!(
+                "Discard local changes and any untracked files in the way, then check out {} at \
+                 {}. You can't undo this action.",
+                quoted(branch.as_bytes()),
+                at.short().as_str()
+            ),
             Self::Amend {
                 commit,
                 published,
@@ -383,7 +318,8 @@ impl Consequence {
                 )
             }
             Self::Amend { .. } => "Amend".to_owned(),
-            Self::CheckoutDiscarding { .. } => "Discard Changes and Check Out".to_owned(),
+            // Confirmed by the Create Branch dialog's own button, which reads so (B3).
+            Self::CheckoutDiscarding { .. } => "Create and Checkout".to_owned(),
             Self::RemoveLock {
                 path,
                 modified: _,
@@ -426,8 +362,6 @@ impl Consequence {
                 branch,
                 at: _,
                 head: _,
-                changes: _,
-                kept_untracked: _,
             } => format!("Create branch '{}'", escaped(branch.as_bytes())),
             Self::RemoveLock {
                 path,
@@ -572,148 +506,6 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         "Do you want to discard the changes in {what}? {}. You can't undo this action.",
         parts.join(", ")
     )
-}
-
-/// Create Branch's discard (R11.3, the user's decision 3), in the discard prompts' words (L8):
-/// "Do you want to create branch 'topic' at 1a2b3c4, check it out and discard the changes in
-/// 3 files (a.rs, b.rs and c.rs)? 2 modified (14 lines), 1 untracked file overwritten (2.1
-/// KiB). Other untracked files are kept. You can't undo this action."
-fn checkout_discarding_prompt(
-    branch: &str,
-    at: Oid,
-    changes: &[LostChange],
-    kept_untracked: usize,
-) -> String {
-    // What is discarded at a path, apart from what is deleted whole for being in the way.
-    let paths: Vec<&RepoPath> = changes
-        .iter()
-        .filter(|change| match &change.loss {
-            ChangeLoss::Changed { .. } | ChangeLoss::Overwritten { .. } => true,
-            ChangeLoss::Removed { .. } => false,
-        })
-        .map(|change| &change.path)
-        .collect();
-    let (mut modified, mut added) = (Lines::default(), Lines::default());
-    let mut deleted = 0usize;
-    let (mut overwritten, mut overwritten_bytes) = (0usize, 0u64);
-    // Each directory or nested repository deleted whole, named by its path (the user's
-    // decision A, 2026-10-09).
-    let mut removed: Vec<String> = Vec::new();
-    for change in changes {
-        match &change.loss {
-            ChangeLoss::Changed {
-                kind: ChangedKind::Modified,
-                index: _,
-                working_tree: _,
-                executable: _,
-                lines,
-            } => add_lines(&mut modified, *lines),
-            ChangeLoss::Changed {
-                kind: ChangedKind::Added,
-                index: _,
-                working_tree: _,
-                executable: _,
-                lines,
-            } => add_lines(&mut added, *lines),
-            ChangeLoss::Changed {
-                kind: ChangedKind::Deleted,
-                ..
-            } => deleted += 1,
-            ChangeLoss::Overwritten {
-                working_tree: _,
-                executable: _,
-                bytes,
-            } => {
-                overwritten += 1;
-                overwritten_bytes = overwritten_bytes.saturating_add(*bytes);
-            }
-            ChangeLoss::Removed {
-                kind,
-                files,
-                bytes: _,
-            } => {
-                let mut directory = change.path.as_bytes().to_vec();
-                directory.push(b'/');
-                let named = quoted(&directory);
-                removed.push(match kind {
-                    RemovedKind::Directory => format!(
-                        "folder {named} ({})",
-                        counted(*files, "untracked file", "untracked files")
-                    ),
-                    RemovedKind::Repository => format!("repository {named} with its history"),
-                });
-            }
-        }
-    }
-    let lines_of =
-        |kind: &Lines| line_detail(kind, false).unwrap_or_else(|| counted(0, "line", "lines"));
-    let mut parts = Vec::with_capacity(4);
-    if modified.files > 0 {
-        parts.push(format!(
-            "{} modified ({})",
-            modified.files,
-            lines_of(&modified)
-        ));
-    }
-    if added.files > 0 {
-        parts.push(format!(
-            "{} deleted ({})",
-            counted(added.files, "new file", "new files"),
-            lines_of(&added)
-        ));
-    }
-    if deleted > 0 {
-        parts.push(format!(
-            "{} restored",
-            counted(deleted, "deleted file", "deleted files")
-        ));
-    }
-    if overwritten > 0 {
-        parts.push(format!(
-            "{} overwritten ({})",
-            counted(overwritten, "untracked file", "untracked files"),
-            size(overwritten_bytes)
-        ));
-    }
-    let question = match paths.as_slice() {
-        [] => format!(
-            "Do you want to create branch {} at {} and check it out?",
-            quoted(branch.as_bytes()),
-            at.short().as_str()
-        ),
-        [only] => format!(
-            "Do you want to create branch {} at {}, check it out and discard the changes in {}? \
-             {}.",
-            quoted(branch.as_bytes()),
-            at.short().as_str(),
-            quoted(only.as_bytes()),
-            parts.join(", ")
-        ),
-        _ => format!(
-            "Do you want to create branch {} at {}, check it out and discard the changes in {} \
-             ({})? {}.",
-            quoted(branch.as_bytes()),
-            at.short().as_str(),
-            counted(paths.len(), "file", "files"),
-            named_paths(&paths),
-            parts.join(", ")
-        ),
-    };
-    let in_the_way = if removed.is_empty() {
-        String::new()
-    } else {
-        format!(
-            " Deleted because the branch has a file there: {}.",
-            named_list(&removed)
-        )
-    };
-    let lost_untracked = overwritten + removed.len();
-    let kept = match (kept_untracked, lost_untracked) {
-        (0, _) => "",
-        (_, 0) => " Untracked files are kept.",
-        _ => " Other untracked files are kept.",
-    };
-    format!("{question}{in_the_way}{kept} You can't undo this action.")
 }
 
 /// How many files a discard of several names before it counts the rest.
@@ -917,141 +709,36 @@ mod tests {
         }
     }
 
-    fn lost(path: &str, kind: ChangedKind, lines: Option<usize>) -> LostChange {
-        LostChange {
-            path: RepoPath::from(path),
-            loss: ChangeLoss::Changed {
-                kind,
-                index: Some(oid(1)),
-                working_tree: Some(oid(2)),
-                executable: false,
-                lines,
-            },
-        }
-    }
-
-    fn checkout(changes: Vec<LostChange>, kept_untracked: usize) -> Consequence {
+    fn checkout() -> Consequence {
         Consequence::CheckoutDiscarding {
             branch: "topic".to_owned(),
             at: oid(0xab),
             head: Some(oid(7)),
-            changes,
-            kept_untracked,
         }
     }
 
-    /// Create Branch's discard (R11.3, the user's decision 3): the prompt names the branch, the
-    /// commit, each kind of loss counted as the discard prompts count — modified lines, new
-    /// files deleted, deleted files restored, untracked files overwritten by size — whether
-    /// other untracked files are kept, and that it can't be undone; one file by its path,
-    /// several by the first three. Caught by: a staged-only or new file left uncounted, an
-    /// overwritten untracked file left unsaid, the kept files claimed when there are none, or
-    /// the branch and commit left out of what is confirmed.
+    /// Create Branch's Discard (R11.3, the user's decision of 2026-10-10): the prompt the
+    /// dialog's press confirms is fixed and generic — it names the branch and the commit, says
+    /// local changes and untracked files in the way go and that it can't be undone, and names
+    /// no file, so nothing is predicted of what git deletes; the button is the dialog's own.
+    /// Caught by: a file or a count put back in, the branch or commit left out of what is
+    /// confirmed, or a second dialog's button.
     #[test]
-    fn a_checkout_that_discards_names_the_branch_and_every_loss() {
-        let all = checkout(
-            vec![
-                lost("a.rs", ChangedKind::Modified, Some(10)),
-                lost("b.rs", ChangedKind::Modified, Some(4)),
-                lost("new.rs", ChangedKind::Added, Some(3)),
-                lost("gone.rs", ChangedKind::Deleted, Some(8)),
-                LostChange {
-                    path: RepoPath::from("in-the-way.txt"),
-                    loss: ChangeLoss::Overwritten {
-                        working_tree: oid(9),
-                        executable: false,
-                        bytes: 2150,
-                    },
-                },
-            ],
-            2,
-        );
+    fn a_checkout_that_discards_says_so_in_fixed_words() {
         assert_eq!(
-            all.prompt(),
-            "Do you want to create branch topic at abababa, check it out and discard the \
-             changes in 5 files (a.rs, b.rs, new.rs and 2 more)? 2 modified (14 lines), 1 new \
-             file deleted (3 lines), 1 deleted file restored, 1 untracked file overwritten (2.1 \
-             KiB). Other untracked files are kept. You can't undo this action."
+            checkout().prompt(),
+            "Discard local changes and any untracked files in the way, then check out topic at \
+             abababa. You can't undo this action."
         );
-        assert_eq!(all.action(), "Discard Changes and Check Out");
-        let one = checkout(vec![lost("a.rs", ChangedKind::Modified, None)], 0);
-        assert_eq!(
-            one.prompt(),
-            "Do you want to create branch topic at abababa, check it out and discard the \
-             changes in a.rs? 1 modified (binary). You can't undo this action."
-        );
-        let kept = checkout(vec![lost("a.rs", ChangedKind::Modified, Some(1))], 4);
-        assert!(
-            kept.prompt()
-                .contains("(1 line). Untracked files are kept. You can't")
-        );
-        assert_eq!(kept.amended(), None);
-    }
-
-    /// Phase 10's QA (items 1-2) and the user's decision A (2026-10-09): a directory of untracked
-    /// files, or a nested repository, that the checkout deletes whole is named by its path in a
-    /// sentence of its own — a folder with the untracked files under it, a repository "with its
-    /// history" — the first three named and the rest counted, as the files prompt names files;
-    /// never counted among the changes discarded, nor among the untracked files kept. Caught by:
-    /// such a loss left out of the prompt or named without its path, counted as a changed file,
-    /// an unbounded list of them, or "Untracked files are kept." said when every untracked file
-    /// is lost.
-    #[test]
-    fn a_directory_or_a_nested_repository_in_the_way_is_named_lost() {
-        let removed = |path: &str, kind: RemovedKind, files: usize, bytes: u64| LostChange {
-            path: RepoPath::from(path),
-            loss: ChangeLoss::Removed { kind, files, bytes },
+        assert_eq!(checkout().action(), "Create and Checkout");
+        assert_eq!(checkout().amended(), None);
+        let odd = Consequence::CheckoutDiscarding {
+            branch: "we\nird".to_owned(),
+            at: oid(0xab),
+            head: None,
         };
-        let consequence = checkout(
-            vec![
-                lost("a.rs", ChangedKind::Modified, Some(10)),
-                lost("b.rs", ChangedKind::Modified, Some(4)),
-                lost("new.rs", ChangedKind::Added, Some(3)),
-                removed("d", RemovedKind::Directory, 4, 15),
-                removed("vendor/lib", RemovedKind::Repository, 30, 4096),
-            ],
-            0,
-        );
-        assert_eq!(
-            consequence.prompt(),
-            "Do you want to create branch topic at abababa, check it out and discard the \
-             changes in 3 files (a.rs, b.rs and new.rs)? 2 modified (14 lines), 1 new file \
-             deleted (3 lines). Deleted because the branch has a file there: folder d/ (4 \
-             untracked files) and repository vendor/lib/ with its history. You can't undo this \
-             action."
-        );
-        let only_removed = checkout(vec![removed("d", RemovedKind::Directory, 1, 3)], 2);
-        assert_eq!(
-            only_removed.prompt(),
-            "Do you want to create branch topic at abababa and check it out? Deleted because \
-             the branch has a file there: folder d/ (1 untracked file). Other untracked files \
-             are kept. You can't undo this action."
-        );
-        let many = checkout(
-            vec![
-                lost("a.rs", ChangedKind::Modified, Some(1)),
-                removed("p", RemovedKind::Directory, 2, 1),
-                removed("q", RemovedKind::Repository, 2, 1),
-                removed("r", RemovedKind::Directory, 1, 1),
-                removed("s", RemovedKind::Directory, 1, 1),
-                removed("t", RemovedKind::Repository, 1, 1),
-            ],
-            0,
-        );
-        assert_eq!(
-            many.prompt(),
-            "Do you want to create branch topic at abababa, check it out and discard the \
-             changes in a.rs? 1 modified (1 line). Deleted because the branch has a file there: \
-             folder p/ (2 untracked files), repository q/ with its history, folder r/ (1 \
-             untracked file) and 2 more. You can't undo this action."
-        );
-        let odd = checkout(
-            vec![removed("we ird\nname", RemovedKind::Directory, 1, 1)],
-            0,
-        );
         assert!(
-            odd.prompt()
-                .contains("folder \"we ird\\nname/\" (1 untracked file)"),
+            odd.prompt().contains("check out \"we\\nird\" at"),
             "{}",
             odd.prompt()
         );
@@ -1555,7 +1242,7 @@ mod tests {
         assert!(discard.needs_confirming());
         assert_eq!(discard.amended(), None);
         assert!(lock("/r/.git/index.lock", Duration::from_secs(1), 0).needs_confirming());
-        assert!(checkout(vec![lost("a.rs", ChangedKind::Modified, Some(1))], 0).needs_confirming());
+        assert!(checkout().needs_confirming());
         assert!(
             Consequence::DiscardFiles {
                 files: vec![modified("a.rs", Some(1))],
@@ -1584,7 +1271,7 @@ mod tests {
             files: vec![modified("a.rs", Some(1)), modified("b.rs", None)],
         };
         assert_eq!(two.name(), "Discard 2 files");
-        assert_eq!(checkout(Vec::new(), 0).name(), "Create branch 'topic'");
+        assert_eq!(checkout().name(), "Create branch 'topic'");
         assert_eq!(
             lock("/r/.git/index.lock", Duration::ZERO, 0).name(),
             "Remove index.lock"

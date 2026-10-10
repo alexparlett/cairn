@@ -1202,6 +1202,17 @@ mod tests {
                 .unwrap()
                 .2 = vec![pressed(Modifiers::empty())];
             assert!(!pin_violations(&press).is_empty(), "a bare press");
+            // A bare heading press fails as well: Stage All's held key is never none.
+            let mut heading_press = rows.clone();
+            heading_press
+                .iter_mut()
+                .find(|(action, _, _)| *action == Action::StageOrUnstageAll)
+                .unwrap()
+                .2 = vec![heading(Modifiers::empty())];
+            assert!(
+                !pin_violations(&heading_press).is_empty(),
+                "a bare heading press"
+            );
             // A chord listed twice for one action fails.
             let mut twice = rows.clone();
             let (_, _, list) = twice

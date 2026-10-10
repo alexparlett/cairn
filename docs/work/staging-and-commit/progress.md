@@ -3,6 +3,22 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 15 part-built, stopped for the user's sign-off (packet mode)
+
+What shipped is state.md's "Phase 15". Notes for the record:
+
+- **Decided here**: the chunk is carried, not inferred — the engine cannot tell a chunk from a
+  drag that happens to cover one, since what a chunk groups depends on the context the view
+  draws at, so the gesture says which of its actions was pressed (`GestureAct::chunk`); the
+  "left as they are" line sits outside the `Consequence` (it names what is NOT destroyed, so
+  the token's prompt never carries it), on `Confirming` beside the title; singular forms of the
+  approved D1 line are its number agreement ("1 submodule is left as it is.").
+- **Found on the way**: N3 was already pinned by phase 03's `an_intent_to_add_files_discard_
+  empties_it_and_says_so` on every git; it now also asserts git still lists the file added.
+- **Stopped**: the UI rule — the dialog-at-press, Show files, and the nothing-discardable
+  reasons carry words neither the PRD nor the phase doc settles; the questions went to the
+  coordinator with options and recommendations.
+
 ## 2026-10-10 — the user's decisions on phase 14's open items
 
 Recorded before phase 15 (packet mode): DO#1 — Create Branch's Discard deletes an untracked

@@ -38,7 +38,9 @@ coordinator's decisions of 2026-10-10; see "Phase 13" below. QA is the coordinat
 ratified the coordinator's three recommendations after phase 13's QA (2026-10-10, "Those are
 fine"): see "Resolved after phase 13's QA" below. Phase 14 (Create Branch as Fork runs it)
 built in packet mode after its stopping rule was decided (2026-10-10), full gate green; see
-"Phase 14" below. QA is the coordinator's.**
+"Phase 14" below. QA is the coordinator's. Phase 15 (the discard prompts) PART-BUILT in packet mode
+and stopped for the user's sign-off on the wording and behaviour its docs do not settle; see
+"Phase 15" below.**
 
 ## The redesign (2026-10-10)
 
@@ -82,6 +84,55 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 15 of the rebuild, the discard prompts (2026-10-10) — part-built, stopped for sign-off
+
+- **Built** (`phase-15-discard-prompts.md`): (1) the frame — `Consequence::prompt` asks every
+  discard in one sentence: files "Discard all changes in <path>?" / "Discard all changes in 31
+  files?", "N untracked file(s) will be deleted." whenever one is, then "You can't undo this.";
+  lines "Discard 2 changed lines in <path>?", a hovered chunk's own Discard "Discard this chunk
+  (6 lines) in <path>?" (`Consequence::DiscardLines::chunk`, carried from
+  `GestureAct::chunk` through `Request::DiscardLinesConsequence` to
+  `ops::discard_lines_consequence`'s new `chunk` argument; words only, no re-check), a mode
+  change alone "Discard the mode change of <path>?", no octal; buttons "Discard Changes in N
+  Files", "Discard N Lines" (a chunk too), "Discard Mode Change"; Create Branch's Discard and the
+  stale lock's prompts end "You can't undo this." (5b, and the PRD's R12.4 aligned at the
+  coordinator's direction). Removed: the per-kind grammar (`modified / emptied / restored /
+  deleted`), `line_detail`, `Lines`, `add_lines`, `discarded_lines`'s octal prose, `NAMED_FILES`
+  and `named*`. Pinned: `a_discard_of_files_asks_in_the_one_sentence_frame`,
+  `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted`,
+  `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`,
+  `every_destructive_prompt_ends_in_the_frame`, the hostile-path test rewritten, and the real-git
+  prompts in `write_verbs.rs` and `local_lane_tests.rs`. (2) N3 settled with real git on the host
+  and both floors: an `add -N` file's discard empties it, keeps its entry, and status still lists
+  it added (`an_intent_to_add_files_discard_empties_it_and_says_so`) — "Emptied" is right; the
+  stopping rule did not trigger. (3) Title Case: "Discard Changes" (`DISCARD_TITLE`), "Remove
+  Stale Lock" (`REMOVE_LOCK_TITLE`); "Amend Commit" already was. (4) D1: a selection mixing
+  submodules or conflicts with discardable paths asks for those alone and the dialog says "1
+  submodule and 1 conflicted file are left as they are." under the prompt
+  (`cairn_ui::left_as_they_are`, `Confirming::leaving`, `ConfirmDialog::left`); `no_discard`
+  refuses only where nothing can be discarded; the chord over such a selection does nothing; the
+  menu's Discard Changes… is greyed on the staged side with "Staged changes can't be discarded.
+  Unstage them first.", every reason wrapped, `max_lines(2)` gone; the line under the lists for a
+  refused discard gone (`Acting::say` removed). Pinned:
+  `a_discard_is_refused_only_where_nothing_can_be_discarded`,
+  `what_a_mixed_discard_leaves_is_said_in_one_line`,
+  `no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why` (rewritten),
+  `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed` (staged greyed),
+  `part_of_a_new_files_lines_is_discarded_as_lines` (a drag's lines never a chunk) and
+  `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file` (the chunk's own).
+- **Not built, waiting on the user's sign-off** (the coordinator holds the questions): the
+  dialog opening at the press with "Counting…" (the greyed button's caption meanwhile), what
+  happens when the engine refuses while it counts, Show files and its rows' words, the
+  nothing-discardable reasons for submodules, conflicts, both, and a nested repository (and
+  whether a nested repository in a mixed selection refuses whole), and the disclosure's caption
+  when open. Until then: `READING_DISCARD` is still the line under the lists while counting;
+  a selection of submodules or conflicts alone keeps the old reasons naming its first path
+  (`NoDiscard::Submodule`, `NoDiscard::Conflicted`); a nested repository is still refused by the
+  engine before any dialog, said under the lists.
+- **The coordinator's direction, flagged for the user**: decision G's lock prompt now ends "You
+  can't undo this." where the user's answer 4 of 2026-10-10 kept G's prompt unchanged (it then
+  spoke of Title Case only); one line to revert if the user wants "this action" back there.
 
 ## Phase 14 of the rebuild, Create Branch as Fork runs it (2026-10-10)
 

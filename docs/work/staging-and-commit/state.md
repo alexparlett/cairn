@@ -30,7 +30,10 @@ F7) since resolved, listed under "Phase 12, the merge bar" below; everything to 
 list there. Then (2026-10-10) an independent review, a design pass and the user's redesign
 decisions: design pass done, rebuild planned — phases 12-20 rebuild what the redesign changes and
 the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran under as phase
-12); see "The redesign" below. Next: phase 12 (`phase-12-output-once.md`).**
+12); see "The redesign" below. The user's answers to the six open questions recorded
+(2026-10-10). Phase 12 of the rebuild (git's output read once) built in packet mode, full gate
+green; its QA is the coordinator's. Next: phase 12's QA, then phase 13
+(`phase-13-commit-asks-git.md`).**
 
 ## The redesign (2026-10-10)
 
@@ -74,6 +77,46 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 12 of the rebuild, git's output read once (2026-10-10)
+
+- **Built** (`phase-12-output-once.md`, C31): the live bug first — a stderr line longer than the
+  piece limit with a character straddling it arrived as U+FFFD (`pipes.rs`'s lossy piece);
+  `a_character_straddling_the_piece_limit_arrives_whole` failed on it, then passed. One line type
+  (`pipes::Lines`) for stdout and stderr, split at `\n` and `\r` on both (decided once: git's
+  progress is stderr's and is split as before; a commit's stdout now splits at `\r` too), pieces
+  of `PIECE_BYTES` cut where a character ends; each line scrubbed as it is split
+  (`Scrubber::line`, `Scrubber::piece` carrying only across a line's pieces); the tail
+  (`pipes::Tail`) whole lines, `ScrubbedLines::older_dropped` a plain bool. `ops/commit.rs` drives
+  `Invocation::lines`, so a commit's stdout and stderr reach the failure and the command log as
+  the runner's lines, in arrival order. git's text crosses into cairn-app only as
+  `cairn_model::ScrubbedLines` (`GitFailed::stderr`, `CommandRecord::stderr`, `CommitWatch::output`,
+  fetch's progress, `Update::WriteOutput`, `Update::FetchProgress`, `WriteEnding::Failed::output`);
+  an error's text as `Error::shown`; arguments scrubbed as the record is booked (`Registration::new`,
+  `cli::describe`). The type holds "no render file takes git's raw text" (compile_fail doctests in
+  `scrub.rs`); no guard written, said in CLAUDE.md as a new invariant with its residuals.
+- **Removed**: `pipes.rs`'s lossy piece decode and its second line definition (commit's `Lines`);
+  `Scrubber::after_cut`, `Carried::Cut` and the cross-line carry; `scrub_userinfo`;
+  `Error::GitFailed::stderr_cut` and the runner's `.then_some(0)`; `pipes::Retained`;
+  `CommandRecord::stderr_cut`; `ops/commit.rs`'s `Lines`, `whole_characters`, `STDOUT_TAIL`,
+  `joined_output` and `Polled` (a `&dyn Cancel` is a `Cancel` now, `cancel.rs`);
+  `Invocation::finish_by_read` (`finish` hands a read's lines on together); `local_lane::scrubbed_error`
+  and `ran_since`'s scrub; `network_lane`'s scrubber; `session`'s scrubs and `shown_output::
+  shown_ending`; `shown_output::{ShownLines, shown_line, scrubbed, scrubbed_at}`; `commit_box_state`'s
+  and `activity`'s `ShownLines`; the app tests pinning per-consumer scrubbing
+  (`no_line_of_an_entry_carries_a_token`, `a_failures_cut_output_is_scrubbed_where_the_engine_says_it_was_cut`),
+  moved to the type and the engine. `strip_ansi` moved to `shown_output.rs`.
+- **Seen by a person, as the phase settles**: a hook redrawing with `\r` on stdout shows each
+  redraw as a line; a commit's `$ git commit` entry in the popover keeps its stdout lines after it
+  ends (they were stderr-only); a commit's kept failure output is in arrival order rather than
+  stdout's tail ahead of stderr's. Nothing else drawn changes.
+- **Carried**: `review-code-app-ui.md` H3 (b) one bounded tail and (c) the receipt protocol — phase
+  20, as planned (`OutputFlow`, `OutputTail` and `ActivityLog` still bound separately, now over
+  scrubbed lines); `WriteEnding`'s messages stay `String`s rendered in the lane from
+  `Error::shown` — phase 19 rewrites the messages; the residual that an escape sequence between a
+  scheme and its `://` hides a URL from the scrubber (stated in `git-processes.md`, "The
+  runner"); #46 to be commented at teardown with what this closes (the engine keeps git's stderr
+  scrubbed now).
 
 ## Phase 12, the merge bar (2026-10-09)
 
@@ -1058,7 +1101,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
 | 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 by the user's answers (2026-10-10); design pass done, rebuild planned (2026-10-10) |
-| 12 output once | planned |
+| 12 output once | built in packet mode — C31 pinned, full gate green; QA the coordinator's |
 | 13 the commit engine asks git | planned — the confirmed amend's skip decided (option (a), 2026-10-10) |
 | 14 Create Branch | planned |
 | 15 the discard prompts | planned |

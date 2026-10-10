@@ -3,6 +3,25 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 12 of the rebuild: git's output read once (packet mode)
+
+Test first: `a_character_straddling_the_piece_limit_arrives_whole` written against `pipes.rs` as
+it was failed ("é cut 1 bytes in read as U+FFFD"), then passed once one line type cut pieces
+where a character ends. Then the rest of the phase as `state.md` lists it ("Phase 12 of the
+rebuild"): one `pipes::Lines` for stdout and stderr, each line scrubbed as it is split, the tail
+whole lines with a plain `older_dropped`, `ops/commit.rs` on `Invocation::lines`, and
+`cairn_model::ScrubbedLines` the one form git's text crosses into cairn-app in, every
+per-consumer scrub gone. C31 pinned by `a_character_straddling_the_piece_limit_arrives_whole`,
+`a_urls_userinfo_never_survives_the_split`, `lines_end_at_either_terminator_across_reads`,
+`git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams` (the runner, both streams, a
+URL across two writes, the tail and the record), `a_hooks_output_reaches_the_commit_as_whole_scrubbed_lines`
+and `gits_stdout_reaches_the_commits_output_and_failure_as_lines` (a commit through real git, which
+also keep `git-floor`'s `--lib diff:: reads:: ops::` count at its floor of 149 after commit's own
+splitter tests moved to `process::pipes`), the model's scrub tests and compile_fail
+doctests, `an_errors_shown_text_carries_no_userinfo` and the app's
+`an_ending_carries_the_engines_scrubbed_text`. No measurement. Full gate green; QA is the
+coordinator's.
+
 ## 2026-10-10 — the open questions answered (packet mode, before phase 12's code)
 
 The user answered "Approve" to each of the planning agent's six recommendations, relayed by the

@@ -56,8 +56,9 @@ use crate::local_writes::{self, LocalWrites};
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request, UnstageTarget, WriteEnding};
 
-/// The confirmation's title, Fork's.
-pub const DISCARD_TITLE: &str = "Discard changes";
+/// The confirmation's title, in Title Case (the redesign's D3), where Fork for Windows writes
+/// "Discard changes".
+pub const DISCARD_TITLE: &str = "Discard Changes";
 /// Said under the lists while the engine counts what a discard would lose.
 pub const READING_DISCARD: &str = "Reading what the discard would lose…";
 
@@ -335,6 +336,7 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&dyn Fn(Request)>)
                     verb,
                     selection,
                     drawn,
+                    chunk: false,
                 },
                 view,
                 submit,
@@ -396,7 +398,7 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&dyn Fn(Request)>)
     let Some((list, diff)) = drawn else {
         return;
     };
-    act_on_lines(list, diff, act.verb, act.selection, view, submit);
+    act_on_lines(list, diff, act.verb, act.selection, act.chunk, view, submit);
 }
 
 /// `verb` on `selection` of `diff`, the diff of a path in `list`.
@@ -405,6 +407,7 @@ fn act_on_lines(
     diff: Arc<FileDiff>,
     verb: GestureVerb,
     selection: Selection,
+    chunk: bool,
     view: View,
     submit: Option<&dyn Fn(Request)>,
 ) {
@@ -415,7 +418,7 @@ fn act_on_lines(
         (GestureVerb::Unstage, ChangeList::Staged) => {
             ask(view, submit, LocalWrite::UnstageLines { diff, selection })
         }
-        (GestureVerb::Discard, _) => discard_lines(list, diff, selection, view, submit),
+        (GestureVerb::Discard, _) => discard_lines(list, diff, selection, chunk, view, submit),
         // Not offered: a stage of what is staged, an unstage of what is not.
         (GestureVerb::Stage, ChangeList::Staged) | (GestureVerb::Unstage, ChangeList::Unstaged) => {
         }
@@ -430,6 +433,7 @@ fn discard_lines(
     list: ChangeList,
     diff: Arc<FileDiff>,
     selection: Selection,
+    chunk: bool,
     view: View,
     submit: Option<&dyn Fn(Request)>,
 ) {
@@ -464,6 +468,7 @@ fn discard_lines(
             asked,
             diff,
             selection,
+            chunk,
         });
     }
 }

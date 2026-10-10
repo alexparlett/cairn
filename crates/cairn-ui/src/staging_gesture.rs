@@ -126,6 +126,10 @@ pub struct GestureAct {
     pub verb: GestureVerb,
     pub selection: Selection,
     pub drawn: u64,
+    /// Whether the selection is the hovered chunk's own — its floating action pressed — rather
+    /// than lines a drag selected or the mode row's mode: a discard's prompt names it as the
+    /// chunk (staging-and-commit phase 15).
+    pub chunk: bool,
 }
 
 /// Where a drag across a diff's lines stands (R9.2), kept by the window and handed to the view
@@ -575,7 +579,7 @@ impl Host {
     }
 
     /// `verb` on what the actions are over: the selection, or the chunk under the pointer.
-    fn act(&self, verb: GestureVerb, file: usize, selection: Selection) {
+    fn act(&self, verb: GestureVerb, file: usize, selection: Selection, chunk: bool) {
         let mut lines = self.gesture.lines;
         lines.set(LineDrag::default());
         let mut acted = self.pointer.acted;
@@ -586,6 +590,7 @@ impl Host {
             verb,
             selection,
             drawn: self.gesture.drawn,
+            chunk,
         });
     }
 
@@ -868,7 +873,11 @@ impl Component for GestureLayer {
                         }),
                     };
                     if let Some(taken) = taken {
-                        acting.act(verb, file, taken);
+                        let chunk = match takes {
+                            Takes::Selection { .. } => false,
+                            Takes::Chunk { .. } => true,
+                        };
+                        acting.act(verb, file, taken, chunk);
                     }
                 }));
             }
@@ -1002,6 +1011,7 @@ impl Component for ModeRow {
                                 verb,
                                 selection,
                                 drawn,
+                                chunk: false,
                             });
                         }));
                 }

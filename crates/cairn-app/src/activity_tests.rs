@@ -224,7 +224,7 @@ fn removals(submitted: &Submitted) -> Vec<String> {
 /// R12.4 and C20, with the user's decisions G and H of 2026-10-09: `Remove index.lock…` is
 /// offered on an ending that names the lock; while a `git` of Cairn's runs it is drawn
 /// unpressable, saying why, rather than vanishing; pressed, it asks the local lane what the
-/// removal would cost NOW, and only that answer opens the "Remove stale lock" confirmation, whose
+/// removal would cost NOW, and only that answer opens the "Remove Stale Lock" confirmation, whose
 /// button asks the removal with the token built from it; a refusal at the press is said beside
 /// the button, which stays. Caught by: an offer lost because a `git` ran as the write ended, a
 /// consequence read once at the ending (a stale age), the removal asked without its

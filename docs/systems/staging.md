@@ -119,7 +119,7 @@ is pinned against real git on the host's git and, through
   staged change — R3.6's stated exception. It predicts nothing of what git deletes: its
   `Consequence::CheckoutDiscarding` (`ops::checkout_discarding_consequence`) is the branch, the
   commit and `HEAD`, its prompt a fixed sentence naming no file — "Discard local changes and any
-  untracked files in the way, then check out topic at 1a2b3c4. You can't undo this action." —
+  untracked files in the way, then check out topic at 1a2b3c4. You can't undo this." —
   and it runs no `git` and reads no working tree. git decides, and leaves exactly what Fork's own
   command leaves (`a_discarding_checkout_leaves_what_forks_command_leaves`, against Fork's
   command run on an identical fixture): staged and unstaged changes and a staged new file gone,
@@ -230,10 +230,19 @@ did not move — when anything it names moved (R1.4).
   directory (`a_nested_repository_is_refused_before_any_confirmation`); and a path
   with no unstaged change, since staged changes are never discarded
   (`staged_changes_are_never_discarded`, R3.6).
-- **A mode change** is named with both modes, as the diff draws them — selected
-  for a discard of lines ("discard 2 lines and the mode change (100644 to
-  100755)") or discarded with a whole file ("1 modified (2 lines and the mode
-  change (100644 to 100755))", and alone never "0 lines") — and put back
+- **The prompt** is one sentence frame (PRD R1.2, the redesign's D2; staging-and-commit
+  phase 15), rendered by `Consequence::prompt`: the question naming what is discarded, the
+  worst loss only when it is worse than changes, then "You can't undo this." — for files
+  "Discard all changes in src/main.rs?" or "Discard all changes in 31 files?", with "2
+  untracked files will be deleted." whenever an untracked file is among them, its button
+  "Discard Changes in 31 Files"; for lines "Discard 2 changed lines in src/main.rs?", the
+  chunk a hovered chunk's own Discard took "Discard this chunk (6 lines) in src/main.rs?"
+  (`discard_lines_consequence`'s `chunk`, which changes no target and no re-check) and a mode
+  change alone "Discard the mode change of run.sh?", no mode in octal, the button counting
+  what it discards ("Discard 2 Lines", "Discard Mode Change"). What happens to each file —
+  restored, emptied, its lines, a mode change — stays in the `Consequence` (`DiscardedFile`,
+  `FileLoss`), the detail behind "Show files", never the sentence's. A mode change is carried
+  with both modes, discarded with a whole file never "0 lines", and put back
   (`a_mode_change_selected_for_discard_is_named_and_put_back`,
   `a_whole_files_mode_change_is_named_and_put_back`).
 - **Files.** Tracked files are restored from the index by `git restore
@@ -251,8 +260,9 @@ did not move — when anything it names moved (R1.4).
   (`a_long_list_is_deleted_in_batches_after_one_recheck`,
   `a_list_past_the_bound_is_split_and_every_path_kept_in_order`). An
   intent-to-add file's index blob is the empty one, so `git restore` leaves it
-  empty with its entry in place, as the user's own `git restore` does, and the
-  prompt names it so — "1 new file emptied (20 lines)" (`FileLoss::Emptied`,
+  empty with its entry in place, `git status` still listing it as added, as the user's own
+  `git restore` does — checked on the host's git and both floors (N3, phase 15) — and its
+  consequence names it so (`FileLoss::Emptied`,
   `an_intent_to_add_files_discard_empties_it_and_says_so`).
 - The `Performed` records the prompt the user accepted (R1.6).
 

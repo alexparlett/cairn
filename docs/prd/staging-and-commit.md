@@ -971,6 +971,11 @@ literally.
   (Amended 2026-10-10, the user's answers, 4: the confirmation is titled "Remove Stale Lock",
   D3's Title Case over decision G's casing; G's prompt and the button "Remove index.lock" are
   unchanged.)
+  (Aligned 2026-10-10, phase 15, carrying phase 14's QA item 5b at the coordinator's direction:
+  G's prompt ends in R1.2's frame, "... can corrupt the index. You can't undo this.", where
+  decision G's words above end "You can't undo this action." — every destructive prompt but an
+  amend's ends in the one frame (`every_destructive_prompt_ends_in_the_frame`); the rest of G's
+  words, and the button "Remove index.lock", are unchanged.)
 - R12.5 A guard holds every filesystem-mutating call in production code (removing,
   writing, renaming, creating or changing the permissions of a file or directory)
   to `crates/cairn-git/src/ops/` (L23), with a nonzero-files assertion and a

@@ -168,6 +168,7 @@ pub(super) enum Routed {
         asked: OperationId,
         diff: Arc<cairn_model::FileDiff>,
         selection: cairn_model::Selection,
+        chunk: bool,
     },
     /// Nothing sent: numbering the discard-count lane is all it is for.
     StopCounting,
@@ -283,10 +284,12 @@ pub(super) fn route(request: Request) -> Routed {
             asked,
             diff,
             selection,
+            chunk,
         } => Routed::DiscardLinesConsequence {
             asked,
             diff,
             selection,
+            chunk,
         },
         Request::StopCounting => Routed::StopCounting,
         Request::CommitReads => Routed::CommitReads,
@@ -349,10 +352,12 @@ pub(super) fn unroute(routed: Routed) -> Request {
             asked,
             diff,
             selection,
+            chunk,
         } => Request::DiscardLinesConsequence {
             asked,
             diff,
             selection,
+            chunk,
         },
         Routed::StopCounting => Request::StopCounting,
         Routed::CommitReads => Request::CommitReads,

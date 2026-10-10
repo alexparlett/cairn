@@ -4413,7 +4413,7 @@ pub(crate) mod tests {
         let kept = tokens.clone();
         let mut confirming = view.confirming;
         confirming.set(Some(Confirming::new(
-            "Discard changes",
+            "Discard Changes",
             one_file_discard(),
             move |token| kept.borrow_mut().push(token),
         )));
@@ -4426,7 +4426,7 @@ pub(crate) mod tests {
     /// A confirmation of a discard at `path` whose token goes to `kept`.
     fn asking(path: &str, kept: &Rc<RefCell<Vec<cairn_model::Confirmed>>>) -> Confirming {
         let kept = kept.clone();
-        Confirming::new("Discard changes", discard_of(path), move |token| {
+        Confirming::new("Discard Changes", discard_of(path), move |token| {
             kept.borrow_mut().push(token)
         })
     }
@@ -4492,7 +4492,7 @@ pub(crate) mod tests {
         let chain = move |first: &Rc<RefCell<Vec<cairn_model::Confirmed>>>,
                           next: &Rc<RefCell<Option<Confirming>>>| {
             let (first, next) = (first.clone(), next.clone());
-            Confirming::new("Discard changes", discard_of("src/lib.rs"), move |token| {
+            Confirming::new("Discard Changes", discard_of("src/lib.rs"), move |token| {
                 first.borrow_mut().push(token);
                 let mut confirming = opener;
                 if let Some(next) = next.borrow_mut().take() {

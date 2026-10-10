@@ -860,6 +860,7 @@ pub(super) enum LocalJob {
         asked: OperationId,
         diff: Arc<FileDiff>,
         selection: Selection,
+        chunk: bool,
         cancel: Superseded,
     },
     /// What the commit box reads (staging-and-commit R10), in the lane's order, answered under
@@ -1127,14 +1128,16 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 asked,
                 diff,
                 selection,
+                chunk,
                 cancel,
             } => {
                 // One path's reads, short: asked only while it is still the newest.
                 if cairn_git::Cancel::is_cancelled(&cancel) || serving.lane.is_closing() {
                     continue;
                 }
-                let outcome = ops::discard_lines_consequence(serving.git, &repo, &diff, selection)
-                    .map_err(|error| error.to_string());
+                let outcome =
+                    ops::discard_lines_consequence(serving.git, &repo, &diff, selection, chunk)
+                        .map_err(|error| error.to_string());
                 drop(diff);
                 serving
                     .outbox

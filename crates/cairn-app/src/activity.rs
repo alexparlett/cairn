@@ -672,8 +672,9 @@ fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>, git_running: bool
     }
 }
 
-/// What a confirmation of `Remove index.lock…` is titled (the user's decision of 2026-10-09, G).
-pub const REMOVE_LOCK_TITLE: &str = "Remove stale lock";
+/// What a confirmation of `Remove index.lock…` is titled: decision G's, in Title Case (the user's
+/// answers of 2026-10-10, 4).
+pub const REMOVE_LOCK_TITLE: &str = "Remove Stale Lock";
 
 /// The popover, while it is open (R12.1): drawn over the window, its operations from the log.
 /// A cancel asks the write's or the fetch's cancel; the way back finds the replaced commit in

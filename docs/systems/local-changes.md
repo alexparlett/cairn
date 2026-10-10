@@ -565,8 +565,10 @@ typed, the arrows are the editor's.
   `paths_drawn_together_are_answered_by_place_under_their_budget` (`worker/diff_tests.rs`, a path
   costing exactly the budget among its cases) and
   `paths_drawn_together_are_each_read_as_their_own_side` (`worker/local_lane_tests.rs`: an
-  unstaged, a staged and an untracked path, against real `git`); the prompt naming the files,
-  `a_discard_of_several_files_names_the_first_three_and_counts_the_rest`
+  unstaged, a staged and an untracked path, against real `git`); the prompt's one sentence
+  frame, `a_discard_of_files_asks_in_the_one_sentence_frame`,
+  `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted` and
+  `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`
   (`crates/cairn-model/src/consequence.rs`).
 - Acting, in the window (`crates/cairn-app/src/local_changes_actions_tests.rs`):
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
@@ -686,8 +688,11 @@ typed, the arrows are the editor's.
   actions are drawn at its top, not at the chunk's. A press without a drag, or Escape, lets a
   selection go, and the window losing focus cancels a drag. (Each ratified by the user,
   2026-10-09.)
-- The discard dialog names the files of a discard of several — the first three and how many
-  more — where Fork's counts them (the user's decision, 2026-10-09).
+- The discard dialog, titled "Discard Changes" in Title Case where Fork for Windows writes
+  "Discard changes" (the redesign's D3), asks in one sentence frame — "Discard all changes in
+  31 files? 2 untracked files will be deleted. You can't undo this.", a chunk's "Discard this
+  chunk (6 lines) in src/main.rs?" — where Fork asks "Do you want to discard all your changes
+  in the selected files?" with no count but the button's (the redesign's D2; observed `dc1`).
 - Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
   follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
   All once nothing is left to stage. Unstage All is the Staged button with the press held, the

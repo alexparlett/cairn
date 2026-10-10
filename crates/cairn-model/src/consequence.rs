@@ -61,6 +61,10 @@ pub enum Consequence {
         /// then the working tree's, which the discard puts back to the first.
         /// Present exactly when the selection holds the mode.
         mode: Option<(FileMode, FileMode)>,
+        /// Whether the selection is the chunk a hovered chunk's own Discard took — every
+        /// changed line of the hunk drawn — rather than lines selected by a drag: the prompt
+        /// names it "this chunk" (staging-and-commit phase 15). Words alone: no re-check reads it.
+        chunk: bool,
         /// The patch the discard applies, emitted from the diff the user confirmed
         /// with this selection: what runs is what was confirmed, never a patch built
         /// again from a later diff, whose lines could align otherwise.
@@ -141,15 +145,15 @@ pub enum FileLoss {
         /// lines (binary).
         lines: Option<usize>,
         /// The mode change the restore takes back, as the diff draws it: the
-        /// index's mode, then the working tree's. Named in the prompt with both
-        /// modes beside the lines (the user's decision of 2026-10-08), so a file
-        /// whose only change is its mode never reads as "0 lines".
+        /// index's mode, then the working tree's. Detail of the file, never the
+        /// prompt's sentence (the redesign's D2).
         mode: Option<(FileMode, FileMode)>,
     },
     /// A file added with `git add -N`, whose index entry is the empty blob:
     /// `git restore` writes that entry back, so the discard leaves the file
     /// EMPTY and the entry in place, as the user's own `git restore` does (the
-    /// user's decision of 2026-10-08), and the prompt names it as emptied.
+    /// user's decision of 2026-10-08; N3, checked against real git in phase 15:
+    /// git empties it and keeps the entry, on every git the gate runs).
     Emptied {
         /// The intent-to-add entry's blob, the empty one, what the file becomes.
         index: Oid,
@@ -215,11 +219,11 @@ impl Consequence {
                 executable: _,
                 selection,
                 mode,
+                chunk,
                 patch: _,
             } => format!(
-                "Do you want to discard {} in {}? You can't undo this action.",
-                discarded_lines(selection.len(), *mode),
-                quoted(path.as_bytes())
+                "{} {UNDONE}",
+                lines_question(&quoted(path.as_bytes()), selection.len(), *mode, *chunk)
             ),
             Self::DiscardFiles { files } => discard_files_prompt(files),
             Self::CheckoutDiscarding {
@@ -228,7 +232,7 @@ impl Consequence {
                 head: _,
             } => format!(
                 "Discard local changes and any untracked files in the way, then check out {} at \
-                 {}. You can't undo this action.",
+                 {}. {UNDONE}",
                 quoted(branch.as_bytes()),
                 at.short().as_str()
             ),
@@ -246,8 +250,7 @@ impl Consequence {
                 inode: _,
             } => format!(
                 "Remove {}? It was last changed {} ago and holds {}. Another program may still \
-                 own it: removing a lock a running git holds can corrupt the index. You can't \
-                 undo this action.",
+                 own it: removing a lock a running git holds can corrupt the index. {UNDONE}",
                 quoted(path.as_os_str().as_encoded_bytes()),
                 elapsed(read_at.duration_since(*modified).unwrap_or(Duration::ZERO)),
                 size(*bytes)
@@ -300,6 +303,7 @@ impl Consequence {
                 executable: _,
                 selection,
                 mode,
+                chunk: _,
                 patch: _,
             } => match (selection.len(), mode) {
                 (0, Some(_)) => "Discard Mode Change".to_owned(),
@@ -352,6 +356,7 @@ impl Consequence {
                 executable: _,
                 selection: _,
                 mode: _,
+                chunk: _,
                 patch: _,
             } => format!("Discard lines of {}", quoted(path.as_bytes())),
             Self::DiscardFiles { files } => {
@@ -407,184 +412,61 @@ fn amend_prompt(commit: Oid, published: &Publication, reflog: Reflog) -> String 
     }
 }
 
-/// Fork's words (L8): "Do you want to discard the changes in 3 files (a.rs, b.rs
-/// and c.rs)? 2 modified (14 lines), 1 untracked file deleted (2.1 KiB). You can't
-/// undo this action." One file is named by its path, several by their first three
-/// paths and how many more (the user's decision, 2026-10-09); a file deleted in the working
-/// tree, which the discard brings back, is named as that.
+/// How every destructive prompt but an amend's ends (staging-and-commit R1.2, the redesign's D2).
+const UNDONE: &str = "You can't undo this.";
+
+/// The one sentence frame for whole files (R1.2, R8.4, the redesign's D2): the question naming
+/// what is discarded — one file by its path, several by their count — then the worst loss only
+/// when it is worse than changes, which is an untracked file deleted, then that it can't be
+/// undone: "Discard all changes in 31 files? 2 untracked files will be deleted. You can't undo
+/// this." What happens to each file (restored, emptied, its lines, a mode change) is the
+/// detail behind "Show files", never the sentence's.
 fn discard_files_prompt(files: &[DiscardedFile]) -> String {
     let what = match files {
         [only] => quoted(only.path.as_bytes()),
-        _ => format!(
-            "{} ({})",
-            counted(files.len(), "file", "files"),
-            named(files)
-        ),
+        _ => counted(files.len(), "file", "files"),
     };
-    let mut modified = Lines::default();
-    let mut modes: Vec<(FileMode, FileMode)> = Vec::new();
-    let mut emptied = Lines::default();
-    let mut restored = 0usize;
-    let mut untracked = 0usize;
-    let mut untracked_bytes = 0u64;
-    for file in files {
-        match &file.loss {
-            FileLoss::Modified {
-                index: _,
-                working_tree: None,
-                executable: _,
-                lines: _,
-                mode: _,
-            } => restored += 1,
-            FileLoss::Modified {
-                index: _,
-                working_tree: Some(_),
-                executable: _,
-                lines,
-                mode,
-            } => {
-                add_lines(&mut modified, *lines);
-                modes.extend(*mode);
-            }
-            FileLoss::Emptied {
-                index: _,
-                working_tree: _,
-                executable: _,
-                lines,
-            } => add_lines(&mut emptied, *lines),
-            FileLoss::Untracked {
-                working_tree: _,
-                executable: _,
-                bytes,
-            } => {
-                untracked += 1;
-                untracked_bytes = untracked_bytes.saturating_add(*bytes);
-            }
-        }
-    }
-    let mut parts = Vec::with_capacity(4);
-    if modified.files > 0 {
-        let mode = match modes.as_slice() {
-            [] => None,
-            [(from, to)] if modified.files == 1 => Some(format!(
-                "the mode change ({} to {})",
-                from.octal(),
-                to.octal()
-            )),
-            several => Some(counted(several.len(), "mode change", "mode changes")),
-        };
-        let detail = match (line_detail(&modified, mode.is_some()), mode) {
-            (Some(lines), None) => lines,
-            (None, Some(mode)) => mode,
-            (Some(lines), Some(mode)) if modified.files == 1 => format!("{lines} and {mode}"),
-            (Some(lines), Some(mode)) => format!("{lines}, {mode}"),
-            (None, None) => counted(0, "line", "lines"),
-        };
-        parts.push(format!("{} modified ({detail})", modified.files));
-    }
-    if emptied.files > 0 {
-        parts.push(format!(
-            "{} emptied ({})",
-            counted(emptied.files, "new file", "new files"),
-            line_detail(&emptied, false).unwrap_or_else(|| counted(0, "line", "lines"))
-        ));
-    }
-    if restored > 0 {
-        parts.push(format!(
-            "{} restored",
-            counted(restored, "deleted file", "deleted files")
-        ));
-    }
-    if untracked > 0 {
-        parts.push(format!(
-            "{} deleted ({})",
-            counted(untracked, "untracked file", "untracked files"),
-            size(untracked_bytes)
-        ));
-    }
-    format!(
-        "Do you want to discard the changes in {what}? {}. You can't undo this action.",
-        parts.join(", ")
-    )
+    let untracked = files
+        .iter()
+        .filter(|file| match file.loss {
+            FileLoss::Untracked { .. } => true,
+            FileLoss::Modified { .. } | FileLoss::Emptied { .. } => false,
+        })
+        .count();
+    let worst = match untracked {
+        0 => String::new(),
+        1 => "1 untracked file will be deleted. ".to_owned(),
+        n => format!("{n} untracked files will be deleted. "),
+    };
+    format!("Discard all changes in {what}? {worst}{UNDONE}")
 }
 
-/// How many files a discard of several names before it counts the rest.
-const NAMED_FILES: usize = 3;
-
-/// The files of a discard of several, as its prompt names them (the user's decision,
-/// 2026-10-09): the first [`NAMED_FILES`] by their quoted paths, and how many more after them
-/// — "a.rs, b.rs and c.rs", "a.rs, b.rs, c.rs and 2 more".
-fn named(files: &[DiscardedFile]) -> String {
-    let paths: Vec<&RepoPath> = files.iter().map(|file| &file.path).collect();
-    named_paths(&paths)
-}
-
-/// [`named`], over the paths themselves.
-fn named_paths(paths: &[&RepoPath]) -> String {
-    let quoted: Vec<String> = paths.iter().map(|path| quoted(path.as_bytes())).collect();
-    named_list(&quoted)
-}
-
-/// Things named in a prompt as [`named`] names files: the first [`NAMED_FILES`], and how many
-/// more after them.
-fn named_list(items: &[String]) -> String {
-    let shown: Vec<&str> = items.iter().take(NAMED_FILES).map(String::as_str).collect();
-    let rest = items.len().saturating_sub(NAMED_FILES);
-    match (shown.split_last(), rest) {
-        (Some((last, before)), 0) if !before.is_empty() => {
-            format!("{} and {last}", before.join(", "))
-        }
-        (_, 0) => shown.join(", "),
-        (_, more) => format!("{} and {more} more", shown.join(", ")),
-    }
-}
-
-/// The lines of a kind of file in a discard, and how many of those files are not text.
-#[derive(Default)]
-struct Lines {
-    files: usize,
+/// The question for a discard of lines (R8.4, the redesign's D2), naming no mode in octal —
+/// the mode row is on screen: "Discard 2 changed lines in src/main.rs?", the chunk a hovered
+/// chunk's Discard took "Discard this chunk (6 lines) in src/main.rs?", a mode change alone
+/// "Discard the mode change of run.sh?". Lines and the mode together — which no route of the
+/// view asks, the mode row acting on the mode alone — read "Discard 2 changed lines and the
+/// mode change in run.sh?".
+fn lines_question(
+    path: &str,
     lines: usize,
-    binary: usize,
-}
-
-/// One more file of a kind, with its lines (`None` for one that is not text). Free
-/// functions rather than an impl, so `impl Consequence` stays this file's one impl block.
-fn add_lines(kind: &mut Lines, lines: Option<usize>) {
-    kind.files += 1;
-    match lines {
-        Some(n) => kind.lines += n,
-        None => kind.binary += 1,
-    }
-}
-
-/// A kind's lines and its files without them, in words — "14 lines", "binary", "14 lines,
-/// 1 binary" — or nothing where the only change beside them is a mode (`moded`) and there
-/// is no line to count: never "0 lines" for a mode change.
-fn line_detail(kind: &Lines, moded: bool) -> Option<String> {
-    let text = kind.files - kind.binary;
-    match (kind.lines, kind.binary) {
-        (0, 0) if moded => None,
-        (lines, 0) => Some(counted(lines, "line", "lines")),
-        (0, _) if moded || text == 0 => Some("binary".to_owned()),
-        (lines, binary) => Some(format!(
-            "{}, {binary} binary",
-            counted(lines, "line", "lines")
-        )),
-    }
-}
-
-/// What a discard of lines takes, in words: the lines, the mode change, or both. The
-/// mode change is named with both modes, as the diff draws them (`old mode`, `new mode`).
-fn discarded_lines(lines: usize, mode: Option<(FileMode, FileMode)>) -> String {
-    match (lines, mode) {
-        (0, Some((from, to))) => format!("the mode change ({} to {})", from.octal(), to.octal()),
-        (lines, Some((from, to))) => format!(
-            "{} and the mode change ({} to {})",
-            counted(lines, "line", "lines"),
-            from.octal(),
-            to.octal()
+    mode: Option<(FileMode, FileMode)>,
+    chunk: bool,
+) -> String {
+    match (lines, mode, chunk) {
+        (0, Some(_), _) => format!("Discard the mode change of {path}?"),
+        (lines, Some(_), _) => format!(
+            "Discard {} and the mode change in {path}?",
+            counted(lines, "changed line", "changed lines")
         ),
-        (lines, None) => counted(lines, "line", "lines"),
+        (lines, None, true) => format!(
+            "Discard this chunk ({}) in {path}?",
+            counted(lines, "line", "lines")
+        ),
+        (lines, None, false) => format!(
+            "Discard {} in {path}?",
+            counted(lines, "changed line", "changed lines")
+        ),
     }
 }
 
@@ -728,7 +610,7 @@ mod tests {
         assert_eq!(
             checkout().prompt(),
             "Discard local changes and any untracked files in the way, then check out topic at \
-             abababa. You can't undo this action."
+             abababa. You can't undo this."
         );
         assert_eq!(checkout().action(), "Create and Checkout");
         assert_eq!(checkout().amended(), None);
@@ -789,6 +671,7 @@ mod tests {
             executable: false,
             selection,
             mode: None,
+            chunk: false,
             patch: Patch::empty(),
         }
     }
@@ -805,198 +688,158 @@ mod tests {
         }
     }
 
-    /// L8's example, word for word. Caught by: a count taken from anything but the files.
+    /// The redesign's D2 (R1.2, R8.4): a discard of files asks in one sentence — one file named
+    /// by its path, several counted — and the button counts the files. Caught by: a kind of
+    /// change or a path listed in the sentence, a count taken from anything but the files, or a
+    /// prompt ending otherwise than the frame.
     #[test]
-    fn a_mixed_discard_names_each_kind_with_its_count() {
-        let consequence = Consequence::DiscardFiles {
-            files: vec![
-                modified("a.rs", Some(10)),
-                modified("b.rs", Some(4)),
-                untracked("notes.txt", 2150),
-            ],
+    fn a_discard_of_files_asks_in_the_one_sentence_frame() {
+        let one = Consequence::DiscardFiles {
+            files: vec![modified("src/main.rs", Some(14))],
         };
         assert_eq!(
-            consequence.prompt(),
-            "Do you want to discard the changes in 3 files (a.rs, b.rs and notes.txt)? 2 \
-             modified (14 lines), 1 untracked \
-             file deleted (2.1 KiB). You can't undo this action."
+            one.prompt(),
+            "Discard all changes in src/main.rs? You can't undo this."
         );
-        assert_eq!(consequence.action(), "Discard Changes in 3 Files");
-    }
-
-    /// The user's decision (2026-10-09): a discard of several files names them — the first
-    /// three by their quoted paths, then how many more — so the dialog says which files go.
-    /// Caught by: a count alone, every name listed however many, or a name left unquoted.
-    #[test]
-    fn a_discard_of_several_files_names_the_first_three_and_counts_the_rest() {
-        let two = Consequence::DiscardFiles {
-            files: vec![modified("a.rs", Some(1)), modified("b.rs", Some(1))],
+        assert_eq!(one.action(), "Discard Changes in 1 File");
+        let many: Vec<DiscardedFile> = (0..31)
+            .map(|n| modified(&format!("f{n}.rs"), Some(n)))
+            .collect();
+        let several = Consequence::DiscardFiles {
+            files: many.clone(),
         };
         assert_eq!(
-            two.prompt(),
-            "Do you want to discard the changes in 2 files (a.rs and b.rs)? 2 modified (2 \
-             lines). You can't undo this action."
+            several.prompt(),
+            "Discard all changes in 31 files? You can't undo this."
         );
-        let five = Consequence::DiscardFiles {
-            files: vec![
-                modified("a.rs", Some(1)),
-                modified("b.rs", Some(1)),
-                modified("c.rs", Some(1)),
-                modified("d.rs", Some(1)),
-                untracked("e.txt", 12),
-            ],
+        assert_eq!(several.action(), "Discard Changes in 31 Files");
+        let mut with_untracked = many[..29].to_vec();
+        with_untracked.push(untracked("notes.txt", 2150));
+        with_untracked.push(untracked("scratch", 12));
+        let with_untracked = Consequence::DiscardFiles {
+            files: with_untracked,
         };
         assert_eq!(
-            five.prompt(),
-            "Do you want to discard the changes in 5 files (a.rs, b.rs, c.rs and 2 more)? 4 \
-             modified (4 lines), 1 untracked file deleted (12 bytes). You can't undo this \
-             action."
+            with_untracked.prompt(),
+            "Discard all changes in 31 files? 2 untracked files will be deleted. You can't undo \
+             this."
         );
-        // A name is quoted as any path in a prompt is: it cannot rewrite the sentence.
-        let quoted = Consequence::DiscardFiles {
-            files: vec![
-                modified("a\nYou can undo this.rs", Some(1)),
-                modified("b.rs", Some(1)),
-            ],
-        };
-        assert_eq!(
-            quoted.prompt(),
-            "Do you want to discard the changes in 2 files (\"a\\nYou can undo this.rs\" and \
-             b.rs)? 2 modified (2 lines). You can't undo this action."
-        );
+        assert_eq!(with_untracked.action(), "Discard Changes in 31 Files");
         // The token's prompt is the dialog's, word for word.
         assert_eq!(
-            crate::Confirmed::by_user(five.clone()).prompt(),
-            five.prompt()
+            crate::Confirmed::by_user(with_untracked.clone()).prompt(),
+            with_untracked.prompt()
         );
     }
 
-    /// Caught by: the untracked files' sizes not summed (the last one's kept), or their
-    /// count taken as one.
+    /// The phase's QA brief: the worst loss in the sentence is the worst one in the list, so a
+    /// selection holding an untracked file always says it will be deleted — alone, beside every
+    /// other kind, and named by its path when it is the one file — and one holding none never
+    /// says it. Restored, emptied, binary and mode changes are changes, behind "Show files".
+    /// Caught by: the deletion said only for several files, or only when every file is
+    /// untracked, or said where nothing is deleted.
     #[test]
-    fn untracked_files_are_counted_and_their_sizes_summed() {
-        let consequence = Consequence::DiscardFiles {
-            files: vec![
-                untracked("a", 1000),
-                untracked("b", 1000),
-                untracked("c", 48),
-            ],
-        };
-        assert_eq!(
-            consequence.prompt(),
-            "Do you want to discard the changes in 3 files (a, b and c)? 3 untracked files \
-             deleted (2.0 \
-             KiB). You can't undo this action."
-        );
-    }
-
-    /// Caught by: a prompt that names a count where one path is the whole of it, or a
-    /// singular rendered as a plural.
-    #[test]
-    fn one_file_is_named_by_its_path_and_counted_singly() {
-        let consequence = Consequence::DiscardFiles {
-            files: vec![modified("src/main.rs", Some(1))],
-        };
-        assert_eq!(
-            consequence.prompt(),
-            "Do you want to discard the changes in src/main.rs? 1 modified (1 line). You \
-             can't undo this action."
-        );
-        assert_eq!(consequence.action(), "Discard Changes in 1 File");
-        let deleted_one = Consequence::DiscardFiles {
+    fn the_worst_loss_is_said_whenever_an_untracked_file_is_deleted() {
+        let alone = Consequence::DiscardFiles {
             files: vec![untracked("scratch", 12)],
         };
         assert_eq!(
-            deleted_one.prompt(),
-            "Do you want to discard the changes in scratch? 1 untracked file deleted (12 \
-             bytes). You can't undo this action."
+            alone.prompt(),
+            "Discard all changes in scratch? 1 untracked file will be deleted. You can't undo \
+             this."
         );
+        let emptied = DiscardedFile {
+            path: RepoPath::from("new.txt"),
+            loss: FileLoss::Emptied {
+                index: oid(1),
+                working_tree: oid(2),
+                executable: false,
+                lines: Some(5),
+            },
+        };
+        let moded = DiscardedFile {
+            path: RepoPath::from("run.sh"),
+            loss: FileLoss::Modified {
+                index: oid(1),
+                working_tree: Some(oid(2)),
+                executable: true,
+                lines: Some(0),
+                mode: Some((FileMode::Regular, FileMode::Executable)),
+            },
+        };
+        let changes = vec![
+            modified("a.rs", Some(3)),
+            modified("logo.png", None),
+            deleted("gone.rs"),
+            emptied,
+            moded,
+        ];
+        let no_untracked = Consequence::DiscardFiles {
+            files: changes.clone(),
+        };
+        assert_eq!(
+            no_untracked.prompt(),
+            "Discard all changes in 5 files? You can't undo this."
+        );
+        let mut every_kind = changes;
+        every_kind.insert(2, untracked("notes.txt", 2150));
+        let every_kind = Consequence::DiscardFiles { files: every_kind };
+        assert_eq!(
+            every_kind.prompt(),
+            "Discard all changes in 6 files? 1 untracked file will be deleted. You can't undo \
+             this."
+        );
+        for prompt in [no_untracked.prompt(), every_kind.prompt()] {
+            assert!(!prompt.contains("100644"), "no octal: {prompt}");
+            assert!(!prompt.contains("a.rs"), "no path of several: {prompt}");
+        }
     }
 
-    /// A binary change has no lines, and the prompt says so rather than counting it as none.
+    /// The redesign's D2 and 4b: lines from the diff are counted, both sides of the selection;
+    /// the chunk a hovered chunk's Discard took is named as the chunk with its lines; a mode
+    /// change alone is named in words, no octal; and the button counts what it discards.
+    /// Caught by: counting one side only, a chunk worded as lines or lines as a chunk, a mode
+    /// named in octal, or the button counting otherwise than the prompt.
     #[test]
-    fn a_binary_change_is_named_binary_never_counted_as_no_lines() {
-        let all_binary = Consequence::DiscardFiles {
-            files: vec![modified("logo.png", None), modified("icon.png", None)],
-        };
-        assert_eq!(
-            all_binary.prompt(),
-            "Do you want to discard the changes in 2 files (logo.png and icon.png)? 2 modified \
-             (binary). You can't \
-             undo this action."
-        );
-        let mixed = Consequence::DiscardFiles {
-            files: vec![modified("logo.png", None), modified("a.rs", Some(3))],
-        };
-        assert_eq!(
-            mixed.prompt(),
-            "Do you want to discard the changes in 2 files (logo.png and a.rs)? 2 modified (3 \
-             lines, 1 binary). \
-             You can't undo this action."
-        );
-    }
-
-    /// A file deleted in the working tree comes back when it is discarded; the prompt says
-    /// that rather than counting it as a modification's lines.
-    #[test]
-    fn a_file_deleted_in_the_working_tree_is_named_as_restored() {
-        let consequence = Consequence::DiscardFiles {
-            files: vec![
-                deleted("gone.rs"),
-                modified("a.rs", Some(2)),
-                deleted("also.rs"),
-            ],
-        };
-        assert_eq!(
-            consequence.prompt(),
-            "Do you want to discard the changes in 3 files (gone.rs, a.rs and also.rs)? 1 \
-             modified (2 lines), 2 deleted \
-             files restored. You can't undo this action."
-        );
-        let one = Consequence::DiscardFiles {
-            files: vec![deleted("gone.rs")],
-        };
-        assert_eq!(
-            one.prompt(),
-            "Do you want to discard the changes in gone.rs? 1 deleted file restored. You \
-             can't undo this action."
-        );
-    }
-
-    /// The count is the selection's, both sides of it. Caught by: counting only the added
-    /// lines (what is deleted) or only the removed ones.
-    #[test]
-    fn discarded_lines_count_both_sides_of_the_selection() {
+    fn a_discard_of_lines_names_the_lines_the_chunk_or_the_mode() {
         let consequence = lines("src/lib.rs", selection(3, 1));
         assert_eq!(
             consequence.prompt(),
-            "Do you want to discard 4 lines in src/lib.rs? You can't undo this action."
+            "Discard 4 changed lines in src/lib.rs? You can't undo this."
         );
         assert_eq!(consequence.action(), "Discard 4 Lines");
-        let other_way = lines("src/lib.rs", selection(1, 3));
-        assert_eq!(other_way.action(), "Discard 4 Lines");
-        let one = Consequence::DiscardLines {
-            path: RepoPath::from("new.txt"),
-            index: None,
+        assert_eq!(
+            lines("src/lib.rs", selection(1, 3)).action(),
+            "Discard 4 Lines"
+        );
+        let one = lines("new.txt", selection(0, 1));
+        assert_eq!(
+            one.prompt(),
+            "Discard 1 changed line in new.txt? You can't undo this."
+        );
+        assert_eq!(one.action(), "Discard 1 Line");
+
+        let chunk = |selection: Selection| Consequence::DiscardLines {
+            path: RepoPath::from("src/main.rs"),
+            index: Some(oid(1)),
             working_tree: oid(2),
             on_disk: oid(4),
             executable: false,
-            selection: selection(0, 1),
+            selection,
             mode: None,
+            chunk: true,
             patch: Patch::empty(),
         };
         assert_eq!(
-            one.prompt(),
-            "Do you want to discard 1 line in new.txt? You can't undo this action."
+            chunk(selection(2, 4)).prompt(),
+            "Discard this chunk (6 lines) in src/main.rs? You can't undo this."
         );
-        assert_eq!(one.action(), "Discard 1 Line");
-    }
+        assert_eq!(chunk(selection(2, 4)).action(), "Discard 6 Lines");
+        assert_eq!(
+            chunk(selection(0, 1)).prompt(),
+            "Discard this chunk (1 line) in src/main.rs? You can't undo this."
+        );
 
-    /// Phase 01's QA item 19: a mode change selected for discard is named, with both modes,
-    /// beside the lines or alone — never "0 lines". Caught by: counting the selection's lines
-    /// alone, or rendering the mode the discard restores as the one it removes.
-    #[test]
-    fn a_discarded_mode_change_is_named_with_its_modes() {
         let with_mode = |lines: Selection| {
             let mut selection = lines;
             selection.select_mode();
@@ -1008,25 +851,50 @@ mod tests {
                 executable: false,
                 selection,
                 mode: Some((FileMode::Regular, FileMode::Executable)),
+                chunk: false,
                 patch: Patch::empty(),
             }
         };
-        let both = with_mode(selection(1, 1));
-        assert_eq!(
-            both.prompt(),
-            "Do you want to discard 2 lines and the mode change (100644 to 100755) in run.sh? \
-             You can't undo this action."
-        );
-        assert_eq!(both.action(), "Discard 2 Lines and Mode Change");
         let alone = with_mode(Selection::empty());
         assert_eq!(
             alone.prompt(),
-            "Do you want to discard the mode change (100644 to 100755) in run.sh? You can't \
-             undo this action."
+            "Discard the mode change of run.sh? You can't undo this."
         );
         assert_eq!(alone.action(), "Discard Mode Change");
-        let one = with_mode(selection(0, 1));
-        assert_eq!(one.action(), "Discard 1 Line and Mode Change");
+        // No route of the view asks lines and the mode together; the words still hold.
+        let both = with_mode(selection(1, 1));
+        assert_eq!(
+            both.prompt(),
+            "Discard 2 changed lines and the mode change in run.sh? You can't undo this."
+        );
+        assert_eq!(both.action(), "Discard 2 Lines and Mode Change");
+        assert_eq!(
+            with_mode(selection(0, 1)).action(),
+            "Discard 1 Line and Mode Change"
+        );
+        for prompt in [alone.prompt(), both.prompt()] {
+            assert!(!prompt.contains("100"), "no octal: {prompt}");
+        }
+    }
+
+    /// Phase 14's QA item 5b and R1.2: every destructive prompt but an amend's — whose fixed
+    /// sentences R10.6 sets — ends in the frame's "You can't undo this.", never "this action".
+    /// Caught by: one operation's prompt left on the old ending.
+    #[test]
+    fn every_destructive_prompt_ends_in_the_frame() {
+        let every = [
+            lines("a.rs", selection(1, 0)),
+            Consequence::DiscardFiles {
+                files: vec![modified("a.rs", Some(1)), untracked("b", 1)],
+            },
+            checkout(),
+            lock("/r/.git/index.lock", Duration::from_secs(20), 0),
+        ];
+        for consequence in every {
+            let prompt = consequence.prompt();
+            assert!(prompt.ends_with(" You can't undo this."), "{prompt}");
+            assert!(!prompt.contains("this action"), "{prompt}");
+        }
     }
 
     /// Phase 03's QA item 2: the executable bit is part of what a discard re-checks, so two
@@ -1063,6 +931,7 @@ mod tests {
             executable: false,
             selection: selection(1, 0),
             mode: None,
+            chunk: false,
             patch: crate::emit_patch(
                 &crate::ChangedFile {
                     status: crate::ChangeStatus::Modified,
@@ -1083,89 +952,6 @@ mod tests {
         };
         assert_ne!(with("a"), with("b"));
         assert_eq!(with("a").prompt(), with("b").prompt());
-    }
-
-    /// The user's decision 6 (2026-10-08): a whole file's mode change is named with both
-    /// modes beside its lines, and a file whose only change is its mode never reads "0
-    /// lines". Full prompts, one file and several.
-    #[test]
-    fn a_whole_files_mode_change_is_named_never_counted_as_no_lines() {
-        let file = |path: &str, lines: usize, mode: Option<(FileMode, FileMode)>| DiscardedFile {
-            path: RepoPath::from(path),
-            loss: FileLoss::Modified {
-                index: oid(1),
-                working_tree: Some(oid(2)),
-                executable: false,
-                lines: Some(lines),
-                mode,
-            },
-        };
-        let changed = Some((FileMode::Regular, FileMode::Executable));
-        let alone = Consequence::DiscardFiles {
-            files: vec![file("run.sh", 0, changed)],
-        };
-        assert_eq!(
-            alone.prompt(),
-            "Do you want to discard the changes in run.sh? 1 modified (the mode change \
-             (100644 to 100755)). You can't undo this action."
-        );
-        let beside = Consequence::DiscardFiles {
-            files: vec![file("run.sh", 2, changed)],
-        };
-        assert_eq!(
-            beside.prompt(),
-            "Do you want to discard the changes in run.sh? 1 modified (2 lines and the mode \
-             change (100644 to 100755)). You can't undo this action."
-        );
-        let several = Consequence::DiscardFiles {
-            files: vec![
-                file("a.rs", 10, None),
-                file("run.sh", 0, changed),
-                file("tool", 3, Some((FileMode::Executable, FileMode::Regular))),
-            ],
-        };
-        assert_eq!(
-            several.prompt(),
-            "Do you want to discard the changes in 3 files (a.rs, run.sh and tool)? 3 modified \
-             (13 lines, 2 mode \
-             changes). You can't undo this action."
-        );
-    }
-
-    /// The user's decision 5 (2026-10-08): an intent-to-add file's discard leaves it empty, as
-    /// `git restore` does, and the prompt says so — never "modified".
-    #[test]
-    fn an_intent_to_add_file_is_named_as_emptied() {
-        let emptied = |path: &str, lines: Option<usize>| DiscardedFile {
-            path: RepoPath::from(path),
-            loss: FileLoss::Emptied {
-                index: oid(1),
-                working_tree: oid(2),
-                executable: false,
-                lines,
-            },
-        };
-        let one = Consequence::DiscardFiles {
-            files: vec![emptied("new.txt", Some(5))],
-        };
-        assert_eq!(
-            one.prompt(),
-            "Do you want to discard the changes in new.txt? 1 new file emptied (5 lines). You \
-             can't undo this action."
-        );
-        let two = Consequence::DiscardFiles {
-            files: vec![
-                emptied("a.txt", Some(5)),
-                emptied("b.bin", None),
-                modified("c.rs", Some(1)),
-            ],
-        };
-        assert_eq!(
-            two.prompt(),
-            "Do you want to discard the changes in 3 files (a.txt, b.bin and c.rs)? 1 modified \
-             (1 line), 2 new files \
-             emptied (5 lines, 1 binary). You can't undo this action."
-        );
     }
 
     /// R10.6 as the redesign of 2026-10-10 fixed it: one sentence for each reason an amend is
@@ -1295,7 +1081,7 @@ mod tests {
             consequence.prompt(),
             "Remove /work/repo/.git/index.lock? It was last changed 3 minutes ago and holds 0 \
              bytes. Another program may still own it: removing a lock a running git holds can \
-             corrupt the index. You can't undo this action."
+             corrupt the index. You can't undo this."
         );
         assert_eq!(consequence.action(), "Remove index.lock");
         assert_eq!(lock("/", Duration::ZERO, 0).action(), "Remove /");
@@ -1328,20 +1114,34 @@ mod tests {
     /// escapes a C-quoted path, and the name is quoted, as git quotes it, once anything in it is.
     #[test]
     fn a_path_or_a_remotes_name_cannot_rewrite_the_prompt() {
-        let path = "a\nYou can undo this action.\u{202e}txt.exe";
+        let path = "a\nYou can undo this.\u{202e}txt.exe";
         let consequence = Consequence::DiscardFiles {
             files: vec![modified(path, Some(1))],
         };
         assert_eq!(
             consequence.prompt(),
-            "Do you want to discard the changes in \"a\\nYou can undo this \
-             action.\\342\\200\\256txt.exe\"? 1 modified (1 line). You can't undo this action."
+            "Discard all changes in \"a\\nYou can undo \
+             this.\\342\\200\\256txt.exe\"? You can't undo this."
         );
         let quote = lines("say \"hi\"\\", selection(1, 0));
         assert_eq!(
             quote.prompt(),
-            "Do you want to discard 1 line in \"say \\\"hi\\\"\\\\\"? You can't undo this \
-             action."
+            "Discard 1 changed line in \"say \\\"hi\\\"\\\\\"? You can't undo this."
+        );
+        let chunk = Consequence::DiscardLines {
+            path: RepoPath::from("x\u{2028}y"),
+            index: None,
+            working_tree: oid(2),
+            on_disk: oid(4),
+            executable: false,
+            selection: selection(0, 2),
+            mode: None,
+            chunk: true,
+            patch: Patch::empty(),
+        };
+        assert_eq!(
+            chunk.prompt(),
+            "Discard this chunk (2 lines) in \"x\\342\\200\\250y\"? You can't undo this."
         );
         let bytes = Consequence::DiscardFiles {
             files: vec![DiscardedFile {
@@ -1374,7 +1174,7 @@ mod tests {
             files: vec![modified("docs/naïve café.md", Some(2))],
         };
         assert!(
-            plain.prompt().contains("in docs/naïve café.md? 1 modified"),
+            plain.prompt().contains("in docs/naïve café.md? You can't"),
             "printable text of any script is kept as it is: {}",
             plain.prompt()
         );

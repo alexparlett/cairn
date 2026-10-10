@@ -322,6 +322,7 @@ fn lines_loss() -> Consequence {
         executable: false,
         selection,
         mode: None,
+        chunk: true,
         patch: Patch::empty(),
     }
 }
@@ -339,7 +340,7 @@ fn a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file() 
     answer_with(&mut test, view, &submitted, drawn.clone());
     hover_row(&mut test, "EDIT 4");
     press(&mut test, DISCARD_CHUNK_CAPTION);
-    let lines_asks: Vec<(OperationId, FileDiff, Selection)> = submitted
+    let lines_asks: Vec<(OperationId, FileDiff, Selection, bool)> = submitted
         .borrow()
         .iter()
         .filter_map(|request| match request {
@@ -347,12 +348,17 @@ fn a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file() 
                 asked,
                 diff,
                 selection,
-            } => Some((*asked, (**diff).clone(), selection.clone())),
+                chunk,
+            } => Some((*asked, (**diff).clone(), selection.clone(), *chunk)),
             _ => None,
         })
         .collect();
     assert_eq!(lines_asks.len(), 1, "{:?}", submitted.borrow());
-    let (asked_id, diff, selection) = lines_asks[0].clone();
+    let (asked_id, diff, selection, chunk) = lines_asks[0].clone();
+    assert!(
+        chunk,
+        "the chunk's own Discard asked as lines: its prompt names no chunk"
+    );
     assert_eq!(diff, drawn, "the discard was asked of another diff");
     assert_eq!(selection.len(), 2);
     assert!(view.confirming.peek().is_none());
@@ -806,6 +812,7 @@ fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
                 verb,
                 selection: selection.clone(),
                 drawn: old,
+                chunk: false,
             },
             view,
             Some(&|request: Request| submitted.borrow_mut().push(request)),
@@ -816,8 +823,9 @@ fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
 }
 
 /// Phase 08 QA item 11: part of a new file's lines is not the file — a drag over two of its
-/// forty lines asks what discarding those lines would lose, never the file's deletion. Caught
-/// by: a new file's every discard routed to the files' route.
+/// forty lines asks what discarding those lines would lose, never the file's deletion — and,
+/// lines a drag selected, never as a chunk (phase 15: the prompt names lines). Caught by: a new
+/// file's every discard routed to the files' route, or a line selection worded as a chunk.
 #[test]
 fn part_of_a_new_files_lines_is_discarded_as_lines() {
     let (mut test, view, submitted) = opened();
@@ -848,6 +856,13 @@ fn part_of_a_new_files_lines_is_discarded_as_lines() {
             _ => (lines, files),
         });
     assert_eq!((lines, files), (1, 0));
+    assert!(
+        submitted.borrow().iter().all(|r| match r {
+            Request::DiscardLinesConsequence { chunk, .. } => !chunk,
+            _ => true,
+        }),
+        "a drag's lines asked as the chunk"
+    );
 }
 
 /// The user's decision (2026-10-09): with no lines selected, the chords over files drawn

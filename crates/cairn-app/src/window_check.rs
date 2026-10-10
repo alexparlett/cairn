@@ -1138,6 +1138,7 @@ fn writes_check() {
                     verb,
                     selection,
                     drawn,
+                    chunk: false,
                 },
                 view,
                 Some(&submit),

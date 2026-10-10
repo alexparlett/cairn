@@ -14,7 +14,7 @@ use freya_testing::TestingRunner;
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
-const TITLE: &str = "Discard changes";
+const TITLE: &str = "Discard Changes";
 
 fn oid(byte: u8) -> Oid {
     Oid::from_bytes(&[byte; 20]).unwrap_or_else(|e| panic!("{e}"))
@@ -61,6 +61,7 @@ fn two_lines() -> Consequence {
         executable: false,
         selection,
         mode: None,
+        chunk: false,
         patch: Patch::empty(),
     }
 }

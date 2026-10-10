@@ -476,6 +476,8 @@ pub enum Request {
         asked: OperationId,
         diff: Arc<FileDiff>,
         selection: Selection,
+        /// Whether the selection is a hovered chunk's own, which the prompt names as the chunk.
+        chunk: bool,
     },
     /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
     /// when it is no longer shown, so a count nobody will confirm stops holding the local lane.
@@ -1083,6 +1085,7 @@ mod tests {
                         content: cairn_model::DiffContent::ModeChangeOnly,
                     }),
                     selection: Selection::empty(),
+                    chunk: false,
                 },
                 QueryLane::DiscardCount,
             ),

@@ -476,6 +476,7 @@ fn cairn_write_costs() {
                 &repo.borrow(),
                 &unstaged,
                 selection.clone(),
+                false,
             )
             .unwrap_or_else(|e| panic!("{e}"));
             started.elapsed()
@@ -493,6 +494,7 @@ fn cairn_write_costs() {
                     &repo.borrow(),
                     &unstaged,
                     selection.clone(),
+                    false,
                 )
                 .unwrap_or_else(|e| panic!("{e}")),
             ));

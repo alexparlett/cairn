@@ -78,7 +78,9 @@ const APPLY_WORKTREE: [&str; 3] = ["apply", "--whitespace=nowarn", "-"];
 /// The `Consequence` of discarding `selection` of `diff` — the path's unstaged or untracked
 /// diff, as the engine answered it — read from the repository now (module docs): the index
 /// entry the lines go back to, the file's git form and its bytes, the selection, and the mode
-/// change when the selection holds it.
+/// change when the selection holds it. `chunk` says the selection is the chunk a hovered
+/// chunk's own Discard took, which the prompt names as the chunk; it changes no target and no
+/// re-check.
 ///
 /// Refused before any prompt ([`Error::Refused`]) when nothing is selected, when the change
 /// is one only a file verb takes, or when the selection is every line of a new file (which
@@ -90,6 +92,7 @@ pub fn discard_lines_consequence(
     repo: &Repository,
     diff: &FileDiff,
     selection: Selection,
+    chunk: bool,
 ) -> Result<Consequence, Error> {
     let path = &diff.file.new_path;
     match &diff.content {
@@ -157,6 +160,7 @@ pub fn discard_lines_consequence(
         executable: disk.executable(),
         selection,
         mode,
+        chunk,
         patch,
     })
 }
@@ -183,6 +187,7 @@ pub fn discard_lines(
             executable,
             selection: _,
             mode: _,
+            chunk: _,
             patch,
         } => {
             let changed = || Error::ChangedSinceConfirmed {
@@ -635,7 +640,8 @@ mod tests {
         let (git, repo) = (stub.git_binary(), stub.repository());
         let diff = stub.diff("file.txt", WorkingTreeDiff::Unstaged);
         let selection = RecordingStub::first_change(&diff);
-        let consequence = discard_lines_consequence(&git, &repo, &diff, selection.clone()).unwrap();
+        let consequence =
+            discard_lines_consequence(&git, &repo, &diff, selection.clone(), false).unwrap();
         stub.forget();
         discard_lines(&git, &repo, Confirmed::by_user(consequence), None).unwrap();
         let recorded = stub.recorded();

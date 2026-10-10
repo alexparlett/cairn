@@ -69,7 +69,7 @@ fn every_dialogs_buttons_follow_the_platforms_order() {
         let linux = platform == Os::Linux;
         let consequence = Rc::new(discard());
         let test = render(move || {
-            ConfirmDialog::new(1, "Discard changes", consequence.clone())
+            ConfirmDialog::new(1, "Discard Changes", consequence.clone())
                 .platform(platform)
                 .into_element()
         });
@@ -132,7 +132,7 @@ fn a_confirmation_starts_on_cancel_on_both_platforms() {
             let (confirmed, cancelled) = (confirmed.clone(), cancelled.clone());
             move || {
                 let (confirmed, cancelled) = (confirmed.clone(), cancelled.clone());
-                ConfirmDialog::new(1, "Discard changes", Rc::new(discard()))
+                ConfirmDialog::new(1, "Discard Changes", Rc::new(discard()))
                     .platform(platform)
                     .on_confirm(move |_| *confirmed.borrow_mut() += 1)
                     .on_cancel(move |()| *cancelled.borrow_mut() += 1)

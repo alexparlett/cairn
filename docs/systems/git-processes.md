@@ -1214,9 +1214,9 @@ Cairn's running in the repository, refused with `Error::LockRefused` otherwise �
 and an offer is never lost because some `git` happened to run as the write ended. Only the
 answer to the latest press is kept (`ActivityLog::lock_answered`): a refusal is said beside the
 button, which stays; a consequence opens the confirmation (`activity::use_lock_confirmation`),
-titled "Remove stale lock" (`activity::REMOVE_LOCK_TITLE`), its prompt `Consequence::prompt`'s —
+titled "Remove Stale Lock" (`activity::REMOVE_LOCK_TITLE`), its prompt `Consequence::prompt`'s —
 "Remove <path>? It was last changed N ago and holds N bytes. Another program may still own it:
-removing a lock a running git holds can corrupt the index. You can't undo this action." — and
+removing a lock a running git holds can corrupt the index. You can't undo this." — and
 its button "Remove index.lock". While a write or a fetch of Cairn's runs the button is drawn
 unpressable, "Cairn is running git in this repository" beside it (`LockOffer::Blocked`). The
 token asks the local lane for `LocalWrite::RemoveLock`, which re-checks the registry, the lock's

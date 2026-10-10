@@ -686,12 +686,14 @@ impl RepositoryHandle {
                 asked,
                 diff,
                 selection,
+                chunk,
             } => {
                 if let Some(epoch) = epoch {
                     let _ = self.local.send(LocalJob::LinesConsequence {
                         asked,
                         diff,
                         selection,
+                        chunk,
                         cancel: self.epochs.watch(epoch),
                     });
                 }
@@ -825,11 +827,13 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
                 asked,
                 diff,
                 selection,
+                chunk,
                 ..
             } => Some(unroute(Routed::DiscardLinesConsequence {
                 asked,
                 diff,
                 selection,
+                chunk,
             })),
             LocalJob::CommitReads { .. } => Some(unroute(Routed::CommitReads)),
             LocalJob::Amending { status, .. } => Some(unroute(Routed::Amending { status })),

@@ -592,7 +592,13 @@ fn through_the_verb(
         PatchAction::Stage => ops::stage_lines(super::git(), &engine, drawn, selection, None),
         PatchAction::Unstage => ops::unstage_lines(super::git(), &engine, drawn, selection, None),
         PatchAction::Discard if deletes => {
-            match ops::discard_lines_consequence(super::git(), &engine, drawn, selection.clone()) {
+            match ops::discard_lines_consequence(
+                super::git(),
+                &engine,
+                drawn,
+                selection.clone(),
+                false,
+            ) {
                 Err(cairn_git::Error::Refused {
                     why: cairn_git::Refusal::WholeFileOnly,
                     ..
@@ -612,13 +618,19 @@ fn through_the_verb(
         }
         PatchAction::Discard => {
             let consequence = ok(
-                ops::discard_lines_consequence(super::git(), &engine, drawn, selection.clone()),
+                ops::discard_lines_consequence(
+                    super::git(),
+                    &engine,
+                    drawn,
+                    selection.clone(),
+                    false,
+                ),
                 &format!("{at}: the discard's consequence"),
             );
             assert!(
                 consequence
                     .prompt()
-                    .contains(&format!("discard {} line", selection.len())),
+                    .contains(&format!("Discard {} changed line", selection.len())),
                 "{at}: the prompt does not count the selection: {}",
                 consequence.prompt()
             );

@@ -1399,7 +1399,7 @@ fn confirmed_discards_run_through_the_lane_and_quote_their_prompts() {
         .unwrap_or_else(|error| panic!("{error}"))
         .unwrap_or_else(|| panic!("a has no unstaged diff"));
     let selection = Selection::with_every_change(diff.text().unwrap_or_else(|| panic!("no text")));
-    let lines = cairn_git::ops::discard_lines_consequence(&git, &repo, &diff, selection)
+    let lines = cairn_git::ops::discard_lines_consequence(&git, &repo, &diff, selection, false)
         .unwrap_or_else(|error| panic!("{error}"));
     let files = cairn_git::ops::discard_files_consequence(
         &git,
@@ -1529,8 +1529,7 @@ fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
     let prompt = consequence.prompt();
     assert_eq!(
         prompt,
-        "Do you want to discard the changes in 2 files (modified and new.txt)? 1 modified (3 \
-         lines), 1 untracked file deleted (12 bytes). You can't undo this action."
+        "Discard all changes in 2 files? 1 untracked file will be deleted. You can't undo this."
     );
     assert_eq!(consequence.action(), "Discard Changes in 2 Files");
     let discarding = ask(

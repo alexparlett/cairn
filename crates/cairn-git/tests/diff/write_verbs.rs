@@ -14,7 +14,10 @@ use cairn_git::{
     CancelSignal, ContentOptions, Error, Refusal, Repository, SharedRepository, WorkingTreeDiff,
     ops,
 };
-use cairn_model::{Confirmed, DiffContent, FileDiff, RepoPath, Selection, apply_patch};
+use cairn_model::{
+    Confirmed, Consequence, DiffContent, DiscardedFile, FileDiff, FileLoss, FileMode, RepoPath,
+    Selection, apply_patch,
+};
 
 use super::repositories::Repo;
 use super::{git, ok};
@@ -200,7 +203,7 @@ fn a_stale_discard_writes_nothing_where_git_apply_would_land_it_at_an_offset() {
     let selection = first_change(&drawn);
     let patch = cairn_model::action_patch(cairn_model::PatchAction::Discard, &drawn, &selection);
     let consequence = ok(
-        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection),
+        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection, false),
         "the consequence",
     );
     let moved = format!(
@@ -274,7 +277,13 @@ fn a_discard_of_lines_refuses_whatever_moved_after_the_confirmation() {
         let drawn = diff_of(&repo, "file.txt", WorkingTreeDiff::Unstaged);
         let objects = snapshot(&repo.path().join(".git/objects"));
         let consequence = ok(
-            ops::discard_lines_consequence(git(), &engine(&repo), &drawn, first_change(&drawn)),
+            ops::discard_lines_consequence(
+                git(),
+                &engine(&repo),
+                &drawn,
+                first_change(&drawn),
+                false,
+            ),
             what,
         );
         assert_eq!(
@@ -732,9 +741,7 @@ fn a_discard_of_files_restores_the_tracked_and_deletes_exactly_the_untracked() {
     let prompt = consequence.prompt();
     assert_eq!(
         prompt,
-        "Do you want to discard the changes in 3 files (a.txt, b.txt and dir/u1.txt)? 1 modified \
-         (2 lines), 1 deleted file restored, 1 untracked file deleted (12 bytes). You can't undo \
-         this action."
+        "Discard all changes in 3 files? 1 untracked file will be deleted. You can't undo this."
     );
     let performed = ok(
         ops::discard_files(git(), &worker, Confirmed::by_user(consequence), None),
@@ -971,7 +978,7 @@ fn a_submodule_is_never_discarded() {
     );
     let mut mode = Selection::empty();
     mode.select_mode();
-    let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, mode);
+    let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, mode, false);
     assert!(is_refused(&outcome, Refusal::Submodule), "{outcome:?}");
     ok(
         ops::stage_files(git(), &engine(&repo), &[RepoPath::new("sub")], None),
@@ -1003,7 +1010,8 @@ fn a_conflicted_path_takes_no_patch_or_discard_and_add_resolves_it() {
     let path = [RepoPath::new("file.txt")];
     let refusals = [
         ops::stage_lines(git(), &engine(&repo), &drawn, &every, None).map(drop),
-        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every.clone()).map(drop),
+        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every.clone(), false)
+            .map(drop),
         ops::discard_files_consequence(git(), &engine(&repo), &path, &CancelSignal::new())
             .map(drop),
     ];
@@ -1033,7 +1041,7 @@ fn every_line_of_an_untracked_file_is_discarded_by_the_file_verb_which_says_so()
             .text()
             .unwrap_or_else(|| panic!("no text: {:?}", drawn.content)),
     );
-    let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every);
+    let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, every, false);
     assert!(is_refused(&outcome, Refusal::WholeFileOnly), "{outcome:?}");
     let consequence = ok(
         ops::discard_files_consequence(
@@ -1046,8 +1054,7 @@ fn every_line_of_an_untracked_file_is_discarded_by_the_file_verb_which_says_so()
     );
     assert_eq!(
         consequence.prompt(),
-        "Do you want to discard the changes in new.txt? 1 untracked file deleted (8 bytes). \
-         You can't undo this action."
+        "Discard all changes in new.txt? 1 untracked file will be deleted. You can't undo this."
     );
     ok(
         ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None),
@@ -1065,7 +1072,8 @@ fn nothing_selected_is_refused_before_any_prompt() {
     let mut mode_alone = Selection::empty();
     mode_alone.select_mode();
     for selection in [Selection::empty(), mode_alone] {
-        let outcome = ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection);
+        let outcome =
+            ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection, false);
         assert!(
             is_refused(&outcome, Refusal::NothingSelected),
             "{outcome:?}"
@@ -1076,7 +1084,8 @@ fn nothing_selected_is_refused_before_any_prompt() {
 }
 
 /// Phase 01's QA item 19 against real git: a mode change selected for discard is named in
-/// the prompt with both modes, and the discard puts the mode back with the lines.
+/// the prompt — in words, no octal, the mode row being on screen (phase 15) — and the discard
+/// puts the mode back with the lines.
 #[test]
 fn a_mode_change_selected_for_discard_is_named_and_put_back() {
     let repo = one_unstaged_edit("mode");
@@ -1086,13 +1095,12 @@ fn a_mode_change_selected_for_discard_is_named_and_put_back() {
     let mut selection = first_change(&drawn);
     selection.select_mode();
     let consequence = ok(
-        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection),
+        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, selection, false),
         "the consequence",
     );
     assert_eq!(
         consequence.prompt(),
-        "Do you want to discard 2 lines and the mode change (100644 to 100755) in file.txt? \
-         You can't undo this action."
+        "Discard 2 changed lines and the mode change in file.txt? You can't undo this."
     );
     ok(
         ops::discard_lines(git(), &engine(&repo), Confirmed::by_user(consequence), None),
@@ -1319,7 +1327,7 @@ fn a_discard_applies_the_patch_it_was_confirmed_with() {
     let mut third = Selection::empty();
     third.select_added(cairn_model::LineNumber::from_index(2));
     let consequence = ok(
-        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, third),
+        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, third, false),
         "the consequence",
     );
     ok(
@@ -1413,8 +1421,12 @@ fn a_file_git_clean_leaves_is_named_as_kept() {
 
 // --- The user's decisions 5 and 6 of 2026-10-08 ---
 
-/// Decision 5: an intent-to-add file's discard is `git restore`'s — the file left EMPTY, its
-/// intent-to-add entry in place — and the prompt says it is emptied, never "modified".
+/// Decision 5, and N3 settled against real git (phase 15): an intent-to-add file's discard is
+/// `git restore`'s — the file left EMPTY, its intent-to-add entry in place and `git status`
+/// still listing it as added — so "emptied" is what git does, and the consequence names it so
+/// (`FileLoss::Emptied`); the sentence asks in the one frame. On the host's git and both
+/// floors. Caught by: git removing the file or its entry (the word would then change in
+/// meaning: the phase's stopping rule), or the loss read as a modification.
 #[test]
 fn an_intent_to_add_files_discard_empties_it_and_says_so() {
     let repo = Repo::new("intent-to-add");
@@ -1433,33 +1445,43 @@ fn an_intent_to_add_files_discard_empties_it_and_says_so() {
     );
     assert_eq!(
         consequence.prompt(),
-        "Do you want to discard the changes in new.txt? 1 new file emptied (20 lines). You \
-         can't undo this action."
+        "Discard all changes in new.txt? You can't undo this."
     );
+    match &consequence {
+        Consequence::DiscardFiles { files } => assert!(
+            matches!(
+                files.as_slice(),
+                [DiscardedFile {
+                    loss: FileLoss::Emptied {
+                        lines: Some(20),
+                        ..
+                    },
+                    ..
+                }]
+            ),
+            "{files:?}"
+        ),
+        other => panic!("not a discard of files: {other:?}"),
+    }
     ok(
         ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None),
         "the discard",
     );
     assert_eq!(on_disk(&repo, "new.txt"), Some(Vec::new()));
     assert_eq!(repo.git(&["ls-files", "--", "new.txt"]).trim(), "new.txt");
+    assert_eq!(
+        repo.git(&["status", "--porcelain=v1", "--", "new.txt"]),
+        " A new.txt\n",
+        "still listed as added, empty"
+    );
 }
 
-/// Decision 6: a whole file's mode change is named with both modes — alone, and beside its
-/// lines — and put back by the discard.
+/// Decision 6: a whole file's mode change is carried in its consequence with both modes —
+/// alone, and beside its lines, never "0 lines" — for the detail behind "Show files", the
+/// sentence asking in the one frame (phase 15); and the discard puts it back.
 #[test]
 fn a_whole_files_mode_change_is_named_and_put_back() {
-    for (edited, prompt) in [
-        (
-            false,
-            "Do you want to discard the changes in run.sh? 1 modified (the mode change (100644 \
-             to 100755)). You can't undo this action.",
-        ),
-        (
-            true,
-            "Do you want to discard the changes in run.sh? 1 modified (2 lines and the mode \
-             change (100644 to 100755)). You can't undo this action.",
-        ),
-    ] {
+    for (edited, lines_lost) in [(false, 0), (true, 2)] {
         let repo = Repo::new("whole-mode");
         repo.write("run.sh", lines(base).as_bytes());
         repo.commit("base");
@@ -1479,7 +1501,27 @@ fn a_whole_files_mode_change_is_named_and_put_back() {
             ),
             "the consequence",
         );
-        assert_eq!(consequence.prompt(), prompt);
+        assert_eq!(
+            consequence.prompt(),
+            "Discard all changes in run.sh? You can't undo this."
+        );
+        match &consequence {
+            Consequence::DiscardFiles { files } => assert!(
+                matches!(
+                    files.as_slice(),
+                    [DiscardedFile {
+                        loss: FileLoss::Modified {
+                            lines: Some(n),
+                            mode: Some((FileMode::Regular, FileMode::Executable)),
+                            ..
+                        },
+                        ..
+                    }] if *n == lines_lost
+                ),
+                "{files:?}"
+            ),
+            other => panic!("not a discard of files: {other:?}"),
+        }
         ok(
             ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None),
             "the discard",

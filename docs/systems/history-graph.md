@@ -959,8 +959,9 @@ that gains a ref is reached at the reopen that follows and drawn as any other.
 
 The way back to a lost commit — or to any — is Fork's Create Branch dialog
 (`crates/cairn-ui/src/create_branch_dialog.rs`, `crates/cairn-app/src/create_branch.rs`; the
-user's decisions of 2026-10-09; evidence
-`docs/research/staging-and-commit/fork-create-branch-evidence.md`), opened by `New Branch…` in
+user's decisions of 2026-10-09 and 2026-10-10; evidence
+`docs/research/staging-and-commit/fork-create-branch-evidence.md` and
+`fork-observed-2026-10-10.md`), opened by `New Branch…` in
 any commit row's context menu, a lost row's too, a stash's row offering none
 (`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
 right-click selecting its row first unless it lands in the selection already made, either of a
@@ -973,16 +974,17 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
 (`the_new_branch_chord_opens_create_branch_at_head`):
 
 - Under the title, Fork's line "Use '/' as a path separator to create folders"; "Create branch
-  at:" the commit's glyph, short id and subject, read only; "Branch name:" (the
-  name a failed create left, or empty); "Check out after create", sticky for the session (issue
+  at:" the commit's glyph, short id and subject, read only; "Branch name:", empty at each
+  opening; "Check out after create", sticky for the session (issue
   #89 will keep it across restarts); Cancel and "Create", "Create and Checkout" while ticked
   (`the_dialog_is_forks_its_button_following_the_box`).
 - Each change of the name asks the engine (`Request::CheckBranchName`, the branch-name lane on
   the local lane, `Repository::branch_name`): the button is enabled only for an answer of
   "free" to the text shown, and a refusal is said inside the dialog, in the buttons' row,
   left of them, behind the warning triangle (`RefGlyph::Gone`), never in the Git Error dialog
-  (the user's decision B, 2026-10-09) — "Branch <name> already exists", git's reason for a
-  name it does not take, git's words for a name a branch's directory holds
+  (the user's decision B, 2026-10-09) — the engine's typed answer worded by the dialog
+  (`cairn_ui::name_refusal`, `refusals_are_worded_by_the_view`): "Branch <name> already exists",
+  git's reason for a name it does not take, git's words for a name a branch's directory holds
   (`'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'`, either way round), or "A
   branch name can't contain '@{'", said before git is asked (decision F;
   `a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
@@ -996,22 +998,41 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
   `only_a_ready_name_is_created_and_every_change_is_reported`,
   `new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`,
   `create_branchs_reads_are_answered_on_the_lane`).
-- "Local changes:" is drawn while the box is ticked and the working tree's status lists a
-  staged, unstaged or conflicted change (its first entry, since `git status` lists those before
-  untracked paths, whatever their names); each opening starts on "Don't change"
+- "Local changes:" is drawn while the box is ticked and a tracked path is staged, unstaged or
+  conflicted (`WorkingTreeStatus::has_tracked_changes`, searched among every entry, never read
+  from the first): Fork's three in Fork's order — "Don't change", "Stash and reapply" greyed with
+  "Comes with stashing." beside it until packet 5b builds stashing, and "Discard", Fork's ⚠
+  beside it while it is chosen; each opening starts on "Don't change"
   (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`,
-  `local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`).
+  `local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`,
+  `local_changes_are_forks_three_in_forks_order_stash_greyed_and_a_chosen_discard_warned`).
+  The button reads "Create and Checkout" whatever is chosen.
+- **The dialog is a confirmation surface** (on the seal guard's `CONFIRMATION_SURFACES`; the
+  user's decision of 2026-10-10, B2): while Discard is chosen the engine is asked what it would
+  be confirmed as for the name shown (`Request::CheckoutConsequence`, the checkout-count lane,
+  asked again as the name changes, the newest ask's answer alone kept), and the button waits for
+  it; then Create and Checkout — or Return — IS the acknowledgement, the radio chosen plus the
+  press, as in Fork: the dialog builds the `Confirmed` from that `Consequence` and the window asks
+  `LocalWrite::CreateBranchDiscarding` with it, no second dialog opening
+  (`discards_press_builds_the_token_from_the_consequence_it_was_handed`,
+  `discards_press_is_its_confirmation_and_builds_the_token_from_the_engines_consequence`). During
+  an operation in progress the refusal row says "<Operation> is in progress. Finish or abort it
+  first." (`cairn_ui::discard_refusal`), the button disabled while Discard is chosen
+  (`an_operation_in_progress_refuses_discard_in_the_dialog`).
 - The writes are the local lane's: `LocalWrite::CreateBranch`,
-  `LocalWrite::CreateBranchAndCheckout`, and — for "Discard" — the count asked first
-  (`Request::CheckoutConsequence`, the checkout-count lane), the dialog closing on its answer
-  and the confirmation opening on it, its token `LocalWrite::CreateBranchDiscarding`'s; an
-  engine refusal before any prompt is said in the dialog, which stays open
-  (`discard_is_counted_and_confirmed_before_its_write`). Each reads everything again however it
-  ends, so the new branch's chip is drawn and a commit it is put on is no longer lost
+  `LocalWrite::CreateBranchAndCheckout` and `LocalWrite::CreateBranchDiscarding`. The dialog
+  stays open, its button disabled, while its write is asked, and closes when it is done
+  (`new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`). Each reads
+  everything again however it ends, so the new branch's chip is drawn and a commit it is put on
+  is no longer lost
   (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
-- A failure — git's refusal, or a discard whose state moved since its confirmation — opens
-  Fork's Git Error dialog with its words, and the name is offered at the next opening
-  (`a_failed_create_opens_the_git_error_and_keeps_its_name`). The engine's verbs are
+- A failure — git's refusal, or a discard whose `HEAD`, commit or name moved since the press —
+  opens Fork's Git Error dialog with its words over the dialog, which stays beneath it as it was
+  left, so Close returns to it; Escape closes the Git Error alone (it is first in the window's
+  tree, so its Escape is heard first, and one overlay above the dialog;
+  `a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was`). While either is up the
+  window's keys are inert (`shortcuts::keys_inert`;
+  `the_windows_keys_are_inert_while_create_branch_is_up`). The engine's verbs are
   `docs/systems/staging.md`'s.
 
 ## What enforces this

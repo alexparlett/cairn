@@ -36,7 +36,9 @@ green, its QA fixes applied. Phase 13 (the commit engine asks git) built in pack
 green, every step built — the token hand-back as (a′) and the stripspace parity fix by the
 coordinator's decisions of 2026-10-10; see "Phase 13" below. QA is the coordinator's. The user
 ratified the coordinator's three recommendations after phase 13's QA (2026-10-10, "Those are
-fine"): see "Resolved after phase 13's QA" below.**
+fine"): see "Resolved after phase 13's QA" below. Phase 14 (Create Branch as Fork runs it)
+built in packet mode after its stopping rule was decided (2026-10-10), full gate green; see
+"Phase 14" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -80,6 +82,53 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 14 of the rebuild, Create Branch as Fork runs it (2026-10-10)
+
+- **Built** (`phase-14-create-branch.md`, C34, C32's name half, C1/C22's roster rows):
+  (1) the engine — `ops::create_branch_discarding` runs Fork's `git checkout -q --no-track -f -b
+  <name> <oid> --` (argv pinned by the recording stub, `the_checkouts_run_as_r11_names_them`);
+  `Consequence::CheckoutDiscarding { branch, at, head }`, its prompt fixed ("Discard local
+  changes and any untracked files in the way, then check out <name> at <short>. You can't undo
+  this action."), its button "Create and Checkout"; `ops::checkout_discarding_consequence(repo,
+  branch, at)` reads no working tree and runs no git, refusing only an operation in progress;
+  the re-check `HEAD`, the commit and the name and nothing else
+  (`Error::CheckoutChangedSinceConfirmed { what: CheckoutMoved::{Head, Commit, Name} }`). Real
+  git on the host and both floors: `a_discarding_checkout_leaves_what_forks_command_leaves`
+  (oracle: Fork's own command on an identical fixture), `a_submodules_change_survives_the_discard_and_a_conflict_is_discarded`,
+  `a_merge_in_progress_is_refused_with_git_not_run` (the command log shows no checkout),
+  `the_recheck_refuses_head_the_commit_or_the_name_moved_and_nothing_else`. (2) The name —
+  `BranchName::{Free, Refused(NameRefusal)}`, `NameRefusal::{AtBrace, Invalid, Taken,
+  InsideABranch, HoldsABranch}`, worded by the dialog (`cairn_ui::name_refusal`); M3 dismissed
+  and pinned by `a_name_is_taken_or_refused_as_gits_verbs_take_it`. (3) The dialog — Fork's three
+  choices in Fork's order, "Stash and reapply" greyed with "Comes with stashing.", ⚠ beside a
+  chosen Discard; with Discard chosen the press or Return builds `Confirmed` in
+  `create_branch_dialog.rs` from the consequence asked for the name shown
+  (`Request::CheckoutConsequence`, re-asked as the name changes) — the dialog on
+  `CONFIRMATION_SURFACES`; the operation-in-progress refusal in the refusal row
+  (`cairn_ui::discard_refusal`, "A merge is in progress. Finish or abort it first."); the dialog
+  kept open while its write runs and beneath a Git Error (which is first in the window's tree and
+  one overlay above, so its Escape is heard first — Freya fires global key listeners in document
+  order); `keys_inert` holds while it is up; "Local changes:" asks
+  `WorkingTreeStatus::has_tracked_changes`.
+- **Removed**: `ChangeLoss`, `ChangedKind`, `RemovedKind`, `LostChange`, `kept_untracked`,
+  `checkout_discarding_prompt` and its tests; `untracked_losses`, `held`, `Held`, `content_under`,
+  `first_difference`, `kinds_of`, `target_tree` in `ops/checkout.rs`; `reads/untracked.rs`,
+  `reads/change_lines.rs`; `CheckoutRefusal::NothingToDiscard`; the prediction's real-git tests
+  (`a_discarding_checkout_names_every_loss_and_then_loses_exactly_those`,
+  `an_untracked_file_in_the_way_is_named_overwritten`,
+  `a_discarding_checkout_refuses_what_changed_since_its_confirmation`,
+  `a_discarding_checkout_is_refused_where_it_cannot_count_the_loss`,
+  `untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost`,
+  `a_nested_repository_the_commit_holds_a_file_at_is_named_lost`,
+  `an_untracked_file_in_the_way_is_named_whatever_status_shows`); the four parts from the seal
+  guard's `CONSEQUENCE_TYPES`; `BranchName::Taken` and `BranchName::refusal(name)`;
+  `create_branch.rs`'s `confirm_arrived`, `kept_name`, `DISCARD_BEFORE_CHECKOUT_TITLE`,
+  `has_changes`, `dialogs`; the "Discard Changes and Check Out" caption. git-floor floors moved
+  to 150 and 216 (count − 1).
+- **Carried**: the Git Error's wording for a refusal found while running ("Couldn't Create
+  branch '<name>'", phase 19 — until then the Git Error carries the engine's sentence); the
+  commit box stays on `CONFIRMATION_SURFACES` until phase 18 takes it off.
 
 ## Phase 14's stopping rule, decided (2026-10-10)
 
@@ -1201,7 +1250,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 by the user's answers (2026-10-10); design pass done, rebuild planned (2026-10-10) |
 | 12 output once | done — C31 pinned; QA adjudicated, fix-now items fixed, full gate green |
 | 13 the commit engine asks git | built in packet mode, full gate green — the token hand-back (a′) and the stripspace parity fix by the coordinator's decisions (2026-10-10); QA the coordinator's |
-| 14 Create Branch | planned |
+| 14 Create Branch | built in packet mode after its stopping rule was decided (2026-10-10), full gate green; QA the coordinator's |
 | 15 the discard prompts | planned |
 | 16 one selection | planned |
 | 17 one file's diff | planned |

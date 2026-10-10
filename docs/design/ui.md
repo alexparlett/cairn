@@ -350,8 +350,12 @@ Choosing Discard and pressing it — or Return — is the confirmation, as in Fo
 deliberate and the press is the acknowledgement, so no second dialog asks again. It runs Fork's
 own command, a forced checkout of the new branch, which throws away staged and unstaged changes
 and any untracked file in the way; what it takes is git's to decide, so Cairn predicts none of
-it, and checks only that `HEAD`, the commit and the name are what they were. A Git Error, or a
-refusal, opens over the dialog, which stays as it was left beneath it. Checking out a branch is
+it, and checks only that `HEAD`, the commit and the name are what they were. A submodule's
+change git leaves in place, and Local Changes still lists it; a conflicted path git discards.
+While git is in the middle of a merge, a rebase, a cherry-pick, a revert or `git am`, which the
+forced checkout would abandon without a word, Discard is refused in the refusal row — "A merge
+is in progress. Finish or abort it first." — the button disabled while it is chosen. A Git
+Error, or a refusal, opens over the dialog, which stays as it was left beneath it. Checking out a branch is
 otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3.
 
 ### Activity

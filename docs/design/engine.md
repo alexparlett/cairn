@@ -108,7 +108,12 @@ implied.
   command, `git checkout -q --no-track -f -b <name> <oid> --` — destructive, the one
   write that discards a staged change, and with it any untracked file in the way, as
   git decides: its `Consequence` is a fixed sentence that predicts nothing, and its
-  re-check is that `HEAD`, the commit and the name are what they were. The name is
+  re-check is that `HEAD`, the commit and the name are what they were. git leaves a
+  submodule's change in place and discards a conflicted path, as Fork's command does; an
+  operation in progress — a merge, a rebase, a cherry-pick, a revert, `git am` — is
+  refused before git runs, since the forced checkout would abandon it without a word
+  (evidence `docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`).
+  The name is
   `-b`'s value, which git reads as the name whatever it begins with, and the commit
   its full id, the `--` after it saying it is no path. Spec:
   `docs/prd/staging-and-commit.md` R11.3.
@@ -250,9 +255,12 @@ the bytes hashed in process with no filter — a symlink as its target, as git s
 one — so an edit git's form does not show, a line ending alone, or a `chmod` still
 refuses it (`docs/prd/staging-and-commit.md`
 R3.9). Creating a branch asks one more: whether git takes a name for a new branch,
-exactly as `git branch` and `git checkout -b` take it — including a name in `@{-N}`'s
-form, which `git check-ref-format --branch` resolves to another branch's name — so the
-dialog refuses, before anything runs, exactly the names git would (R11.3). A commit asks two: `git
+exactly as `git branch` and `git checkout -b` take it: `git check-ref-format --branch`,
+which resolves a name in `@{-N}`'s form to another branch's exactly as both verbs do, where
+`check-ref-format refs/heads/<name>` would take `-x` and `HEAD`, which both refuse; a name
+holding `@{` is refused before git is asked, and a name a branch has, or one a branch's
+folder holds, is looked up — so the dialog refuses, before anything runs, exactly the
+names git would (R11.3). A commit asks two: `git
 stripspace`, given a merge's, cherry-pick's or revert's message on stdin, so the draft is
 what git's own editor session would leave under the repository's `commit.cleanup` and
 comment character — comment lines gone under `strip`, kept under `whitespace`, the message as

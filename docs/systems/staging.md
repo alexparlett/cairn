@@ -96,47 +96,53 @@ is pinned against real git on the host's git and, through
   `a_name_git_refuses_is_refused_with_its_reason_and_nothing_written`,
   `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
   everything again after it, however it ended. Whether git takes a name is asked first, by
-  `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), git's
-  reason kept for a name it refuses — a name holding `@{` refused before git is asked, "A
-  branch name can't contain '@{'" (the user's decision F, 2026-10-09;
-  `a_name_holding_at_brace_is_refused_in_cairns_words`) — then the ref, each proper prefix of it and the namespace
-  under it looked up by gix, for a name a branch has or one a branch's directory holds, refused
-  in git's words (`a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`) — and
-  the read writes nothing
+  `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), the
+  oracle `git branch` and `git checkout -b` agree with: both verbs resolve a name in `@{-N}`'s
+  form to the previous branch's exactly as it does, where `git check-ref-format
+  refs/heads/<name>` would take `-x` and `HEAD`, which both refuse
+  (`a_name_is_taken_or_refused_as_gits_verbs_take_it`, on the host's git and both floors) — a
+  name holding `@{` refused before git is asked (the user's decision F, 2026-10-09;
+  `a_name_holding_at_brace_is_refused_in_cairns_words`), then the ref, each proper prefix of it
+  and the namespace under it looked up by gix, for a name a branch has or one a branch's
+  directory holds (`a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`). The
+  answer is typed — `BranchName::Free`, or `BranchName::Refused` with a `NameRefusal`: `AtBrace`,
+  `Invalid` with git's reason, `Taken`, `InsideABranch` or `HoldsABranch` with the branch it
+  clashes with — and worded by the dialog (`cairn_ui::name_refusal`); the read writes nothing
   (`a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing`).
 - **A branch checked out as it is created**, keeping the changes ("Don't change"), is `git
   checkout -q -b <name> <commit> --`: the changes carried over, or git refusing where one would
   be overwritten — its words the failure's — and then no branch is made
   (`a_kept_checkout_carries_the_changes_or_is_refused_by_git_writing_nothing`).
-- **A branch checked out discarding the changes** ("Discard", the user's decision 3) is the one
-  operation that discards a staged change — R3.6's stated exception. Its
-  `Consequence::CheckoutDiscarding` (`ops::checkout_discarding_consequence`) names the branch,
-  the commit, `HEAD`, every tracked path with a staged or an unstaged change (a rename's source
-  too), each with its kind, its index entry and its bytes on disk, and its staged and unstaged
-  lines together as git's numstat counts them (`reads::change_lines`: `git diff-index --cached
-  --numstat` and `git diff-files --numstat`); what `checkout -f` does to the untracked files,
-  read from `git ls-files --others --exclude-standard` (`reads::untracked`, so
-  `status.showUntrackedFiles=no` hides nothing) and each path's every prefix looked up in the
-  commit's tree: a file at the same path is overwritten, by its size; a directory where the
-  commit holds a file is removed with every untracked file under it, and a nested repository
-  where the commit holds anything is removed whole (`ChangeLoss::Removed`, its files and bytes
-  counted on disk); and how many untracked files stay. The prompt (the user's decision A,
-  2026-10-09) names the changed files as the files prompt does, then, in a sentence of its own,
-  each directory and nested repository deleted by its path — "Deleted because the branch has a
-  file there: folder d/ (4 untracked files) and repository vendor/lib/ with its history" — the
-  first three named and the rest counted; its title is "Discard changes", its button "Discard
-  Changes and Check Out" (`a_directory_or_a_nested_repository_in_the_way_is_named_lost`). It is
-  refused before any prompt during a merge, rebase, `git am`, cherry-pick or revert, for a
-  conflicted path and for a submodule's change (`a_discarding_checkout_is_refused_where_it_cannot_count_the_loss`),
-  computed again and compared before git runs, any difference refusing with the path it moved
-  at (`a_discarding_checkout_refuses_what_changed_since_its_confirmation`), and its run loses
-  exactly what it named (`a_discarding_checkout_names_every_loss_and_then_loses_exactly_those`,
-  `an_untracked_file_in_the_way_is_named_overwritten`,
-  `an_untracked_file_in_the_way_is_named_whatever_status_shows`,
-  `untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost`,
-  `a_nested_repository_the_commit_holds_a_file_at_is_named_lost`). An ignored file at a path
-  the commit holds, and an ignored directory where it holds a file, are overwritten or removed
-  by any checkout, kept or discarding, as the user's own `git checkout` does: not counted.
+- **A branch checked out discarding the changes** ("Discard") is Fork's own command, `git
+  checkout -q --no-track -f -b <name> <commit> --` (observed in Fork's Activity Manager, with
+  Cairn's `-q` and `--`; the user's decisions of 2026-10-10), the one operation that discards a
+  staged change — R3.6's stated exception. It predicts nothing of what git deletes: its
+  `Consequence::CheckoutDiscarding` (`ops::checkout_discarding_consequence`) is the branch, the
+  commit and `HEAD`, its prompt a fixed sentence naming no file — "Discard local changes and any
+  untracked files in the way, then check out topic at 1a2b3c4. You can't undo this action." —
+  and it runs no `git` and reads no working tree. git decides, and leaves exactly what Fork's own
+  command leaves (`a_discarding_checkout_leaves_what_forks_command_leaves`, against Fork's
+  command run on an identical fixture): staged and unstaged changes and a staged new file gone,
+  an untracked file at a path the commit holds overwritten, an untracked file it holds nothing
+  at kept, no upstream set. Over a submodule's change it runs as Fork's does, and git leaves the
+  submodule's change in place — its checkout on the moved commit, the edits inside it, and a
+  staged change of its commit listed again as unstaged — while it discards the rest; over a
+  conflicted path with no operation in progress git discards the conflict
+  (`a_submodules_change_survives_the_discard_and_a_conflict_is_discarded`; the user's decision
+  on phase 14's stopping rule, evidence
+  `docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`). During a merge,
+  a rebase, a cherry-pick, a revert or `git am` it is refused before git runs —
+  `CheckoutRefusal::InProgress`, both when the consequence is read and again before the run —
+  since git's forced checkout abandons the operation without a word, a merge's `MERGE_HEAD` and
+  `MERGE_MSG` removed (`a_merge_in_progress_is_refused_with_git_not_run`). Its re-check, just
+  before git runs, is that `HEAD` is still the commit it was, the commit can still be read, and
+  the name is still free (`Repository::branch_name`) — `Error::CheckoutChangedSinceConfirmed`
+  with `CheckoutMoved::Head`, `Commit` or `Name`, writing nothing — and nothing else: a file
+  edited after the press is discarded with the rest
+  (`the_recheck_refuses_head_the_commit_or_the_name_moved_and_nothing_else`). Its argv is pinned
+  by the recording stub (`the_checkouts_run_as_r11_names_them`). An ignored file at a path the
+  commit holds, and an ignored directory where it holds a file, are overwritten or removed by any
+  checkout, kept or discarding, as the user's own `git checkout` does.
 - **Every path is literal**: a file named `*.txt` is staged alone, and `git clean`
   of `st*` leaves `stx` (`every_path_is_read_literally_never_as_a_pattern`).
 - **Every verb is silent on success**, so one left running by a second close, its

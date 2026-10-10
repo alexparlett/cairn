@@ -3,6 +3,24 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 14 built, Create Branch as Fork runs it (packet mode)
+
+What shipped is state.md's "Phase 14". Notes for the record:
+
+- **Decided here**: the consequence is keyed by the name it was asked for, and asked again as
+  the name changes while Discard is chosen, so the token a press builds is always for the name
+  shown; the dialog stays open, its button disabled, while its write runs, and closes when it is
+  done (a second press asks nothing); a name re-check that is no longer free refuses with
+  `CheckoutMoved::Name`; `Cancel` is ignored while a create's Git Error is over the dialog.
+- **Found on the way**: Freya's `Popup` consumes Escape and fires global key listeners in
+  document order (`freya-core/tests/global_key_order.rs` in the vendored fork), so a Git Error
+  drawn after the dialog never heard Escape; it is placed first in the window's tree, wrapped one
+  overlay higher (`Layer::Overlay`) so it still paints above. Pinned by
+  `a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was`.
+- **Fork's command as the oracle**: `a_discarding_checkout_leaves_what_forks_command_leaves` runs
+  Fork's own `git checkout --no-track -b <name> <commit> --force` on an identical fixture and
+  compares the status, every working-tree file's bytes and the branch's upstream.
+
 ## 2026-10-10 — phase 14 stopped on its rule, then decided
 
 The forced checkout probed on the host and both floors (evidence

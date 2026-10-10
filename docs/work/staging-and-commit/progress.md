@@ -3,6 +3,23 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 17 built (packet mode)
+
+What shipped is state.md's "Phase 17". Notes for the record:
+
+- **Found on the way**: the UI-thread guard's waiting roster names `scope` (`std::thread::scope`),
+  and it reads `cairn-ui` too, test modules included, so no binding there may be called `scope`
+  (`chord_heard_in`'s arm binds `heard`, the pin's grouping `where_heard`); `window::tests::press_chord`
+  sent a key down alone, so a chord with a modifier left the window's held keys holding it and
+  the next row press resolved as Ctrl-press — it now lets the keys go after, as a keyboard does;
+  and a test's click moves no pointer, so the gesture's "hide until the pointer moves" kept a
+  second selection's actions hidden where it ended on the spot of the first act — the C26 window
+  test ends its second drag a few pixels across.
+- **Phase 16's carries**: #3 (on_the_diff's together branch and its overclaiming comment) and #5
+  (the togethering effect and the root `CLAUDE.md` sentence on it) went with the files drawn
+  together.
+- **Stopping rules**: neither triggered (state.md's "Phase 17").
+
 ## 2026-10-10 — phase 16's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p16/adjudication.md`): FIX NOW 1, 4 and 6; CARRY 3 and 5 to

@@ -1506,7 +1506,9 @@ once (`Asking::Working`), and a changes query supersedes it with the rest
 `a_setting_asks_the_working_path_when_local_changes_is_shown`). A working-tree answer is
 kept only when it names exactly the query the path chosen is asked as now
 (`DiffState::working_arrived`).
-`DiffState` records which holds it (`file_in_lane`, and the expansion's own), and the one
+`DiffState` records which holds it as one value (`lane`, a `LaneHolder` — `File`, `Working` or
+`Expansion` — taken by `take_lane` and let go of by its holder alone; staging-and-commit phase
+17, the code review's H1), and the one
 that lost it while its answer was awaited is asked again, whole, as its tab is shown: the
 Changes tab's effect asks `reask_file` when `file_needs_asking`, the Commit tab's body
 asks `reask_expansion` when `expansion_needs_asking`, so neither waits for good on an
@@ -2163,7 +2165,9 @@ As-built for PRD R8, decision D5 and staging-and-commit R7.2-R7.3
 (`crates/cairn-ui/src/accelerators.rs`). Every shortcut is an `Action` mapped by
 `accelerators::chords(action, os)` to a list of distinct `Chord`s per `Os` (`Chords`, in the
 table's order, empty for an action Fork binds none) — macOS, and Linux for every other
-platform — and by `accelerators::heard_in(action)` to the `Scope` it is heard in: `Window`,
+platform — and by `accelerators::heard_in(action)` to the `Scope` it is heard in, each chord
+in its action's scope but the stage's bare Return, heard from Local Changes' file lists alone
+(`accelerators::chord_heard_in(action, chord)`, which the resolver reads): `Window`,
 wherever focus is; `Detail`, only while focus is inside the detail pane or Local Changes'
 diff; `LocalChanges`, only while a file list or the diff in Local Changes has focus;
 `LocalChangesLists`, only while Unstaged or Staged has focus; `CommitBox`, only while the
@@ -2196,8 +2200,8 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | select a range of paths in Local Changes' lists | Shift+press | Shift+press | where the press lands |
 | extend Local Changes' list selection up / down | Shift+↑ / Shift+↓ | Shift+↑ / Shift+↓ | in Local Changes' lists |
 | Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
-| stage or unstage the selection | Enter, Ctrl+Shift+S | Return, ⌘S | in Local Changes' lists and diff |
-| stage all or unstage all | Ctrl+Alt+Shift+S; Alt+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
+| stage or unstage the selection | Enter; Ctrl+S, Ctrl+Shift+S | Return; ⌘S | Enter and Return in Local Changes' lists alone; the rest in its lists and diff |
+| stage all or unstage all | Ctrl+Alt+Shift+S; Shift+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
 | discard the selection | Backspace, Delete, Ctrl+Shift+D | ⌫, ⇧⌘D | in Local Changes' lists and diff |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
 | Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |
@@ -2213,15 +2217,19 @@ focus, as Fork does (the detail pane, above). No collapse chord: the user's deci
 is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md` ⌘R and
 `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows row, as it
 does for every chord here, and F5 is bound by no Linux desktop nor by any other action. Fork
-keeps alternates for staging — stage on Return and ⌘S, discard on Backspace, Delete and
-Ctrl+Shift+D — so an action holds a list. No chord is listed twice on one platform, within
-one list or across two actions, whatever their scopes; and every chord holds a modifier but a
-function key's (F5) and, in `LocalChanges` alone, a bare Enter, Backspace or Delete: an
-unmodified key belongs to whatever has focus, a function key types nothing anywhere, and
-Local Changes' lists and diff are the one scope no text field is in
-(`chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`, which also
-shows a bare Enter in any other scope, a bare letter, a bare press, a chord listed twice for
-one action and one shared by two actions each failing it).
+keeps alternates for staging — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
+discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. In Fork's diff Return
+does nothing and ⌘S or Ctrl+S stages the whole selection (observed in Fork for Windows 2.21.1,
+`lc3`, `lc4`; staging-and-commit R7.3 as amended 2026-10-10), so the stage's bare Return is
+heard from the file lists alone. No chord is listed twice on one platform, within one list or
+across two actions, whatever their scopes; and every chord holds a modifier but a function
+key's (F5) and, in `LocalChanges` alone, a bare Backspace or Delete, and in
+`LocalChangesLists` alone a bare Enter: an unmodified key belongs to whatever has focus, a
+function key types nothing anywhere, and Local Changes' lists and diff are scopes no text
+field is in (`chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`,
+which reads a row per action and scope its chords are heard in, and also shows the bare Enter
+heard on the diff, each bare key in any scope that does not admit it, a bare letter, a bare
+press, a chord listed twice for one action and one shared by two actions each failing it).
 
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
 action a key press is in a scope, or `accelerators::is_chord(event, own)` whether it is a

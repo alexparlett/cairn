@@ -41,7 +41,9 @@ built in packet mode after its stopping rule was decided (2026-10-10), full gate
 "Phase 14" below. QA is the coordinator's. Phase 15 (the discard prompts) built in packet mode after
 the user's answers to its six questions (2026-10-10), full gate green; see "Phase 15" below. QA
 is the coordinator's. Phase 16 (one selection) built in packet mode, full gate green, neither
-stopping rule triggered; see "Phase 16" below. QA is the coordinator's.**
+stopping rule triggered; see "Phase 16" below. QA is the coordinator's. Phase 17 (one file's
+diff) built in packet mode, full gate green, neither stopping rule triggered, nothing for the
+user's sign-off; see "Phase 17" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -85,6 +87,99 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 17 of the rebuild, one file's diff (2026-10-10)
+
+- **Built** (`phase-17-one-file-diff.md`, C16, C19, C25's diff half, C26): (1) one file — the
+  diff is the primary's alone however many paths are selected, the file clicked first (`lc2`),
+  with everything one file's diff has, its bar the primary's own and counting nothing (the
+  user's answer, 2); "No file selected" with none (`local_changes_pane::NO_FILE_SELECTED`,
+  replacing `NO_PATH_CHOSEN`). (2) H1 — who holds the file-diff lane is one value,
+  `DiffState::lane: Option<LaneHolder>` (`File`, `Working`, `Expansion`), taken by
+  `take_lane` and let go of by its holder alone (`let_go_of_lane`), in place of `file_in_lane`,
+  `working_in_lane`, `Opening::in_lane` and `Together::in_lane` and their cross-resets. (3) The
+  chords — Linux's stage gains Ctrl+S (Enter, Ctrl+S, Ctrl+Shift+S; macOS Return, ⌘S); the
+  stage's bare Return is heard from the file lists alone (`accelerators::chord_heard_in`, a rule
+  of the table read by the resolver: a bare Enter of `Scope::LocalChanges` is heard in
+  `Scope::LocalChangesLists`), Backspace and Delete from both; the lists hear the narrowed
+  Return through their own key handler; from the diff with no lines selected Ctrl+S (⌘S)
+  stages the whole selection through `selected_rows` (on_the_diff's together branch and its
+  "each one the selection holds" comment gone — phase 16's carry #3). The pin reads a row per
+  action and scope its chords are heard in, admits Backspace and Delete in `LocalChanges`
+  (`LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2]`) and Enter in `LocalChangesLists` alone
+  (`LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1]`), and shows the bare Enter heard on the diff
+  refused (`pin_violations(&enter_in_the_diff)`); the guard pins both declarations, both
+  `contains` reads and the new rule example, its self-test refusing Enter back in the
+  list-and-diff keys, a second lists key, the lists' keys redeclared, the rule not reading them
+  and the Enter example dropped; the root `CLAUDE.md` modifier invariant says the same, in the
+  same commit. (4) The line selection keeps to its text — `ShownDiff::keyed(&asked)` hashes
+  the question (the `FileQuery`: path, side, options), the context and the whole answer
+  (paths, modes, ids, both sides' lines, the exact and whitespace-ignoring ranges) on the diff
+  thread for every file answer, `ShownDiff::content` the number; `LineDrag` records the content
+  (in place of the answer number), the gesture is handed it, `GestureAct::content` carries it,
+  `on_gesture` refuses an act whose content is not drawn; `session::apply`'s `lines_follow`
+  lets a finished selection go when a re-read of the same question draws other content, and
+  `LineDrag::cleared_by_a_change` makes the bar say `cairn_ui::SELECTION_CLEARED` ("The file
+  changed — line selection cleared.", `DiffHeader::said`) until the next key or press anywhere
+  in the view (the pane's global listeners, `quieten`); another primary, or the same at other
+  options, lets the selection go silently (`diff_actions::reset_local_view`, `ask_again`); a
+  drag in progress is still cancelled on focus lost. `GestureAct::file` and every phase's
+  `file` went (one file only).
+- **Pinned**: `a_diffs_content_is_its_question_and_every_byte_of_its_answer` (model);
+  `a_selection_belongs_to_the_text_it_was_made_over` (ui unit),
+  `a_selection_survives_a_redraw_of_the_same_text_and_no_other` (C26 headless) and the existing
+  C19 gesture tests rekeyed (`after_an_action_the_actions_follow_the_new_rows_or_none`,
+  `a_view_handed_no_gesture_draws_no_action` — the tabs draw no action — and the 10,000-line
+  twin); in the window `several_paths_selected_show_the_primarys_diff_and_its_chord_stages_them_all`
+  (C25's diff half: the file clicked first, nothing asked for the path added, no count, Return
+  in the diff inert, Ctrl+S staging a.rs and c.rs, the selection moved to b.rs and its diff
+  asked), `a_line_selection_is_kept_across_a_refresh_of_the_same_text_and_cleared_once_otherwise`
+  (C26 through the window's refresh: the status read again asks the primary again, the old diff
+  drawn meanwhile, the same text keeping the selection and the act staging exactly line 4, other
+  text clearing it with the notice once, gone at the next key),
+  `an_act_made_under_an_answer_no_longer_drawn_asks_nothing` rekeyed, and
+  `a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen` now pinning "No file
+  selected"; the table's `the_table_is_forks_chords_and_no_others` (Ctrl+S, the Return's
+  narrowed scope), `every_chord_resolves_to_its_action_in_its_scope_only` (per chord),
+  `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks` (Return inert in the diff's scope,
+  Ctrl+S staging there), `a_fields_own_scope_holds_no_bare_chord` (per chord) and the pin;
+  the guards' `the_accelerator_table_holds_data_and_resolution_only` and
+  `the_pin_placement_check_catches_the_shapes_it_claims`. The lane's behaviour stays pinned by
+  `diff_state`'s and `working.rs`'s existing lane tests.
+- **Removed**: `diff_state/together.rs` (690 lines) whole; `cairn-ui`'s `stacked_diff.rs` (297)
+  whole and `Expansion::take_all`, which only it used; `Request::Together`, `Update::Together`,
+  `DiffQuery::Together`, `TogetherQuery`, `TogetherFile`, `TogetherOutcome`, `TogetherEnded`,
+  `together_diffs`, the diff lane's together arm and `TOGETHER_PAGE_FILES`, the routing rows;
+  `local_changes_pane.rs`'s `together_wanted`, `draw_together`, `together_side` and the
+  togethering `use_side_effect` (phase 16's carry #5); the four lane booleans; `working.rs`'s
+  `answered`, `previous_answered`, `working_drawn` and `DiffState::answers`; the gesture's
+  `Places` and `Source` (one diff only); the tests that pinned files drawn together
+  (`the_chords_over_files_drawn_together_take_only_the_files_drawn`,
+  `a_selection_over_files_drawn_together_is_nothing_once_a_page_replaces_its_diff`,
+  `several_paths_selected_draw_their_diffs_together`, `files_drawn_together_build_one_viewport`,
+  `files_drawn_together_each_take_their_own_gesture`, `together.rs`'s four,
+  `paths_drawn_together_are_answered_by_place_under_their_budget`,
+  `paths_drawn_together_are_each_read_as_their_own_side`); `window_check`'s "a thousand files
+  drawn together" measures the primary's diff drawn after a thousand selected instead; and the
+  root `CLAUDE.md`'s per-frame prose on the files drawn together, with phase 16's carried
+  sentence on `together_wanted`. Net: the code commit −1,519 lines (1,134 in, 2,653 out).
+- **Decided here**: (a) the narrowed Return is a rule of the table (`chord_heard_in`) rather
+  than a scope split, so one action keeps one list of chords and one scope, the rule naming its
+  one exception; (b) every file answer is keyed, the Changes tab's too — one file, bounded by
+  R2.6's ceilings, a second pass on the diff thread; (c) the content hashes the whole answer,
+  not the rows drawn, so a byte changed outside the context clears the selection too ("the
+  file changed" — conservative, never a stale selection); the intra-line highlights and the
+  function context are left out, being drawn from the text; (d) the notice is said only when the
+  selection was live over the diff drawn just before and the new answer differs — never for
+  another path or other options, which let go silently; (e) the test chord helper presses a
+  chord heard in its action's own scope and lets its keys go, as a keyboard does
+  (`window::tests::press_chord`).
+- **Stopping rules, neither triggered**: the bare-key scope narrowed with a guard that fails
+  toward fewer bare chords (both declarations pinned exactly, Enter refused back in the diff's
+  scope); Ctrl+S was no chord of another action on Linux (the pin's "two actions sharing a
+  chord" check passes over the whole table).
+- **Carried**: none new. **To teardown**: H2 (one pointer-drag primitive), already on the one list.
+  QA is the coordinator's (not run here).
 
 ## Phase 16 of the rebuild, one selection (2026-10-10)
 
@@ -889,6 +984,22 @@ Phase 07 (`docs/systems/local-changes.md`, "Acting on files"):
   (`list()` is `Some`), so nothing is acted on; the follow resets the selection when it moves or
   lets go of the path chosen.
 
+Phase 17 (`docs/systems/local-changes.md`, "Choosing a path" and "The diff's staging gesture";
+supersedes phase 08's files drawn together below — `StackedDiff`, `Request::Together` and its
+kin, `DiffState::together*`, `working_drawn` and `GestureAct::file` are gone):
+
+- **`cairn_model::ShownDiff::keyed(self, asked: &impl Hash) -> Self`** and `content() -> u64`;
+  `Hash` derived on `ChangedFile`, `ChangeStatus`, `ChangedRange`, `TextDiff`, `Context`,
+  `SizeLimit`.
+- **`cairn_ui`**: `Gesture::new(side, content: u64, lines, on_act)`; `GestureAct { verb,
+  selection, content, chunk }`; `LineDrag::selected(content) -> Option<&Selection>`,
+  `outlived_by(content)`, `cleared_by_a_change()`, `says_cleared()`; `ModeRow::of(file, side,
+  content, on_act)`; `SELECTION_CLEARED`; `DiffHeader::said(Option<&'static str>)`;
+  `accelerators::chord_heard_in(action, chord) -> Scope`.
+- **Window**: `DiffState`'s private `lane: Option<LaneHolder>`, `take_lane`, `let_go_of_lane`,
+  `holds_lane`; `FileQuery`, `FileTarget`, `DiffOptions`, `Comparison` derive `Hash`;
+  `local_changes_pane::NO_FILE_SELECTED`; `session`'s `lines_follow`.
+
 Phase 08 (`docs/systems/local-changes.md`, "Several paths, drawn together" and "The diff's
 staging gesture"):
 
@@ -1458,7 +1569,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 14 Create Branch | built in packet mode after its stopping rule was decided (2026-10-10), full gate green; QA the coordinator's |
 | 15 the discard prompts | built in packet mode after the user's answers (2026-10-10), QA fixes applied, full gate green |
 | 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
-| 17 one file's diff | planned |
+| 17 one file's diff | built in packet mode, neither stopping rule triggered, full gate green; QA the coordinator's |
 | 18 the commit box | planned |
 | 19 one home for each message | planned — F7 decided (2026-10-10) |
 | 20 the Activity Manager | planned |

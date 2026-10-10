@@ -119,6 +119,15 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   keeps it until the skip or Close, and the skip runs with it. A token comes back only when git
   wrote nothing. Two `CONFIRMED_HOLDERS` rows — the engine's error and the window's Git Error
   state, each excused by file and type — are added with their guard rows where they are built.)
+  (Decided 2026-10-10, the coordinator's ruling on phase 13's stopping rule, as (a′): "git wrote
+  nothing" is read as "the amend was not made" — after the reap `HEAD` is still the confirmed
+  commit, on git's failure alone, never on a refusal before git ran or a cancel. What git writes
+  before a `pre-commit` hook runs — the index rewritten with refreshed stat data and its cache
+  tree, unreferenced tree objects — is git's own bookkeeping, done on every hook-failed commit or
+  amend on every git (reproduced on 2.30.9 and 2.56.0), and outside what the `Consequence` names
+  (`HEAD`, the remote ref that has it, the reflog fact); the skip's run re-checks the
+  consequence. Built as `Error::AmendNotMade { failure, unspent }`, its `CONFIRMED_HOLDERS` row,
+  and `the_engine_error_holds_a_token_only_as_an_unspent_amend`.)
 - R1.2 A `Confirmed` carries a `Consequence`, an engine-computed `cairn-model`
   value naming what the operation will destroy — per operation: the paths, the
   lines per modified path and the bytes per untracked file (Fork's wording, L8),
@@ -419,6 +428,18 @@ literally.
   `core.commentChar` itself, its input `MERGE_MSG`'s bytes on stdin — a new read in `reads/`,
   approved by the user's choice of C2, a named function with its own guard row (C32), writing
   nothing and running nothing. What the box then shows is what is committed under R6.1's rules.
+  (Amended 2026-10-10, the coordinator's ruling on phase 13's parity finding: `--strip-comments`
+  alone is git's editor only under the default cleanup with an explicit comment character, and a
+  divergence from git is a bug. The pre-fill is what git's own editor session leaves of the
+  message under the repository's settings — `commit.cleanup` and the comment character read with
+  `git config` in query form (R6.11): unset, `default` or `strip`, comments stripped; `whitespace`,
+  whitespace only; `verbatim`, the message as written; `scissors`, cut at git's scissors line
+  (its comment string asked of `git stripspace --comment-lines`) then whitespace only; and under
+  `core.commentChar=auto`, whitespace only, since the character git picks starts no line of the
+  message — each checked against `git commit` with an editor on the host's git and both floors.
+  The template git adds around the message in an editor session (the help lines, the status) is
+  not the message's. C32's "exactly as `git stripspace --strip-comments` leaves it" reads as
+  "exactly as git's editor leaves it".)
 - R6.11 The settings a commit and an amend depend on are git's answers (added 2026-10-10, the
   redesign's git-parity fixes, `review-code-engine.md` M4): `core.logAllRefUpdates`, for R6.4's
   reflog fact, and `i18n.commitEncoding`, for R6.1's refusal, are read with `git config` in

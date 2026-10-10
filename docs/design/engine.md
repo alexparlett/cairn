@@ -252,10 +252,13 @@ refuses it (`docs/prd/staging-and-commit.md`
 R3.9). Creating a branch asks one more: whether git takes a name for a new branch,
 exactly as `git branch` and `git checkout -b` take it — including a name in `@{-N}`'s
 form, which `git check-ref-format --branch` resolves to another branch's name — so the
-dialog refuses, before anything runs, exactly the names git would (R11.3). A commit asks two: `git stripspace
---strip-comments`, given a merge's, cherry-pick's or revert's message on stdin, so
-the draft is what git's own editor would leave — its comment lines gone, git reading
-`core.commentChar` itself — and what is shown is what is committed (R6.10); and the
+dialog refuses, before anything runs, exactly the names git would (R11.3). A commit asks two: `git
+stripspace`, given a merge's, cherry-pick's or revert's message on stdin, so the draft is
+what git's own editor session would leave under the repository's `commit.cleanup` and
+comment character — comment lines gone under `strip`, kept under `whitespace`, the message as
+written under `verbatim`, cut at git's scissors line under `scissors`, and no line a comment
+under `core.commentChar=auto` — git reading the comment character itself, and what is shown
+is what is committed (R6.10); and the
 settings the commit and an amend depend on, `core.logAllRefUpdates` and
 `i18n.commitEncoding`, through the same `git config` query fetch's refspec check
 makes, since gix's reading of a linked worktree's `includeIf`, the system file and
@@ -319,7 +322,7 @@ read is `git diff-files` (the index against the working tree) or, for a file git
 does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
 the top of the working tree (`./-` for `-`) — one of the four porcelain modes
 a read runs (the others are `git config` in query form, `git stash show` in raw
-form and `git stripspace --strip-comments`, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
+form and `git stripspace`, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
 diff (`git diff-index --cached`) reads only objects; a staged rename or copy is

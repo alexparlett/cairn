@@ -138,11 +138,13 @@ WARNING tier:
    the promisor holds, since those gits ignore `GIT_NO_LAZY_FETCH` (2.30 and
    2.31 list no untracked half, so have no untracked file to pair); 2.44 and
    later fail closed. The fourth (the user's decision of 2026-10-10, C2): `git
-   stripspace --strip-comments`, the message on stdin, built only by
-   `reads::stripspace`, a merge's, cherry-pick's or revert's `MERGE_MSG` cleaned
-   as git's editor cleans it, git reading `core.commentChar`; it reads its
-   stdin and the configuration and nothing else. Any other option (`-s`,
-   `--comment-lines`), or `stripspace` built anywhere else, is a finding. All
+   stripspace` with `--strip-comments`, `--comment-lines` or no option, the
+   message on stdin, built only in `reads/stripspace.rs`, a merge's,
+   cherry-pick's or revert's `MERGE_MSG` as git's editor session leaves it under
+   `commit.cleanup` and the comment character, git reading the comment
+   character; it reads its stdin and the configuration and nothing else. Any
+   other option (a short spelling, `--verbose`), or `stripspace` built anywhere
+   else, is a finding. All
    four are pinned by `the_porcelain_reads_are_the_named_queries` — the verbs,
    the stash read's options against `STASH_SHOW_OPTIONS` (and
    `STASH_SHOW_REQUIRED` present), the stripspace read's against

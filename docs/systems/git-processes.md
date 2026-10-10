@@ -118,9 +118,10 @@ crates/cairn-git/src/
     hash_object.rs  hash_object — `git hash-object --path=<p> -- <p>`, never `-w`: a
                     working-tree file's id in git's form, for a discard's stale check
                     (docs/systems/staging.md)
-    stripspace.rs   stripspace — `git stripspace --strip-comments`, the message on stdin: a
-                    merge's, cherry-pick's or revert's `MERGE_MSG` cleaned as git's editor
-                    cleans it, git reading `core.commentChar` (docs/systems/staging.md)
+    stripspace.rs   as_the_editor_leaves — `git stripspace` (`--strip-comments`,
+                    `--comment-lines` or no option), the message on stdin: a merge's,
+                    cherry-pick's or revert's `MERGE_MSG` as git's editor session leaves it under
+                    `commit.cleanup` and the comment character (docs/systems/staging.md)
     branch_name.rs  branch_name — `git check-ref-format --branch <name>`, whether git takes a
                     name for a new branch, and its reason when it refuses one (Create Branch)
     change_lines.rs change_lines — `git diff-index --cached --numstat -z <HEAD>` and `git
@@ -338,9 +339,10 @@ Why each variable is there, with its evidence, is beside it in
   query form only, in `reads/config.rs`, which asks git what a fetch will read
   for fetch's refspec check, so the check decides on exactly what the fetch's
   own git reads (2026-10-04), and what a commit and an amend will — `i18n.commitEncoding`
-  and `core.logAllRefUpdates` (2026-10-10); and `git stripspace --strip-comments`, the
-  message on stdin, in `reads/stripspace.rs`, a merge's message cleaned as git's editor
-  cleans it, git reading its comment character (2026-10-10); and `git stash show --raw -z --no-abbrev
+  and `core.logAllRefUpdates`, and `commit.cleanup` and the comment character
+  (2026-10-10); and `git stripspace` with `--strip-comments`, `--comment-lines` or none, the
+  message on stdin, in `reads/stripspace.rs`, a merge's message as git's editor session
+  leaves it under `commit.cleanup`, git reading its comment character (2026-10-10); and `git stash show --raw -z --no-abbrev
   --no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash
   commit>`, in `reads/stash_changes.rs`, which lists what a stash changed with
   its untracked files paired as git pairs them, git reading
@@ -1465,8 +1467,8 @@ which is a length of time, is waited out.
   refresh's refs arrive — is a job of the lane's (`LocalJob::CommitReads`), read after
   the writes asked before it, so a commit's message is among the recent ones once it has
   ended: the operation in progress, the message git prepared for the commit that concludes a
-  merge, a cherry-pick or a revert in progress — `MERGE_MSG` through `git stripspace
-  --strip-comments` — and the last ten messages, each answer or its failure, as
+  merge, a cherry-pick or a revert in progress — `MERGE_MSG` as git's editor session leaves it,
+  through `git stripspace` — and the last ten messages, each answer or its failure, as
   `Update::CommitReads`. `Request::Amending { status }` —
   asked while Amend is ticked, over each status that arrives — reads what an amend would
   replace (`ops::amend_consequence`), the message of the commit it names, and amend's

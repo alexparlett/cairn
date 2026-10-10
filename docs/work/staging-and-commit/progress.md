@@ -3,6 +3,24 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 13, the coordinator's decisions applied (packet mode)
+
+- **Token hand-back (a′)**: built as ruled — `Error::AmendNotMade { failure, unspent }`, git's
+  failure with `HEAD` unmoved after the reap; the holder row and its pin
+  (`the_engine_error_holds_a_token_only_as_an_unspent_amend`, self-test
+  `the_engine_error_token_matcher_catches_the_shapes_it_claims`); the PRD's R1.1 records the
+  reading. Real-git pin on the host and both floors:
+  `a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends`.
+- **Stripspace parity**: git's rules from `git help commit` (`--cleanup`), `git help config`
+  (`core.commentChar`, `commit.cleanup`, `commit.status`) and git's `cleanup_message`,
+  `wt_status_locate_end` and `adjust_comment_line_char` as the oracle confirms them: under `auto`
+  the picked character starts no line, so nothing is a comment and no scissors line is found —
+  whitespace only. The oracle is `git -c commit.status=false commit` with `GIT_EDITOR=true`,
+  leaving out the template (help lines, status) a person removes by hand under `whitespace` and
+  `verbatim`. 18 settings × the host and both floors agree; no version difference.
+  `where_gits_editor_is_not_the_strip_of_comments_it_is_pinned` and
+  `merge_msg_is_cleaned_and_committed_as_gits_editor_leaves_it` replaced.
+
 ## 2026-10-10 — phase 13 built, the commit engine asks git (packet mode)
 
 Built on `feature/staging-and-commit` from d81f3ef. What shipped is state.md's "Phase 13". Notes

@@ -378,7 +378,8 @@ description. A commit made clears the draft; one that fails keeps it.
 is shown, and as each refresh's refs arrive while Local Changes is shown, the box asks its reads
 (`Request::CommitReads`, answered by `Update::CommitReads`): the operation in progress, the
 message git prepared for the commit that concludes a merge, a cherry-pick or a revert — its
-`MERGE_MSG` cleaned of git's commentary by `git stripspace --strip-comments` — and the last ten
+`MERGE_MSG` as git's own editor session would leave it under the repository's `commit.cleanup`
+and comment character — and the last ten
 messages — on the local lane, after the writes asked before them,
 numbered in the commit-box lane so the next ask supersedes the last. Nothing is read on the UI
 thread.
@@ -448,9 +449,10 @@ draft only where it still holds the message the commit took, so a draft typed wh
 kept; an amend unticks Amend.
 
 **An operation in progress** (R10.8, L25): with a merge, a single cherry-pick or a single
-revert, an empty draft is filled once per operation with git's `MERGE_MSG` cleaned of git's
-commentary as git's editor cleans it (R6.10: no `# Conflicts:` block, no scissors section), so
-what it shows is what is committed — the merge commit, or the pick or revert concluded; Amend is
+revert, an empty draft is filled once per operation with git's `MERGE_MSG` as git's own editor
+session would leave it under the repository's `commit.cleanup` and comment character (R6.10:
+under the default, no `# Conflicts:` block and no scissors section), so what it shows is what
+is committed — the merge commit, or the pick or revert concluded; Amend is
 disabled. During a rebase, `git am` or a sequence of picks or reverts the fields and the buttons
 are disabled and the box says "Committing is unavailable while a rebase is in progress."
 

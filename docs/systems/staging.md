@@ -335,21 +335,24 @@ snapshot says so, and a commit there is made on no branch, refused by nothing
 what `git status` says.
 
 **The message git prepared** for the commit that concludes a merge, a cherry-pick or a revert
-is `Repository::prepared_message`: `MERGE_MSG` cleaned of git's commentary by
-`reads::stripspace`, `git stripspace --strip-comments` with the message on stdin, run in the
-repository so git reads `core.commentChar` itself (R6.10, C32). Under the default cleanup
-and an explicit comment character, what it leaves is what `git commit` with an editor leaves
-— `# Conflicts:` gone, a scissors section gone, a `#123` line of the merge's own message
-dropped where `#` is the comment character and kept where `;` is — and what the box then
-commits is that, on git 2.30.9, 2.32.7 and the host's
-(`merge_msg_is_cleaned_and_committed_as_gits_editor_leaves_it`). It writes nothing and runs
-nothing (`the_stripspace_read_writes_nothing_and_runs_nothing`). Where git's editor is not
-`strip`'s cleaning, C32's strip is kept and the difference pinned
-(`where_gits_editor_is_not_the_strip_of_comments_it_is_pinned`): under `commit.cleanup=
-scissors` the editor keeps a comment-character line of the merge's own above the scissors
-line, under `whitespace` (and `verbatim`) it keeps `# Conflicts:`, and under
-`core.commentChar=auto` git's commit picks another comment character because a line starts
-with `#`, keeping `# Conflicts:`, where `stripspace` reads `auto` as `#`.
+is `Repository::prepared_message`: `MERGE_MSG` as git's own editor session would leave it under
+the repository's settings (R6.10, C32; `reads::as_the_editor_leaves`), `commit.cleanup` and
+the comment character read with `git config` in query form (`reads::commit_cleanup`,
+`reads::comment_char_is_auto`) and the cleaning done by `git stripspace`, the message on stdin,
+run in the repository so git reads the comment character itself: unset, `default` or `strip`,
+`--strip-comments`; `whitespace`, no option; `verbatim`, the message as written; `scissors`, cut
+at git's scissors line (`wt_status_locate_end`, the comment string asked of `git stripspace
+--comment-lines`, so `core.commentString` counts where git reads it) and then no option; and
+under `core.commentChar=auto`, no option for every mode but `verbatim`, since the character
+git's commit picks starts no line of the message. Every setting — each cleanup, unset and the
+five, under `#`, `;` and `auto` — leaves exactly what `git commit` with an editor leaves, and
+the box's `git commit -F -` of it stores the same, on git 2.30.9, 2.32.7 and the host's
+(`merge_msg_is_shown_and_committed_as_gits_editor_leaves_it_under_every_setting`, with
+`each_setting_shows_a_message_of_its_own` holding the settings apart). git's template around
+the message in an editor session — the help lines and the status, which under `whitespace`
+and `verbatim` a person removes by hand — is not the message's, and the oracle leaves it out
+(`commit.status=false`). It writes nothing and runs nothing
+(`the_stripspace_read_writes_nothing_and_runs_nothing`).
 
 **What the commit box reads** beside the verbs, each on a worker:
 `Repository::operation_in_progress` and, while one a commit concludes is in progress,
@@ -428,9 +431,13 @@ confirmed one — `HEAD` moved, a remote came to hold it, the reflog setting cha
 `an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed`);
 its `Performed` quotes the accepted prompt (R1.6,
 `an_amend_records_its_prompt_and_a_commit_invalidates_what_it_moves`). An amend git refused
-before amending — a hook failed — does not yet hand its unspent token back (R1.1's option
-(a)); the window's skip builds a new one from the same consequence (`AmendSkip`), until the
-token's return is settled.
+before amending — a hook failed, `HEAD` read unmoved after the reap — hands its token back
+unspent, `Error::AmendNotMade { failure, unspent }` (R1.1's option (a), as (a′)): git's index
+refresh and the tree objects it writes before a hook runs are its own bookkeeping, outside
+what the consequence names, and the skip's run re-checks it; a refusal before git ran or a
+cancel hands none back (`a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends`).
+The local lane lets it go for now: the window's skip builds a new token from the same
+consequence (`AmendSkip`) until phase 18's Git Error state keeps this one.
 
 **What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
 `c999cef531e`, 13 remote-tracking refs, release build, warm; the

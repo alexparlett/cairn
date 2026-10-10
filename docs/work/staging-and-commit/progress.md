@@ -3,6 +3,19 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — the open questions answered (packet mode, before phase 12's code)
+
+The user answered "Approve" to each of the planning agent's six recommendations, relayed by the
+coordinator: (1) a confirmed amend's skip by option (a), the unspent token handed back; (2) no
+"k of n selected"; (3) the amend button reads "Amend Last Commit"; (4) "Remove Stale Lock";
+(5) Fork's All / User / Background tabs filed at teardown; (6) R2.1 describes
+`TextDiff::inverted`, C21 gains no staged-rename row (a measurement issue at teardown), and Escape
+as a literal key is an allowed convention, its sites named. Recorded in the PRD (its opening and
+each requirement touched: R1.1, R2.1, R7.2, R8.1, R10.5, R10.6, R12.1, R12.4, the deviations
+list, C14, C21, C25, C30, "Not done"), `docs/design/ui.md`, `state.md` ("Open for the user", all
+resolved; the teardown list) and phases 13, 15, 17, 18, 19 and 20. Nothing is built for them
+here.
+
 ## 2026-10-10 — the review, the design pass, the user's redesign decisions; the rebuild planned
 
 **The review.** At 2bf8394, with the merge bar's fixes in, the user asked whether the packet had

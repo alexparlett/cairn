@@ -53,9 +53,9 @@ STEP 2  Implement.
            Modal enum in the window — confirmation, Git Error or Couldn't,
            Create Branch, credential prompt, popover — and keys_inert reads it;
            local_changes_actions::dialog_open and the per-dialog checks go.
-           Decide Escape's place here (the merge bar's F7, the user's): an
-           action in the table, or the literal written down as the convention —
-           stop and ask if the user has not decided.
+           Escape stays a literal key, the convention the user allowed on
+           2026-10-10 (the merge bar's F7, PRD R7.2): a new site where Escape
+           is heard is named in R7.2's list.
         5. The leftover lock (R12.4, F5, F6, G, C30): every refresh stats
            `<gitdir>/index.lock` on the refresh thread; the window shows the
            banner while it exists, no git of Cairn's runs or waits there, and its
@@ -63,8 +63,9 @@ STEP 2  Implement.
            A write that fails because git could not create the lock is retried
            on the local lane about a second later, once or twice (a sleep on the
            worker thread is allowed; say so), before it ends failed, and its Git
-           Error then carries Remove index.lock… beside Close. Both open decision
-           G's "Remove stale lock" confirmation, the Consequence read at the
+           Error then carries Remove index.lock… beside Close. Both open the
+           "Remove Stale Lock" confirmation (decision G's prompt, titled in
+           Title Case by the user's answer of 2026-10-10), the Consequence read at the
            press, ops::remove_index_lock unchanged; then a refresh, never a
            retry of the write. The closing banner names the write
            ("Closing after Commit finishes. Close again to quit now.").
@@ -115,8 +116,7 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         with no per-phase PR. NEVER merge or PR to main — teardown raises that
         one PR and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user if F7 (Escape) is undecided when the
-Modal state needs it; if a retry on a lock could run a write twice that wrote
+STOPPING RULES: stop and ask the user if a retry on a lock could run a write twice that wrote
 anything the first time (retry only what git refused before writing). Otherwise
 do not stop for permission.
 ```

@@ -27,9 +27,10 @@ STEP 1  Load context via an Explore agent over crates/cairn-app/src/diff_state.r
 STEP 2  Implement.
         1. One file (R8.1, L1): the diff shows the selection's primary with
            everything one file's diff has; with several selected its bar keeps
-           the primary's own header and adds "k of n selected" — unless the user
-           has dropped the count (state.md, open questions), in which case the
-           bar draws nothing extra; no fabricated ChangedFile. None selected:
+           the primary's own header and draws nothing extra — no "k of n
+           selected", the user's answer of 2026-10-10 (Fork draws no count,
+           lc2; the list's highlighted rows show the selection); no fabricated
+           ChangedFile. None selected:
            "No file selected".
         2. The lane owner (review-code-app-ui.md H1): with Together gone, the
            file-diff lane's holder becomes one Option of an enum (File, Working,

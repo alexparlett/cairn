@@ -70,8 +70,9 @@ STEP 2  Implement.
         All); the UI thread never waits; no credential value is drawn (the
         lines arrive scrubbed, phase 12).
 
-        Out of scope: Fork's All / User / Background tabs (the user's to
-        confirm; filed at teardown otherwise).
+        Out of scope: Fork's All / User / Background tabs — filed as an issue
+        at teardown, the user's answer of 2026-10-10 (Cairn has no background
+        operations yet).
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
         names for phase 20, spawned fresh, plus the qa-checklist.md items this

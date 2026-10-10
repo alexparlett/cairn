@@ -68,10 +68,13 @@ STEP 2  Implement, test-first against real git on the host and both floors.
            reads/hooks_path.rs, cairn_model::CommitHooks,
            Request::CommitReads's hooks half and the pin
            the_hooks_path_read_writes_nothing_and_runs_nothing go; the Git Error
-           offers the skip on every failed commit or amend. How a failed
-           CONFIRMED amend's skip runs without asking again is the user's
-           decision, open (below); until it is made, build the commit's skip and
-           the unconfirmed amend's skip, and stop before the confirmed amend's.
+           offers the skip on every failed commit or amend. A failed
+           CONFIRMED amend's skip runs without asking again by option (a) below,
+           the user's answer of 2026-10-10: when git refused before amending,
+           ops::amend's error hands the unspent Confirmed back, and a token
+           comes back only when git wrote nothing; the engine error's
+           CONFIRMED_HOLDERS row and its guard pin land here, the window's Git
+           Error state's in phase 18.
         6. A cancelled commit or amend (R4.7): after the reap the engine reads
            HEAD and reports whether the commit was made; the lane's WriteEnding
            gains Cancelled, and MayHaveTakenEffect no longer covers a user's
@@ -122,14 +125,18 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         with no per-phase PR. NEVER merge or PR to main — teardown raises that
         one PR and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user before building the confirmed amend's
-skip (the open decision below); if git's own `commit -F` during a cherry-pick
+STOPPING RULES: stop and ask the user if a confirmed amend's token could come
+back from a run in which git wrote anything (option (a) hands back only an
+unspent one); if git's own `commit -F` during a cherry-pick
 does not keep the picked author on the host or a floor (then C3's promise needs
 the user); if `git stripspace` at 2.30.9 cleans differently from the host's git
 in a way a person would see. Otherwise do not stop for permission.
 ```
 
-## Awaiting the user's decision: a confirmed amend's skip
+## Decided 2026-10-10: a confirmed amend's skip — option (a)
+
+The user approved the recommendation, option (a): the failed run hands the unspent token back,
+and Skip retries without asking again. The options as they were put:
 
 The user approved "Its skip runs once, never asks a second time" (`redesign-page-2026-10-10.html`,
 section 2) for commits and amends alike. For an amend that needed confirming (a remote has

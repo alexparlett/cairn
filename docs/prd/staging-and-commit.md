@@ -37,6 +37,28 @@ Fork first, checked at the source — makes `fork-observed-2026-10-10.md` win ov
 brief where they differ. Every requirement the redesign touches is amended in place below,
 dated; the rebuild is phases 12-20 of `docs/work/staging-and-commit/`.
 
+**The planning agent's open questions, answered 2026-10-10.** The user approved each
+recommendation ("Approve"); each requirement below is amended in place, dated "the user's
+answers, 2026-10-10":
+
+1. A confirmed amend's skip, when git refused before amending (a hook failed on a commit a remote
+   has, or one git keeps no reflog for): the failed run hands its unspent `Confirmed` back, and
+   the skip runs with it, never asking again (R1.1, R10.5; option (a) of
+   `phase-13-commit-asks-git.md`). Two `CONFIRMED_HOLDERS` rows follow — the engine's error and
+   the window's Git Error state — built in phases 13 and 18.
+2. No "k of n selected" in the diff's bar: Fork draws no count (observed `lc2`), and the list's
+   highlighted rows show the selection (R8.1, C25). L1 otherwise stands.
+3. The amend button reads Fork's "Amend Last Commit" (observed `amd2`), replacing C6's
+   "Amend 3f2a1c9" (R10.6, C14).
+4. The lock's confirmation is titled "Remove Stale Lock" — D3's Title Case over decision G's
+   casing; G's prompt is unchanged (R12.4, C30).
+5. Fork's Activity Manager's All / User / Background tabs are filed as an issue at teardown;
+   Cairn has no background operations yet (R12.1).
+6. R2.1 describes what `TextDiff::inverted` does — a replacement inverts into its insertion and
+   then its removal, as `git reset -p` leaves it; C21 gains no staged-rename row (a measurement
+   issue is filed at teardown); and Escape matched as a literal key is an allowed convention, its
+   sites named (R7.2). These close the merge bar's F2 and F7.
+
 **Three earlier decisions are superseded, because they rested on Fork claims Fork's own record
 contradicts** (the redesign; evidence `brief-local-changes-selection.md` headlines 1-2,
 `brief-commit-and-amend.md` §5.2, `fork-observed-2026-10-10.md`):
@@ -92,6 +114,11 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   acknowledgement (R11.3). The commit box leaves it: an amend that needs confirming is confirmed
   in the dialog (R10.6). How a failed amend's skip spends a confirmation without asking again
   (R10.5) is open — see `docs/work/staging-and-commit/phase-13-commit-asks-git.md`.)
+  (Decided 2026-10-10, the user's answers, 1: a confirmed amend that git refused before amending
+  hands its unspent `Confirmed` back inside the engine's error; the window's Git Error state
+  keeps it until the skip or Close, and the skip runs with it. A token comes back only when git
+  wrote nothing. Two `CONFIRMED_HOLDERS` rows — the engine's error and the window's Git Error
+  state, each excused by file and type — are added with their guard rows where they are built.)
 - R1.2 A `Confirmed` carries a `Consequence`, an engine-computed `cairn-model`
   value naming what the operation will destroy — per operation: the paths, the
   lines per modified path and the bytes per untracked file (Fork's wording, L8),
@@ -141,6 +168,13 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   added sets swapped, paths, modes and ids swapped and added with deleted — so
   unstage and discard emit through the existing forward rule and no `-R` is run
   (L17a).
+  (Amended 2026-10-10, the user's answers, 6 — the merge bar's F2: what is built, and what this
+  requires, is that a change which only removes or only adds inverts by swapping its two spans,
+  and a change that both removes and adds — a replacement — inverts into two changes at one
+  place, its insertion first and then its removal, so a partial selection restores old lines
+  ahead of the new ones that stay, as `git reset -p` and `git checkout -p` leave the file
+  (`patch-mechanics-spike.md` E1b). Each side's content and line numbers are unchanged by the
+  split; inverting twice gives the same sides, not necessarily the same changes.)
 - R2.2 What each action emits: stage lines — the unstaged diff (index to working
   tree) as it is; unstage lines — the staged diff (`HEAD` to index) inverted;
   discard lines — the unstaged diff inverted. Always at three lines of context,
@@ -407,6 +441,13 @@ literally.
   Delete in exactly one scope — a focused file list or diff in Local Changes — and
   the pinned rule is amended to say so; nowhere else is a bare chord other than a
   function key.
+  (Amended 2026-10-10, the user's answers, 6 — the merge bar's F7: Escape, which backs out of
+  whatever is open, is matched as the literal `NamedKey::Escape` where it is heard rather than
+  as an action of the table — an allowed convention, not a modifier the twin guards. Its sites
+  in production code: `cairn_ui`'s `diff_view.rs` (a line selection let go), `stacked_diff.rs`
+  (the same, until phase 17 removes it), `local_changes_drag.rs` (a drag cancelled) and
+  `activity_popover.rs` (the popover closed); the dialogs hear it through Freya's `Popup`, and
+  the table's `chord_names.rs` names it for a tooltip. A new site is named here.)
 - R7.3 New actions, each with Fork's chords per platform (Linux as Fork for
   Windows) and heard in its own scope only, so no list or staging chord fires while
   the commit box has focus; the window's chords still do, as from the filter fields
@@ -463,9 +504,9 @@ literally.
   the file clicked first, not the topmost and not the one last toggled — with everything a
   single file's diff has: Load Diff, the mode row, previous and next change, the gesture. No
   files are drawn together, there is no line budget and no "not shown" notice. With more than
-  one file selected the diff's bar keeps the primary's own header and adds "k of n selected"
-  (L1 as answered; Fork draws no count — the user's to confirm, see
-  `docs/work/staging-and-commit/state.md`). Toggling the primary out moves it to the nearest
+  one file selected the diff's bar keeps the primary's own header and adds nothing: Fork draws
+  no count (`lc2`), and the list's highlighted rows show the selection (the user's answers,
+  2026-10-10, 2, dropping L1's "k of n selected"). Toggling the primary out moves it to the nearest
   selected path; toggling the last one out leaves nothing selected and the diff says "No file
   selected".)
 - R8.2 Files stage and unstage by double-click, R7.3's chords, a drag from one
@@ -601,6 +642,8 @@ literally.
   platform's order beside Close, one button component for both; it runs once, with
   `--no-verify`, and never asks a second time — an amend that was confirmed is not confirmed
   again (how its token is spent is open, see R1.1). No prompt text is drawn in the dialog.)
+  (Decided 2026-10-10, the user's answers, 1: the failed run hands the unspent token back, and
+  Skip runs the amend with it, without asking again — R1.1.)
 - R10.6 In amend mode the button reads `Amend <short id>` above "Replaces <short
   id> '<subject>'. The old commit stays in Show Lost Commits." when git will write
   the reflog entry that keeps the replaced commit findable, and above "Replaces
@@ -628,6 +671,9 @@ literally.
   with no dialog (observed `amd1`-`amd3`), Fork for macOS says nothing (C1); and Fork's button
   reads "Amend Last Commit" (observed `amd2`) where Cairn's names the commit (C6 as answered,
   the user's to confirm against the observation).)
+  (Amended 2026-10-10, the user's answers, 3: the button reads Fork's "Amend Last Commit"
+  (observed `amd2`), replacing C6's `Amend <short id>`; it names no commit, the dialog still
+  names the id once. The deviation from Fork's caption is gone.)
 - R10.7 The draft survives refreshes, a failed hook and Amend's toggling, for the
   life of the window.
 - R10.8 With a merge in progress (R6.9) the box fills an empty draft, once per
@@ -785,7 +831,9 @@ literally.
   byte bound evicts whole oldest operations; only one larger than the bound alone is cut, its
   first line "Earlier output not kept." A fetch's progress shows in the status box, with Fetch
   greyed while a fetch runs, so no fetch is refused for being second (F9). Fork's All / User /
-  Background tabs are not drawn (the user's to confirm, `state.md`).
+  Background tabs are not drawn (the user's to confirm, `state.md`). (Decided 2026-10-10, the
+  user's answers, 5: Cairn has no background operations yet; the tabs are filed as an issue at
+  teardown.)
 - R12.2 Credentials in a URL (`scheme://user:secret@host`) are removed from every
   stderr line before it is drawn (#46, for display).
 - R12.3 Nothing about the log persists past the window (L14). It closes #41.
@@ -825,6 +873,9 @@ literally.
   once or twice (F5; Fork retries, Tracker #1303, observed `lk2`). Kept deviations from Fork:
   the banner, where Fork shows nothing until a write fails (`lk1`), and the confirmation, where
   Fork removes the lock unasked (`lk3`) — the user's F6 and G.)
+  (Amended 2026-10-10, the user's answers, 4: the confirmation is titled "Remove Stale Lock",
+  D3's Title Case over decision G's casing; G's prompt and the button "Remove index.lock" are
+  unchanged.)
 - R12.5 A guard holds every filesystem-mutating call in production code (removing,
   writing, renaming, creating or changing the permissions of a file or directory)
   to `crates/cairn-git/src/ops/` (L23), with a nonzero-files assertion and a
@@ -926,12 +977,10 @@ change dated.
   Windows writes "Discard changes" (D3); a mixed selection's discard taking what it can and
   saying what is left, where Fork asks twice (D1); Ignore Whitespace disabled in Local Changes
   (L6); a visible ⇈ Unstage All in Staged's header, where Fork for Windows shows it only while
-  Shift is held (L2); "k of n selected" in the diff's bar, where Fork draws no count (L1, the
-  user's to confirm); a finished line selection kept across a refresh that leaves the diff's text
+  Shift is held (L2); a finished line selection kept across a refresh that leaves the diff's text
   unchanged, where Fork drops it (L4, the user's kept deviation); the amend dialog when a
   remote has `HEAD` or git keeps no reflog, where Fork for Windows notes a pushed amend inline
-  and amends at once and Fork for macOS says nothing (C1, the user's kept deviation); the amend
-  button naming the commit, where Fork's reads "Amend Last Commit" (C6); Cancel beside a running
+  and amends at once and Fork for macOS says nothing (C1, the user's kept deviation); Cancel beside a running
   commit, where Fork has only the Activity Manager's × (C5); the commit box disabled during a
   rebase, `git am` or a sequence of picks, naming git's command, where Fork pre-fills and commits
   (L25 as narrowed by C3); the activity popover quoting each confirmed prompt (F3), its "Show in
@@ -948,7 +997,8 @@ change dated.
   --reflog`, TrackerWin #1307); and no Commit and Push until push exists (L9). (Before
   2026-10-10 this list also named prompts counting by kind and size, the amend's line, Create
   Branch's own Discard confirmation and the commit box refusing a cherry-pick or revert; the
-  redesign replaced each.)
+  redesign replaced each; "k of n selected" in the diff's bar and the amend button naming the
+  commit left it with the user's answers of 2026-10-10, 2 and 3.)
 - **A line selection acts only on the diff it was made over** (phase 08's QA, item 1; amended
   2026-10-10, L4): a selection names rows of one diff by its content, and once a diff whose text
   differs is drawn under it, it is nothing, and no act made over the old rows reaches a write; a
@@ -990,23 +1040,23 @@ amended in place, on 2026-10-10 (`redesign-decisions-2026-10-10.md`).
 | C11 | A close during a commit waits and says so (stub, then real, as C10); a second close after `CLOSE_PATIENCE` closes; a stranded `index.lock` is named on the next open and in the failed write's error | worker tests, and headless tests |
 | C12 | A local write whose child asks for a secret shows the prompt and is answered (an SSH-signing key with a passphrase, through the sshd fixture's key setup or a stub `ssh-keygen`; the stub's long-running write in phase 04, a real signed `git commit` in phase 05); the inherited roster holds R5.2's nine, each with its reason, and neither date variable; a commit made with `GIT_AUTHOR_EMAIL` set in Cairn's environment has that author | integration test, the process environment twin's roster |
 | C13 | Commit and amend: the message reaches git byte for byte under every `commit.cleanup` value as `git commit -F` would leave it; a `pre-commit` hook's failure shows its output and the skip offers only where a hook exists (`.git/hooks`, `core.hooksPath`); the draft survives it; a non-UTF-8 `i18n.commitEncoding` is refused; amend's staged list equals `git diff --cached --name-status HEAD^`, and a root commit's amend works, unstaging from it with `git rm --cached -q --`; Amend is disabled on an unborn branch; with no identity configured, git's own error is shown; recent messages equal `git log -n 10 --format=%B HEAD`'s (Amended 2026-10-10, C4: the skip is offered on every failed commit or amend, in the footer for both, and a skipped confirmed amend is not confirmed again; the hooks-path read, `CommitHooks` and their pins are gone; `i18n.commitEncoding` is refused as `git config` answers it — R6.11; a cancelled commit that git had already made is reported made, one it had not is `cancelled` with the draft kept — R4.7.) | integration tests in `cairn-git`, headless tests; C32 for the config read |
-| C14 | Amend's button text and dialog are rendered from its `Consequence`; the dialog appears exactly when a remote has `HEAD` (an upstream at `HEAD`, behind it, none with another remote branch containing it, none at all) (Superseded 2026-10-10 — C1, C6 and rule 3: the button reads `Amend <short id>` with no line under it, button and chord identical; at the press the engine reads the cost inside the job that runs it, and an amend git logs and no remote has runs with no dialog; the dialog "Amend Commit" appears exactly when a remote has `HEAD` (an upstream at `HEAD`, behind it, none with another remote branch containing it) or git will keep no reflog (`core.logAllRefUpdates` false and no log yet, as `git config` answers), in the fixed sentences of R10.6, Cancel returning to the box unchanged; no amend read is asked on a status's arrival.) | integration and headless tests; worker tests that no amend cost read runs before the press |
+| C14 | Amend's button text and dialog are rendered from its `Consequence`; the dialog appears exactly when a remote has `HEAD` (an upstream at `HEAD`, behind it, none with another remote branch containing it, none at all) (Superseded 2026-10-10 — C1, C6 and rule 3: the button reads "Amend Last Commit" (the user's answers, 2026-10-10, 3, replacing `Amend <short id>`) with no line under it, button and chord identical; at the press the engine reads the cost inside the job that runs it, and an amend git logs and no remote has runs with no dialog; the dialog "Amend Commit" appears exactly when a remote has `HEAD` (an upstream at `HEAD`, behind it, none with another remote branch containing it) or git will keep no reflog (`core.logAllRefUpdates` false and no log yet, as `git config` answers), in the fixed sentences of R10.6, Cancel returning to the box unchanged; no amend read is asked on a status's arrival.) | integration and headless tests; worker tests that no amend cost read runs before the press |
 | C15 | Every text field hands accelerator chords and held modifiers to the window: with a filter field focused, F5 refreshes and a Ctrl/⌘-click extends the selection (failing first on today's code); ⌘Return / Ctrl+Enter in the description commits without a newline | headless tests |
 | C16 | The accelerator table maps each action to a list of distinct chords per platform, and every chord of R7.3's lists resolves per platform; each new action resolves only in its R7.3 scope — with the commit box focused, the stage, unstage, discard and Show Lost Commits chords resolve to nothing and the commit chord commits; the pin admits bare Enter, Backspace and Delete only in Local Changes' list-and-diff scope; the root `CLAUDE.md` modifier invariant and its twin, amended in phase 06, hold a list per action | the table's tests, the modifier guard |
 | C17 | The discard dialog: modal (Tab stays inside, a window chord does nothing), focus on Cancel, Escape cancels, its text and button from the `Consequence` (`Discard Changes in 3 Files`, `Discard 2 Lines`) (Amended 2026-10-10, D1-D3, rule 6: titled "Discard Changes"; the one sentence frame, the worst loss only when it is worse than changes; "Show files" over a virtualized list of the paths for a selection of several; a mixed selection discarding what it can, one line saying what is left and the button counting only that; the dialog open at once on the press with "Counting…" and its button greyed until the `Consequence` arrives; no text cut.) | headless tests; a viewport twin for "Show files" over 50,000 paths |
 | C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection — but a double-click, which acts on its own row (amended 2026-10-09, the user's decision on phase 07's QA item 4(b)); a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact (Amended 2026-10-10, rule 8, L2, L3, L5: every route acts on the selection wherever focus is; Stage All and Unstage All by Shift held on Linux and ⌥ on macOS, enabled whatever is selected, and by ⇊ and ⇈ in the headers; the selection after an action is C25's.) | headless tests |
 | C19 | The gesture: a hovered chunk's actions stage, unstage and discard exactly that chunk; a drag-selection narrows them to its lines, across rows the virtual list unmounted; side by side keeps a selection in one column; the Commit and Changes tabs draw no action; a 10,000-line diff with the gesture builds one viewport (Amended 2026-10-10: with no lines selected the chords act on every selected file, wherever focus is; the 10,000-line twin stays and `files_drawn_together_build_one_viewport` goes with the view it pinned; a line selection across a refresh is C26's.) | headless tests, and a viewport twin |
 | C20 | Show Lost Commits: the commits it adds equal `git rev-list <every old and new id of every entry of HEAD's and each local branch's reflog, read from the log files> --not --branches --remotes --tags HEAD` (amended 2026-10-09, the user's decision D: old ids too, as `git rev-list --reflog` reads them), on a fixture with an amended, a reset-away and a 4 KiB-message entry, and an amend whose log it created itself (the replaced commit only an entry's old id); those rows are dimmed — their text, the graph in its colours (amended 2026-10-09: Fork-settled on Fork's evidence, applied under the user's Fork-first rule); Create Branch (R11.3, amended 2026-10-09) creates the branch `git branch` would, checks it out keeping the changes as `git checkout -b` would or refuses with git's words, and with "Discard" names every loss in a confirmation and discards exactly those; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` (Amended 2026-10-10: Create Branch's Discard is C34's; the activity popover is C29's and `Remove index.lock…` C30's.) | integration and headless tests |
-| C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a flat 50 ms (the user's decision, 2026-10-08, at R13.2's amendment): about 93 ms to stage, 93 ms to unstage, 76 ms to discard and 87 ms to commit, from `docs/research/staging-and-commit/measured-baseline.md`'s highest sums (42.9, 42.8, 25.8 and 37.4 ms); Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands (Amended 2026-10-10, R13.3: measured again at the merge bar over the rebuilt packet, an amend's press-time read recorded beside the four.) | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |
+| C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a flat 50 ms (the user's decision, 2026-10-08, at R13.2's amendment): about 93 ms to stage, 93 ms to unstage, 76 ms to discard and 87 ms to commit, from `docs/research/staging-and-commit/measured-baseline.md`'s highest sums (42.9, 42.8, 25.8 and 37.4 ms); Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands (Amended 2026-10-10, R13.3: measured again at the merge bar over the rebuilt packet, an amend's press-time read recorded beside the four. No staged-rename row is added — the user's answers, 2026-10-10, 6; measuring a staged rename is filed as an issue at teardown.) | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |
 | C22 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names R3.9's two reads, the write verbs and the one file deletion made without `git` (R12.4); the destructive-operation roster, the confirmation-surface roster, the chord lists and the bare-key scope, the gesture's viewport twin (C19) and the filesystem-mutation guard (R12.5) each have their twin named in `CLAUDE.md` (Amended 2026-10-10: D1 and the root `CLAUDE.md` also name `git stripspace --strip-comments`, the config read R6.11 widens, Create Branch's forced checkout as Fork runs it and its one read, and no longer name `git rev-parse --git-path hooks`, the `--numstat` pair or `git ls-files --others`; the two rosters' changed rows and the narrowed bare-key scope have their twins named.) | review |
 | C23 | `scripts/gate.sh` passes | the gate |
 | C24 | Conflicts and operations in progress (L25): staging a conflicted row runs `git add` and `git status` then reports it resolved; a conflicted row offers no line gesture and no discard by any route, and no verb takes a patch or a discard for one; with a merge in progress the engine reports it, the commit box holds `MERGE_MSG`'s text, its commit has `HEAD` and `MERGE_HEAD` as parents, and Amend is disabled; during a rebase, `git am` (added 2026-10-09, the user's decision C), a cherry-pick and a revert the engine reports each, commit and amend are refused before git runs, and the commit box is disabled and names it; the commit box holds `MERGE_MSG` with git's comment lines visible (the user's decision E) (Amended 2026-10-10, superseding decision E and narrowing L25 — C2, C3, C8: the commit box holds `MERGE_MSG` cleaned of git's comment lines as `git stripspace --strip-comments` leaves it, and what it shows is what is committed; a single cherry-pick or revert is concluded by Commit (C33); a rebase, `git am` and a sequence still refuse, naming git's command; a detached `HEAD` commits under one line and no dialog.) | integration tests in `cairn-git` against real `git`, headless tests |
-| C25 | One selection (added 2026-10-10, rule 8, L1, L3, L5; R8.1-R8.3): the selection is one value in one list with a primary; the diff shows the primary — the file clicked first, then Ctrl/⌘-click another, observed `lc2` — with Load Diff, the mode row and previous and next change; "k of n selected" in its bar while several are selected (unless the user drops it); Ctrl+S (⌘S) with focus in the diff and no lines selected stages the whole selection, and Return there does nothing (observed `lc3`, `lc4`); after an action, a refresh, an outside commit (observed `lc5`) or a filter, one pure rule gives the next selection — kept paths kept, else the row in the first one's place, else the nearest above — tested after an action, after a refresh, a path vanished, with gaps and with a filter; no file is ever acted on that the filter hides | unit tests of the rule, headless and window tests |
+| C25 | One selection (added 2026-10-10, rule 8, L1, L3, L5; R8.1-R8.3): the selection is one value in one list with a primary; the diff shows the primary — the file clicked first, then Ctrl/⌘-click another, observed `lc2` — with Load Diff, the mode row and previous and next change; no count in its bar while several are selected (the user's answers, 2026-10-10, 2); Ctrl+S (⌘S) with focus in the diff and no lines selected stages the whole selection, and Return there does nothing (observed `lc3`, `lc4`); after an action, a refresh, an outside commit (observed `lc5`) or a filter, one pure rule gives the next selection — kept paths kept, else the row in the first one's place, else the nearest above — tested after an action, after a refresh, a path vanished, with gaps and with a filter; no file is ever acted on that the filter hides | unit tests of the rule, headless and window tests |
 | C26 | A finished line selection is kept across a refresh whose re-read draws the same text (switching apps and back), and cleared with one notice, "The file changed — line selection cleared.", when the text differs; no act made over rows of another content reaches a write (added 2026-10-10, L4; R9.6) | headless tests, and a window test through a real refresh |
 | C27 | Stage All and Unstage All (added 2026-10-10, L2; R8.2): while Shift is held on Linux (⌥ on macOS) both headers read Stage All and Unstage All, enabled whatever is selected; ⇊ in Unstaged and ⇈ in Staged reach them with no key held; a held Alt does nothing; with a filter on each takes the rows shown | headless tests, the accelerator table's tests |
 | C28 | One home for each message (added 2026-10-10, rules 4-6, F1, F2; R14): a running write's name shows in the status box only after 250 ms and with " · N waiting" behind it; a git failure opens Git Error; a refusal found while running opens "Couldn't <name>" with one sentence, "Nothing was changed." once, and no Error Details; success shows nothing; a cancel opens no dialog; nothing is drawn under the file lists; a refusal known in advance is a greyed control with its reason, wrapped; no text a person needs is cut (no line cap on such a label); each operation's one name is the only wording of it; while any dialog or the popover is open — Create Branch included — the window's chords and the lists' keys do nothing | headless and window tests |
 | C29 | Fork's Activity Manager (added 2026-10-10, F3, F4, F7, F8, F9; R12.1): each row its name, Fork's result line, `HH:MM:SS UTC` and ⚠ on a failure; the header its name, one of running, succeeded, failed, cancelled, the time and the duration; a failed or cancelled entry's one sentence; the confirmed prompt whole and wrapped, only for an operation that ran; "Show in Lost Commits" turning the mode on and selecting the replaced commit; whole oldest entries evicted at the byte bound, an entry larger alone cut under "Earlier output not kept."; a fetch's progress in the status box with Fetch greyed while it runs; the popover's two lists still one viewport each | headless tests, the popover's viewport twin |
-| C30 | The leftover lock (added 2026-10-10, F5, F6, G; R12.4): the banner shows exactly while `<gitdir>/index.lock` exists, no `git` of Cairn's runs or waits and the file is older than about ten seconds, and goes when the file does, whoever removed it; a write that fails because git could not create `index.lock` is retried about a second later once or twice before it is reported, and its Git Error then carries `Remove index.lock…`; both routes open "Remove stale lock" with decision G's prompt, and the removal is followed by a refresh, never a retry of the write | worker tests against real `git`, headless tests |
+| C30 | The leftover lock (added 2026-10-10, F5, F6, G; R12.4): the banner shows exactly while `<gitdir>/index.lock` exists, no `git` of Cairn's runs or waits and the file is older than about ten seconds, and goes when the file does, whoever removed it; a write that fails because git could not create `index.lock` is retried about a second later once or twice before it is reported, and its Git Error then carries `Remove index.lock…`; both routes open "Remove Stale Lock" (the user's answers, 2026-10-10, 4) with decision G's prompt, and the removal is followed by a refresh, never a retry of the write | worker tests against real `git`, headless tests |
 | C31 | git's output read once (added 2026-10-10; R4.10): stdout and stderr are split by one line type into whole lines, never inside a character — a multi-byte character straddling the stderr piece limit arrives whole (failing first on `process/pipes.rs` as it was) — each line scrubbed of a URL's userinfo before it is kept or cut, the tail dropping whole lines with a plain "older lines dropped"; no view draws git's text but through the scrubbed lines | engine tests in `cairn-git`, and a guard or type that no render file takes git's raw `String` |
 | C32 | git's answers, not Cairn's (added 2026-10-10, the four git-parity fixes; R6.10, R6.11, R11.3): a `MERGE_MSG` with `# Conflicts:`, a scissors line and `core.commentChar` set is shown and committed exactly as `git stripspace --strip-comments` leaves it; the stripspace read writes nothing and runs nothing, and its guard row (`"stripspace"` only in its `reads/` file, once, `--strip-comments` its one option) has a matcher self-test; `core.logAllRefUpdates` and `i18n.commitEncoding` are read as `git config` answers them, a linked worktree's `includeIf` included, with no gix configuration read left for either; a branch name is accepted or refused as `git branch` and `git checkout -b` take it — `@{-1}`, `@{`, `a..b`, a taken name, a folder clash — on the host's git and both floors | integration tests against real `git`, `git-floor`, the porcelain-read guard |
 | C33 | A single cherry-pick or revert in progress is concluded by Commit (added 2026-10-10, C3; R6.9): the commit equals what `git commit -F` would make — the picked author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD` gone — with the box filled from the cleaned message; a sequence (`.git/sequencer`), a rebase and `git am` still refuse commit and amend before git runs, the box naming git's own command | integration tests in `cairn-git` against real `git`, headless tests |
@@ -1048,5 +1098,6 @@ refactors the rebuild does not rewrite anyway (`review-code-engine.md` H1's one 
 path's state, M1's per-operation consequence types, M5, M6 and the L items;
 `review-code-app-ui.md` H2's one pointer-drag primitive, H4's write ledger, M1's declarative
 lane table, M2's one consequence ask, M6 and the L items) — each phase doc of the rebuild says
-which it takes in passing; Fork's Activity Manager's All / User / Background tabs; and Fork's
+which it takes in passing; Fork's Activity Manager's All / User / Background tabs (the user's
+answers, 2026-10-10, 5); measuring a staged rename for C21 (the same, 6); and Fork's
 "Stash and reapply", packet 5b's.

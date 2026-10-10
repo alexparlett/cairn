@@ -25,8 +25,8 @@ QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full ga
 Phase 11 (the activity popover and the measured bar) done in packet mode: QA adjudicated, every
 fix-now item fixed, and the user's decisions A-N on the popover (2026-10-09) applied — DO3+DO5
 resolved by H; full gate green. Phase 12 (the merge bar): QA adjudicated, every fix-now item and
-the probe's verdict applied, C21 re-measured on the tip; four user decisions pending (W1, W3, F2,
-F7), listed under "Phase 12, the merge bar" below; everything to file at teardown gathered in one
+the probe's verdict applied, C21 re-measured on the tip; its four user decisions (W1, W3, F2,
+F7) since resolved, listed under "Phase 12, the merge bar" below; everything to file at teardown gathered in one
 list there. Then (2026-10-10) an independent review, a design pass and the user's redesign
 decisions: design pass done, rebuild planned — phases 12-20 rebuild what the redesign changes and
 the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran under as phase
@@ -48,26 +48,32 @@ the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran
 - **The merge bar's pending decisions**: W1 (the amend line's cap) and W3 (Create Branch's
   prompt) are resolved by the redesign — the line goes (C1, C6) and the prompt predicts nothing
   (B1, B2). F2 (R2.1's wording against `TextDiff::inverted`, and a staged-rename row for C21) and
-  F7 (Escape as a literal) still wait on the user; F7 is needed by phase 19.
+  F7 (Escape as a literal) — resolved 2026-10-10 by the user's answers (6, below).
 - **Phases**: 12 output once; 13 the commit engine asks git; 14 Create Branch; 15 the discard
   prompts; 16 one selection; 17 one file's diff; 18 the commit box; 19 one home for each
   message; 20 the Activity Manager; 21 the merge bar.
 
-### Open for the user (the phases stop on each)
+### Open for the user — all resolved 2026-10-10
 
-- **A confirmed amend's skip** (phase 13, before phase 18): the token handed back in the
-  failure (two new `CONFIRMED_HOLDERS` rows), the Git Error dialog as a confirmation surface
-  (one acknowledgement, two tokens), or the skip asking again. Options in
-  `phase-13-commit-asks-git.md`.
-- **"k of n selected"** (phase 17): the user answered L1 with it; Fork draws no count (`lc2`),
-  and rule 1 would drop it. Kept as answered until the user says otherwise.
-- **The amend button's caption** (phase 18): the user answered C6 "Amend 3f2a1c9" before the Fork
-  check, which saw "Amend Last Commit" (`amd2`); kept as answered until the user says otherwise.
-- **Fork's All / User / Background tabs** in the Activity Manager (phase 20): observed (`am1`),
-  not in the redesign; filed at teardown unless the user wants them.
-- **Title Case against decision G** (phase 15): D3 says Title Case everywhere; decision G titled
-  the lock's confirmation "Remove stale lock".
-- **F2 and F7**, above.
+The user answered "Approve" to each of the planning agent's recommendations (recorded in the
+PRD's opening, "The planning agent's open questions, answered 2026-10-10", and in each
+requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
+
+- ~~**A confirmed amend's skip**~~ — **resolved (1)**: option (a), the failed run hands the
+  unspent token back and Skip retries without asking again; the `CONFIRMED_HOLDERS` rows for the
+  engine's error (phase 13) and the window's Git Error state (phase 18).
+- ~~**"k of n selected"**~~ — **resolved (2)**: no count in the diff's bar; Fork shows none
+  (`lc2`) and the list's highlighted rows show the selection. L1 otherwise stands.
+- ~~**The amend button's caption**~~ — **resolved (3)**: Fork's "Amend Last Commit" (`amd2`),
+  replacing C6's "Amend 3f2a1c9".
+- ~~**Title Case against decision G**~~ — **resolved (4)**: "Remove Stale Lock"; G's prompt
+  unchanged.
+- ~~**Fork's All / User / Background tabs**~~ — **resolved (5)**: filed as an issue at teardown
+  (in the one list below); Cairn has no background operations yet.
+- ~~**F2 and F7**~~ — **resolved (6)**: R2.1 amended to describe `TextDiff::inverted` (a
+  replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
+  gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
+  key is an allowed convention, its sites named in PRD R7.2.
 
 ## Phase 12, the merge bar (2026-10-09)
 
@@ -81,7 +87,8 @@ the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran
 - **Probe 7** (Show All's measured height): the probe passed, but its controls show the measure
   does reach the list in both directions — dismissed, and the other direction pinned
   (`a_prompt_shown_whole_sits_on_its_measured_height_not_its_estimate`).
-- **The user's decisions pending** (the coordinator relays them; nothing here is built for them):
+- **The user's decisions pending** (W1 and W3 resolved by the redesign, F2 and F7 by the user's
+  answers of 2026-10-10; kept as the record):
   W1 — the amend button's three-line cap can cut "can't be recovered" off a long subject; W3 —
   Create Branch's Discard prompt gives no size for a folder or nested repository and says nothing
   of ignored files; F2 — PRD R2.1's "spans swapped" against `TextDiff::inverted`'s
@@ -112,6 +119,10 @@ commented, not filed again.
   `info/grafts`, where git turns the commit-graph off when they are present.
 - **DO6**: `reflogs::reflog_tips` takes an id the commit-graph holds as present without an object
   lookup, so a commit pruned after the graph was written is listed as lost and fails to open.
+- **Fork's All / User / Background tabs** in the Activity Manager (the user's answer of
+  2026-10-10, 5): observed `am1`; Cairn has no background operations yet.
+- **A staged rename's measurement** for C21 (the user's answer of 2026-10-10, 6): stage, unstage
+  and discard a hunk of a staged rename on the bench clone, beside C21's four.
 - **GI7** (pre-existing): `code_without_test_modules` blanks the block after a `#[cfg(test)]` on a
   field, variant or arm, which would hide production code from every guard using it.
 - **F3**: skipping the amend re-check's walk when the tips it read have not moved (phase 05's QA
@@ -129,8 +140,8 @@ commented, not filed again.
 - **Responsiveness 3**: `activity::popover` reads the activity log on every window render, the
   popover closed included, so each streamed line re-renders the window's root; reading `is_open`
   in a child component would leave a closed popover unsubscribed. Within budget (C21, phase 12).
-- **F7, Escape as a literal**, unless the user's decision makes it an action or a written
-  convention (pending; phase 19 needs it).
+- ~~**F7, Escape as a literal**~~ — resolved 2026-10-10: an allowed convention, its sites named
+  in PRD R7.2.
 - **Responsiveness 2 and 3** above are taken by phase 20 (Show All goes; `is_open` read in a
   child); drop them from the list if it lands them.
 - ~~**W3's residuals**~~ — resolved by the redesign (2026-10-10): Create Branch's Discard
@@ -757,7 +768,7 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   re-reads every path: keep each file's answer across selection changes, with measurements (the
   flash is documented as interim in `local-changes.md`).
 - **Phase 09 — done** (#7): `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`.
-- **Phase 12 / the user, at the merge bar** (#15; the user's decision F7 pending, and in the one
+- **Phase 12 / the user, at the merge bar** (#15; F7 resolved 2026-10-10 as an allowed convention, PRD R7.2; in the one
   list above): Escape is matched as a literal
   `NamedKey::Escape` (`diff_view.rs`, `stacked_diff.rs`, `local_changes_drag.rs`) rather than as
   an accelerator-table `Action` — a convention note, not a guard breach.
@@ -1046,14 +1057,14 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
-| 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 pending; design pass done, rebuild planned (2026-10-10) |
+| 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 by the user's answers (2026-10-10); design pass done, rebuild planned (2026-10-10) |
 | 12 output once | planned |
-| 13 the commit engine asks git | planned — one user decision open (a confirmed amend's skip) |
+| 13 the commit engine asks git | planned — the confirmed amend's skip decided (option (a), 2026-10-10) |
 | 14 Create Branch | planned |
 | 15 the discard prompts | planned |
 | 16 one selection | planned |
 | 17 one file's diff | planned |
-| 18 the commit box | planned — needs phase 13's decision |
-| 19 one home for each message | planned — needs F7 |
+| 18 the commit box | planned |
+| 19 one home for each message | planned — F7 decided (2026-10-10) |
 | 20 the Activity Manager | planned |
 | 21 QA | planned — the merge bar over the whole packet |

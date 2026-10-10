@@ -23,8 +23,8 @@ STEP 1  Load context via an Explore agent over crates/cairn-ui/src/commit_box.rs
         section 4, and fork-observed-2026-10-10.md ("Amend"). Do not read the
         other planning docs directly.
 STEP 2  Implement.
-        1. One button (R10.6, C6): "Commit N Files", or "Amend 3f2a1c9" while
-           Amend is ticked — enabled with a subject even with nothing new staged
+        1. One button (R10.6, C6): "Commit N Files", or Fork's "Amend Last
+           Commit" while Amend is ticked (the user's answer of 2026-10-10) — enabled with a subject even with nothing new staged
            — with no line under it; ⌘Return / Ctrl+Enter presses it, in every
            state. Pressing Amend asks phase 13's job: a recoverable amend runs;
            otherwise the confirmation dialog opens titled "Amend Commit", in the
@@ -39,8 +39,11 @@ STEP 2  Implement.
         3. A failure (R10.5, C4): Fork's Git Error, its footer in the platform's
            order — Skip pre-commit hooks and commit, and Close, focus on Close —
            one button component for both, for a commit or an amend; the skip runs
-           once, as the user decided for a confirmed amend (phase 13's open
-           question); no prompt text in the dialog.
+           once; a confirmed amend's skip runs with the token the failed run
+           handed back (option (a), the user's answer of 2026-10-10), kept in
+           the window's Git Error state until the skip or Close — that state's
+           CONFIRMED_HOLDERS row and its guard pin land here, with CLAUDE.md's
+           seal prose; no prompt text in the dialog.
         4. Fills and lines (R10.3, R10.8, C2, C3, C7, C8): one touched bit per
            draft — a fill goes only into an empty, untouched draft; a merge's,
            cherry-pick's or revert's draft filled from phase 13's cleaned
@@ -102,10 +105,9 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         with no per-phase PR. NEVER merge or PR to main — teardown raises that
         one PR and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user if phase 13's open question is still
-undecided (do not build the confirmed amend's skip on a guess); if the caption
-"Amend 3f2a1c9" is to become Fork's "Amend Last Commit" (state.md, open
-questions). Otherwise do not stop for permission.
+STOPPING RULES: stop and ask the user if the Git Error state would have to keep
+a token for anything but a confirmed amend's skip. Otherwise do not stop for
+permission.
 ```
 
 ## QA brief

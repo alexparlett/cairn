@@ -37,8 +37,9 @@ STEP 2  Implement.
            settle N3 with a real-git test: discard an `add -N` file and read
            what git leaves.
         2. Title Case everywhere a dialog or button is named (D3): "Discard
-           Changes", "Amend Commit", "Remove Stale Lock" stays the user's
-           decision G's words ("Remove stale lock") — ask before changing it.
+           Changes", "Amend Commit", and the lock's confirmation "Remove Stale
+           Lock" — the user's answer of 2026-10-10, D3's casing over decision
+           G's; G's prompt and the button "Remove index.lock" unchanged.
         3. The dialog (R7.4, rules 3 and 6): opens on the press, "Counting…"
            with its button greyed until the Consequence arrives; Show files a
            disclosure over a virtualized list; the prompt never cut (no
@@ -92,8 +93,7 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         with no per-phase PR. NEVER merge or PR to main — teardown raises that
         one PR and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user before changing decision G's "Remove stale
-lock" title to Title Case; if N3's real-git check shows git removes an
+STOPPING RULES: stop and ask the user if N3's real-git check shows git removes an
 intent-to-add file (the prompt's word then changes in meaning, not only form).
 Otherwise do not stop for permission.
 ```

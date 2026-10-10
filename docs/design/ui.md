@@ -65,12 +65,11 @@ Kept, and why:
 | **No text a person needs is cut.** A sentence that could run long is made short instead — it names only the exception and never repeats what is on screen — and per-file detail goes behind Show files. | `cairn.md`, what Cairn is |
 | The **activity popover**, Fork's Activity Manager, also quotes the prompt an operation confirmed, whole, gives each entry its duration, and offers "Show in Lost Commits" for an amend's old commit. Its times are UTC, since local time needs a timezone dependency; Fork's are local. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | **Ignore Whitespace is disabled in Local Changes**, so every change drawn there is one a gesture can stage. Fork offers it there. | `diff.md`, "Selections and patches" |
-| With several files selected, the diff's bar says **how many are selected**; Fork's draws no count. | `cairn.md`, what Cairn is |
 | A **visible double chevron in each list's header** — Stage All in Unstaged, Unstage All in Staged — beside the held key; Fork for Windows shows Unstage All only while Shift is held. | `platform.md` — keyboard-first, every action reachable |
 | A finished **line selection survives a refresh** whose re-read draws the same text — switching to the editor and back — and is cleared, with one notice, when the text changed; Fork drops it silently. | `concurrency.md` — a refresh is frequent and must cost the person nothing |
 | The floating actions **stay at the list's top** while the chunk's top is scrolled above it, so a tall chunk's actions stay in reach; Fork's sit at the chunk's top right. | `cairn.md`, what Cairn is |
 | A press without a drag, or Escape, **lets a line selection go**, and the window losing focus cancels a drag; the selection's discard reads `Discard 2 Lines…`, its ellipsis saying it confirms. | `diff.md`, "Selections and patches" |
-| The amend button **names the commit** it amends, and an amend asks first — in the one dialog — exactly when a remote already has the commit or git keeps no reflog to recover it from. Fork's button reads "Amend Last Commit"; Fork for Windows notes a pushed amend beside the check box and amends at once, Fork for macOS says nothing. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
+| An amend **asks first** — in the one dialog — exactly when a remote already has the commit or git keeps no reflog to recover it from; the button reads Fork's "Amend Last Commit". Fork for Windows notes a pushed amend beside the check box and amends at once, Fork for macOS says nothing. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | A running commit has **Cancel beside it** in the box, so a hung hook is stopped where it was started; Fork's cancel is only in the Activity Manager. | `processes.md`, "Cancellation" |
 | A failed commit or amend always offers **Skip pre-commit hooks and commit**, where Fork offers it where it finds a hook; hooks git finds by configuration Fork misses (Tracker #948). | `engine.md`, D1 — git decides, Cairn does not model it |
 | A merge message is shown **as git's editor would leave it** — comment lines stripped by git — so what is shown is what is committed; Fork commits git's `# Conflicts:` lines, its open bug (Tracker #180). | `engine.md`, D1 |
@@ -165,8 +164,8 @@ The selection is one value, in one list at a time, with a primary row: a press
 selects a row, ⌘- or Ctrl-click toggles one in or out, Shift-click and Shift+↑/↓
 extend from the anchor. The diff shows one file — the primary, the file clicked
 first — with everything one file's diff has: Load Diff, the mode row, previous and
-next change, the gesture. With several selected, its bar says how many. Fork shows
-one file too, and its developer has declined a combined view (Tracker #261,
+next change, the gesture. With several selected, its bar adds no count — the list's
+highlighted rows show the selection, as in Fork. Fork shows one file too, and its developer has declined a combined view (Tracker #261,
 TrackerWin #786). Where status lists an untracked directory collapsed, its row acts
 on everything under it.
 
@@ -302,7 +301,7 @@ unticks itself after the commit. Amend is greyed, with its reason, where there i
 nothing to amend — an unborn branch — and while an operation is in progress. Where
 amend's staged list cannot be read — a partial clone's missing blob, which Cairn's
 reads never fetch — the amend is still offered, and the box says the lists show what
-is staged against `HEAD`. The button reads `Amend 3f2a1c9`, with nothing under it,
+is staged against `HEAD`. The button reads "Amend Last Commit", as Fork's does, with nothing under it,
 and the chord does what it does. Pressing it asks what the amend costs, then: where
 git keeps the old commit and no remote has it, it amends at once, the old commit
 findable in Show Lost Commits; where a remote already has it, or the repository
@@ -381,7 +380,7 @@ behind." and offers `Remove index.lock…`. It goes when the file does, however 
 went. A write that fails on the lock is retried after about a second, once or
 twice, as Fork retries, before it is reported; its Git Error then carries the same
 `Remove index.lock…` beside Close, as Fork's does. Either way the removal is
-confirmed — "Remove stale lock", naming the lock's age and size and that another
+confirmed — "Remove Stale Lock", naming the lock's age and size and that another
 program may still own it — and is followed by a refresh, never by a retry of the
 write. Spec: `docs/prd/staging-and-commit.md` R12.4.
 

@@ -81,6 +81,18 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
 
+## Phase 14's stopping rule, decided (2026-10-10)
+
+Probed on 2.56.0, 2.30.9 and 2.32.7 (`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`):
+git's forced checkout refuses none of decision 3's cases; over a submodule it leaves the
+submodule's change in place, which differs from Fork's observed run. The user answered "Agree take
+them": (1) a submodule's change — as Fork, no refusal, the change survives and Local Changes still
+lists it; (2) a conflicted path with no operation in progress — as Fork, no refusal, git discards
+it; (3) an operation in progress — still refused before git runs, "<Operation> is in progress.
+Finish or abort it first." in the dialog's refusal row, Create and Checkout disabled while Discard
+is chosen. The review's M3 (the name oracle) dismissed: the verbs resolve `@{-N}` as `--branch`
+does, and `refs/heads/<name>` accepts `-x` and `HEAD`. Recorded in the PRD (R11.3, C34).
+
 ## Resolved after phase 13's QA (2026-10-10)
 
 The user answered "Those are fine" to the coordinator's three recommendations; the PRD records

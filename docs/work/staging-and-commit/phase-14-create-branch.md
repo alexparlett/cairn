@@ -42,6 +42,17 @@ STEP 2  Implement, test-first against real git on the host and both floors.
            with a grep before deleting), and their pins and D1's mention of them.
            The refusals of decision 3 stay: an operation in progress, a
            conflicted path, a submodule's change, each before git runs.
+           (Amended 2026-10-10, the user's answer to this phase's stopping
+           rule, evidence create-branch-discard-probe-2026-10-10.md: only an
+           operation in progress is refused before git runs — "<Operation> is
+           in progress. Finish or abort it first." in the dialog's refusal
+           row, Create and Checkout disabled while Discard is chosen; a
+           submodule's change and a conflicted path with no operation in
+           progress go to git as Fork's do — the submodule's change survives
+           and the rest is discarded, a conflict is discarded. Pinned on the
+           host and both floors: the submodule's change survives and the rest
+           is discarded; a stash-apply conflict is discarded; a merge in
+           progress is refused with git not run.)
         2. The name (R11.3's parity amendment, C32): first establish, with a
            real-git test on the host and both floors, what `git branch -- <name>`
            and `git checkout -b <name>` do with `@{-1}`, `@{`, `a..b`, a taken
@@ -49,7 +60,10 @@ STEP 2  Implement, test-first against real git on the host and both floors.
            the check agree with that — the review's proposal is `git
            check-ref-format refs/heads/<name>` without `--branch`, whose
            `@{-N}` resolution is the mismatch; if git's verbs resolve it too,
-           the finding is dismissed and the test pins why. The refusal becomes a
+           the finding is dismissed and the test pins why (established
+           2026-10-10: the verbs resolve @{-N} as --branch does, and
+           refs/heads/<name> accepts -x and HEAD, which the verbs refuse — M3
+           dismissed). The refusal becomes a
            typed value (invalid, taken, a folder holds it, it holds a branch),
            worded by the view; decision F's "A branch name can't contain '@{'"
            stays.

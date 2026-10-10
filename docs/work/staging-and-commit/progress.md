@@ -3,6 +3,17 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 14 stopped on its rule, then decided
+
+The forced checkout probed on the host and both floors (evidence
+`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`): exit 0 in every case;
+staged, unstaged, a staged new file and an untracked file in the way gone, other untracked files
+kept; a merge's conflict discarded and the merge abandoned (`MERGE_HEAD`, `MERGE_MSG` removed); a
+stash-apply conflict discarded; a submodule's moved checkout, its inside edit and a staged change of
+its commit left in place (the last listed again as unstaged) — the stopping rule. The user's answer
+("Agree take them"): no refusal over a submodule or a conflicted path, as Fork; an operation in
+progress refused before git runs. The branch-name probe dismissed the review's M3.
+
 ## 2026-10-10 — the user's ratification after phase 13's QA
 
 The user answered "Those are fine" to the coordinator's recommendations: (1) the token hand-back

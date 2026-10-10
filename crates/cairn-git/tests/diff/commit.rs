@@ -1233,105 +1233,138 @@ fn merging(name: &str, config: &[(&str, &str)], message: &str) -> Repo {
     repo
 }
 
-/// What `git commit` with an editor that changes nothing stores for the merge in progress —
-/// the oracle for what the box shows and commits (C32).
+/// What `git commit` with an editor that changes nothing stores for the merge in progress — the
+/// oracle for what the box shows and commits (C32). `commit.status=false` leaves out the
+/// template git adds around the message in an editor session — the help lines and the status,
+/// which under `whitespace` and `verbatim` a person removes by hand (`git help config`,
+/// `commit.cleanup`) and which the commit box never shows.
 fn committed_by_gits_editor(repo: &Repo) -> Vec<u8> {
-    let _ = repo.run(&["commit", "-q"], &[("GIT_EDITOR", "true")], None);
+    let (status, _, stderr) = repo.run(
+        &["-c", "commit.status=false", "commit", "-q"],
+        &[("GIT_EDITOR", "true")],
+        None,
+    );
+    assert!(status.success(), "git's own commit failed: {stderr}");
     stored_message(repo)
 }
 
-/// C32 and R6.10, the QA brief's last case: a `MERGE_MSG` with `# Conflicts:`, under
-/// `core.commentChar` unset and `;`, and under `commit.cleanup=scissors` with its scissors line,
-/// is shown cleaned and committed exactly as `git commit` with an editor leaves it — the
-/// merge's own `#123` line dropped as a comment where `#` is the comment character and kept
-/// where `;` is. Caught by: the read run outside the repository (git would strip `#` whatever
-/// the setting), Cairn's own idea of a comment, or the cleaned text committed differently.
+/// C32 and R6.10 (the QA brief's last case), every setting: under each `commit.cleanup` (unset,
+/// `default`, `strip`, `whitespace`, `verbatim`, `scissors`) and each comment character (unset,
+/// `;`, `auto`), a `MERGE_MSG` with `# Conflicts:`, the merge's own `#123` and `;45` lines, a
+/// trailing space and blank lines — and, under `scissors`, git's scissors line — is shown exactly
+/// as `git commit` with an editor leaves it, and the commit box's `git commit -F -` of it stores
+/// the same, on the host's git and both floors. Caught by: one cleaning for every setting (git's
+/// editor keeps comment lines under `whitespace` and `verbatim`, a `#123` above the scissors
+/// line, and every line under `auto`), the scissors line not cut, or the cleaned text committed
+/// differently.
 #[test]
-fn merge_msg_is_cleaned_and_committed_as_gits_editor_leaves_it() {
-    let marked = "Merge other\n\n#123 fixes the bug\n;45 also\n";
-    for (name, config, message, shown, scissors) in [
-        ("default", vec![], marked, "Merge other\n\n;45 also\n", None),
-        (
-            "semicolon",
-            vec![("core.commentChar", ";")],
-            marked,
-            "Merge other\n\n#123 fixes the bug\n",
-            None,
-        ),
-        (
-            "scissors",
-            vec![("commit.cleanup", "scissors")],
-            "Merge other\n",
-            "Merge other\n",
-            Some("# ------------------------ >8"),
-        ),
-        (
-            "scissors-semicolon",
-            vec![("commit.cleanup", "scissors"), ("core.commentChar", ";")],
-            "Merge other\n",
-            "Merge other\n",
-            Some("; ------------------------ >8"),
-        ),
+fn merge_msg_is_shown_and_committed_as_gits_editor_leaves_it_under_every_setting() {
+    let message = "Merge other  \n\n\n#123 fixes the bug\n;45 also\n\n";
+    for cleanup in [
+        None,
+        Some("default"),
+        Some("strip"),
+        Some("whitespace"),
+        Some("verbatim"),
+        Some("scissors"),
     ] {
-        let cairn = merging(&format!("c32-cairn-{name}"), &config, message);
-        let written =
-            std::fs::read_to_string(cairn.path().join(".git/MERGE_MSG")).unwrap_or_default();
-        assert!(written.contains("Conflicts:"), "{name}: {written}");
-        if let Some(line) = scissors {
-            assert!(
-                written.contains(line),
-                "{name}: no scissors line: {written}"
+        for comment in [None, Some(";"), Some("auto")] {
+            let label = format!("cleanup {cleanup:?}, comment {comment:?}");
+            let mut config = Vec::new();
+            if let Some(cleanup) = cleanup {
+                config.push(("commit.cleanup", cleanup));
+            }
+            if let Some(comment) = comment {
+                config.push(("core.commentChar", comment));
+            }
+            let name = format!(
+                "c32-{}-{}",
+                cleanup.unwrap_or("unset"),
+                match comment {
+                    None => "hash",
+                    Some(";") => "semicolon",
+                    Some(_) => "auto",
+                }
+            );
+            let cairn = merging(&format!("{name}-cairn"), &config, message);
+            let written =
+                std::fs::read_to_string(cairn.path().join(".git/MERGE_MSG")).unwrap_or_default();
+            assert!(written.contains("Conflicts:"), "{label}: {written}");
+            if cleanup == Some("scissors") {
+                assert!(
+                    written.contains(">8"),
+                    "{label}: no scissors line: {written}"
+                );
+            }
+            let filled = prepared(&cairn).unwrap_or_default();
+            let editor = merging(&format!("{name}-git"), &config, message);
+            let left = committed_by_gits_editor(&editor);
+            assert_eq!(
+                filled,
+                String::from_utf8_lossy(&left),
+                "{label}: shown is not what git's editor leaves"
+            );
+            ok(commit(&cairn, &filled, Hooks::Run), &label);
+            assert_eq!(
+                String::from_utf8_lossy(&stored_message(&cairn)),
+                String::from_utf8_lossy(&left),
+                "{label}: committed"
             );
         }
-        let filled = prepared(&cairn).unwrap_or_default();
-        assert_eq!(filled, shown, "{name}");
-        ok(commit(&cairn, &filled, Hooks::Run), name);
-        assert_eq!(
-            stored_message(&cairn),
-            shown.as_bytes(),
-            "{name}: committed"
-        );
-        let editor = merging(&format!("c32-git-{name}"), &config, message);
-        assert_eq!(
-            committed_by_gits_editor(&editor),
-            shown.as_bytes(),
-            "{name}: shown is not what git's editor leaves"
-        );
     }
 }
 
-/// R6.10 against git's editor where `git stripspace --strip-comments` — C32's read, whatever
-/// `commit.cleanup` says — is not it, each divergence pinned so a change in either is seen:
-/// under `scissors` the editor keeps the merge's own `#123` line above the scissors line,
-/// which the strip drops; under `whitespace` the editor keeps `# Conflicts:`; and under
-/// `core.commentChar=auto` git's commit picks another comment character because a line starts
-/// with `#`, keeping `# Conflicts:`, where `stripspace` reads `auto` as `#`. Caught by: the
-/// read changed to follow `commit.cleanup` without the PRD saying so, or git changing either.
+/// C32: the settings change what is shown — `#123` dropped as a comment under the default and
+/// kept under `;`, `# Conflicts:` kept under `whitespace`, `verbatim` and `auto`, and the
+/// scissors line and what follows cut under `scissors` — so the matrix above compares answers
+/// that differ. Caught by: a matrix whose every case leaves the same text.
 #[test]
-fn where_gits_editor_is_not_the_strip_of_comments_it_is_pinned() {
+fn each_setting_shows_a_message_of_its_own() {
     let message = "Merge other\n\n#123 fixes the bug\n;45 also\n";
-    for (name, config, editor_keeps) in [
+    type Case<'a> = (&'a [(&'a str, &'a str)], &'a [&'a str], &'a [&'a str]);
+    let cases: [Case<'_>; 6] = [
+        (&[], &[";45 also"], &["#123", "Conflicts"]),
         (
-            "scissors",
-            vec![("commit.cleanup", "scissors")],
-            "#123 fixes the bug",
+            &[("core.commentChar", ";")],
+            &["#123"],
+            &[";45", "Conflicts"],
         ),
         (
-            "whitespace",
-            vec![("commit.cleanup", "whitespace")],
-            "# Conflicts:",
+            &[("commit.cleanup", "whitespace")],
+            &["#123", "# Conflicts:"],
+            &[],
         ),
-        ("auto", vec![("core.commentChar", "auto")], "# Conflicts:"),
-    ] {
-        let cairn = merging(&format!("c32-diverge-cairn-{name}"), &config, message);
-        let filled = prepared(&cairn).unwrap_or_default();
-        assert_eq!(filled, "Merge other\n\n;45 also\n", "{name}");
-        let editor = merging(&format!("c32-diverge-git-{name}"), &config, message);
-        let left = String::from_utf8_lossy(&committed_by_gits_editor(&editor)).into_owned();
-        assert!(
-            left.contains(editor_keeps),
-            "{name}: git's editor left {left:?}"
-        );
+        (
+            &[("commit.cleanup", "verbatim")],
+            &["#123", "# Conflicts:"],
+            &[],
+        ),
+        (
+            &[("core.commentChar", "auto")],
+            &["#123", ";45", "# Conflicts:"],
+            &[],
+        ),
+        (
+            &[("commit.cleanup", "scissors")],
+            &["#123", ";45"],
+            &[">8", "Conflicts"],
+        ),
+    ];
+    for (config, keeps, drops) in cases {
+        let repo = merging("c32-distinct", config, message);
+        let filled = prepared(&repo).unwrap_or_default();
+        for kept in keeps {
+            assert!(
+                filled.contains(kept),
+                "{config:?}: {kept:?} dropped: {filled:?}"
+            );
+        }
+        for dropped in drops {
+            assert!(
+                !filled.contains(dropped),
+                "{config:?}: {dropped:?} kept: {filled:?}"
+            );
+        }
     }
 }
 
@@ -1629,6 +1662,75 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
             .code()
             != Some(0)
     );
+}
+
+/// R1.1's option (a) as (a′), the user's decision of 2026-10-10: a `pre-commit` hook fails a
+/// confirmed amend — git has refreshed the index and written tree objects, its own bookkeeping,
+/// but `HEAD` is still the confirmed commit — so the error hands the token back unspent, the
+/// same consequence; the skip amends with it, `--no-verify`, asking nothing again, and its run
+/// re-checks it. A refusal before git ran hands none back (another error, no token in it).
+/// Caught by: a token kept by the failed run (the skip would have to confirm again), or one
+/// handed back from a run that moved `HEAD`.
+#[test]
+fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
+    let repo = identified("r11-token-back");
+    repo.write("a.txt", b"a\n");
+    let replaced = repo.commit("one");
+    repo.write("a.txt", b"b\n");
+    repo.git(&["add", "a.txt"]);
+    hook(
+        &repo,
+        ".git/hooks",
+        "pre-commit",
+        "echo 'lint failed' >&2\nexit 1\n",
+        0o755,
+    );
+    let consequence = ok(consequence(&repo), "the consequence");
+    let unspent = match amend_with(&repo, Confirmed::by_user(consequence.clone()), "amended") {
+        Err(Error::AmendNotMade { failure, unspent }) => {
+            assert!(
+                matches!(&*failure, Error::GitFailed { stderr, .. } if stderr.contains("lint failed")),
+                "{failure:?}"
+            );
+            unspent
+        }
+        other => panic!("the failed amend handed no token back: {other:?}"),
+    };
+    assert_eq!(unspent.consequence(), &consequence);
+    assert_eq!(repo.rev("HEAD"), replaced, "the failed amend moved HEAD");
+
+    let cancel = CancelSignal::new();
+    let mut running = |_| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
+    ok(
+        ops::amend(
+            committer(),
+            &engine(&repo),
+            *unspent,
+            "amended",
+            Hooks::Skip,
+            None,
+            CommitWatch {
+                cancel: &cancel,
+                running: &mut running,
+                output: &mut output,
+            },
+        ),
+        "the skip, with the token handed back",
+    );
+    assert_eq!(repo.git(&["log", "--format=%s"]), "amended\n");
+    assert_ne!(repo.rev("HEAD"), replaced);
+
+    // A refusal before git runs is no failure of git's: no token comes back.
+    std::fs::remove_file(repo.path().join(".git/hooks/pre-commit"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let stale = Confirmed::by_user(ok(self::consequence(&repo), "the consequence"));
+    repo.write("a.txt", b"c\n");
+    repo.commit("moved");
+    assert!(matches!(
+        amend_with(&repo, stale, "x"),
+        Err(Error::AmendChangedSinceConfirmed)
+    ));
 }
 
 // --- R4.7 and phase 12's QA item #10: made is read from HEAD ---

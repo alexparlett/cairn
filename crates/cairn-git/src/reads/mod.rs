@@ -33,8 +33,9 @@
 //! [`stash_changes`], `git stash show --raw`, because with `stash.showIncludeUntracked` set
 //! git pairs a stash's untracked files with its tracked changes in one diff, which no
 //! plumbing can ask without writing a tree (refs-and-status R6.2); and one for a merge's
-//! message, [`stripspace`], `git stripspace --strip-comments`, git's own cleaning of
-//! `MERGE_MSG` with the comment character it reads (staging-and-commit R6.10); and one for
+//! message, [`as_the_editor_leaves`], `git stripspace`, git's own cleaning of `MERGE_MSG` as its
+//! editor session leaves it, under `commit.cleanup` and the comment character it reads
+//! (staging-and-commit R6.10); and one for
 //! Create Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git
 //! takes a name as a branch's is git's rule to apply (staging-and-commit R11.3), with
 //! [`change_lines`] beside it, `git diff-index --cached --numstat` and `git diff-files
@@ -45,8 +46,9 @@
 //!
 //! **Query plumbing, or `git status`, and four named porcelain exceptions.**
 //!
-//! **The fourth, `git stripspace --strip-comments`, the message on stdin** (accepted by the
-//! user on 2026-10-10, C2), built only in [`stripspace`], whose module docs carry its
+//! **The fourth, `git stripspace` with `--strip-comments`, `--comment-lines` or no option, the
+//! message on stdin** (accepted by the user on 2026-10-10, C2), built only in `stripspace.rs`,
+//! whose module docs carry its
 //! evidence: it reads its stdin and the configuration, takes no lock, reads no index or object
 //! and runs no program (`the_stripspace_read_writes_nothing_and_runs_nothing`).
 //!
@@ -215,7 +217,7 @@
 //! and no `git stash` subcommand that writes (`push`, `pop`, `apply`, `drop`,
 //! `store`, `clear`, `create`, `branch`, `save`, `export`, `import`) as a
 //! literal anywhere here; and the exact literal `"stripspace"` only in
-//! `stripspace.rs`, once, `--strip-comments` its one option.
+//! `stripspace.rs`, once, `--strip-comments` and `--comment-lines` its two options.
 //! What it cannot see is a
 //! review obligation (`destructive-ops-reviewer`, check 10): a verb or option
 //! built at run time — by `format!`, `concat!` or from bytes — and whether
@@ -240,7 +242,8 @@ pub(crate) use branch_name::branch_name;
 pub(crate) use change_lines::change_lines;
 pub(crate) use changes::{Detection, Submodules, changes};
 pub(crate) use config::{
-    FetchSettings, LogRefUpdates, commit_encoding, fetch_settings, log_all_ref_updates,
+    CommitCleanup, FetchSettings, LogRefUpdates, comment_char_is_auto, commit_cleanup,
+    commit_encoding, fetch_settings, log_all_ref_updates,
 };
 pub(crate) use hash_object::hash_object;
 #[cfg(test)]
@@ -248,7 +251,7 @@ pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
-pub(crate) use stripspace::stripspace;
+pub(crate) use stripspace::as_the_editor_leaves;
 pub(crate) use untracked::untracked_paths;
 pub(crate) use working_tree::{
     Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, staged_since,

@@ -731,6 +731,14 @@ impl WriteEnding {
                     Some(Invalidated::NOTHING),
                 );
             }
+            // A confirmed amend git refused before amending hands its token back (R1.1's option
+            // (a)); the window keeps none yet — its skip builds one from the same consequence
+            // until phase 18's Git Error state holds this one — so it is let go of here, and the
+            // ending is git's failure's.
+            Err(Error::AmendNotMade { failure, unspent }) => {
+                drop(unspent);
+                *failure
+            }
             Err(error) => error,
         };
         // The engine's text of it, scrubbed there (R12.2): git's stderr is in the message, and a

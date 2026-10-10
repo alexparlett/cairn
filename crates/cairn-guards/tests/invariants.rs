@@ -2658,10 +2658,11 @@ const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
 /// decision of 2026-10-10).
 const STRIPSPACE_READ_FILE: &str = "crates/cairn-git/src/reads/stripspace.rs";
 
-/// The one option the stripspace read passes, and must: the strip of comment lines. Any
-/// literal of [`STRIPSPACE_READ_FILE`]'s production code that starts with `-` must be it — not
-/// `--comment-lines` (`-c`), which comments every line, nor any other.
-const STRIPSPACE_OPTIONS: &[&str] = &["--strip-comments"];
+/// The options the stripspace read passes, and must: the strip of comment lines (the editor's
+/// `strip` cleanup), and the comment of every line, which asks git for its comment string
+/// (where `scissors` cuts). Any literal of [`STRIPSPACE_READ_FILE`]'s production code that
+/// starts with `-` must be one of them — no short spelling, nor any other option.
+const STRIPSPACE_OPTIONS: &[&str] = &["--strip-comments", "--comment-lines"];
 
 /// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
 /// the working tree, a branch or a ref (`export` writes a ref, `import` the stash), and none
@@ -2746,8 +2747,8 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
 /// file is one of [`STASH_WRITING_SUBCOMMANDS`]. `stripspace` ([`stripspace_read_violations`]):
 /// the exact literal `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`]
-/// alone, exactly once, and every literal there that starts with `-` is `--strip-comments`,
-/// which it passes. Comments and test modules are not read; a verb or an option built by
+/// alone, exactly once, and every literal there that starts with `-` is one of
+/// [`STRIPSPACE_OPTIONS`], each of which it passes. Comments and test modules are not read; a verb or an option built by
 /// `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
@@ -3012,15 +3013,15 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 /// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
 /// in query form, built once, by the config read (the user's decisions of 2026-10-04 and
 /// 2026-10-10), `git stash show`, built once, by the stash read (the user's decision of
-/// 2026-10-07), and `git stripspace --strip-comments`, built once, by the stripspace read (the
-/// user's decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
+/// 2026-10-07), and `git stripspace` with `--strip-comments`, `--comment-lines` or no option,
+/// built once, by the stripspace read (the user's decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
 /// diff` against the working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git
 /// config` with a setter writes the configuration, and every `git stash` subcommand but
 /// `show` and `list` writes a stash, the working tree or a branch, so a second `"diff"`,
 /// `"config"`, `"stash"` or `"stripspace"` in `reads/`, an option outside the query form in the
 /// config read, a setter anywhere in `reads/`, `stash` without `show` after it, a writing stash
-/// subcommand anywhere in `reads/`, or an option of stripspace's but `--strip-comments` is the
-/// regression this catches. Scoped to those literals; a verb or option built at run time
+/// subcommand anywhere in `reads/`, or an option of stripspace's but `--strip-comments` and
+/// `--comment-lines` is the regression this catches. Scoped to those literals; a verb or option built at run time
 /// (`format!`), and whether every other verb a read runs is query plumbing, stay the
 /// reviewer's.
 #[test]
@@ -3054,8 +3055,7 @@ fn the_porcelain_reads_are_the_named_queries() {
         "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
          `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
          `git config` in query form built in {CONFIG_READ_FILE}, `git stash show` built \
-         in {STASH_READ_FILE}, or `git stripspace --strip-comments` built in \
-         {STRIPSPACE_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
+         in {STASH_READ_FILE}, or `git stripspace` built in {STRIPSPACE_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
          config` setter the configuration, and any other `git stash` the stashes or the \
          working tree."
     );
@@ -3077,8 +3077,9 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
                           \"--no-abbrev\", \"--no-color\", \"--no-ext-diff\", \
                           \"--no-textconv\", \"--no-relative\", \"--end-of-options\"]; }";
     let stripspace_home = Path::new(STRIPSPACE_READ_FILE);
-    let accepted_stripspace =
-        "const ARGUMENTS: [&str; 2] = [\"stripspace\", \"--strip-comments\"];";
+    let accepted_stripspace = "const VERB: &str = \"stripspace\";\n\
+                               const STRIP_COMMENTS: &str = \"--strip-comments\";\n\
+                               const COMMENT_LINES: &str = \"--comment-lines\";\n";
     // The `diff` cases are judged beside the accepted config, stash and stripspace reads,
     // unless they bring their own; the `config`, `stash` and `stripspace` cases below bring
     // theirs beside the rest.
@@ -3434,7 +3435,7 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
         );
     }
 
-    // The stripspace read: once, in its file, `--strip-comments` its one option and passed.
+    // The stripspace read: once, in its file, its two options each passed and no other.
     let stripspace_verdict = |files: &[(&Path, &str)]| {
         let mut all = vec![
             (home, accepted),
@@ -3478,19 +3479,39 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
             )],
         ),
         (
-            "`--comment-lines`, which comments every line",
+            "`-s`, the short spelling of the strip",
             &[(
                 stripspace_home,
-                "fn s() { [\"stripspace\", \"--strip-comments\", \"--comment-lines\"]; }",
+                "fn s() { [\"stripspace\", \"-s\", \"--comment-lines\"]; }",
             )],
         ),
         (
-            "`-s`, the short spelling, not the one option",
-            &[(stripspace_home, "fn s() { [\"stripspace\", \"-s\"]; }")],
+            "`-c`, the short spelling of the comment",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\", \"-c\"]; }",
+            )],
+        ),
+        (
+            "an option beside the two",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\", \"--comment-lines\", \"--verbose\"]; }",
+            )],
         ),
         (
             "no `--strip-comments`",
-            &[(stripspace_home, "fn s() { [\"stripspace\"]; }")],
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--comment-lines\"]; }",
+            )],
+        ),
+        (
+            "no `--comment-lines`",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\"]; }",
+            )],
         ),
         (
             "no stripspace read at all",
@@ -5881,13 +5902,125 @@ const CONFIRMED_RECORD: (&str, &str, &str) = (
 /// handed to an operation behind a reference, where the by-value roster cannot see it, or kept
 /// and spent twice in spirit by a caller that clones what holds it. A row here is a review, and
 /// excuses that one declaration alone: a second type in the same file that holds a token
-/// fails, and so does a row whose type no longer exists or no longer holds one. The one row:
-/// the local write lane's `LocalWrite`, which carries a destructive write's token from the
+/// fails, and so does a row whose type no longer exists or no longer holds one. The rows: the
+/// local write lane's `LocalWrite`, which carries a destructive write's token from the
 /// confirmation surface to the lane that spends it by value on the operation
 /// (staging-and-commit R4), and is neither `Clone` (but for a test-only impl that refuses a
-/// destructive write) nor kept once run.
-const CONFIRMED_HOLDERS: &[(&str, &str)] =
-    &[("crates/cairn-app/src/worker/local_lane.rs", "LocalWrite")];
+/// destructive write) nor kept once run; and the engine's `Error`, whose `AmendNotMade` hands
+/// a confirmed amend's token back unspent when git failed with `HEAD` unmoved, so the skip
+/// amends without asking again (R1.1, option (a) of 2026-10-10) — the one variant, and the one
+/// field, allowed to (`ENGINE_ERROR_TOKEN`, held by
+/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`).
+const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
+    ("crates/cairn-app/src/worker/local_lane.rs", "LocalWrite"),
+    ("crates/cairn-git/src/error.rs", "Error"),
+];
+
+/// The engine's error file, and the one variant and field of its `Error` that may hold a
+/// `Confirmed`: a confirmed amend's token handed back unspent.
+const ENGINE_ERROR_TOKEN: (&str, &str, &str) = (
+    "crates/cairn-git/src/error.rs",
+    "AmendNotMade",
+    "unspent: Box<Confirmed>,",
+);
+
+/// Where `code` — the engine error file's production code, comments and strings blanked —
+/// names `Confirmed` other than in an import and as `ENGINE_ERROR_TOKEN`'s one field of its one
+/// variant, or names it there not at all.
+fn engine_error_token_violations(code: &str) -> Vec<String> {
+    let (_, variant, field) = ENGINE_ERROR_TOKEN;
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut held = 0usize;
+    for line in mentions_crate(code, CONFIRMED_TYPE) {
+        let text = lines.get(line - 1).map_or("", |text| text.trim());
+        if text.starts_with("use ") {
+            continue;
+        }
+        let in_variant = lines[..line - 1]
+            .iter()
+            .rev()
+            .map(|text| text.trim())
+            .find(|text| {
+                text.ends_with('{') && text.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            })
+            .is_some_and(|header| header == format!("{variant} {{"));
+        if text == field && in_variant {
+            held += 1;
+        } else {
+            found.push(format!(
+                "line {line} names `{CONFIRMED_TYPE}` (`{text}`) other than as `{variant}`'s \
+                 `{field}`: the engine's error hands back an unspent amend token and holds no other"
+            ));
+        }
+    }
+    if held != 1 {
+        found.push(format!(
+            "`{variant}` holds `{field}` {held} times; it hands back exactly one unspent token"
+        ));
+    }
+    found
+}
+
+/// The engine's `Error` holds a token in exactly one place — `AmendNotMade`'s `unspent`, the
+/// confirmed amend's token handed back when git failed with `HEAD` unmoved (R1.1, option (a)) —
+/// so no other failure can carry a confirmation out of an operation. Its `CONFIRMED_HOLDERS`
+/// row excuses the type; this pins where in it.
+#[test]
+fn the_engine_error_holds_a_token_only_as_an_unspent_amend() {
+    let (file, _, _) = ENGINE_ERROR_TOKEN;
+    let (_, source) = rust_sources("crates/cairn-git/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(file))
+        .unwrap_or_else(|| panic!("{file} is gone; CONFIRMED_HOLDERS and this pin name it"));
+    let code = code_without_test_modules(&code_without_strings(&source));
+    let found = engine_error_token_violations(&code);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn the_engine_error_token_matcher_catches_the_shapes_it_claims() {
+    let accepted = "use cairn_model::{Confirmed, ScrubbedLines};\n\
+                    pub enum Error {\n    Gone,\n    AmendNotMade {\n        failure: Box<Error>,\n        \
+                    unspent: Box<Confirmed>,\n    },\n}\n";
+    assert!(
+        engine_error_token_violations(accepted).is_empty(),
+        "the accepted shape"
+    );
+    for (shape, code) in [
+        (
+            "a second variant holding one",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Box<Confirmed>,\n    },\n    \
+             Other {\n        kept: Confirmed,\n    },\n}\n",
+        ),
+        (
+            "the field renamed",
+            "pub enum Error {\n    AmendNotMade {\n        token: Box<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "an Option of one",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Option<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "another variant's field of that name",
+            "pub enum Error {\n    Discard {\n        unspent: Box<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "none at all",
+            "pub enum Error {\n    AmendNotMade {\n    },\n}\n",
+        ),
+        (
+            "a function handing one out",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Box<Confirmed>,\n    },\n}\n\
+             impl Error {\n    pub fn take(self) -> Option<Confirmed> { None }\n}\n",
+        ),
+    ] {
+        assert!(
+            !engine_error_token_violations(code).is_empty(),
+            "{shape} was not caught"
+        );
+    }
+}
 
 /// Crates whose production code may spell a path into a `Consequence` (a variant, a part):
 /// the model that defines and renders it, and the engine that computes it.

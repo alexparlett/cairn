@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-use cairn_model::ScrubbedLines;
+use cairn_model::{Confirmed, ScrubbedLines};
 
 use crate::ops::GitVersion;
 
@@ -422,6 +422,20 @@ pub enum Error {
     /// The amend refused, writing nothing — an outcome of its own, never git's failure.
     #[error("HEAD changed since you confirmed the amend; nothing was amended")]
     AmendChangedSinceConfirmed,
+
+    /// A confirmed amend git ran and failed before amending — a hook refused it, say — so `HEAD`
+    /// is still the commit the confirmation names (staging-and-commit R1.1, R10.5; option (a) of
+    /// 2026-10-10, as (a′)): `failure` is git's, and `unspent` the confirmation handed back, for
+    /// the skip to amend with without asking again; the skip's run re-checks it. A token comes
+    /// back only on git's failure with `HEAD` read unmoved after the reap — never for a refusal
+    /// before git ran, a cancel, or a run that moved `HEAD`. What git writes before a hook runs —
+    /// the index's refreshed stat data and cache tree, unreferenced tree objects — is git's own
+    /// bookkeeping, outside what the `Consequence` names. Its text is `failure`'s.
+    #[error("{failure}")]
+    AmendNotMade {
+        failure: Box<Error>,
+        unspent: Box<Confirmed>,
+    },
 
     /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a
     /// commit whose parent is the `HEAD` it ran on, or for an amend, whose parents are the

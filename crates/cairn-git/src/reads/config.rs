@@ -158,6 +158,75 @@ pub(crate) fn log_all_ref_updates(
     }))
 }
 
+/// `commit.cleanup` as git reads it (`get_cleanup_mode` in git's `builtin/commit.c`, at v2.30.0
+/// and v2.56.0: one of five exact words, any other refused): what git's editor does to a message
+/// once it is edited (`git help commit`, `--cleanup`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommitCleanup {
+    /// Unset or `default`: `strip` when the message is edited.
+    Default,
+    /// `strip`: comment lines and surplus whitespace removed.
+    Strip,
+    /// `whitespace`: surplus whitespace removed, comment lines kept.
+    Whitespace,
+    /// `verbatim`: nothing changed.
+    Verbatim,
+    /// `scissors`: as `whitespace`, everything from git's scissors line on cut, when edited.
+    Scissors,
+}
+
+/// `commit.cleanup` as git reads it (R6.10): [`CommitCleanup::Default`] when it is unset; a
+/// value git refuses is [`Error::InvalidConfig`], as git's commit dies on it.
+pub(crate) fn commit_cleanup(
+    git: &GitBinary,
+    repo: &Repository,
+    cancel: &impl Cancel,
+) -> Result<CommitCleanup, Error> {
+    const KEY: &str = "commit.cleanup";
+    let Some(value) = text(git, repo, KEY, cancel)? else {
+        return Ok(CommitCleanup::Default);
+    };
+    match value.as_slice() {
+        b"default" => Ok(CommitCleanup::Default),
+        b"strip" => Ok(CommitCleanup::Strip),
+        b"whitespace" => Ok(CommitCleanup::Whitespace),
+        b"verbatim" => Ok(CommitCleanup::Verbatim),
+        b"scissors" => Ok(CommitCleanup::Scissors),
+        _ => Err(Error::InvalidConfig {
+            key: KEY.to_owned(),
+            value: String::from_utf8_lossy(&value).into_owned(),
+        }),
+    }
+}
+
+/// Whether the comment character is `auto` (R6.10): `core.commentChar`'s last value — or, on git
+/// 2.45 and later, which read it as an alias, `core.commentString`'s — `auto` in any case
+/// (`git_default_core_config`, `strcasecmp`), so git's commit picks a comment character that
+/// starts no line of the message. Residual: with both keys set, one `auto` and the other not,
+/// which came last is not asked; `auto` is answered.
+pub(crate) fn comment_char_is_auto(
+    git: &GitBinary,
+    repo: &Repository,
+    cancel: &impl Cancel,
+) -> Result<bool, Error> {
+    const ALIASED_FROM: crate::ops::GitVersion = crate::ops::GitVersion {
+        major: 2,
+        minor: 45,
+        patch: 0,
+    };
+    let keys: &[&str] = if git.version() >= ALIASED_FROM {
+        &["core.commentChar", "core.commentString"]
+    } else {
+        &["core.commentChar"]
+    };
+    for key in keys {
+        if text(git, repo, key, cancel)?.is_some_and(|value| value.eq_ignore_ascii_case(b"auto")) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The last value of `key` as written, or `None` when it is unset.
 fn text(
     git: &GitBinary,

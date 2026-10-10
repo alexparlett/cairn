@@ -205,7 +205,8 @@ pub fn amend_unconfirmed(
 /// Amends `HEAD` with `message` and what is staged (module docs), once the `Consequence`
 /// `confirmed` carries is still what the repository says. Refused as [`commit`] is, and for
 /// any operation in progress or an unborn branch; [`Error::AmendChangedSinceConfirmed`] when
-/// what was confirmed moved.
+/// what was confirmed moved. git's failure with `HEAD` unmoved — a hook refused it — is
+/// [`Error::AmendNotMade`], the token handed back unspent for the skip.
 pub fn amend(
     git: &GitBinary,
     repo: &Repository,
@@ -232,7 +233,7 @@ pub fn amend(
     }
     let before = locks_now(repo);
     let made = Made::amend_of(repo, replaced)?;
-    run(
+    match run(
         git,
         repo,
         &arguments(true, hooks),
@@ -240,7 +241,20 @@ pub fn amend(
         token,
         watch,
         &made,
-    )?;
+    ) {
+        Ok(()) => {}
+        // git failed, and `HEAD` is still the commit confirmed: nothing the confirmation names
+        // moved, so it is handed back unspent, for the skip (R1.1's option (a)).
+        Err(failure @ Error::GitFailed { .. })
+            if head_commit(repo).ok().flatten() == Some(replaced) =>
+        {
+            return Err(Error::AmendNotMade {
+                failure: Box::new(failure),
+                unspent: Box::new(confirmed),
+            });
+        }
+        Err(other) => return Err(other),
+    }
     Ok(Performed::destructive(
         format!("amended {}", replaced.short().as_str()),
         confirmed,

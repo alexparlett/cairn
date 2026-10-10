@@ -51,10 +51,10 @@ impl Repository {
     }
 
     /// The message git prepared for the commit that concludes a merge, a cherry-pick or a revert
-    /// — `MERGE_MSG` — cleaned of git's commentary as `git stripspace --strip-comments` cleans
-    /// it, git reading the comment character (R6.10, `crate::reads::stripspace`); `None` where
-    /// git prepared none. The commit box fills an empty draft with it, so what it shows is what
-    /// is committed.
+    /// — `MERGE_MSG` — as git's own editor session would leave it under the repository's
+    /// `commit.cleanup` and comment character (R6.10, `crate::reads::as_the_editor_leaves`):
+    /// `None` where git prepared none. The commit box fills an empty draft with it, so what it
+    /// shows is what `git commit` would commit.
     pub fn prepared_message(
         &self,
         git: &GitBinary,
@@ -63,7 +63,7 @@ impl Repository {
         let Ok(written) = std::fs::read(self.git_dir().join("MERGE_MSG")) else {
             return Ok(None);
         };
-        let cleaned = crate::reads::stripspace(git, self, &written, cancel)?;
+        let cleaned = crate::reads::as_the_editor_leaves(git, self, &written, cancel)?;
         Ok(Some(String::from_utf8_lossy(&cleaned).into_owned()))
     }
 }

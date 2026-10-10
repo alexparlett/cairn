@@ -474,3 +474,66 @@ fn show_files_over_50000_paths_builds_one_viewport() {
         "the end is not the last file: {at_end:?}"
     );
 }
+
+/// Whether assistive technology reads the button labelled `caption` as disabled; `None` when no
+/// button carries that label.
+fn button_disabled(test: &TestingRunner, caption: &str) -> Option<bool> {
+    test.find(|_, element| {
+        Rect::try_downcast(element).and_then(|rect| {
+            (rect.accessibility.builder.role() == AccessibilityRole::Button
+                && rect.accessibility.builder.label() == Some(caption))
+            .then(|| rect.accessibility.builder.is_disabled())
+        })
+    })
+}
+
+/// Phase 15's QA item 4, R7.4: while the engine counts, the greyed button is disabled to
+/// assistive technology as well as to the eye, and once the count fills the same dialog its
+/// caption's button is not. Caught by: the disabled flag dropped from the greyed answer (a
+/// screen reader would offer a button that does nothing), or kept on the confirming one.
+#[test]
+fn the_greyed_button_is_disabled_to_assistive_technology_until_the_count_arrives() {
+    let (mut test, answer) = {
+        let (test, answer) = TestingRunner::new(
+            move || {
+                let answer = use_consume::<State<DialogAnswer>>();
+                rect()
+                    .expanded()
+                    .child(ConfirmDialog::answering(1, TITLE, answer.read().clone()))
+                    .into_element()
+            },
+            (WIDTH, HEIGHT).into(),
+            |runner| runner.provide_root_context(|| State::create(DialogAnswer::Counting)),
+            1.,
+        );
+        (test, answer)
+    };
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        button_disabled(&test, TITLE),
+        Some(true),
+        "{:?}",
+        labels(&test)
+    );
+    assert_eq!(button_disabled(&test, CANCEL_CAPTION), Some(false));
+
+    let consequence = three_files();
+    let mut answer = answer;
+    test.run_in(|| answer.set(DialogAnswer::Ready(Rc::new(consequence.clone()))));
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        button_disabled(&test, &consequence.action()),
+        Some(false),
+        "{:?}",
+        labels(&test)
+    );
+    assert_eq!(
+        button_disabled(&test, TITLE),
+        None,
+        "the greyed button outlived the count"
+    );
+}

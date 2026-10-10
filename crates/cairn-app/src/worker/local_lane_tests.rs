@@ -1446,8 +1446,9 @@ fn consequence_of(seen: &[Update], asked: OperationId) -> Result<cairn_model::Co
 
 /// R8.4 and phase 04's carry: what a discard would lose is counted on the local lane in the
 /// order asked — after a stage asked before it, held in its `git add` meanwhile — so it counts
-/// what that stage left: the path staged whole has no unstaged change, and the discard is
-/// refused before any dialog. Caught by: the consequence computed on another thread, or ahead
+/// what that stage left: the path staged whole has no unstaged change, and the count refuses —
+/// the refusal the dialog, opened counting at the press, then shows as "Couldn't Discard
+/// Changes". Caught by: the consequence computed on another thread, or ahead
 /// of the write asked before it (it would count the file as untracked and offer to delete it).
 #[test]
 fn a_discards_consequence_is_counted_after_the_writes_asked_before_it() {

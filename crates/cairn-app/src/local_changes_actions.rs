@@ -17,16 +17,18 @@
 //! left, and its diff is asked (R8.3, `cairn_ui::nearest_remaining`): the row that slides into
 //! the first acted row's place, else the nearest above it.
 //!
-//! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule or
-//! a conflicted path: a selection mixing them with paths that can be discarded asks for those
-//! alone, and the confirmation says in one line what is left (`cairn_ui::left_as_they_are`, the
-//! redesign's D1); a selection with nothing that can be discarded asks nothing, and the chord
-//! over it does nothing, as Fork's does — the menu says why (`cairn_ui::no_discard`). What it would lose is
-//! computed by the engine on the local lane, behind the writes asked before it
-//! (`Request::DiscardConsequence`); the answer opens the confirmation (`Confirming`), whose
-//! token asks the discard. No route reaches a discard without the dialog. The engine refuses a
-//! nested repository, and anything else it cannot count, before any dialog, and the view says
-//! why.
+//! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule,
+//! a conflicted path or a nested repository: a selection mixing them with paths that can be
+//! discarded asks for those alone, and the confirmation says in one line what is left
+//! (`cairn_ui::Left`, the redesign's D1 and the user's decision of 2026-10-10 on nested
+//! repositories); a selection with nothing that can be discarded asks nothing, and the chord
+//! over it does nothing, as Fork's does — the menu says why (`cairn_ui::no_discard`). The
+//! confirmation opens at the press, counting (R7.4, rule 3), while the engine computes what the
+//! discard would lose on the local lane, behind the writes asked before it
+//! (`Request::DiscardConsequence`); its answer fills the same dialog, whose token asks the
+//! discard, and a refusal the engine makes while counting turns it into "Couldn't Discard
+//! Changes" with the engine's sentence and "Nothing was changed." (rule 4). No route reaches a
+//! discard without the dialog.
 //!
 //! **The diff's gesture** (R9) acts on lines of the diff drawn, copied as the lane will apply
 //! it: staged or unstaged by patch (`LocalWrite::StageLines`, `UnstageLines`), discarded through

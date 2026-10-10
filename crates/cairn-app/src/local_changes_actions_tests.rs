@@ -1189,6 +1189,42 @@ fn every_route_takes_the_selection_and_nothing_the_person_did_not_select() {
     );
 }
 
+/// L3, the QA brief ("no file is ever acted on that the filter hides"): while a filter's first
+/// rows are on their way the lists show nothing and the selection is left as it was — so the
+/// stage and discard chords heard on the diff then take nothing: no write, no consequence, no
+/// dialog — every route takes only the selected paths the lists SHOW. Caught by: an action that
+/// takes the selection's listed paths without asking whether the filter shows them (phase 16's
+/// QA #1).
+#[test]
+fn nothing_is_acted_on_while_the_filters_rows_are_on_their_way() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    assert_eq!(selected(view), ["a.rs"]);
+    let mut local = view.local.state;
+    let _ = test.run_in(|| local.write().filter("x"));
+    settle(&mut test);
+    assert_eq!(
+        selected(view),
+        ["a.rs"],
+        "the selection was moved while waiting"
+    );
+    let submit: crate::local_changes_actions::Submit = {
+        let submitted = Rc::clone(&submitted);
+        Rc::new(move |request| submitted.borrow_mut().push(request))
+    };
+    for action in [Action::StageOrUnstage, Action::Discard] {
+        test.run_in(|| local_changes_actions::on_the_diff(action, view, Some(&submit)));
+        settle(&mut test);
+    }
+    assert_eq!(
+        writes(&submitted),
+        [],
+        "a path the lists do not show was written"
+    );
+    assert_eq!(consequences_asked(&submitted), [], "a discard was counted");
+    assert!(view.confirming.peek().is_none(), "a dialog opened");
+}
+
 /// Phase 07's QA item 7, R8.3: the selection moves to the row that takes the FIRST acted row's
 /// place — c.rs staged out of a, b, c, d leaves d.rs selected, not the list's first row — and,
 /// through a filter, by the rows the filter shows: cx.rs staged out of cx, dx, ex leaves dx.rs.

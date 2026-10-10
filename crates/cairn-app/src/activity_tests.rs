@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use cairn_model::{
     ChangeLoss, ChangedKind, CommandExit, CommandRecord, Confirmed, Consequence, LostChange, Oid,
-    Publication, Reflog, RepoPath, UnstagedChange,
+    Publication, Reflog, RepoPath, ScrubbedLines, UnstagedChange,
 };
 use cairn_ui::{
     ACTIVITY_TITLE, CANCEL_CAPTION, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
@@ -95,8 +95,7 @@ fn record(arguments: &[&str], stderr: &str, code: i32) -> CommandRecord {
         duration: Duration::from_millis(12),
         exit: CommandExit::Code(code),
         cancelled: false,
-        stderr: stderr.to_owned(),
-        stderr_cut: false,
+        stderr: ScrubbedLines::scrubbing(stderr),
     }
 }
 
@@ -116,7 +115,7 @@ fn failed_on_the_lock() -> WriteEnding {
         message: "git add failed: fatal: Unable to create index.lock".to_owned(),
         locks: vec![PathBuf::from("/home/ada/engine/.git/index.lock")],
         command: Some("git add".to_owned()),
-        output: "fatal: Unable to create index.lock".to_owned(),
+        output: ScrubbedLines::scrubbing("fatal: Unable to create index.lock"),
     }
 }
 
@@ -126,10 +125,11 @@ fn open(test: &mut TestingRunner) {
 }
 
 /// C20's popover half and R12.2: the status box opens the popover; before anything has run it
-/// says so; a write that ran draws its name, its status, its `$ git` and what git said, with no
-/// token anywhere — not in the arguments, not in stderr, not in the line under the lists — and
-/// Escape closes it. Caught by: a status box that opens nothing, a popover drawing an operation
-/// without its `git`, or any of git's text drawn as git wrote it.
+/// says so; a write that ran draws its name, its status, its `$ git` and what git said — as the
+/// engine hands them on, git's text in `ScrubbedLines` and the arguments scrubbed as they were
+/// recorded (R4.10), so no token anywhere — and Escape closes it. Caught by: a status box that
+/// opens nothing, a popover drawing an operation without its `git`, or git's text drawn other
+/// than through the type.
 #[test]
 fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     let (mut test, view, submitted) = launch();
@@ -151,11 +151,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
         Update::OperationRan {
             by: RanBy::Write(id),
             commands: vec![record(
-                &[
-                    "--literal-pathspecs",
-                    "add",
-                    "https://ada:ghp_TOKEN@example.com/r",
-                ],
+                &["--literal-pathspecs", "add", "https://example.com/r"],
                 "hint: https://ada:ghp_TOKEN@example.com/r refused",
                 1,
             )],
@@ -169,10 +165,10 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
         Update::WriteEnded {
             id,
             ending: WriteEnding::Failed {
-                message: "git add failed: https://ada:ghp_TOKEN@example.com/r refused".to_owned(),
+                message: "git add failed: https://example.com/r refused".to_owned(),
                 locks: Vec::new(),
                 command: Some("git add".to_owned()),
-                output: "https://ada:ghp_TOKEN@example.com/r refused".to_owned(),
+                output: ScrubbedLines::scrubbing("https://ada:ghp_TOKEN@example.com/r refused"),
             },
             read_again: crate::worker::ReadAgain::Status,
         },
@@ -519,7 +515,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
                     .to_owned(),
                 locks: Vec::new(),
                 command: Some("git checkout -q -f -b topic".to_owned()),
-                output: "fatal: a branch named 'topic' already exists".to_owned(),
+                output: ScrubbedLines::scrubbing("fatal: a branch named 'topic' already exists"),
             },
             read_again: crate::worker::ReadAgain::Everything,
         },

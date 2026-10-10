@@ -473,15 +473,15 @@ fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
 }
 
 /// Phase 11's QA (TC10): a fetch whose git writes a remote URL with a token — whole, split over
-/// two lines, and in the failure it ends with — sends the window no update that carries the
-/// token: not its progress, not what it ran, not its failure. Caught by: any of the lane's
-/// scrubs left out.
+/// two writes, and in the failure it ends with — sends the window no update that carries the
+/// token: not its progress, not what it ran, not its failure (R4.10: the engine scrubs each
+/// line as its runner splits it). Caught by: a scrub left out, or one after the split.
 #[test]
 fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
     let stub = StubGit::new(
         "  echo 'remote: see https://ada:ghp_SECRETTOKEN@example.com/r' >&2\n  \
-         echo 'retry at https://ada:ghp_SECRET' >&2\n  \
-         echo 'TOKEN@example.com/again' >&2\n  \
+         printf 'retry at https://ada:ghp_SECRET' >&2\n  \
+         printf 'TOKEN@example.com/again\\n' >&2\n  \
          echo 'fatal: https://ada:ghp_SECRETTOKEN@example.com/r denied' >&2\n  exit 128",
     );
     let fixture = with_origin(
@@ -508,7 +508,7 @@ fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
     );
     assert!(
         seen.iter()
-            .any(|update| matches!(update, Update::FetchProgress { line } if line.contains("example.com/again"))),
+            .any(|update| matches!(update, Update::FetchProgress { lines } if lines.contains("https://example.com/again"))),
         "{seen:?}"
     );
     assert!(

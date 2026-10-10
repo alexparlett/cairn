@@ -72,7 +72,7 @@ fn commit_by(
     let cancel = CancelSignal::new();
     let mut started = 0;
     let mut running = |_| started += 1;
-    let mut output = |_: &[&str]| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
     ops::commit(
         git,
         &engine(repo),
@@ -90,7 +90,7 @@ fn commit_by(
 fn amend_with(repo: &Repo, confirmed: Confirmed, message: &str) -> Result<ops::Performed, Error> {
     let cancel = CancelSignal::new();
     let mut running = |_| {};
-    let mut output = |_: &[&str]| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
     ops::amend(
         committer(),
         &engine(repo),
@@ -276,7 +276,8 @@ fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commi
     let cancel = CancelSignal::new();
     let (mut started, mut lines) = (0, Vec::<String>::new());
     let mut running = |_| started += 1;
-    let mut output = |said: &[&str]| lines.extend(said.iter().map(|line| (*line).to_owned()));
+    let mut output =
+        |said: &cairn_model::ScrubbedLines| lines.extend(said.lines().map(str::to_owned));
     let outcome = ops::commit(
         committer(),
         &engine(&repo),
@@ -1155,7 +1156,7 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
     cancel.cancel();
     let mut started = 0;
     let mut running = |_| started += 1;
-    let mut output = |_: &[&str]| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
     let outcome = ops::commit(
         committer(),
         &engine(&repo),

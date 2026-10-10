@@ -11,7 +11,7 @@ use cairn_model::ShownDiff;
 use cairn_model::{
     AheadBehind, BranchName, ChangeSet, ChangedFile, CommandRecord, CommitHooks, Consequence,
     Context, Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress,
-    RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, Selection, SidebarRow,
+    RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, ScrubbedLines, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -631,9 +631,10 @@ pub enum Update {
     FetchStarted {
         remote: String,
     },
-    /// One redraw of git's own progress meter, for the one fetch in flight.
+    /// The redraws of git's own progress meter one read of its stderr completed, for the one
+    /// fetch in flight: whole lines, scrubbed by the engine as it split them (R4.10, R12.2).
     FetchProgress {
-        line: String,
+        lines: ScrubbedLines,
     },
     /// The fetch ended. Whether it moved a ref is the refresh's to find out, which the
     /// window asks for on every ending, since a fetch that failed or was killed may have
@@ -718,12 +719,13 @@ pub enum Update {
     },
     /// The lines a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
     /// stderr's alike, as they arrived (staging-and-commit R6.5): one read of a pipe's, or what
-    /// the lane held while the window was behind (`output_flow`). What the Git Error dialog and
-    /// the activity popover draw; the receipt gives the lines' bytes back to the lane's budget
-    /// as the update is dropped.
+    /// the lane held while the window was behind (`output_flow`) — whole lines, scrubbed by the
+    /// engine as it split them (R4.10, R12.2). What the Git Error dialog and the activity popover
+    /// draw; the receipt gives the lines' bytes back to the lane's budget as the update is
+    /// dropped.
     WriteOutput {
         id: OperationId,
-        lines: Vec<String>,
+        lines: ScrubbedLines,
         receipt: super::OutputReceipt,
     },
     /// A local write has ended, how, and what the window reads again after it (R4.5): what
@@ -736,7 +738,8 @@ pub enum Update {
     },
     /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
     /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
-    /// their arguments and stderr scrubbed of a URL's userinfo (R12.2) — and whether its ending
+    /// their arguments and output scrubbed of a URL's userinfo by the engine (R12.2) — and
+    /// whether its ending
     /// names the repository's `<gitdir>/index.lock`: `Remove index.lock…`'s offer (R12.4), whose
     /// cost is read when it is pressed (the user's decision H, 2026-10-09).
     OperationRan {

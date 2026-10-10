@@ -87,19 +87,15 @@ impl CommandLog {
     }
 }
 
-/// Trims `record` until it holds at most `limit` bytes; see [`CommandLog::push`].
+/// Trims `record` until it holds at most `limit` bytes; see [`CommandLog::push`]. Its stderr
+/// lets go of whole lines, oldest first, saying so — never a cut inside a line.
 fn fit(record: &mut CommandRecord, limit: usize) {
     let over = record.held_bytes().saturating_sub(limit);
     if over == 0 {
         return;
     }
-    let mut cut = over.min(record.stderr.len());
-    while !record.stderr.is_char_boundary(cut) {
-        cut += 1;
-    }
-    record.stderr.drain(..cut);
-    // Cut from the front: said, so a view scrubs its first line as begun part-way.
-    record.stderr_cut |= cut > 0;
+    let room = record.stderr.bytes().saturating_sub(over);
+    record.stderr.keep_last(room);
     if record.held_bytes() <= limit {
         return;
     }
@@ -109,7 +105,7 @@ fn fit(record: &mut CommandRecord, limit: usize) {
         .as_ref()
         .map_or(0, |directory| directory.as_os_str().len());
     let total = record.arguments.len();
-    let mut room = limit.saturating_sub(directory + record.stderr.len() + 64);
+    let mut room = limit.saturating_sub(directory + record.stderr.bytes() + 64);
     let mut kept = 0;
     for argument in &record.arguments {
         if argument.len() > room {
@@ -129,7 +125,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
-    use cairn_model::CommandExit;
+    use cairn_model::{CommandExit, ScrubbedLines};
 
     use super::*;
 
@@ -141,8 +137,7 @@ mod tests {
             duration: Duration::ZERO,
             exit: CommandExit::Code(0),
             cancelled: false,
-            stderr,
-            stderr_cut: false,
+            stderr: ScrubbedLines::scrubbing(&stderr),
         }
     }
 
@@ -200,29 +195,32 @@ mod tests {
     }
 
     /// A record that alone is over the byte bound is kept, trimmed to fit, and
-    /// says so: its stderr keeps its end; past that, its arguments keep their
-    /// start and a last argument counts what went. Caught by: keeping it whole
-    /// (the bound breaks), dropping it (an invocation goes unrecorded), or
-    /// cutting the arguments without a word.
+    /// says so: its stderr keeps its newest whole lines and says older ones went
+    /// (R4.10); past that, its arguments keep their start and a last argument
+    /// counts what went. Caught by: keeping it whole (the bound breaks), dropping
+    /// it (an invocation goes unrecorded), a cut inside a line, or cutting the
+    /// arguments without a word.
     #[test]
     fn a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so() {
         let mut log = CommandLog::default();
-        // An odd overage, so the first cut lands inside an `é` and must move
-        // to the next character boundary rather than split one.
-        let mut loud = record(0, format!("{}the end.", "é".repeat(LOG_BYTES)));
+        // Lines of the runner's piece size, so each is as long as git's output's lines get.
+        let line = "é".repeat(128 * 1024);
+        let mut loud = record(0, format!("{}the end.", format!("{line}\n").repeat(20)));
         loud.arguments = vec!["fetch".to_owned()];
-        assert_eq!(
-            (loud.held_bytes() - LOG_BYTES) % 2,
-            1,
-            "the overage is even, so the cut lands on a boundary and this decides nothing"
-        );
+        assert!(loud.held_bytes() > LOG_BYTES);
         log.push(origin(0), loud);
         let kept = &log.records()[0];
         assert!(kept.held_bytes() <= LOG_BYTES);
-        assert!(kept.stderr.ends_with("the end."));
+        assert!(kept.stderr.text().ends_with("the end."));
         assert!(
-            kept.stderr_cut,
-            "a stderr cut to fit was not said to be cut"
+            kept.stderr.older_dropped(),
+            "a stderr let go of to fit was not said to be"
+        );
+        assert!(
+            kept.stderr
+                .lines()
+                .all(|kept| kept == line || kept == "the end."),
+            "a line was cut to fit"
         );
         assert_eq!(kept.arguments, ["fetch"]);
 

@@ -757,17 +757,44 @@ which waits, but for the drop's no-thread fallback below.
   ended and reaped on the calling thread first, never left running with nobody
   waiting on it (`a_thread_that_cannot_start_ends_and_reaps_the_process`, with
   a thread starter that fails at the stdout and the stderr reader).
-- **stderr** is split into lines at `\r` and `\n`, and each read's lines cross
-  to the driver as one event, so what git wrote before it exited is a handful
-  of events however many lines it was. Every non-blank line goes to `progress`,
-  and the last `TAIL_BYTES` (256 KiB) is retained, starting at a line's start
-  where one falls inside the window; while the process runs the tail holds at
-  most twice that and the line being added, because it cuts in batches. A line
-  with no terminator is cut into pieces of that size. Pinned by
+- **git's output is read once, as whole lines** (staging-and-commit R4.10, C31).
+  One line type, `pipes::Lines`, splits stderr — and stdout, for a verb whose
+  stdout is said to a person (`Invocation::lines`, a commit's) — at `\n` and at
+  `\r` alike, the terminator dropped: git's progress meters redraw with `\r`, and
+  a hook redrawing on stdout is split the same way. A line is decoded whole, so
+  a character split across two reads arrives whole; one longer than
+  `PIECE_BYTES` (256 KiB) is handed on in pieces, each cut where a character
+  ends, never inside one. Each line, and each piece, passes a
+  `cairn_model::Scrubber` as it is split — a URL's userinfo removed before
+  anything keeps or cuts it (R12.2), the scrubber carrying across the pieces of
+  one line and nothing across a line's end — and becomes a
+  `cairn_model::ScrubbedLine`, gathered into the `ScrubbedLines` one read
+  completed. Each read's lines cross to the driver as one event, so what git
+  wrote before it exited is a handful of events however many lines it was; they
+  go to `progress` together (blank ones among them; `ScrubbedLines::spoken`
+  reads the rest), and into the tail (`pipes::Tail`), which keeps the last
+  `TAIL_BYTES` (256 KiB) of whole lines, letting go of the oldest whole lines
+  first and saying so (`ScrubbedLines::older_dropped`, a plain fact — never an
+  offset) — while the process runs it holds at most twice that and the lines
+  being added, because it lets go in batches. Read as lines, stdout's go into
+  the same tail as stderr's, in the order the reads arrived. What a failure
+  carries (`Error::GitFailed`'s `stderr`) and the command log records are that
+  tail. Pinned by `a_character_straddling_the_piece_limit_arrives_whole` (the
+  bug: a two-, three- and four-byte character at every offset across the limit,
+  which `pipes.rs` once cut and decoded as U+FFFD),
+  `a_urls_userinfo_never_survives_the_split`,
+  `lines_end_at_either_terminator_across_reads`,
+  `git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams` (through
+  the runner: both streams, a URL written across two writes, the tail and the
+  record),
   `a_mib_of_stderr_is_forwarded_whole_and_retained_as_a_bounded_tail`,
   `a_final_burst_of_stderr_is_kept_whole_though_a_holder_keeps_the_pipe` (a
   burst written just before git fails, with a slow progress callback and a pipe
-  still held: its last line arrives) and the unit tests in `pipes.rs`.
+  still held: its last line arrives) and the unit tests in `pipes.rs` and
+  `cairn_model`'s `scrub.rs`. Residual: the scrubber reads a URL by its
+  `scheme://`, so a terminal escape sequence written between a scheme and its
+  `://` hides the URL from it, and the window, which strips escapes after, would
+  then draw its userinfo — no remote or hook is known to write one there.
 - **Thread hygiene.** Every thread is counted while it runs;
   `every_thread_an_invocation_starts_ends_with_it` sees the three names started
   and the count back at zero once the invocation is over. The one thread that
@@ -1008,10 +1035,12 @@ and `every_handle_on_a_repository_shares_its_log`.
 ## The command log
 
 A record is a `cairn_model::CommandRecord`: the arguments after the program,
-lossily decoded; the directory it ran in; when it started, by the wall clock;
-how long until it was over; how it ended (`CommandExit`: a code, a signal,
-never started, or unknown); whether it was cancelled; and the retained
-stderr tail. There is no field for the environment, so the askpass token an
+lossily decoded and each scrubbed of a URL's userinfo as the record is booked
+(`Registration::new`; Cairn passes none, and an error's arguments are scrubbed
+the same way, `cli::describe`); the directory it ran in; when it started, by
+the wall clock; how long until it was over; how it ended (`CommandExit`: a
+code, a signal, never started, or unknown); whether it was cancelled; and the
+runner's tail, `ScrubbedLines` — stderr's, and a commit's stdout's with it. There is no field for the environment, so the askpass token an
 invocation carried has nowhere to land, and none that could hold a `Secret`;
 `the_record_holds_exactly_what_r8_1_lists` destructures it exhaustively, so a
 new field stops it compiling. Its arguments are what Cairn passed — fetch
@@ -1031,8 +1060,9 @@ two ways, dropping its oldest records to stay under both:
 - **`LOG_BYTES`, 4 MiB** of arguments, directories and stderr — what bounds it
   when git says a lot: sixteen full 256 KiB tails. It is above what one record
   holds at the platforms' default `ARG_MAX` (2 MiB on Linux, 1 MiB on macOS),
-  so a record is trimmed only past those: its stderr keeps its end, then its
-  arguments their start, with a last argument counting what went.
+  so a record is trimmed only past those: its stderr keeps its newest whole
+  lines and says older ones went, then its arguments their start, with a last
+  argument counting what went.
 
 `SharedRepository::command_log()` answers it, and the worker hands it to
 whoever asks: `Request::CommandLog` is answered on the repository thread by
@@ -1144,20 +1174,22 @@ before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` fro
 lane. A commit's output streams into its entry as it arrives (R10.4: a hook's lines while it
 runs, `Update::WriteOutput`), and is replaced by its commands' records once they are in.
 
-**Scrubbed before it is kept** (R12.2, `cairn_model::Scrubber`): the userinfo of every
-`scheme://` URL is removed from every line of git's the window keeps — the lane scrubs each
-record's arguments and stderr, a fetch's progress lines and every ending's message and output
-before they leave it, and the window scrubs them again as it keeps them
-(`crate::shown_output`), so no entry, no Git Error dialog and no line under the lists can draw a
-token whoever built the update. A URL a line's end cuts anywhere — inside its scheme, its `://`,
-its userinfo or its host — loses its userinfo on both sides of the cut, and a quote inside a
-userinfo does not end it. Where a text was cut from its front is the engine's to say, never
-guessed from its length: a record's `stderr_cut`, and an `Error::GitFailed`'s `stderr_cut`
-offsets — its tail's front, and in a commit's output where its stderr's cut tail follows
-stdout's — by which the lanes scrub each part (`shown_output::scrubbed_at`). An
-scp-like address (`git@host:path`) is no URL and is left. Pinned by `scrub.rs`'s tests,
-`the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept),
-`no_line_of_an_entry_carries_a_token` and
+**Scrubbed once, in the runner** (R12.2, R4.10): the userinfo of every `scheme://` URL is
+removed from each line of git's as the runner splits it, before anything keeps or cuts it ("The
+runner", above), and git's text reaches the application only as `cairn_model::ScrubbedLines` —
+a record's stderr, a failure's output, a fetch's progress and a commit's streamed output — whose
+lines only a `Scrubber`'s output, or its own scrubbing constructor, can fill (the type's
+`compile_fail` doctests in `scrub.rs`). An error's text reaches it as the engine renders it,
+`cairn_git::Error::shown` — the error's `Display` scrubbed whole, for the values it quotes
+beside git's words — in the lanes (`local_lane::message_of`). No lane and no view scrubs again:
+the window only strips escape sequences (`crate::shown_output`). A URL a piece's end cuts
+anywhere — inside its scheme, its `://`, its userinfo or its host — loses its userinfo on both
+sides of the cut, and a quote inside a userinfo does not end it; older lines let go of are said
+with a plain `older_dropped`, never an offset into the text. An scp-like address
+(`git@host:path`) is no URL and is left. Pinned by `scrub.rs`'s tests, the runner's above,
+`an_errors_shown_text_carries_no_userinfo`, `an_ending_carries_the_engines_scrubbed_text` (the
+lane), `no_update_of_a_fetch_carries_a_token_its_git_wrote` (a real fetch through the worker),
+`the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept) and
 `the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
 
 **`Remove index.lock…`** (R12.4, L23, the user's decisions G and H of 2026-10-09): offered on
@@ -1219,9 +1251,10 @@ destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "
 a.rs", "Amend", "Remove index.lock"). A write ended before it started keeps the name it was
 asked under; "A write" is said only of one the window never asked.
 
-**A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a write's
-stderr on a read of the pipe at a time (`Invocation::finish_by_read`), the commit's `CommitWatch`
-hands those lines on together, and the lane sends each read as one `Update::WriteOutput` whose
+**A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a commit's
+stdout and stderr on a read of a pipe at a time, as whole scrubbed lines (`Invocation::lines`),
+the commit's `CommitWatch` hands those lines on together, and the lane sends each read as one
+`Update::WriteOutput` whose
 `OutputReceipt` counts its bytes in a budget shared with the window. Past
 `output_flow::IN_FLIGHT_BYTES` waiting for the window, the lane holds the newest lines
 itself, at most the window's own tail's bounds, and sends them once the window has given bytes

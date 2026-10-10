@@ -29,6 +29,13 @@ impl Cancel for CancelSignal {
     }
 }
 
+/// A borrowed cancel is one: what a `&dyn Cancel` names reaches a walk that wants a sized one.
+impl<C: Cancel + ?Sized> Cancel for &C {
+    fn is_cancelled(&self) -> bool {
+        (**self).is_cancelled()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

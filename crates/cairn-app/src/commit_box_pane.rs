@@ -23,7 +23,9 @@
 
 use std::rc::Rc;
 
-use cairn_model::{ChangeList, Confirmed, Consequence, OperationInProgress, StagedAgainst};
+use cairn_model::{
+    ChangeList, Confirmed, Consequence, OperationInProgress, ScrubbedLines, StagedAgainst,
+};
 use cairn_ui::accelerators::RecallStep;
 use cairn_ui::{Busy, CommitBox, CommitButton, GitErrorDialog, MainView};
 use freya::prelude::*;
@@ -516,7 +518,7 @@ pub fn write_started(id: OperationId, view: View) {
 }
 
 /// Lines of a write's output: kept when they are this box's commit's.
-pub fn write_output(id: OperationId, lines: &[String], view: View) {
+pub fn write_output(id: OperationId, lines: &ScrubbedLines, view: View) {
     let mut state = view.local.commit.state;
     if state.peek().asked().is_some_and(|asked| asked.id == id) {
         state.write().output_arrived(id, lines);

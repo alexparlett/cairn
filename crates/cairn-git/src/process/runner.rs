@@ -4,7 +4,8 @@
 //! [`super::cli::GitCommand::start`] spawns the process as the leader of a new
 //! group and hands the [`Child`] here, where each pipe gets its own thread
 //! (`pipes.rs`) and the caller gets an [`Invocation`]. The caller then drives
-//! it on its own thread with [`Invocation::finish`], [`Invocation::records`] or
+//! it on its own thread with [`Invocation::finish`], [`Invocation::lines`],
+//! [`Invocation::records`] or
 //! — on a read alone, since a ceiling must never outrank a write's clean exit —
 //! [`Invocation::collect`] or [`Invocation::finish_within`], or drops it, which
 //! ends it on a reaper thread.
@@ -64,11 +65,11 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use cairn_model::CommandExit;
+use cairn_model::{CommandExit, ScrubbedLines};
 
 use super::cli::{GitDirs, Kind, Output, Read};
 use super::group::{Group, KillHandle, Spawner, ThreadStarter, os_thread};
-use super::pipes::{self, EVENTS_BOUND, Event, Records, Retained, Tail};
+use super::pipes::{self, EVENTS_BOUND, Event, Lines, Records, Tail};
 use super::registry::{Registration, exit_of};
 use crate::{Cancel, Error};
 
@@ -117,6 +118,14 @@ enum Flow {
     Stop,
 }
 
+/// Where stdout goes: to the caller as bytes, or split into lines by the one line type
+/// ([`Lines`]) and handled as stderr's are — handed on with them and kept in the same tail, in
+/// the order the reads arrived (staging-and-commit R4.10).
+enum StdoutSink<'a> {
+    Bytes(&'a mut dyn FnMut(&[u8]) -> Flow),
+    Lines(Lines),
+}
+
 /// The receiving end of an invocation's pipes and its group, which together
 /// are what drives it to its end — on the caller's thread, or the reaper's.
 ///
@@ -152,7 +161,8 @@ struct Ended {
     signalled_while_running: bool,
     asked_to_end: bool,
     stopped: bool,
-    tail: Retained,
+    /// The output kept: stderr's lines, and stdout's when it was read as lines.
+    tail: ScrubbedLines,
 }
 
 impl Ended {
@@ -253,7 +263,11 @@ pub(super) fn watch<K: Kind>(
             drop(stdin);
             if let Some(mut driver) = invocation.driver.take() {
                 driver.runner_ended = true;
-                driver.run(&|| true, &mut |_| Flow::Continue, &mut |_| {});
+                driver.run(
+                    &|| true,
+                    StdoutSink::Bytes(&mut |_| Flow::Continue),
+                    &mut |_| {},
+                );
             }
             Err(ended_by_the_runner(
                 &invocation.kind,
@@ -326,45 +340,45 @@ impl<K: Kind> Invocation<K> {
         KillHandle(Arc::clone(&self.group))
     }
 
-    /// Waits for the end, handing stdout to `stdout` as it arrives and each
-    /// non-blank stderr line to `progress`; `cancel` is polled every tick. The
+    /// Waits for the end, handing stdout to `stdout` as it arrives and the
+    /// stderr lines each read completed to `progress` — whole, scrubbed, at most
+    /// one call a read (`pipes::Lines`); `cancel` is polled every tick. The
     /// `Output` carries the retained stderr and no stdout — it went to `stdout`.
     pub(crate) fn finish(
         self,
         cancel: &impl Cancel,
         mut stdout: impl FnMut(&[u8]),
-        mut progress: impl FnMut(&str),
+        mut progress: impl FnMut(&ScrubbedLines),
     ) -> Result<Output, Error> {
         self.drive(
             cancel,
-            &mut |chunk| {
+            StdoutSink::Bytes(&mut |chunk| {
                 stdout(chunk);
                 Flow::Continue
-            },
-            &mut |lines| lines.iter().for_each(|line| progress(line)),
+            }),
+            &mut progress,
             None,
         )
         .map(|stderr| Output::new(Vec::new(), stderr))
     }
 
-    /// As [`Invocation::finish`], with the stderr lines each read of the pipe completed handed
-    /// to `progress` together — at most one call a read — rather than one call a line.
-    pub(crate) fn finish_by_read(
+    /// Waits for the end with stdout read as lines, as stderr is: each read of either pipe's
+    /// lines, whole and scrubbed, handed to `output` as they arrive, and both kept in one tail
+    /// in that order — what a failure carries ([`Error::GitFailed`]) and the command log
+    /// records. For a verb whose stdout is said to a person, not parsed: a commit's, where git
+    /// and its hooks write to both (staging-and-commit R6.5, R4.10).
+    pub(crate) fn lines(
         self,
         cancel: &impl Cancel,
-        mut stdout: impl FnMut(&[u8]),
-        mut progress: impl FnMut(&[&str]),
+        mut output: impl FnMut(&ScrubbedLines),
     ) -> Result<Output, Error> {
         self.drive(
             cancel,
-            &mut |chunk| {
-                stdout(chunk);
-                Flow::Continue
-            },
-            &mut progress,
+            StdoutSink::Lines(Lines::default()),
+            &mut output,
             None,
         )
-        .map(|stderr| Output::new(Vec::new(), stderr))
+        .map(|kept| Output::new(Vec::new(), kept))
     }
 
     /// As [`Invocation::finish`], with stdout split into the NUL-terminated
@@ -377,16 +391,16 @@ impl<K: Kind> Invocation<K> {
         self,
         cancel: &impl Cancel,
         mut record: impl FnMut(&[u8]),
-        mut progress: impl FnMut(&str),
+        mut progress: impl FnMut(&ScrubbedLines),
     ) -> Result<Output, Error> {
         let mut splitter = Records::default();
         let outcome = self.drive(
             cancel,
-            &mut |chunk| {
+            StdoutSink::Bytes(&mut |chunk| {
                 splitter.push(chunk, &mut record);
                 Flow::Continue
-            },
-            &mut |lines| lines.iter().for_each(|line| progress(line)),
+            }),
+            &mut progress,
             None,
         );
         if outcome.is_ok() {
@@ -419,10 +433,10 @@ impl<K: Kind> Invocation<K> {
     fn drive(
         mut self,
         cancel: &impl Cancel,
-        stdout: &mut dyn FnMut(&[u8]) -> Flow,
-        progress: &mut dyn FnMut(&[&str]),
+        stdout: StdoutSink<'_>,
+        progress: &mut dyn FnMut(&ScrubbedLines),
         ceiling: Option<K::Ceiling>,
-    ) -> Result<String, Error> {
+    ) -> Result<ScrubbedLines, Error> {
         // A write's ceiling type has no value, so only a read reaches the arm below.
         let ceiling = ceiling.map(K::ceiling_bytes);
         let arguments = std::mem::take(&mut self.arguments);
@@ -457,12 +471,11 @@ impl<K: Kind> Invocation<K> {
             return Err(Error::GitFailed {
                 arguments,
                 status,
-                stderr_cut: ended.tail.cut.then_some(0).into_iter().collect(),
-                stderr: ended.tail.text,
+                stderr: ended.tail,
                 present_locks: self.kind.present_locks(self.dirs.as_ref()),
             });
         }
-        Ok(ended.tail.text)
+        Ok(ended.tail)
     }
 }
 
@@ -487,20 +500,20 @@ impl Invocation<Read> {
         cancel: &impl Cancel,
         ceiling: usize,
         mut stdout: impl FnMut(&[u8]),
-        mut progress: impl FnMut(&str),
+        mut progress: impl FnMut(&ScrubbedLines),
     ) -> Result<Output, Error> {
         let mut taken = 0usize;
         self.drive(
             cancel,
-            &mut |chunk| {
+            StdoutSink::Bytes(&mut |chunk| {
                 taken = taken.saturating_add(chunk.len());
                 if taken > ceiling {
                     return Flow::Stop;
                 }
                 stdout(chunk);
                 Flow::Continue
-            },
-            &mut |lines| lines.iter().for_each(|line| progress(line)),
+            }),
+            &mut progress,
             Some(ceiling),
         )
         .map(|stderr| Output::new(Vec::new(), stderr))
@@ -513,19 +526,19 @@ impl Invocation<Read> {
         self,
         cancel: &impl Cancel,
         ceiling: usize,
-        mut progress: impl FnMut(&str),
+        mut progress: impl FnMut(&ScrubbedLines),
     ) -> Result<Output, Error> {
         let mut collected = Vec::new();
         let stderr = self.drive(
             cancel,
-            &mut |chunk| {
+            StdoutSink::Bytes(&mut |chunk| {
                 if collected.len() + chunk.len() > ceiling {
                     return Flow::Stop;
                 }
                 collected.extend_from_slice(chunk);
                 Flow::Continue
-            },
-            &mut |lines| lines.iter().for_each(|line| progress(line)),
+            }),
+            &mut progress,
             Some(ceiling),
         )?;
         Ok(Output::new(collected, stderr))
@@ -571,8 +584,8 @@ impl Driver {
     fn run(
         &mut self,
         cancel: &dyn Fn() -> bool,
-        stdout: &mut dyn FnMut(&[u8]) -> Flow,
-        progress: &mut dyn FnMut(&[&str]),
+        mut stdout: StdoutSink<'_>,
+        progress: &mut dyn FnMut(&ScrubbedLines),
     ) -> Ended {
         let group = Arc::clone(&self.group);
         let Some(events) = self.events.as_ref() else {
@@ -583,7 +596,7 @@ impl Driver {
                 signalled_while_running: false,
                 asked_to_end: group.ending(),
                 stopped: false,
-                tail: Retained::default(),
+                tail: ScrubbedLines::new(),
             };
             self.record(&ended);
             return ended;
@@ -596,28 +609,29 @@ impl Driver {
         // The tick is part of the bound: the exit is noticed at most a tick late.
         let drain = DRAIN_BOUND.saturating_sub(TICK);
 
-        let mut handle = |event: Event, stopped: &mut bool| match event {
-            Event::Stdout(chunk) => {
-                if !*stopped && stdout(&chunk) == Flow::Stop {
-                    *stopped = true;
-                    group.mark_ending();
-                }
+        // The lines one read completed, kept and handed on together (staging-and-commit phase
+        // 05's QA item 3): a caller that sends them on sends one message a read.
+        let mut said = |lines: &ScrubbedLines, tail: &mut Tail| {
+            if !lines.is_empty() {
+                tail.push(lines);
+                progress(lines);
             }
-            Event::Lines(lines) => {
-                // The lines one read completed, handed on together (staging-and-commit phase
-                // 05's QA item 3): a caller that sends them on sends one message a read.
-                let mut said = Vec::new();
-                for line in lines.split('\n') {
-                    let text = line.trim_end();
-                    if !text.is_empty() {
-                        said.push(text);
+        };
+        let mut handle = |event: Event, stopped: &mut bool, tail: &mut Tail| match event {
+            Event::Stdout(chunk) => match &mut stdout {
+                StdoutSink::Bytes(sink) => {
+                    if !*stopped && sink(&chunk) == Flow::Stop {
+                        *stopped = true;
+                        group.mark_ending();
                     }
-                    tail.push(line);
                 }
-                if !said.is_empty() {
-                    progress(&said);
+                StdoutSink::Lines(splitter) => {
+                    let mut lines = ScrubbedLines::new();
+                    splitter.push(&chunk, &mut lines);
+                    said(&lines, tail);
                 }
-            }
+            },
+            Event::Lines(lines) => said(&lines, tail),
         };
 
         loop {
@@ -636,13 +650,13 @@ impl Driver {
                         // of output still reaches the cancel poll and the escalation
                         // below at least once a tick.
                         let received = Instant::now();
-                        handle(event, &mut stopped);
+                        handle(event, &mut stopped, &mut tail);
                         for _ in 0..EVENTS_BOUND {
                             if received.elapsed() >= TICK {
                                 break;
                             }
                             match events.try_recv() {
-                                Ok(event) => handle(event, &mut stopped),
+                                Ok(event) => handle(event, &mut stopped, &mut tail),
                                 Err(TryRecvError::Empty) => break,
                                 Err(TryRecvError::Disconnected) => {
                                     pipes_closed = true;
@@ -686,12 +700,19 @@ impl Driver {
                 // What is already queued is the leader's, written before it exited.
                 for _ in 0..EVENTS_BOUND {
                     match events.try_recv() {
-                        Ok(event) => handle(event, &mut stopped),
+                        Ok(event) => handle(event, &mut stopped, &mut tail),
                         Err(_) => break,
                     }
                 }
                 break;
             }
+        }
+
+        // stdout read as lines: its last, when it ended without a terminator.
+        if let StdoutSink::Lines(splitter) = stdout {
+            let mut last = ScrubbedLines::new();
+            splitter.finish(&mut last);
+            said(&last, &mut tail);
         }
 
         // Read under the lock that concludes: a kill after this signals nothing and
@@ -716,7 +737,7 @@ impl Driver {
             signalled_while_running,
             asked_to_end,
             stopped,
-            tail: tail.into_text(),
+            tail: tail.into_lines(),
         };
         self.record(&ended);
         ended
@@ -744,16 +765,14 @@ impl Drop for Driver {
                 if let Some(events) = self.events.take() {
                     for event in events.try_iter() {
                         if let Event::Lines(lines) = event {
-                            for line in lines.split('\n') {
-                                tail.push(line);
-                            }
+                            tail.push(&lines);
                         }
                     }
                 }
                 registration.finish(
                     status.map_or(CommandExit::Unknown, exit_of),
                     true,
-                    tail.into_text(),
+                    tail.into_lines(),
                 );
             }
             return;
@@ -771,7 +790,11 @@ impl Drop for Driver {
             "cairn-git-reaper",
             move || {
                 let mut reaper = reaper;
-                reaper.run(&|| true, &mut |_| Flow::Continue, &mut |_| {});
+                reaper.run(
+                    &|| true,
+                    StdoutSink::Bytes(&mut |_| Flow::Continue),
+                    &mut |_| {},
+                );
             },
             &self.reaper,
         );
@@ -793,7 +816,7 @@ mod tests {
 
     use super::super::cli::{Kind, Output, Read, Write};
     use super::super::group::{TERMINATION_GRACE, os_thread};
-    use super::super::pipes;
+    use super::super::pipes::{self, spoken};
     use super::super::stub_git::{StubGit, discover_retrying};
     use super::{DRAIN_BOUND, Invocation, TICK};
     use crate::ops::{Askpass, GitBinary};
@@ -1026,7 +1049,7 @@ mod tests {
                 .records(
                     &never(),
                     |record| records.push(String::from_utf8_lossy(record).into_owned()),
-                    |line| lines.push(line.to_owned()),
+                    |said| lines.extend(spoken(said)),
                 )
                 .unwrap();
             (records, lines)
@@ -1203,7 +1226,9 @@ mod tests {
                 .input(input)
                 .start()
                 .unwrap()
-                .collect(&never(), 65 * 1024 * 1024, |_| lines += 1)
+                .collect(&never(), 65 * 1024 * 1024, |said| {
+                    lines += spoken(said).len();
+                })
                 .unwrap();
             (output, lines)
         });
@@ -1265,13 +1290,15 @@ mod tests {
             let outcome = invocation.finish(
                 &signal,
                 |_| {},
-                |line| {
-                    seen.push(line.to_owned());
-                    if line == "hanging" && at.is_none() {
-                        at = Some(Instant::now());
-                        match how {
-                            Cancelling::ByHandle => handle.kill(),
-                            Cancelling::BySignal => signal.cancel(),
+                |said| {
+                    for line in spoken(said) {
+                        seen.push(line.to_owned());
+                        if line == "hanging" && at.is_none() {
+                            at = Some(Instant::now());
+                            match how {
+                                Cancelling::ByHandle => handle.kill(),
+                                Cancelling::BySignal => signal.cancel(),
+                            }
                         }
                     }
                 },
@@ -1518,10 +1545,12 @@ mod tests {
             let outcome = invocation.finish(
                 &never(),
                 |_| {},
-                |line| {
-                    seen.push(line.to_owned());
-                    if line == "hanging" {
-                        let _ = spoke.send(());
+                |said| {
+                    for line in spoken(said) {
+                        seen.push(line.to_owned());
+                        if line == "hanging" {
+                            let _ = spoke.send(());
+                        }
                     }
                 },
             );
@@ -1571,9 +1600,11 @@ mod tests {
                 .records(
                     &never(),
                     |record| records.push(record.to_vec()),
-                    |line| {
-                        if line == "last words" {
-                            last_words = Some(Instant::now());
+                    |said| {
+                        for line in spoken(said) {
+                            if line == "last words" {
+                                last_words = Some(Instant::now());
+                            }
                         }
                     },
                 )
@@ -1707,7 +1738,6 @@ mod tests {
                 arguments,
                 status,
                 stderr,
-                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(arguments, "stub");
@@ -1798,17 +1828,19 @@ mod tests {
             let outcome = invocation.finish(
                 &never(),
                 |_| {},
-                |line| {
-                    seen.push(line.to_owned());
-                    if line == "hanging" {
-                        let held = group.leader();
-                        let killing = Instant::now();
-                        handle.kill();
-                        assert!(
-                            killing.elapsed() < Duration::from_millis(50),
-                            "the kill waited"
-                        );
-                        assert!(!held.terminated(), "the kill took a lock that was held");
+                |said| {
+                    for line in spoken(said) {
+                        seen.push(line.to_owned());
+                        if line == "hanging" {
+                            let held = group.leader();
+                            let killing = Instant::now();
+                            handle.kill();
+                            assert!(
+                                killing.elapsed() < Duration::from_millis(50),
+                                "the kill waited"
+                            );
+                            assert!(!held.terminated(), "the kill took a lock that was held");
+                        }
                     }
                 },
             );
@@ -1825,9 +1857,9 @@ mod tests {
         );
     }
 
-    /// Phase 05's QA item 3: `finish_by_read` hands on the lines one read completed together —
-    /// a burst of lines written at once is far fewer calls than lines — and every line, in
-    /// order, blank ones left out. Caught by: one call a line, or a line lost between reads.
+    /// Phase 05's QA item 3: `finish` hands on the lines one read completed together — a burst
+    /// of lines written at once is far fewer calls than lines, none empty — and every line, in
+    /// order. Caught by: one call a line, an empty call, or a line lost between reads.
     #[test]
     fn the_lines_of_one_read_are_handed_on_together() {
         const LINES: usize = 5_000;
@@ -1838,22 +1870,11 @@ mod tests {
         let calls = within(DEADLINE, move || {
             let mut calls = Vec::new();
             started(&stub)
-                .finish_by_read(
-                    &never(),
-                    |_| {},
-                    |lines| {
-                        calls.push(
-                            lines
-                                .iter()
-                                .map(|line| (*line).to_owned())
-                                .collect::<Vec<_>>(),
-                        );
-                    },
-                )
+                .finish(&never(), |_| {}, |lines| calls.push(lines.clone()))
                 .unwrap();
             calls
         });
-        let lines: Vec<String> = calls.iter().flatten().cloned().collect();
+        let lines: Vec<String> = calls.iter().flat_map(spoken).collect();
         let expected: Vec<String> = (1..=LINES)
             .map(|n| format!("line {n}"))
             .chain(["last".to_owned()])
@@ -1867,9 +1888,6 @@ mod tests {
         );
     }
 
-    /// G13: 1 MiB of stderr in lines reaches the progress callback line by line,
-    /// and what is retained is at most 256 KiB and ends with the last line. Caught
-    /// by: retaining everything, or dropping lines under volume.
     #[test]
     fn a_mib_of_stderr_is_forwarded_whole_and_retained_as_a_bounded_tail() {
         const LINES: usize = 21_000;
@@ -1880,7 +1898,7 @@ mod tests {
         let (output, lines) = within(DEADLINE, move || {
             let mut lines = Vec::new();
             let output = started(&stub)
-                .finish(&never(), |_| {}, |line| lines.push(line.to_owned()))
+                .finish(&never(), |_| {}, |said| lines.extend(spoken(said)))
                 .unwrap();
             (output, lines)
         });
@@ -2179,9 +2197,11 @@ mod tests {
             let outcome = invocation.records(
                 &never(),
                 |record| records.push(record.to_vec()),
-                |line| {
-                    if line == "hanging" {
-                        handle.kill();
+                |said| {
+                    for line in spoken(said) {
+                        if line == "hanging" {
+                            handle.kill();
+                        }
                     }
                 },
             );
@@ -2216,8 +2236,8 @@ mod tests {
             let outcome = invocation.finish(
                 &never(),
                 |_| {},
-                |_| {
-                    seen += 1;
+                |said| {
+                    seen += spoken(said).len();
                     std::thread::sleep(Duration::from_micros(100));
                 },
             );
@@ -2318,9 +2338,11 @@ mod tests {
             invocation.finish(
                 &never(),
                 |_| {},
-                |line| {
-                    if line == "hanging" {
-                        panic!("a caller's callback panicked");
+                |said| {
+                    for line in spoken(said) {
+                        if line == "hanging" {
+                            panic!("a caller's callback panicked");
+                        }
                     }
                 },
             )

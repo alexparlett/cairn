@@ -37,11 +37,12 @@
 //! group as a fetch's cancel does; before then, [`CommitWatch::cancel`] is polled through the
 //! checks, and a commit cancelled there writes nothing
 //! ([`Error::CommitCancelledBeforeRunning`]). git's output — a hook's lines, on stdout and
-//! stderr alike — is handed to [`CommitWatch::output`] line by line as it arrives (R6.5); a
-//! failure carries it too, stdout's tail ahead of stderr's, since git says "nothing to commit"
-//! and "would make it empty" on stdout.
+//! stderr alike — is read by the runner as whole lines, each scrubbed as it is split, and handed
+//! to [`CommitWatch::output`] a read at a time as it arrives (R6.5, R4.10); a failure carries
+//! the runner's tail of both, in the order the lines arrived, since git says "nothing to
+//! commit" and "would make it empty" on stdout; the command log records the same.
 
-use cairn_model::{AskpassToken, Confirmed, Consequence};
+use cairn_model::{AskpassToken, Confirmed, Consequence, ScrubbedLines};
 
 use super::amend::amend_consequence;
 use super::local_write::{locks_around, locks_now};
@@ -66,9 +67,10 @@ pub struct CommitWatch<'a> {
     /// Called once, as git starts, with what ends it from another thread.
     pub running: &'a mut dyn FnMut(CommitCancel),
     /// The lines git or a hook writes, stdout's and stderr's alike, as they arrive: each call
-    /// the lines one read of one pipe completed, never empty (staging-and-commit phase 05's QA
-    /// item 3 — a caller that sends each call on sends one message a read, not a line).
-    pub output: &'a mut dyn FnMut(&[&str]),
+    /// the lines one read of one pipe completed, whole and scrubbed, never empty
+    /// (staging-and-commit phase 05's QA item 3 — a caller that sends each call on sends one
+    /// message a read, not a line; R4.10).
+    pub output: &'a mut dyn FnMut(&ScrubbedLines),
 }
 
 /// Ends a running commit and everything it started — its hooks, a signing program — with
@@ -89,9 +91,6 @@ impl std::fmt::Debug for CommitWatch<'_> {
             .finish_non_exhaustive()
     }
 }
-
-/// How much of git's stdout a failure keeps: the end of it, which is where git says why.
-const STDOUT_TAIL: usize = 64 * 1024;
 
 /// Commits what is staged with `message` (module docs). Refused before git runs
 /// ([`Error::CommitRefused`]) for a non-UTF-8 `i18n.commitEncoding` and during a rebase,
@@ -144,7 +143,7 @@ pub fn amend(
         }
     };
     utf8_messages(repo)?;
-    let now = amend_consequence(repo, &Polled(watch.cancel)).map_err(|error| {
+    let now = amend_consequence(repo, &watch.cancel).map_err(|error| {
         if watch.cancel.is_cancelled() {
             Error::CommitCancelledBeforeRunning
         } else {
@@ -234,165 +233,10 @@ fn run(
     }
     let invocation = command.start()?;
     (watch.running)(CommitCancel(invocation.kill_handle()));
-    // Both pipes' lines go to the one output, each on the thread that drives the runner.
-    let output = std::cell::RefCell::new(watch.output);
-    let mut stdout = Lines::default();
-    // stdout's lines a chunk completed, handed on together.
-    let together = |lines: Vec<String>| {
-        if !lines.is_empty() {
-            let said: Vec<&str> = lines.iter().map(String::as_str).collect();
-            (output.borrow_mut())(&said);
-        }
-    };
-    let outcome = invocation.finish_by_read(
-        &CancelSignal::new(),
-        |chunk| {
-            let mut lines = Vec::new();
-            stdout.push(chunk, &mut |line| lines.push(line.to_owned()));
-            together(lines);
-        },
-        |lines| (output.borrow_mut())(lines),
-    );
-    let mut lines = Vec::new();
-    stdout.finish(&mut |line| lines.push(line.to_owned()));
-    together(lines);
-    match outcome {
-        Ok(_) => Ok(()),
-        Err(Error::GitFailed {
-            arguments,
-            status,
-            stderr,
-            stderr_cut,
-            present_locks,
-        }) => {
-            let (joined, cut) = joined_output(stdout.tail(), (stderr, stderr_cut.contains(&0)));
-            Err(Error::GitFailed {
-                arguments,
-                status,
-                stderr: joined,
-                stderr_cut: cut,
-                present_locks,
-            })
-        }
-        Err(other) => Err(other),
-    }
-}
-
-/// stdout's tail, then stderr's, the blank ones left out, joined by a newline — and where in
-/// the text each part that was cut from its front now begins (phase 11's QA, TC5), so a view
-/// scrubs a URL cut there with nothing guessed.
-fn joined_output(stdout: (String, bool), stderr: (String, bool)) -> (String, Vec<usize>) {
-    let mut joined = String::new();
-    let mut cut = Vec::new();
-    for (part, part_cut) in [stdout, stderr] {
-        if part.trim().is_empty() {
-            continue;
-        }
-        if !joined.is_empty() {
-            joined.push('\n');
-        }
-        if part_cut {
-            cut.push(joined.len());
-        }
-        joined.push_str(&part);
-    }
-    (joined, cut)
-}
-
-/// A `&dyn Cancel` where a walk wants a sized one.
-struct Polled<'a>(&'a dyn Cancel);
-
-impl Cancel for Polled<'_> {
-    fn is_cancelled(&self) -> bool {
-        self.0.is_cancelled()
-    }
-}
-
-/// stdout split into lines as it arrives, and the tail of it kept for a failure.
-#[derive(Default)]
-struct Lines {
-    partial: Vec<u8>,
-    tail: Vec<u8>,
-    /// The tail let go of a prefix: it may begin part-way through a line.
-    cut: bool,
-}
-
-impl Lines {
-    fn push(&mut self, chunk: &[u8], output: &mut dyn FnMut(&str)) {
-        self.tail.extend_from_slice(chunk);
-        if self.tail.len() > STDOUT_TAIL {
-            let excess = self.tail.len() - STDOUT_TAIL;
-            self.tail.drain(..excess);
-            self.cut = true;
-        }
-        self.partial.extend_from_slice(chunk);
-        // Each line handed on where it lies, the consumed prefix dropped once per chunk: a
-        // chunk of many short lines costs its length, not its length per line.
-        let mut start = 0;
-        while let Some(offset) = self.partial[start..].iter().position(|byte| *byte == b'\n') {
-            let end = start + offset;
-            let text = String::from_utf8_lossy(&self.partial[start..end]);
-            if !text.trim().is_empty() {
-                output(&text);
-            }
-            start = end + 1;
-        }
-        self.partial.drain(..start);
-        // A line that never ends is handed on in pieces of the tail's size, so what is kept
-        // of it stays bounded — cut before a character a piece would split, which waits for
-        // the next piece rather than reading as U+FFFD (phase 05's QA item 11).
-        if self.partial.len() > STDOUT_TAIL {
-            let whole = whole_characters(&self.partial);
-            let rest = self.partial.split_off(whole);
-            self.finish(output);
-            self.partial = rest;
-        }
-    }
-
-    fn finish(&mut self, output: &mut dyn FnMut(&str)) {
-        let text = String::from_utf8_lossy(&self.partial).into_owned();
-        self.partial.clear();
-        if !text.trim().is_empty() {
-            output(&text);
-        }
-    }
-
-    /// The tail, starting at a character's start: a cut that fell inside one leaves its
-    /// continuation bytes out rather than reading them as U+FFFD.
-    fn tail(&self) -> (String, bool) {
-        let start = self
-            .tail
-            .iter()
-            .take(3)
-            .take_while(|byte| (**byte & 0xC0) == 0x80)
-            .count();
-        (
-            String::from_utf8_lossy(&self.tail[start..]).into_owned(),
-            self.cut,
-        )
-    }
-}
-
-/// How many of `bytes` end at a character's end: all of them, unless they end inside a UTF-8
-/// sequence, whose started bytes are left out. Bytes that are no UTF-8 at all are counted, to be
-/// read lossily as they always were.
-fn whole_characters(bytes: &[u8]) -> usize {
-    let length = bytes.len();
-    for back in 1..=length.min(3) {
-        let byte = bytes[length - back];
-        if (byte & 0xC0) == 0x80 {
-            continue;
-        }
-        // A lead byte: how long its sequence is, and whether all of it is here.
-        let needs = match byte {
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            0xF0..=0xF7 => 4,
-            _ => 1,
-        };
-        return if back < needs { length - back } else { length };
-    }
-    length
+    // Both pipes' lines, as the runner splits and scrubs them, to the one output.
+    invocation
+        .lines(&CancelSignal::new(), |lines| (watch.output)(lines))
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -432,7 +276,7 @@ mod tests {
         let (git, repo) = (stub.git_binary(), stub.repository());
         let message = "a subject never on argv\n\nand a body\n";
         let cancel = CancelSignal::new();
-        let (mut running, mut output) = (|_: CommitCancel| {}, |_: &[&str]| {});
+        let (mut running, mut output) = (|_: CommitCancel| {}, |_: &ScrubbedLines| {});
         stub.forget();
         commit(
             &git,
@@ -491,6 +335,117 @@ mod tests {
         }
     }
 
+    /// Runs a commit of the fixture's staged change through `run`'s line stream, handing back the
+    /// outcome and every line `output` was handed, in order. A hook written a moment ago can be
+    /// refused with "Text file busy" while another test's fork still holds it open: retried then.
+    fn commit_seen(
+        stub: &super::super::recording_stub::RecordingStub,
+        repo: &Repository,
+    ) -> (Result<Performed, Error>, Vec<String>) {
+        let git = stub.git_binary();
+        for _ in 0..20 {
+            let cancel = CancelSignal::new();
+            let mut seen = Vec::new();
+            let mut running = |_: CommitCancel| {};
+            let mut output = |lines: &ScrubbedLines| seen.extend(lines.lines().map(str::to_owned));
+            let outcome = commit(
+                &git,
+                repo,
+                "subject",
+                Hooks::Run,
+                None,
+                CommitWatch {
+                    cancel: &cancel,
+                    running: &mut running,
+                    output: &mut output,
+                },
+            );
+            match &outcome {
+                Err(Error::GitFailed { stderr, .. }) if stderr.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => return (outcome, seen),
+            }
+        }
+        panic!("the hook stayed busy");
+    }
+
+    /// C31 for a commit (R4.10, R6.5): a hook's output reaches the commit's output and its
+    /// failure as the runner's whole lines — a URL's userinfo written across two writes never
+    /// handed on, kept or recorded; a multi-byte character whole; a `\r` redraw split as a line
+    /// of its own — and the failure keeps what was handed on, in order. Caught by: commit's own
+    /// splitter back, a scrub after the cut, or a failure built from another text.
+    #[test]
+    fn a_hooks_output_reaches_the_commit_as_whole_scrubbed_lines() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let stub = super::super::recording_stub::RecordingStub::new();
+        stub.config("user.name", "Commit Ter");
+        stub.config("user.email", "committer@example.com");
+        stub.write(
+            ".git/hooks/pre-commit",
+            "#!/bin/sh\n\
+             PATH=/usr/bin:/bin\n\
+             printf 'denied by https://u:SEC'\n\
+             sleep 0.1\n\
+             printf 'RET@host/r\\n'\n\
+             printf 'caf\\303\\251 closed\\n' >&2\n\
+             printf 'redraw 1\\rredraw 2\\n'\n\
+             exit 1\n",
+        );
+        let hook = stub.repository().git_dir().join("hooks/pre-commit");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repo = stub.repository();
+        let (outcome, seen) = commit_seen(&stub, &repo);
+        for line in [
+            "denied by https://host/r",
+            "café closed",
+            "redraw 1",
+            "redraw 2",
+        ] {
+            assert!(
+                seen.iter().any(|said| said == line),
+                "{line:?} not handed on: {seen:?}"
+            );
+        }
+        assert!(seen.iter().all(|line| !line.contains("SEC")), "{seen:?}");
+        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+            panic!("the hook's failure was not the commit's: {outcome:?}");
+        };
+        assert_eq!(
+            stderr.lines().collect::<Vec<_>>(),
+            seen.iter().map(String::as_str).collect::<Vec<_>>(),
+            "the failure keeps other than what was handed on"
+        );
+        let logged = format!("{:?}", repo.processes().log());
+        assert!(
+            !logged.contains("SEC") && logged.contains("café closed"),
+            "{logged}"
+        );
+    }
+
+    /// R6.5's other stream: git's own words on stdout — "no changes added to commit" — reach the
+    /// commit's output and its failure as lines, as stderr's do. Caught by: stdout read as bytes
+    /// and dropped, or kept apart from the failure.
+    #[test]
+    fn gits_stdout_reaches_the_commits_output_and_failure_as_lines() {
+        let stub = super::super::recording_stub::RecordingStub::new();
+        stub.config("user.name", "Commit Ter");
+        stub.config("user.email", "committer@example.com");
+        let repo = stub.repository();
+        let (made, _) = commit_seen(&stub, &repo);
+        assert!(made.is_ok(), "{made:?}");
+        let (outcome, seen) = commit_seen(&stub, &repo);
+        assert!(
+            seen.iter()
+                .any(|line| line.starts_with("no changes added to commit")),
+            "{seen:?}"
+        );
+        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+            panic!("nothing staged, yet {outcome:?}");
+        };
+        assert!(stderr.contains("no changes added to commit"), "{stderr}");
+    }
+
     /// git's `is_encoding_utf8`. Caught by: a case-sensitive match, `utf-8` refused, or
     /// `UTF-16` taken for UTF-8.
     #[test]
@@ -509,129 +464,5 @@ mod tests {
         ] {
             assert!(!names_utf8(name.as_bytes()), "{name}");
         }
-    }
-
-    /// stdout's lines reach the output as they complete, a last line without its newline
-    /// on finish, blank ones dropped; the tail keeps the end of a long answer, and a line with
-    /// no end is handed on rather than kept. Caught by: a line split at a chunk's edge, or the
-    /// tail or the line in progress growing without bound.
-    #[test]
-    fn stdout_is_handed_on_by_line_and_its_tail_is_bounded() {
-        let mut seen = Vec::new();
-        let mut lines = Lines::default();
-        let mut output = |line: &str| seen.push(line.to_owned());
-        lines.push(b"On branch ma", &mut output);
-        lines.push(b"in\n\nnothing to com", &mut output);
-        lines.push(b"mit\nlast", &mut output);
-        lines.finish(&mut output);
-        assert_eq!(seen, ["On branch main", "nothing to commit", "last"]);
-        let mut lines = Lines::default();
-        let mut pieces = 0;
-        lines.push(&vec![b'x'; STDOUT_TAIL * 2], &mut |_| pieces += 1);
-        assert_eq!(pieces, 1, "a line with no end was kept whole");
-        assert!(lines.partial.is_empty());
-        lines.push(b"\nend\n", &mut |_| {});
-        assert_eq!(lines.tail().0.len(), STDOUT_TAIL);
-        assert!(lines.tail().0.ends_with("\nend\n"));
-    }
-
-    /// Phase 11's QA (TC5): the kept output says where each cut part begins — stdout's front,
-    /// and stderr's after stdout's — and nothing for parts that were not cut. Caught by: a cut
-    /// guessed from a length, or the offset of stderr's part lost in the join.
-    #[test]
-    fn the_kept_output_says_where_each_cut_part_begins() {
-        let (text, cut) = joined_output(("out".to_owned(), true), ("err".to_owned(), true));
-        assert_eq!(text, "out\nerr");
-        assert_eq!(cut, [0, 4]);
-        let (text, cut) = joined_output(("out".to_owned(), false), ("err".to_owned(), true));
-        assert_eq!((text.as_str(), cut), ("out\nerr", vec![4]));
-        let (text, cut) = joined_output((" ".to_owned(), true), ("err".to_owned(), false));
-        assert_eq!((text.as_str(), cut), ("err", vec![]));
-        let (_, cut) = joined_output(("out".to_owned(), false), ("err".to_owned(), false));
-        assert!(cut.is_empty());
-    }
-
-    /// Phase 05's QA item 11: a cut — the tail's front, or a piece of a line with no end — that
-    /// falls inside a multibyte character never reads as U+FFFD; the piece's split character
-    /// goes whole with the next piece. Caught by: a byte cut decoded lossily.
-    #[test]
-    fn a_cut_inside_a_character_reads_no_replacement_character() {
-        let mut seen = Vec::new();
-        let mut lines = Lines::default();
-        // `é` is two bytes: one more byte than the tail's size puts its first byte at the end.
-        let mut long = vec![b'x'; STDOUT_TAIL];
-        long.extend_from_slice("é".as_bytes());
-        lines.push(&long[..=STDOUT_TAIL], &mut |line| {
-            seen.push(line.to_owned())
-        });
-        lines.push(&long[STDOUT_TAIL + 1..], &mut |line| {
-            seen.push(line.to_owned())
-        });
-        lines.push(b"\n", &mut |line| seen.push(line.to_owned()));
-        assert_eq!(
-            seen.len(),
-            2,
-            "{:?}",
-            seen.iter().map(String::len).collect::<Vec<_>>()
-        );
-        assert!(seen.iter().all(|line| !line.contains('\u{FFFD}')));
-        assert_eq!(seen[1], "é");
-        // The tail's front cut inside `€` (three bytes).
-        let mut lines = Lines::default();
-        let mut text = "€".as_bytes().to_vec();
-        text.extend(vec![b'y'; STDOUT_TAIL - 1]);
-        lines.push(&text, &mut |_| {});
-        let (tail, cut) = lines.tail();
-        assert!(
-            !tail.contains('\u{FFFD}'),
-            "the tail began inside a character"
-        );
-        assert_eq!(tail.len(), STDOUT_TAIL - 1);
-        assert!(
-            cut,
-            "a tail one byte short of the bound, cut, read as whole"
-        );
-        let mut whole = Lines::default();
-        whole.push(b"short\n", &mut |_| {});
-        assert!(!whole.tail().1, "an uncut tail said to be cut");
-        // Phase 11's QA (TC12): two and three continuation bytes left at the tail's front, and
-        // a piece cut through a four-byte character at every byte of it.
-        for (character, left) in [("€", 2), ("😀", 3)] {
-            let mut lines = Lines::default();
-            let mut text = character.as_bytes().to_vec();
-            text.extend(vec![b'y'; STDOUT_TAIL - left]);
-            lines.push(&text, &mut |_| {});
-            let (tail, _) = lines.tail();
-            assert!(
-                !tail.contains('\u{FFFD}'),
-                "{left} continuation bytes read as U+FFFD"
-            );
-            assert_eq!(tail.len(), STDOUT_TAIL - left);
-        }
-        for at in 1..4 {
-            let mut seen = Vec::new();
-            let mut lines = Lines::default();
-            let mut long = vec![b'x'; STDOUT_TAIL + 1 - at];
-            long.extend_from_slice("😀".as_bytes());
-            lines.push(&long[..=STDOUT_TAIL], &mut |line| {
-                seen.push(line.to_owned())
-            });
-            lines.push(&long[STDOUT_TAIL + 1..], &mut |line| {
-                seen.push(line.to_owned())
-            });
-            lines.push(b"\n", &mut |line| seen.push(line.to_owned()));
-            assert!(
-                seen.iter().all(|line| !line.contains('\u{FFFD}')),
-                "cut {at} bytes into a four-byte character"
-            );
-            assert_eq!(seen.last().map(String::as_str), Some("😀"), "cut {at}");
-        }
-        assert_eq!(whole_characters("a€".as_bytes()), 4);
-        assert_eq!(whole_characters(&"a€".as_bytes()[..3]), 1);
-        assert_eq!(
-            whole_characters(&[b'a', 0xFF]),
-            2,
-            "not UTF-8: counted as it is"
-        );
     }
 }

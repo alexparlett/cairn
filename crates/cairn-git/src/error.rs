@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
+use cairn_model::ScrubbedLines;
+
 use crate::ops::GitVersion;
 
 #[derive(Debug, thiserror::Error)]
@@ -220,7 +222,10 @@ pub enum Error {
     },
 
     /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the
-    /// user: the last 256 KiB of it, whatever it said before that dropped.
+    /// user: the last 256 KiB of it as whole lines, each scrubbed of a URL's
+    /// userinfo as the runner split it, older lines let go of whole — and, for
+    /// a commit, its stdout's lines too, in the order they arrived
+    /// (staging-and-commit R4.10).
     /// `present_locks` is every `*.lock` under the git directory once a WRITE
     /// had failed — the file another git holds, or a stale one from a crash,
     /// which is what a write fails on and git does not wait for. Never retried
@@ -234,12 +239,7 @@ pub enum Error {
     GitFailed {
         arguments: String,
         status: ExitStatus,
-        stderr: String,
-        /// The byte offsets in `stderr` where retained text begins part-way through a line —
-        /// `0` when its front was cut to the runner's tail, and, for a commit's, where its
-        /// stderr's cut tail follows stdout's — so a view scrubs a URL cut there
-        /// (staging-and-commit R12.2). Empty when nothing was cut.
-        stderr_cut: Vec<usize>,
+        stderr: ScrubbedLines,
         present_locks: Vec<PathBuf>,
     },
 
@@ -457,6 +457,16 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+}
+
+impl Error {
+    /// This error as a person reads it, scrubbed of every URL's userinfo (staging-and-commit
+    /// R12.2, R4.10): git's own words in it were scrubbed as the runner split them, and what
+    /// else it quotes — a setting's value, a record git printed — is scrubbed here, once, so the
+    /// application draws an error's text through this and never scrubs it itself.
+    pub fn shown(&self) -> ScrubbedLines {
+        ScrubbedLines::scrubbing(&self.to_string())
+    }
 }
 
 /// Why a fetch was refused; see [`Error::FetchRefused`].
@@ -773,8 +783,7 @@ mod tests {
         let clean = Error::GitFailed {
             arguments: "add x".to_owned(),
             status,
-            stderr: "fatal: no".to_owned(),
-            stderr_cut: Vec::new(),
+            stderr: ScrubbedLines::scrubbing("fatal: no"),
             present_locks: Vec::new(),
         };
         assert_eq!(
@@ -784,13 +793,27 @@ mod tests {
         let locked = Error::GitFailed {
             arguments: "add x".to_owned(),
             status,
-            stderr: "fatal: Unable to create index.lock".to_owned(),
-            stderr_cut: Vec::new(),
+            stderr: ScrubbedLines::scrubbing("fatal: Unable to create index.lock"),
             present_locks: vec![PathBuf::from("/r/.git/index.lock")],
         };
         let text = locked.to_string();
         assert!(text.contains("lock files are present"), "{text}");
         assert!(text.ends_with("/r/.git/index.lock"), "{text}");
+    }
+
+    /// R12.2: an error's text as the application draws it carries no URL's userinfo, whatever
+    /// part of it quoted one — git's words, or a value the engine quotes beside them. Caught by:
+    /// the application handed `to_string`'s text as it is.
+    #[test]
+    fn an_errors_shown_text_carries_no_userinfo() {
+        let quoting = Error::InvalidConfig {
+            key: "remote.origin.url".to_owned(),
+            value: "https://user:SECRET@host/r".to_owned(),
+        };
+        assert!(quoting.to_string().contains("SECRET"), "the case is real");
+        let shown = quoting.shown();
+        assert!(!shown.text().contains("SECRET"), "{shown}");
+        assert!(shown.text().contains("https://host/r"), "{shown}");
     }
 
     /// Issue #19: the message names every stranded lock, and says nothing about locks

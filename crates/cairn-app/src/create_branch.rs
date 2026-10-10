@@ -401,10 +401,7 @@ pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding) {
             } else {
                 lines
             };
-            (
-                crate::shown_output::shown_line(&command.clone().unwrap_or_default()),
-                lines,
-            )
+            (command.clone().unwrap_or_default(), lines)
         }
         WriteEnding::Stale { message, .. }
         | WriteEnding::Refused { message }

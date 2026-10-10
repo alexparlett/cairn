@@ -640,7 +640,9 @@ fn a_failed_create_opens_the_git_error_and_keeps_its_name() {
                 message: "git failed".to_owned(),
                 locks: Vec::new(),
                 command: Some("git --literal-pathspecs branch -- topic abab".to_owned()),
-                output: "fatal: a branch named 'topic' already exists\n".to_owned(),
+                output: cairn_model::ScrubbedLines::scrubbing(
+                    "fatal: a branch named 'topic' already exists\n",
+                ),
             },
             read_again: crate::worker::ReadAgain::Everything,
         },

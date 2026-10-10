@@ -37,8 +37,8 @@ use cairn_model::{CommandExit, CommandRecord};
 
 use super::command_log::{CommandLog, Origin};
 use super::group::{Group, TERMINATION_GRACE};
-use super::pipes::Retained;
 use super::runner::DRAIN_BOUND;
+use cairn_model::{ScrubbedLines, Scrubber};
 
 /// How long closing a repository waits for its invocations to be reaped: 3 s.
 ///
@@ -166,17 +166,23 @@ pub(super) struct Registration {
 }
 
 impl Registration {
-    /// Booked as starting now, with what the invocation was given. Nothing
-    /// from its environment: the record has nowhere to put it.
+    /// Booked as starting now, with what the invocation was given — each
+    /// argument scrubbed of a URL's userinfo as it is booked (R12.2), though
+    /// Cairn passes none. Nothing from its environment: the record has nowhere
+    /// to put it.
     pub(super) fn new(
         processes: &Arc<Processes>,
         arguments: Vec<String>,
         directory: Option<PathBuf>,
     ) -> Self {
+        let mut scrubber = Scrubber::new();
         Self {
             processes: Arc::clone(processes),
             id: None,
-            arguments,
+            arguments: arguments
+                .iter()
+                .map(|argument| scrubber.line(argument).into_string())
+                .collect(),
             directory,
             started: SystemTime::now(),
             clock: Instant::now(),
@@ -197,15 +203,15 @@ impl Registration {
 
     /// The process never started.
     pub(super) fn not_started(self) {
-        self.finish(CommandExit::NotStarted, false, Retained::default());
+        self.finish(CommandExit::NotStarted, false, ScrubbedLines::new());
     }
 
     /// The invocation is over: one record, and out of the registry.
-    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: Retained) {
+    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: ScrubbedLines) {
         self.book(exit, cancelled, stderr);
     }
 
-    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: Retained) {
+    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: ScrubbedLines) {
         if self.finished {
             return;
         }
@@ -217,8 +223,7 @@ impl Registration {
             duration: self.clock.elapsed(),
             exit,
             cancelled,
-            stderr: stderr.text,
-            stderr_cut: stderr.cut,
+            stderr,
         };
         self.processes.leave(self.id.take(), self.origin, record);
     }
@@ -228,7 +233,7 @@ impl Drop for Registration {
     /// Never the path an invocation takes — each ends by [`Registration::finish`]
     /// — but if one ever did not, it is still recorded, as an end nobody saw.
     fn drop(&mut self) {
-        self.book(CommandExit::Unknown, false, Retained::default());
+        self.book(CommandExit::Unknown, false, ScrubbedLines::new());
     }
 }
 
@@ -345,12 +350,14 @@ mod tests {
             .finish(
                 &signal,
                 |_| {},
-                |line| {
-                    if line == "hanging" {
-                        if by_handle {
-                            handle.kill();
-                        } else {
-                            signal.cancel();
+                |said| {
+                    for line in crate::process::spoken(said) {
+                        if line == "hanging" {
+                            if by_handle {
+                                handle.kill();
+                            } else {
+                                signal.cancel();
+                            }
                         }
                     }
                 },
@@ -395,6 +402,78 @@ mod tests {
         assert_eq!(record.exit, CommandExit::Code(0));
         assert!(!record.cancelled);
         assert_eq!(record.stderr, "said this");
+    }
+
+    /// C31 through the runner (R4.10): read as lines, stdout and stderr are split by the one line
+    /// type — a character straddling the piece limit arrives whole on both — and a URL's userinfo
+    /// written across two reads is never handed on, kept in the failure or recorded; the kept
+    /// output lets go of whole older lines and says so; and the record's arguments carry no
+    /// userinfo either. Caught by: stdout and stderr split by two rules, a scrub after the cut, a
+    /// tail that starts part-way through a line, or an argument recorded as it was given.
+    #[test]
+    fn git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams() {
+        let stub = stub(
+            "PATH=/usr/bin:/bin; command -v head >/dev/null || exit 99; \
+             x=$(head -c 262143 /dev/zero | tr '\\000' x); \
+             printf '%s\\303\\251 out\\n' \"$x\"; printf '%s\\303\\251 err\\n' \"$x\" >&2; \
+             sleep 0.1; printf 'fatal: https://user:SEC' >&2; sleep 0.2; \
+             printf 'RET@host/r denied\\n' >&2; printf 'to https://u:SECRET@h/x\\n'; exit 1",
+        );
+        let repo = repo();
+        let processes = processes(&repo);
+        let mut handed = Vec::new();
+        let outcome = discover_retrying(stub.environment())
+            .unwrap()
+            .read_invocation()
+            .in_repository(&repo)
+            .args(["stub", "https://user:SECRET@host/r"])
+            .start()
+            .unwrap()
+            .lines(&CancelSignal::new(), |lines| {
+                handed.extend(lines.lines().map(str::to_owned));
+            });
+        assert!(
+            handed.iter().all(|line| !line.contains('\u{FFFD}')),
+            "a character was cut"
+        );
+        for line in [
+            "é out",
+            "é err",
+            "fatal: https://host/r denied",
+            "to https://h/x",
+        ] {
+            assert!(
+                handed.iter().any(|said| said == line),
+                "{line:?} not handed on whole"
+            );
+        }
+        assert!(
+            handed.iter().all(|line| !line.contains("SEC")),
+            "{handed:?}"
+        );
+        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+            panic!("expected the failure, got {outcome:?}");
+        };
+        assert!(stderr.older_dropped(), "older lines let go of, unsaid");
+        assert!(stderr.bytes() <= super::super::pipes::TAIL_BYTES);
+        assert!(
+            stderr.contains("fatal: https://host/r denied"),
+            "{}",
+            &stderr[..80]
+        );
+        assert!(!stderr.contains("SEC"));
+        assert!(
+            stderr
+                .lines()
+                .all(|kept| handed.iter().any(|said| said == kept)),
+            "a kept line is not one handed on whole: the tail cut inside a line"
+        );
+        let record = the_one_record(&processes);
+        assert_eq!(
+            record.stderr, stderr,
+            "the log keeps what the failure carries"
+        );
+        assert_eq!(record.arguments, ["stub", "https://host/r"]);
     }
 
     /// A failure is recorded as what it was: its status, and what it said.

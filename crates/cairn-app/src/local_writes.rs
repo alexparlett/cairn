@@ -203,7 +203,7 @@ mod tests {
                 message: "index.lock exists".to_owned(),
                 locks: vec![lock.clone()],
                 command: None,
-                output: String::new(),
+                output: cairn_model::ScrubbedLines::new(),
             },
         );
         assert!(!writes.is_running());

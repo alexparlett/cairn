@@ -48,7 +48,7 @@
 //! can name them and say when acting on them is safe (`super::stranded_locks`);
 //! the runner lists them after the reap, because a fetch is a write.
 
-use cairn_model::AskpassToken;
+use cairn_model::{AskpassToken, ScrubbedLines};
 
 use super::{GitBinary, Invalidated, Performed, WriteAuthority, refspec_policy};
 use crate::process::{Invocation, KillHandle, Write};
@@ -109,8 +109,9 @@ impl FetchInProgress {
         FetchCancel(self.invocation.kill_handle())
     }
 
-    /// Streams git's progress to `progress`, one line per redraw, until the
-    /// process exits. Success is a [`Performed`] declaring `refs` and
+    /// Streams git's progress to `progress` until the process exits: the lines each read of
+    /// stderr completed, one line per redraw, whole and scrubbed of a URL's userinfo as the
+    /// runner split them (staging-and-commit R4.10), blank ones among them. Success is a [`Performed`] declaring `refs` and
     /// `objects` invalid — the declaration is what a fetch CAN change; whether
     /// a ref actually moved is for the caller to see, which the application does
     /// by refreshing after every outcome (a failed or killed fetch may have
@@ -130,7 +131,7 @@ impl FetchInProgress {
     /// The cancel is [`FetchCancel`]'s alone, so the signal the runner polls
     /// here is one nobody holds; and stdout, where `git fetch` writes nothing
     /// a person or Cairn reads, is drained and dropped.
-    pub fn finish(self, progress: impl FnMut(&str)) -> Result<Performed, Error> {
+    pub fn finish(self, progress: impl FnMut(&ScrubbedLines)) -> Result<Performed, Error> {
         self.invocation
             .finish(&CancelSignal::new(), |_| {}, progress)
             .map(|_| {
@@ -184,7 +185,7 @@ mod tests {
         let mut seen = Vec::new();
         fetch(&git, &repo, "-origin", None)
             .unwrap()
-            .finish(|line| seen.push(line.to_owned()))
+            .finish(|lines| seen.extend(lines.lines().map(str::to_owned)))
             .unwrap();
         let named = |option: &str, path: &std::path::Path| {
             format!("{option}{}", std::fs::canonicalize(path).unwrap().display())
@@ -230,8 +231,8 @@ mod tests {
             let mut seen = String::new();
             fetch(&git, &repo, "origin", token)
                 .unwrap()
-                .finish(|line| {
-                    seen.push_str(line);
+                .finish(|lines| {
+                    seen.push_str(lines.text());
                     seen.push('\n');
                 })
                 .unwrap();
@@ -346,7 +347,7 @@ mod tests {
                 "origin"
             ]
         );
-        assert_eq!(record.stderr, "Receiving objects: 100%, done.");
+        assert_eq!(record.stderr.text(), "Receiving objects: 100%, done.");
         let rendered = format!("{log:?}");
         for (name, value) in values {
             assert!(

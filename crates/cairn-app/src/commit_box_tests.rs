@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use cairn_model::{
     ChangeStatus, ChangedFile, CommitHooks, Consequence, FileMode, HeadState, LocalChanges, Oid,
-    OperationInProgress, Publication, RefName, Reflog, RefsSnapshot, RepoPath, StagedChange,
-    StatusEntry, UnstagedChange, WorkingTreeStatus,
+    OperationInProgress, Publication, RefName, Reflog, RefsSnapshot, RepoPath, ScrubbedLines,
+    StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
 };
 use cairn_ui::{
     AMEND_CAPTION, CANCEL_COMMIT_CAPTION, GIT_ERROR_TITLE, SKIP_HOOKS_CAPTION, UNSTAGE_CAPTION,
@@ -540,14 +540,17 @@ fn a_newer_amend_read_names_its_own_head() {
     assert_eq!(head, Some(oid(0xcd)));
 }
 
+/// A commit's failure as the local lane hands it on: git's output as the engine kept it, and the
+/// message the engine's text of the error (`Error::shown`), both scrubbed there.
 fn failed(id: OperationId, command: &str, output: &str) -> Update {
+    let output = ScrubbedLines::scrubbing(output);
     Update::WriteEnded {
         id,
         ending: WriteEnding::Failed {
             message: format!("{command} failed (exit status: 1): {output}"),
             locks: Vec::new(),
             command: Some(command.to_owned()),
-            output: output.to_owned(),
+            output,
         },
         read_again: crate::worker::ReadAgain::Everything,
     }
@@ -604,7 +607,7 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
             &submitted,
             Update::WriteOutput {
                 id,
-                lines: vec![line.to_owned()],
+                lines: ScrubbedLines::scrubbing(line),
                 receipt: crate::worker::OutputReceipt::none(),
             },
         );
@@ -662,9 +665,11 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
 }
 
 /// R12.2 and phase 09's QA item 11, at the dialog: a hook that prints a remote URL with a token
-/// — whole in one read, split over two reads, and in the output the engine kept — opens the Git
-/// Error dialog with the URLs drawn and no token anywhere in it. Caught by: the streamed lines
-/// or the kept output drawn as git wrote them.
+/// — in the reads streamed and in the output the engine kept, each as the engine hands it on,
+/// scrubbed as its runner split it (R4.10; a URL split over two reads is the engine's to join,
+/// `process::registry`'s `git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams`) —
+/// opens the Git Error dialog with the URLs drawn and no token anywhere in it. Caught by: the
+/// dialog drawing other than what the type holds.
 #[test]
 fn the_git_error_draws_no_token_a_hook_printed() {
     for streamed in [true, false] {
@@ -674,12 +679,13 @@ fn the_git_error_draws_no_token_a_hook_printed() {
         let id = writes(&submitted)[0].0;
         apply(&mut test, view, &submitted, Update::WriteStarted { id });
         let kept = "fatal: https://deploy:ghp_SECRET1@example.com/r.git denied\n\
-                    retry at https://deploy:ghp_SEC\nRET2@example.com/again";
+                    retry at https://deploy:ghp_SECRET2@example.com/again";
         if streamed {
             for read in [
-                vec!["fatal: https://deploy:ghp_SECRET1@example.com/r.git denied".to_owned()],
-                vec!["retry at https://deploy:ghp_SEC".to_owned()],
-                vec!["RET2@example.com/again".to_owned()],
+                ScrubbedLines::scrubbing(
+                    "fatal: https://deploy:ghp_SECRET1@example.com/r.git denied",
+                ),
+                ScrubbedLines::scrubbing("retry at https://deploy:ghp_SECRET2@example.com/again"),
             ] {
                 apply(
                     &mut test,

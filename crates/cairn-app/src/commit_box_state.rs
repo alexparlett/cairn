@@ -14,10 +14,10 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
-use cairn_model::{CommitHooks, Consequence, OperationInProgress};
+use cairn_model::{CommitHooks, Consequence, OperationInProgress, ScrubbedLines};
 use freya::prelude::*;
 
-use crate::shown_output::{ShownLines, shown_line, shown_lines};
+use crate::shown_output::{shown_lines, spoken_lines};
 use crate::worker::{CommitReads, OperationId};
 
 /// The most lines of a commit's output the window keeps for the Git Error dialog: the latest,
@@ -102,15 +102,12 @@ pub struct GitError {
 pub struct OutputTail {
     lines: VecDeque<String>,
     bytes: usize,
-    /// Each line as it is drawn, a URL cut at a line's end carried to the next (R12.2).
-    shown: ShownLines,
 }
 
 impl OutputTail {
-    /// One line more, ANSI sequences stripped and every URL's userinfo removed (R12.2); the
+    /// One line more, as it is drawn — scrubbed by the engine, ANSI sequences stripped here; the
     /// oldest let go of past the bounds.
-    pub fn push(&mut self, line: &str) {
-        let line = self.shown.line(line);
+    pub fn push(&mut self, line: String) {
         self.bytes += line.len();
         self.lines.push_back(line);
         while self.lines.len() > OUTPUT_LINES || (self.bytes > OUTPUT_BYTES && self.lines.len() > 1)
@@ -124,7 +121,6 @@ impl OutputTail {
     pub fn clear(&mut self) {
         self.lines.clear();
         self.bytes = 0;
-        self.shown = ShownLines::default();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -325,10 +321,10 @@ impl CommitBox {
         }
     }
 
-    /// A line of the write `id`'s output: kept when it is this box's commit.
-    pub fn output_arrived(&mut self, id: OperationId, lines: &[String]) {
+    /// A read of the write `id`'s output: its spoken lines kept when it is this box's commit.
+    pub fn output_arrived(&mut self, id: OperationId, lines: &ScrubbedLines) {
         if self.asked.as_ref().is_some_and(|asked| asked.id == id) {
-            for line in lines {
+            for line in spoken_lines(lines) {
                 self.output.push(line);
             }
         }
@@ -356,13 +352,12 @@ impl CommitBox {
     /// A commit failed with git's own failure: the Git Error dialog opens over its output —
     /// what streamed, or else what the engine kept of it — the skip offered only where a hook
     /// exists and it was not already skipped (R10.5).
-    pub fn failed(&mut self, failed: AskedCommit, command: String, kept: &str) {
+    pub fn failed(&mut self, failed: AskedCommit, command: String, kept: &ScrubbedLines) {
         let lines = if self.output.is_empty() {
             shown_lines(kept)
         } else {
             self.output.lines()
         };
-        let command = shown_line(&command);
         self.output.clear();
         let serial = self.next_serial();
         self.error = Some(GitError {
@@ -408,54 +403,6 @@ pub fn compose_message(subject: &str, description: &str) -> String {
     }
 }
 
-/// `line` without its terminal control sequences (R10.5; Fork Tracker #1218 prints them raw):
-/// every CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or `ESC \`) and two-byte escape, and every
-/// other control character but a tab — a carriage return a progress meter writes among them.
-pub fn strip_ansi(line: &str) -> String {
-    let mut shown = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => match chars.next() {
-                // CSI: parameters and intermediates, ended by a byte in `@`..=`~`.
-                Some('[') => {
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                // OSC: ended by BEL or ST (`ESC \`).
-                Some(']') => {
-                    while let Some(c) = chars.next() {
-                        if c == '\u{7}' {
-                            break;
-                        }
-                        if c == '\u{1b}' && chars.peek() == Some(&'\\') {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                // Any other escape: intermediates (` `..=`/`) and one final character, such as
-                // a character set chosen (`ESC ( B`).
-                Some(' '..='/') => {
-                    for c in chars.by_ref() {
-                        if !(' '..='/').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                Some(_) | None => {}
-            },
-            '\t' => shown.push(c),
-            c if c.is_control() => {}
-            c => shown.push(c),
-        }
-    }
-    shown
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,30 +434,13 @@ mod tests {
         assert_eq!(compose_message("Only a subject", ""), "Only a subject");
     }
 
-    /// R10.5: a hook's coloured output reads as its text — colours, cursor moves and window
-    /// titles gone, a carriage return gone, a tab kept. Caught by: an escape's tail left in
-    /// (`[31m`), or an OSC swallowing the text after it.
-    #[test]
-    fn ansi_sequences_and_control_characters_are_stripped() {
-        assert_eq!(
-            strip_ansi("\u{1b}[1;31merror:\u{1b}[0m lint failed"),
-            "error: lint failed"
-        );
-        assert_eq!(
-            strip_ansi("\u{1b}]0;title\u{7}after\u{1b}]8;;url\u{1b}\\link"),
-            "afterlink"
-        );
-        assert_eq!(strip_ansi("50%\r100%\tdone\u{1b}(B"), "50%100%\tdone");
-        assert_eq!(strip_ansi("plain"), "plain");
-    }
-
     /// R10.5's bound: the output kept is the latest lines, however many a hook writes. Caught
     /// by: an unbounded buffer, or the newest lines dropped rather than the oldest.
     #[test]
     fn the_output_kept_is_its_latest_bounded_tail() {
         let mut tail = OutputTail::default();
         for n in 0..OUTPUT_LINES + 5 {
-            tail.push(&format!("line {n}"));
+            tail.push(format!("line {n}"));
         }
         let lines = tail.lines();
         assert_eq!(lines.len(), OUTPUT_LINES);
@@ -522,7 +452,7 @@ mod tests {
         let mut wide = OutputTail::default();
         let long = "x".repeat(OUTPUT_BYTES / 2 + 1);
         for _ in 0..3 {
-            wide.push(&long);
+            wide.push(long.clone());
         }
         assert_eq!(wide.lines().len(), 1, "past the byte bound");
     }
@@ -619,15 +549,19 @@ mod tests {
         state.commit_asked(asked(false));
         state.output_arrived(
             OperationId::for_tests(3),
-            &["\u{1b}[31mlint\u{1b}[0m failed".to_owned()],
+            &ScrubbedLines::scrubbing("\u{1b}[31mlint\u{1b}[0m failed"),
         );
         state.output_arrived(
             OperationId::for_tests(4),
-            &["another write's line".to_owned()],
+            &ScrubbedLines::scrubbing("another write's line"),
         );
         let failed = state.ended(OperationId::for_tests(3));
         assert_eq!(failed, Some(asked(false)));
-        state.failed(asked(false), "git commit -q -F -".to_owned(), "kept");
+        state.failed(
+            asked(false),
+            "git commit -q -F -".to_owned(),
+            &ScrubbedLines::scrubbing("kept"),
+        );
         let error = state.error().cloned();
         assert_eq!(
             error.as_ref().map(|error| error.lines.as_slice().to_vec()),
@@ -650,7 +584,11 @@ mod tests {
             },
             false,
         );
-        state.failed(asked(false), "git commit -q -F -".to_owned(), "a\nb");
+        state.failed(
+            asked(false),
+            "git commit -q -F -".to_owned(),
+            &ScrubbedLines::scrubbing("a\nb"),
+        );
         let error = state.error().cloned();
         assert_eq!(error.as_ref().map(|error| error.skip), Some(true));
         assert_eq!(
@@ -660,7 +598,7 @@ mod tests {
         state.failed(
             asked(true),
             "git commit -q --no-verify -F -".to_owned(),
-            "x",
+            &ScrubbedLines::scrubbing("x"),
         );
         assert_eq!(state.error().map(|error| error.skip), Some(false));
     }

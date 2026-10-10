@@ -589,9 +589,11 @@ mod tests {
         let outcome = invocation.finish(
             &CancelSignal::new(),
             |_| {},
-            |line| {
-                if line == "hanging" {
-                    killer.kill();
+            |said| {
+                for line in crate::process::spoken(said) {
+                    if line == "hanging" {
+                        killer.kill();
+                    }
                 }
             },
         );
@@ -675,7 +677,6 @@ mod tests {
                 arguments,
                 status,
                 stderr,
-                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(arguments, "add tracked");
@@ -722,7 +723,6 @@ mod tests {
                 arguments,
                 status,
                 stderr,
-                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(

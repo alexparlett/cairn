@@ -51,7 +51,7 @@ use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{
     AskpassToken, ChangeList, CommandRecord, Confirmed, FileDiff, LocalChanges, Oid, RepoPath,
-    Selection,
+    ScrubbedLines, Selection,
 };
 
 use super::epoch::{Epoch, Superseded};
@@ -544,11 +544,11 @@ impl Watch<'_> {
         let mut running = |cancel: ops::CommitCancel| {
             lane.install(id, Box::new(move || cancel.cancel()));
         };
-        let mut send = |lines: Vec<String>, receipt: OutputReceipt| {
+        let mut send = |lines: ScrubbedLines, receipt: OutputReceipt| {
             outbox.send(None, Update::WriteOutput { id, lines, receipt });
         };
         let flow = std::cell::RefCell::new(OutputFlow::new(Arc::clone(self.budget)));
-        let mut output = |said: &[&str]| flow.borrow_mut().read(said, &mut send);
+        let mut output = |said: &ScrubbedLines| flow.borrow_mut().read(said, &mut send);
         let outcome = commit(CommitWatch {
             cancel: &before,
             running: &mut running,
@@ -589,13 +589,14 @@ pub enum WriteEnding {
     Refused { message: String },
     /// git ran and failed: its message, and the lock files present once it had — the one it
     /// failed on among them, when that was it. When it was git that failed, `command` is what
-    /// ran (`git commit -q -F -`) and `output` git's words as the engine kept them — stdout's
-    /// tail, then stderr's — for the Git Error dialog (R10.5); both empty otherwise.
+    /// ran (`git commit -q -F -`) and `output` git's words as the engine kept them — its
+    /// runner's whole lines, scrubbed as they were split, stdout's and stderr's in the order
+    /// they arrived (R4.10) — for the Git Error dialog (R10.5); both empty otherwise.
     Failed {
         message: String,
         locks: Vec<PathBuf>,
         command: Option<String>,
-        output: String,
+        output: ScrubbedLines,
     },
     /// Cancelled, or Cairn lost hold of its git: it may have taken effect, in part or whole,
     /// and the read after it shows what did (R4.7). With the lock files left.
@@ -659,16 +660,11 @@ impl WriteEnding {
                     Some(performed.invalidated()),
                 );
             }
-            Err(error) => scrubbed_error(error),
+            Err(error) => error,
         };
-        // Scrubbed before it leaves the lane (R12.2): git's stderr is in the message, and a
+        // The engine's text of it, scrubbed there (R12.2): git's stderr is in the message, and a
         // remote URL with a token in it is never drawn.
-        let message = crate::shown_output::scrubbed(&match prompting {
-            Ok(()) => error.to_string(),
-            Err(why) => format!(
-                "{error}. Cairn could not have asked for a credential in this session: {why}"
-            ),
-        });
+        let message = message_of(&error, prompting);
         let ending = match error {
             Error::ChangedSinceRead { path } | Error::ChangedSinceConfirmed { path } => {
                 Self::Stale { path, message }
@@ -697,7 +693,7 @@ impl WriteEnding {
             } => Self::Failed {
                 message,
                 locks: present_locks,
-                command: Some(crate::shown_output::scrubbed(&format!("git {arguments}"))),
+                command: Some(format!("git {arguments}")),
                 output: stderr,
             },
             Error::DiscardIncomplete {
@@ -716,7 +712,7 @@ impl WriteEnding {
                 message,
                 locks: Vec::new(),
                 command: None,
-                output: String::new(),
+                output: ScrubbedLines::new(),
             },
         };
         (ending, None)
@@ -1193,57 +1189,23 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
     }
 }
 
-/// `error` with git's stderr in it scrubbed of a URL's userinfo where the engine kept it — a
-/// failure's, and the failure a partial discard carries — each part the engine says was cut
-/// read as begun part-way through a line (phase 11's QA, TC5), so the message formatted from it
-/// carries no token whatever was cut.
-pub(super) fn scrubbed_error(error: Error) -> Error {
-    match error {
-        Error::GitFailed {
-            arguments,
-            status,
-            stderr,
-            stderr_cut,
-            present_locks,
-        } => Error::GitFailed {
-            arguments,
-            status,
-            stderr: crate::shown_output::scrubbed_at(&stderr, &stderr_cut),
-            stderr_cut: Vec::new(),
-            present_locks,
-        },
-        Error::DiscardIncomplete {
-            performed,
-            kept,
-            failure,
-        } => Error::DiscardIncomplete {
-            performed,
-            kept,
-            failure: failure.map(|failure| Box::new(scrubbed_error(*failure))),
-        },
-        other => other,
+/// `error`'s text as the window draws it — the engine's ([`Error::shown`], git's words in it
+/// scrubbed there, R12.2) — and, where no prompt could have been answered, why: a failure's own
+/// message ("terminal prompts disabled") does not say why nothing answered.
+pub(super) fn message_of(error: &Error, prompting: &Result<(), String>) -> String {
+    let shown = error.shown();
+    match prompting {
+        Ok(()) => shown.to_string(),
+        Err(why) => {
+            format!("{shown}. Cairn could not have asked for a credential in this session: {why}")
+        }
     }
 }
 
-/// The command log's records of what this thread ran in `repo` since `mark`, each argument and
-/// its stderr scrubbed of a URL's userinfo before it leaves the lane (R12.2).
+/// The command log's records of what this thread ran in `repo` since `mark` — each argument
+/// and its output scrubbed of a URL's userinfo by the engine as it was recorded (R12.2, R4.10).
 pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<CommandRecord> {
     repo.commands_since(mark)
-        .into_iter()
-        .map(|record| CommandRecord {
-            arguments: record
-                .arguments
-                .iter()
-                .map(|argument| crate::shown_output::scrubbed(argument))
-                .collect(),
-            stderr: crate::shown_output::scrubbed_at(
-                &record.stderr,
-                if record.stderr_cut { &[0] } else { &[] },
-            ),
-            stderr_cut: false,
-            ..record
-        })
-        .collect()
 }
 
 /// `Remove index.lock…`'s offer (R12.4): whether `locks` — an ending's, or the repository's
@@ -1444,42 +1406,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Phase 11's QA (TC5): a failure whose stderr the engine says was cut — at its front, or
-    /// after stdout's part — loses the userinfo its cut began inside, in the message and the
-    /// output alike, and one never said to be cut keeps its first line whole. Caught by: the
-    /// cut ignored, or guessed from a length.
+    /// R12.2 and R4.10 at the lane: a failure's output is the engine's scrubbed lines, handed on
+    /// as they are, and its message is the engine's text of the error — no token in either,
+    /// whatever part quoted one — with why no prompt could be answered after it. Caught by: the
+    /// lane formatting an error's text itself, or a failure's output rebuilt from text.
     #[test]
-    fn a_failures_cut_output_is_scrubbed_where_the_engine_says_it_was_cut() {
+    fn an_ending_carries_the_engines_scrubbed_text() {
         use std::os::unix::process::ExitStatusExt as _;
-        let failed = |stderr: &str, cut: Vec<usize>| Error::GitFailed {
+        let output =
+            cairn_model::ScrubbedLines::scrubbing("fatal: 'https://u:TOKEN@host/r' denied");
+        let failed = Error::GitFailed {
             arguments: "commit -q -F -".to_owned(),
             status: std::process::ExitStatus::from_raw(1 << 8),
-            stderr: stderr.to_owned(),
-            stderr_cut: cut,
+            stderr: output.clone(),
             present_locks: Vec::new(),
         };
-        for (stderr, cut) in [
-            ("er:TOKEN@host/r denied", vec![0]),
-            ("stdout's line\ner:TOKEN@host/r denied", vec![14]),
-        ] {
-            let (ending, _) = WriteEnding::of(Err(failed(stderr, cut)), &Ok(()));
-            let WriteEnding::Failed {
-                message, output, ..
-            } = ending
-            else {
-                panic!("{ending:?}");
-            };
-            assert!(!message.contains("TOKEN"), "{message}");
-            assert!(
-                !output.contains("TOKEN") && output.ends_with("host/r denied"),
-                "{output}"
-            );
-        }
-        let (ending, _) = WriteEnding::of(Err(failed("ada@example.com: hook", vec![])), &Ok(()));
-        let WriteEnding::Failed { output, .. } = ending else {
+        let (ending, _) = WriteEnding::of(Err(failed), &Err("no channel".to_owned()));
+        let WriteEnding::Failed {
+            message,
+            output: kept,
+            command,
+            ..
+        } = ending
+        else {
             panic!("{ending:?}");
         };
-        assert_eq!(output, "ada@example.com: hook");
+        assert_eq!(kept, output);
+        assert!(!kept.contains("TOKEN"), "{kept}");
+        assert!(!message.contains("TOKEN"), "{message}");
+        assert!(
+            message.ends_with("in this session: no channel"),
+            "{message}"
+        );
+        assert_eq!(command.as_deref(), Some("git commit -q -F -"));
+        let quoting = Error::InvalidConfig {
+            key: "remote.origin.url".to_owned(),
+            value: "https://u:TOKEN@host/r".to_owned(),
+        };
+        let (ending, _) = WriteEnding::of(Err(quoting), &Ok(()));
+        let WriteEnding::Failed { message, .. } = ending else {
+            panic!("{ending:?}");
+        };
+        assert!(
+            !message.contains("TOKEN") && message.contains("https://host/r"),
+            "{message}"
+        );
     }
 
     /// The user's decision (2026-10-09): Stage All and Unstage All take the rows a filter shows

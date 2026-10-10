@@ -529,7 +529,7 @@ fn cairn_write_costs() {
         || {
             committed.set(true);
             let cancel = CancelSignal::new();
-            let (mut running, mut output) = (|_| {}, |_: &[&str]| {});
+            let (mut running, mut output) = (|_| {}, |_: &cairn_model::ScrubbedLines| {});
             let started = Instant::now();
             cairn_git::ops::commit(
                 git,

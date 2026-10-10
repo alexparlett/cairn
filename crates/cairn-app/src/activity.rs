@@ -6,9 +6,10 @@
 //!
 //! Fed by `session::apply` from the updates the lanes send: a write's start, its output as it
 //! streams (R10.4: a hook's lines while it runs), what it ran (`Update::OperationRan`, the
-//! command log's records of its own `git`, scrubbed on the lane), and its ending; a fetch's the
-//! same. Every text of git's kept here is scrubbed of a URL's userinfo (R12.2) — on the lane,
-//! and again as it is kept, so no entry can draw a token whoever built the update. Each line is
+//! command log's records of its own `git`), and its ending; a fetch's the same. Every text of
+//! git's kept here arrives as `cairn_model::ScrubbedLines`, scrubbed of a URL's userinfo by the
+//! engine's runner as it split git's output (R12.2, R4.10), so no entry can draw a token; it is
+//! only stripped of escape sequences here (`crate::shown_output`). Each line is
 //! cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character with the diff
 //! view's marker after it (`cairn_ui::cut_marker`), so no row holds or shapes a 256 KiB piece.
 //!
@@ -23,13 +24,13 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
-use cairn_model::{CommandExit, CommandRecord, Consequence, Oid};
+use cairn_model::{CommandExit, CommandRecord, Consequence, Oid, ScrubbedLines};
 use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover, LockOffer};
 use freya::prelude::*;
 
 use crate::confirming::Confirming;
 use crate::local_writes::Asked;
-use crate::shown_output::{ShownLines, shown_line, shown_lines};
+use crate::shown_output::{shown_lines, spoken_lines};
 use crate::window::View;
 use crate::worker::{LocalWrite, Request};
 use crate::worker::{OperationId, WriteEnding};
@@ -129,7 +130,6 @@ pub struct Activity {
     commands: VecDeque<ActivityLine>,
     /// What it wrote as it ran, while it runs: let go of once `commands` arrive.
     streamed: VecDeque<String>,
-    shown: ShownLines,
     /// The bytes of `commands` and `streamed`, counted as lines go in and out.
     bytes: usize,
     /// The lines drawn, built when the open popover asks and kept until a line changes.
@@ -153,7 +153,6 @@ impl Activity {
             let_go: false,
             commands: VecDeque::new(),
             streamed: VecDeque::new(),
-            shown: ShownLines::default(),
             bytes: 0,
             drawn: std::cell::RefCell::new(None),
         }
@@ -422,7 +421,7 @@ impl ActivityLog {
 
     /// Lines a running operation wrote, kept while it runs (R10.4), the latest
     /// [`ACTIVITY_LINES`].
-    pub fn output(&mut self, key: ActivityKey, lines: &[String]) {
+    pub fn output(&mut self, key: ActivityKey, lines: &ScrubbedLines) {
         let Some(entry) = self.find(key) else {
             return;
         };
@@ -431,8 +430,8 @@ impl ActivityLog {
             return;
         }
         let before = entry.bytes;
-        for line in lines {
-            let line = cut_line(entry.shown.line(line));
+        for line in spoken_lines(lines) {
+            let line = cut_line(line);
             entry.bytes += line.len();
             entry.streamed.push_back(line);
         }
@@ -574,7 +573,7 @@ impl ActivityLog {
 /// A record of the command log as the popover draws it: `$ git <arguments>`, then what it
 /// wrote to stderr, and how it ended when that was not a clean exit.
 fn command_lines(record: &CommandRecord) -> Vec<ActivityLine> {
-    let mut lines = vec![ActivityLine::Ran(cut_line(shown_line(&format!(
+    let mut lines = vec![ActivityLine::Ran(cut_line(format!(
         "$ git {}",
         record
             .arguments
@@ -582,7 +581,7 @@ fn command_lines(record: &CommandRecord) -> Vec<ActivityLine> {
             .map(|argument| shell_quoted(argument))
             .collect::<Vec<_>>()
             .join(" ")
-    ))))];
+    )))];
     lines.extend(
         shown_lines(&record.stderr)
             .into_iter()
@@ -821,9 +820,17 @@ mod tests {
             duration: Duration::ZERO,
             exit,
             cancelled: false,
-            stderr: stderr.to_owned(),
-            stderr_cut: false,
+            stderr: ScrubbedLines::scrubbing(stderr),
         }
+    }
+
+    /// A read's lines, as the engine would hand them on.
+    fn said<S: AsRef<str>>(lines: &[S]) -> ScrubbedLines {
+        let mut said = ScrubbedLines::new();
+        for line in lines {
+            said.append(&ScrubbedLines::scrubbing(line.as_ref()));
+        }
+        said
     }
 
     fn done(acknowledged: Option<&str>) -> WriteEnding {
@@ -849,7 +856,7 @@ mod tests {
         log.write_started(&asked(amend, "amend", Some(replaced)));
         log.output(
             ActivityKey::Write(amend),
-            &["hook: \u{1b}[31mok\u{1b}[0m".to_owned()],
+            &said(&["hook: \u{1b}[31mok\u{1b}[0m"]),
         );
         let (entries, selected) = log.shown(false);
         assert_eq!(selected, 0);
@@ -905,7 +912,7 @@ mod tests {
                 message: "git commit failed".to_owned(),
                 locks: Vec::new(),
                 command: None,
-                output: String::new(),
+                output: ScrubbedLines::new(),
             },
             None,
         );
@@ -913,46 +920,6 @@ mod tests {
         assert_eq!(entries[0].status, "failed");
         assert_eq!(entries[0].message.as_deref(), Some("git commit failed"));
         assert_eq!(entries[0].replaced, None);
-    }
-
-    /// R12.2 in the popover: a command's arguments, its stderr and a streamed line carry no
-    /// userinfo, a URL split over two reads included. Caught by: any of them kept as git wrote
-    /// it.
-    #[test]
-    fn no_line_of_an_entry_carries_a_token() {
-        let mut log = ActivityLog::default();
-        log.fetch_started("origin");
-        let key = log.fetch_key().unwrap();
-        log.output(key, &["fatal: https://u:SECRET@h/r".to_owned()]);
-        log.output(key, &["see https://u:SEC".to_owned(), "RET@h/x".to_owned()]);
-        let (entries, _) = log.shown(false);
-        assert!(
-            entries[0]
-                .lines
-                .iter()
-                .all(|line| !format!("{line:?}").contains("SEC")),
-            "{:?}",
-            entries[0].lines
-        );
-        log.ran(
-            key,
-            &[record(
-                &["fetch", "https://u:SECRET@h/r"],
-                "remote: https://u:SECRET@h/r denied",
-                CommandExit::Code(128),
-            )],
-            false,
-        );
-        log.fetch_ended("origin", Outcome::Failed("boom".to_owned()));
-        let (entries, _) = log.shown(false);
-        assert_eq!(
-            *entries[0].lines,
-            [
-                ActivityLine::Ran("$ git fetch https://h/r".to_owned()),
-                ActivityLine::Output("remote: https://h/r denied".to_owned()),
-                ActivityLine::Output("(exit status 128)".to_owned()),
-            ]
-        );
     }
 
     /// R12.1's bounds: at most [`ACTIVITY_ENTRIES`] operations, the oldest let go of; at most
@@ -976,7 +943,7 @@ mod tests {
         let lines: Vec<String> = (0..ACTIVITY_LINES + 7)
             .map(|n| format!("line {n}"))
             .collect();
-        log.output(ActivityKey::Write(id), &lines);
+        log.output(ActivityKey::Write(id), &said(&lines));
         let (entries, _) = log.shown(false);
         assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
         assert_eq!(
@@ -1011,7 +978,7 @@ mod tests {
         for n in 0..40 {
             let id = OperationId::for_tests(n);
             log.write_started(&asked(id, "commit", None));
-            log.output(ActivityKey::Write(id), &wide);
+            log.output(ActivityKey::Write(id), &said(&wide));
             log.ran(
                 ActivityKey::Write(id),
                 &[record(
@@ -1049,7 +1016,7 @@ mod tests {
         log.write_started(&asked(id, "commit", None));
         for n in 0..4_000 {
             let line = format!("{n:05}{}", "x".repeat(1_500));
-            log.output(ActivityKey::Write(id), std::slice::from_ref(&line));
+            log.output(ActivityKey::Write(id), &said(&[&line]));
         }
         assert!(log.bytes <= ACTIVITY_BYTES, "{}", log.bytes);
         let (entries, _) = log.shown(false);
@@ -1071,7 +1038,7 @@ mod tests {
         log.write_started(&asked(older, "commit", None));
         log.write_started(&asked(newer, "commit", None));
         for n in 0..30_000 {
-            log.output(ActivityKey::Write(newer), &[format!("line {n}")]);
+            log.output(ActivityKey::Write(newer), &said(&[format!("line {n}")]));
         }
         assert!(
             log.newest_first()
@@ -1103,7 +1070,7 @@ mod tests {
         let id = OperationId::for_tests(1);
         log.write_started(&asked(id, "commit", None));
         let long = format!("x{}", "é".repeat(128 * 1024));
-        log.output(ActivityKey::Write(id), std::slice::from_ref(&long));
+        log.output(ActivityKey::Write(id), &said(&[&long]));
         let (entries, _) = log.shown(false);
         let Some(ActivityLine::Output(kept)) = entries[0].lines.first() else {
             panic!("{:?}", entries[0].lines);
@@ -1325,7 +1292,7 @@ mod tests {
         let wide: Vec<String> = (0..4_000)
             .map(|n| format!("{n:05}{}", "x".repeat(1_500)))
             .collect();
-        log.output(ActivityKey::Write(new), &wide);
+        log.output(ActivityKey::Write(new), &said(&wide));
         let lines: Vec<_> = log
             .newest_first()
             .map(|entry| (entry.key, entry.lines()))

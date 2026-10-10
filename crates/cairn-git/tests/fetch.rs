@@ -70,7 +70,14 @@ fn fetch_origin(
     let mut progress = Vec::new();
     let started = fetch(&git, &repo, "origin", Some(operation.token()))
         .unwrap_or_else(|e| panic!("fetch did not start: {e}"));
-    let outcome = started.finish(|line| progress.push(line.to_owned()));
+    let outcome = started.finish(|lines| {
+        progress.extend(
+            lines
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned),
+        )
+    });
     (outcome, progress)
 }
 

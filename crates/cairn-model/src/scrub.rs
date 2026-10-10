@@ -1,7 +1,12 @@
-//! Credentials in a URL removed from text before it is drawn (staging-and-commit R12.2; #46,
-//! for display). git can quote a remote's URL in what it writes to stderr, and a URL configured
-//! with userinfo — `https://user:token@host/repo.git` — carries a credential in it that is not a
-//! [`crate::Secret`]. Every stderr line a view draws goes through a [`Scrubber`] first.
+//! Credentials in a URL removed from git's text before anything keeps or draws it
+//! (staging-and-commit R12.2, R4.10; #46). git can quote a remote's URL in what it writes, and a
+//! URL configured with userinfo — `https://user:token@host/repo.git` — carries a credential in it
+//! that is not a [`crate::Secret`].
+//!
+//! **Scrubbed once, as whole lines.** The engine's runner splits git's output into whole lines
+//! and hands each to a [`Scrubber`] as it is split, before anything is cut or kept; what it keeps
+//! and hands on is a [`ScrubbedLine`] or [`ScrubbedLines`], which only a scrubber's output can
+//! fill. So git's text crosses into the application only scrubbed, and no view scrubs again.
 //!
 //! The rule only removes, never classifies: in every `scheme://` URL, everything between the
 //! `//` and the last `@` before the authority ends — at whitespace, `/`, `?`, `#`, `<`, `>` or
@@ -10,18 +15,17 @@
 //! (`git+ssh://`, `ftp://`). An scp-like address (`git@host:path`) is no URL and carries no
 //! password, so it is left as git wrote it.
 //!
-//! A line can end inside a URL's authority — git's stderr reader sends a line longer than its
-//! tail in pieces, and a retained tail can begin part-way through a line — so a scrubber
-//! carries across lines what the last line ended in. A line ending in a scheme, or a scheme and
-//! part of its `://`, lets the next line's start complete the `://` and begin an authority. A
-//! line ending inside an authority it had not seen an `@` in has that unfinished authority
-//! removed where it ends (a host cut there is removed too, since it cannot be told from a user
-//! name), and the next line's leading run up to its last `@` — before any character that ends
-//! an authority — is removed as the rest of it. A text known to start part-way through a line
-//! ([`Scrubber::after_cut`]) is read as if the line before had ended in either.
+//! A line longer than the runner's piece limit is handed on in pieces, and a piece can end
+//! inside a URL's authority, so a scrubber carries across the pieces of one line what the last
+//! piece ended in ([`Scrubber::piece`]); a whole line ([`Scrubber::line`]) carries nothing to the
+//! next. A piece ending in a scheme, or a scheme and part of its `://`, lets the next piece's
+//! start complete the `://` and begin an authority. A piece ending inside an authority it had not
+//! seen an `@` in has that unfinished authority removed where it ends (a host cut there is
+//! removed too, since it cannot be told from a user name), and the next piece's leading run up to
+//! its last `@` — before any character that ends an authority — is removed as the rest of it.
 
-/// Scrubs a sequence of lines, in order, carrying a URL cut at a line's end over to the next
-/// line.
+/// Scrubs git's lines, in order: each whole line alone, and the pieces of a line longer than one
+/// piece with a URL cut at a piece's end carried over to the next.
 #[derive(Debug, Clone, Default)]
 pub struct Scrubber {
     carried: Carried,
@@ -35,11 +39,9 @@ enum Carried {
     /// A scheme and this much of its `://` — none of it, `:` or `:/`: a next line beginning with
     /// the rest of `://` begins an authority.
     Scheme { seen: usize },
-    /// A URL's authority, with no `@` seen yet: the next line's leading run up to an `@` is the
+    /// A URL's authority, with no `@` seen yet: the next piece's leading run up to an `@` is the
     /// rest of a userinfo.
     Authority,
-    /// Text that may start anywhere in a line ([`Scrubber::after_cut`]): both of the above.
-    Cut,
 }
 
 const SEPARATOR: &str = "://";
@@ -50,16 +52,22 @@ impl Scrubber {
         Self::default()
     }
 
-    /// A scrubber for text that may start part-way through a line — a tail cut from the
-    /// front: its first line may begin inside a URL, anywhere from its `://` to its `@`.
-    pub fn after_cut() -> Self {
-        Self {
-            carried: Carried::Cut,
-        }
+    /// A whole line — or the last piece of one longer than a piece — with the userinfo of every
+    /// URL in it removed. Nothing is carried to the next line: git writes a URL whole on one.
+    pub fn line(&mut self, line: &str) -> ScrubbedLine {
+        let shown = self.scrubbed(line);
+        self.carried = Carried::Nothing;
+        ScrubbedLine(shown)
     }
 
-    /// `line` with the userinfo of every URL in it removed.
-    pub fn line(&mut self, line: &str) -> String {
+    /// A piece of a line longer than one piece, with the userinfo of every URL in it removed;
+    /// a URL its end cuts is carried to the next piece, which [`Scrubber::piece`] or
+    /// [`Scrubber::line`] reads next.
+    pub fn piece(&mut self, piece: &str) -> ScrubbedLine {
+        ScrubbedLine(self.scrubbed(piece))
+    }
+
+    fn scrubbed(&mut self, line: &str) -> String {
         let mut shown = String::with_capacity(line.len());
         let mut rest = line;
         let carried = std::mem::take(&mut self.carried);
@@ -69,9 +77,6 @@ impl Scrubber {
             Carried::Scheme { seen } if rest.starts_with(&SEPARATOR[seen..]) => {
                 Some(completes(seen))
             }
-            Carried::Cut => (0..SEPARATOR.len())
-                .find(|seen| rest.starts_with(&SEPARATOR[*seen..]))
-                .map(completes),
             Carried::Nothing | Carried::Scheme { .. } | Carried::Authority => None,
         };
         if let Some(length) = separator_rest {
@@ -80,7 +85,7 @@ impl Scrubber {
                 Some(after) => rest = after,
                 None => return shown,
             }
-        } else if matches!(carried, Carried::Authority | Carried::Cut) {
+        } else if carried == Carried::Authority {
             // The rest of a userinfo a cut separated from its URL: up to its last `@`.
             let run = authority_end(rest);
             if let Some(at) = rest[..run].rfind('@') {
@@ -116,8 +121,8 @@ impl Scrubber {
     }
 
     /// The authority at `text`'s start, its userinfo removed and its host copied to `shown`;
-    /// what follows it, or `None` when the line ends inside it before any `@` — removed, and
-    /// carried to the next line.
+    /// what follows it, or `None` when the text ends inside it before any `@` — removed, and
+    /// carried to the next piece.
     fn authority<'a>(&mut self, text: &'a str, shown: &mut String) -> Option<&'a str> {
         let end = authority_end(text);
         if end == text.len() && !text.contains('@') {
@@ -135,13 +140,234 @@ impl Scrubber {
     }
 }
 
-/// `text`'s lines, each scrubbed, joined by `\n` — for a text read whole from its first line.
-pub fn scrub_userinfo(text: &str) -> String {
-    let mut scrubber = Scrubber::new();
-    text.split('\n')
-        .map(|line| scrubber.line(line))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// One line of git's — or one piece of a line longer than the runner's piece limit — with the
+/// userinfo of every URL in it removed. Only a [`Scrubber`] makes one.
+///
+/// ```compile_fail
+/// // No literal: the field is private.
+/// let line = cairn_model::ScrubbedLine(String::from("https://u:p@h"));
+/// ```
+///
+/// ```compile_fail
+/// // No conversion from text.
+/// let line: cairn_model::ScrubbedLine = String::from("https://u:p@h").into();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubbedLine(String);
+
+impl ScrubbedLine {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ScrubbedLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// git's text as whole lines, each scrubbed of a URL's userinfo as it was added — what the
+/// engine hands the application of anything git wrote (R4.10): the lines one read of a pipe
+/// completed, a failure's retained output, a command log record's. A line holds no `\n`.
+/// Lines are added only as [`ScrubbedLine`]s, or scrubbed on the way in ([`Self::scrubbing`]),
+/// so nothing in it was not scrubbed. Bounded by its holder through [`Self::keep_last`], which
+/// lets go of whole lines, oldest first, and says so ([`Self::older_dropped`]) — never a cut
+/// inside a line.
+///
+/// ```compile_fail
+/// // No literal: the fields are private.
+/// let lines = cairn_model::ScrubbedLines { text: String::new(), lines: 0, older_dropped: false };
+/// ```
+///
+/// ```compile_fail
+/// // A line is pushed only as a scrubber's output, never as text.
+/// let mut lines = cairn_model::ScrubbedLines::default();
+/// lines.push(String::from("https://u:p@h"));
+/// ```
+///
+/// ```
+/// // The passing scaffold the two refusals above each change one line of.
+/// let mut lines = cairn_model::ScrubbedLines::default();
+/// lines.push(cairn_model::Scrubber::new().line("https://u:p@h/x"));
+/// assert_eq!(lines.text(), "https://h/x");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScrubbedLines {
+    /// The lines, joined by `\n`.
+    text: String,
+    /// How many lines `text` holds: one empty line and none read alike.
+    lines: usize,
+    older_dropped: bool,
+}
+
+impl ScrubbedLines {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `text`'s lines — split at `\n` — each scrubbed whole, for git's text read whole: a
+    /// message the engine formats from what git said, or a test's.
+    pub fn scrubbing(text: &str) -> Self {
+        let mut lines = Self::new();
+        let mut scrubber = Scrubber::new();
+        for line in text.split('\n') {
+            lines.push(scrubber.line(line));
+        }
+        lines
+    }
+
+    /// One line more, after the rest.
+    pub fn push(&mut self, line: ScrubbedLine) {
+        if self.lines > 0 {
+            self.text.push('\n');
+        }
+        self.text.push_str(&line.0);
+        self.lines += 1;
+    }
+
+    /// `other`'s lines after these.
+    pub fn append(&mut self, other: &ScrubbedLines) {
+        if other.lines == 0 {
+            return;
+        }
+        if self.lines > 0 {
+            self.text.push('\n');
+        }
+        self.text.push_str(&other.text);
+        self.lines += other.lines;
+    }
+
+    /// The lines, oldest first.
+    pub fn lines(&self) -> impl DoubleEndedIterator<Item = &str> {
+        let text = if self.lines == 0 {
+            None
+        } else {
+            Some(&self.text)
+        };
+        text.into_iter().flat_map(|text| text.split('\n'))
+    }
+
+    /// The lines a person reads: each with its trailing whitespace trimmed, the blank ones left
+    /// out — what a progress line or a streamed output draws.
+    pub fn spoken(&self) -> impl DoubleEndedIterator<Item = &str> {
+        self.lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+    }
+
+    /// The lines joined by `\n`.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines == 0
+    }
+
+    /// How many lines it holds — not its bytes, which [`Self::bytes`] counts.
+    pub fn line_count(&self) -> usize {
+        self.lines
+    }
+
+    /// The bytes of its text.
+    pub fn bytes(&self) -> usize {
+        self.text.len()
+    }
+
+    /// Older lines were let go of to keep it bounded: what it holds starts at a line's start,
+    /// after lines that are not kept.
+    pub fn older_dropped(&self) -> bool {
+        self.older_dropped
+    }
+
+    /// Lets go of whole lines, oldest first, until its text is at most `bytes` long. A line is
+    /// never cut: one longer than `bytes` is let go of whole, the newest too.
+    pub fn keep_last(&mut self, bytes: usize) {
+        let mut start = 0;
+        let mut dropped = 0;
+        while self.text.len() - start > bytes && dropped < self.lines {
+            start = match self.text[start..].find('\n') {
+                Some(end) => start + end + 1,
+                None => self.text.len(),
+            };
+            dropped += 1;
+        }
+        if dropped > 0 {
+            self.text.drain(..start);
+            self.lines -= dropped;
+            self.older_dropped = true;
+        }
+    }
+
+    /// Lets go of whole lines, oldest first, until at most `count` are left.
+    pub fn keep_last_lines(&mut self, count: usize) {
+        if self.lines <= count {
+            return;
+        }
+        let dropping = self.lines - count;
+        let start = if count == 0 {
+            self.text.len()
+        } else {
+            self.text
+                .match_indices('\n')
+                .nth(dropping - 1)
+                .map_or(self.text.len(), |(at, _)| at + 1)
+        };
+        self.text.drain(..start);
+        self.lines = count;
+        self.older_dropped = true;
+    }
+
+    /// Lets go of trailing lines that are blank, and the trailing whitespace of the last line
+    /// kept. Only removes, so what is left is as scrubbed as it was.
+    pub fn trim_end(&mut self) {
+        let kept = self.text.trim_end().len();
+        self.text.truncate(kept);
+        self.lines = if self.text.is_empty() {
+            0
+        } else {
+            self.text.matches('\n').count() + 1
+        };
+    }
+}
+
+impl std::fmt::Display for ScrubbedLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+/// Read as its text, the lines joined by `\n`: what it holds is scrubbed, so reading it is free.
+impl std::ops::Deref for ScrubbedLines {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+/// Compared with text by its text alone.
+impl PartialEq<str> for ScrubbedLines {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for ScrubbedLines {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for ScrubbedLines {
+    fn eq(&self, other: &String) -> bool {
+        &self.text == other
+    }
 }
 
 /// Where an authority beginning at `text`'s start ends: at the first character no authority
@@ -175,7 +401,7 @@ mod tests {
     use super::*;
 
     fn scrubbed(line: &str) -> String {
-        Scrubber::new().line(line)
+        Scrubber::new().line(line).into_string()
     }
 
     /// R12.2's first case: an http(s) URL's user and password are removed, and nothing else
@@ -223,47 +449,42 @@ mod tests {
         );
     }
 
-    /// R12.2's split case: a URL whose authority a line's end cuts — a line sent in pieces —
-    /// loses the userinfo on both sides of the cut. Caught by: lines scrubbed one at a time
-    /// with nothing carried across.
+    /// R12.2's split case: a URL whose authority a piece's end cuts — a line longer than the
+    /// runner's piece limit — loses the userinfo on both sides of the cut, and a whole line
+    /// carries nothing to the next. Caught by: pieces scrubbed one at a time with nothing
+    /// carried, or a carry left over past a line's end.
     #[test]
-    fn a_url_split_across_a_line_loses_its_userinfo_on_both_sides() {
+    fn a_url_split_across_pieces_loses_its_userinfo_on_both_sides() {
         let mut scrubber = Scrubber::new();
         assert_eq!(
-            scrubber.line("error: https://user:ghp_TO"),
+            scrubber.piece("error: https://user:ghp_TO").as_str(),
             "error: https://"
         );
         assert_eq!(
-            scrubber.line("KEN@github.com/o/r failed"),
+            scrubber.line("KEN@github.com/o/r failed").as_str(),
             "github.com/o/r failed"
         );
         assert_eq!(
-            scrubber.line("next https://plain/x"),
+            scrubber.line("next https://plain/x").as_str(),
             "next https://plain/x"
         );
-        // Cut before the `@` was reached, with no `@` on the next line: the host is kept there.
+        // Cut before the `@` was reached, with no `@` in the next piece: the host is kept there.
         let mut scrubber = Scrubber::new();
-        assert_eq!(scrubber.line("see https://exam"), "see https://");
-        assert_eq!(scrubber.line("ple.com/x"), "ple.com/x");
-        // A tail cut from the front: its first line may begin inside a userinfo.
-        let mut cut = Scrubber::after_cut();
+        assert_eq!(scrubber.piece("see https://exam").as_str(), "see https://");
+        assert_eq!(scrubber.line("ple.com/x").as_str(), "ple.com/x");
+        // A whole line ending inside an authority carries nothing: the next line is its own.
+        let mut scrubber = Scrubber::new();
+        assert_eq!(scrubber.line("see https://exam").as_str(), "see https://");
         assert_eq!(
-            cut.line("er:secret@host/r.git' denied"),
-            "host/r.git' denied"
+            scrubber.line("ada:x@example.com wrote").as_str(),
+            "ada:x@example.com wrote"
         );
-        assert_eq!(
-            cut.line("user:secret@x"),
-            "user:secret@x",
-            "only the first line"
-        );
-        let mut cut = Scrubber::after_cut();
-        assert_eq!(cut.line("remote: done"), "remote: done");
     }
 
-    /// Phase 11's QA (TC3): a line cut at any byte — inside the scheme, at or inside its `://`,
-    /// in the userinfo, the host or after it — loses no userinfo on either side of the cut, and
-    /// a text that starts at any byte of the line does not either. Caught by: a carry that waits
-    /// for a whole `://` before it starts.
+    /// Phase 11's QA (TC3), for pieces: a line cut into two pieces at any byte — inside the
+    /// scheme, at or inside its `://`, in the userinfo, the host or after it — loses no
+    /// userinfo on either side of the cut. Caught by: a carry that waits for a whole `://`
+    /// before it starts.
     #[test]
     fn a_url_cut_at_any_byte_loses_its_userinfo() {
         let line = "error: 'https://user:tok@host/r' failed";
@@ -271,7 +492,7 @@ mod tests {
             let mut scrubber = Scrubber::new();
             let shown = format!(
                 "{}{}",
-                scrubber.line(&line[..cut]),
+                scrubber.piece(&line[..cut]),
                 scrubber.line(&line[cut..])
             );
             assert!(
@@ -279,30 +500,16 @@ mod tests {
                 "cut at {cut}: {shown:?}"
             );
             assert!(shown.contains("host/r' failed"), "cut at {cut}: {shown:?}");
-            let from = Scrubber::after_cut().line(&line[cut..]);
-            assert!(
-                !from.contains("tok") && !from.contains("user"),
-                "from {cut}: {from:?}"
-            );
         }
         let mut scrubber = Scrubber::new();
-        assert_eq!(scrubber.line("see https:"), "see https:");
-        assert_eq!(scrubber.line("//u:p@h/x"), "//h/x");
-        assert_eq!(
-            Scrubber::after_cut().line("://u:p@h/x"),
-            "://h/x",
-            "a text that starts at its `://`"
-        );
-        assert_eq!(
-            Scrubber::after_cut().line("/home/ada@x is mine"),
-            "/home/ada@x is mine"
-        );
+        assert_eq!(scrubber.piece("see https:").as_str(), "see https:");
+        assert_eq!(scrubber.line("//u:p@h/x").as_str(), "//h/x");
         let mut scrubber = Scrubber::new();
-        assert_eq!(scrubber.line("it failed"), "it failed");
+        assert_eq!(scrubber.piece("it failed").as_str(), "it failed");
         assert_eq!(
-            scrubber.line("// a comment, ada@example.com"),
+            scrubber.line("// a comment, ada@example.com").as_str(),
             "// a comment, ada@example.com",
-            "a line after a word is no authority unless it starts with `://`'s rest"
+            "a piece after a word is no authority unless it starts with `://`'s rest"
         );
     }
 
@@ -323,13 +530,18 @@ mod tests {
         );
     }
 
-    /// The text form reads each line in order with one scrubber.
+    /// A text read whole is scrubbed line by line, each line its own.
     #[test]
-    fn a_text_is_scrubbed_line_by_line_with_the_cut_carried() {
+    fn a_text_is_scrubbed_line_by_line() {
+        let lines = ScrubbedLines::scrubbing("a https://u:p@h/x\nb https://u:p@h/y\n\nc");
+        assert_eq!(lines.text(), "a https://h/x\nb https://h/y\n\nc");
+        assert_eq!(lines.line_count(), 4);
         assert_eq!(
-            scrub_userinfo("a https://u:p@h/x\nb https://u:\np@h/y\nc"),
-            "a https://h/x\nb https://\nh/y\nc"
+            lines.lines().collect::<Vec<_>>(),
+            ["a https://h/x", "b https://h/y", "", "c"]
         );
+        assert!(!lines.older_dropped());
+        assert_eq!(lines.to_string(), lines.text());
     }
 
     /// `://` with no scheme before it, and a scheme starting with a digit, are not read as a
@@ -339,5 +551,72 @@ mod tests {
         assert_eq!(scrubbed("odd ://user@host"), "odd ://user@host");
         assert_eq!(scrubbed("9http://u:p@h/x"), "9http://h/x");
         assert_eq!(scrubbed("ünicode https://ü:p@h/x"), "ünicode https://h/x");
+    }
+
+    /// R4.10's tail: bounded by letting go of whole lines, oldest first, and saying so with a
+    /// plain fact — never a cut inside a line, never the newest line let go of. Caught by: a
+    /// byte cut, the head kept instead of the end, or a dropped line not said.
+    #[test]
+    fn keeping_the_last_lets_go_of_whole_oldest_lines_and_says_so() {
+        let mut lines = ScrubbedLines::new();
+        let mut scrubber = Scrubber::new();
+        for n in 0..10 {
+            lines.push(scrubber.line(&format!("line {n}")));
+        }
+        lines.keep_last(20);
+        assert_eq!(lines.text(), "line 7\nline 8\nline 9");
+        assert_eq!(lines.line_count(), 3);
+        assert!(lines.older_dropped());
+        let mut short = ScrubbedLines::scrubbing("all of it");
+        short.keep_last(1024);
+        assert!(!short.older_dropped());
+        let mut long = ScrubbedLines::scrubbing(&format!("first\n{}", "é".repeat(100)));
+        long.keep_last(200);
+        assert_eq!(long.text(), "é".repeat(100), "the newest line kept whole");
+        assert!(long.older_dropped());
+        long.keep_last(10);
+        assert!(
+            long.is_empty(),
+            "a line longer than the bound let go of whole, never cut"
+        );
+        assert!(long.older_dropped());
+        assert_eq!(long.lines().count(), 0);
+        let mut empty = ScrubbedLines::new();
+        empty.keep_last(0);
+        assert!(empty.is_empty() && !empty.older_dropped());
+        assert_eq!(empty.lines().count(), 0);
+    }
+
+    /// Bounded by count as by bytes, and what a person reads of it leaves blank lines out.
+    #[test]
+    fn keeping_the_last_lines_and_reading_what_is_spoken() {
+        let mut lines = ScrubbedLines::scrubbing("a\n\nb  \nc\nd");
+        assert_eq!(lines.spoken().collect::<Vec<_>>(), ["a", "b", "c", "d"]);
+        lines.keep_last_lines(2);
+        assert_eq!((lines.text(), lines.line_count()), ("c\nd", 2));
+        assert!(lines.older_dropped());
+        let mut kept = ScrubbedLines::scrubbing("a\nb");
+        kept.keep_last_lines(2);
+        assert!(!kept.older_dropped());
+        kept.keep_last_lines(0);
+        assert!(kept.is_empty() && kept.older_dropped());
+    }
+
+    /// Trailing blank lines and whitespace go; one empty line and none are told apart until
+    /// then. Caught by: a count left stale by the trim.
+    #[test]
+    fn trimming_the_end_lets_go_of_blank_lines() {
+        let mut lines = ScrubbedLines::scrubbing("fatal: no  \n\n  ");
+        assert_eq!(lines.line_count(), 3);
+        lines.trim_end();
+        assert_eq!((lines.text(), lines.line_count()), ("fatal: no", 1));
+        let mut blank = ScrubbedLines::scrubbing("");
+        assert_eq!(blank.line_count(), 1);
+        blank.trim_end();
+        assert!(blank.is_empty());
+        let mut joined = ScrubbedLines::scrubbing("a");
+        joined.append(&ScrubbedLines::scrubbing("b\nc"));
+        joined.append(&ScrubbedLines::new());
+        assert_eq!((joined.text(), joined.line_count()), ("a\nb\nc", 3));
     }
 }

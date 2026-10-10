@@ -279,9 +279,10 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   would let this process execute, following a link
   (`a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits`,
   `a_hook_counts_where_access_would_let_its_owner_run_it`). A failing hook fails
-  the commit with git's output — stdout's tail ahead of stderr's, since git says
-  "nothing to commit" and "would make it empty" on stdout — and nothing is
-  committed, the change still staged and no lock left.
+  the commit with git's output — the runner's tail of stdout's and stderr's lines
+  in the order they arrived, whole and scrubbed (`Invocation::lines`, R4.10),
+  since git says "nothing to commit" and "would make it empty" on stdout — and
+  nothing is committed, the change still staged and no lock left.
 - **The identity is git's** (R6.8): nothing is passed and nothing read, so a commit
   is by the inherited identity variables over the configuration, as a terminal's
   is (`a_commit_is_by_the_identity_in_cairns_environment`), and with none, git's

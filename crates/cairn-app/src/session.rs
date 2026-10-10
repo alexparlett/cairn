@@ -106,13 +106,15 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             activity.write().fetch_started(&remote);
             fetch.write().started(remote);
         }
-        Update::FetchProgress { line } => {
-            let line = crate::shown_output::scrubbed(&line);
+        Update::FetchProgress { lines } => {
             let key = activity.peek().fetch_key();
             if let Some(key) = key {
-                activity.write().output(key, std::slice::from_ref(&line));
+                activity.write().output(key, &lines);
             }
-            fetch.write().progressed(line);
+            // The status box draws the latest redraw.
+            if let Some(line) = lines.spoken().next_back() {
+                fetch.write().progressed(line.to_owned());
+            }
         }
         // What an operation ran, for the activity popover (R12.1).
         Update::OperationRan {
@@ -155,7 +157,6 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             refresh_after_an_operation(worker);
         }
         Update::FetchFailed { remote, message } => {
-            let message = crate::shown_output::scrubbed(&message);
             activity
                 .write()
                 .fetch_ended(&remote, crate::activity::Outcome::Failed(message.clone()));
@@ -191,8 +192,6 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             } else {
                 worker.submit
             };
-            // git's words in it scrubbed before anything keeps or draws them (R12.2).
-            let ending = crate::shown_output::shown_ending(ending);
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
             // A write that never started is named as it was asked (the user's decision N), and
@@ -1148,7 +1147,9 @@ mod tests {
             view,
             &asked,
             Update::FetchProgress {
-                line: "Receiving objects: 40%".to_owned(),
+                lines: cairn_model::ScrubbedLines::scrubbing(
+                    "Receiving objects: 20%\nReceiving objects: 40%\n",
+                ),
             },
         );
         assert_eq!(

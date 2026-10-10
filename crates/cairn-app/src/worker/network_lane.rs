@@ -206,14 +206,13 @@ pub(super) fn serve_network_lane(
                             remote: remote.clone(),
                         },
                     );
-                    // Scrubbed before it leaves the lane (R12.2): a remote URL with a token
-                    // in it is never drawn.
-                    let mut shown = cairn_model::Scrubber::new();
-                    started.finish(|line| {
+                    // Each read's lines as the engine split and scrubbed them (R4.10, R12.2): a
+                    // remote URL with a token in it is never drawn.
+                    started.finish(|lines| {
                         outbox.send(
                             None,
                             Update::FetchProgress {
-                                line: shown.line(line),
+                                lines: lines.clone(),
                             },
                         );
                     })
@@ -255,18 +254,10 @@ fn fetch_outcome(
             remote,
             stranded_locks,
         },
-        Err(error) => {
-            let error = super::local_lane::scrubbed_error(error);
-            Update::FetchFailed {
-                remote,
-                message: crate::shown_output::scrubbed(&match prompting {
-                    Ok(()) => error.to_string(),
-                    Err(why) => format!(
-                        "{error}. Cairn could not have asked for a credential in this session: {why}"
-                    ),
-                }),
-            }
-        }
+        Err(error) => Update::FetchFailed {
+            remote,
+            message: super::local_lane::message_of(&error, prompting),
+        },
     }
 }
 

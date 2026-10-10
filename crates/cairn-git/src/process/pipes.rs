@@ -18,6 +18,8 @@ use std::io::{self, Read as _};
 use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::SyncSender;
 
+use cairn_model::{ScrubbedLines, Scrubber};
+
 use super::group::Group;
 
 /// What a reader hands the driving thread.
@@ -25,29 +27,36 @@ use super::group::Group;
 pub(super) enum Event {
     /// Bytes from stdout, in order, as they arrived.
     Stdout(Vec<u8>),
-    /// The lines of stderr one read completed, in order, each with its
-    /// terminator stripped and lossily decoded, joined by `\n` (which no line
-    /// contains) into one string. One event per read, not per line, so what git
-    /// wrote before it exited is a few events however many lines it was, and the
-    /// driver's last look at the queue takes it all; one string, not a string
-    /// per line, so an event costs one allocation of at most a read's bytes and
-    /// a pending line piece, however short its lines.
-    Lines(String),
+    /// The lines of stderr one read completed, in order, each split whole by [`Lines`] and
+    /// scrubbed of a URL's userinfo as it was split (staging-and-commit R4.10). One event per
+    /// read, not per line, so what git wrote before it exited is a few events however many
+    /// lines it was, and the driver's last look at the queue takes it all; one text, not a
+    /// string per line, so an event costs one allocation of at most a read's bytes and a
+    /// pending line piece, however short its lines.
+    Lines(ScrubbedLines),
 }
 
 /// How many events may wait for the driving thread before a reader waits for
 /// it: each is one allocation of at most a 64 KiB read — a stderr event also
-/// a line piece of up to 256 KiB, and up to three bytes for each undecodable
-/// one — so a few MiB of stdout queued at most, and some tens of MiB of
-/// stderr in the worst case.
+/// a line piece of up to [`PIECE_BYTES`], and up to three bytes for each
+/// undecodable one — so a few MiB of stdout queued at most, and some tens of
+/// MiB of stderr in the worst case.
 pub(super) const EVENTS_BOUND: usize = 64;
 
 /// Bytes read from a pipe at a time: the most a Linux pipe holds by default.
 const CHUNK: usize = 64 * 1024;
 
-/// How much of git's stderr is retained for an error and the log: the last
-/// 256 KiB. Lines before that are forwarded as progress and dropped.
+/// How much of git's output is retained for an error and the log: the last
+/// 256 KiB, as whole lines. Lines before that are forwarded as progress and
+/// dropped.
 pub(super) const TAIL_BYTES: usize = 256 * 1024;
+
+/// The longest piece of a line [`Lines`] hands on: a line longer than this —
+/// one with no terminator for 256 KiB — is handed on in pieces of at most this
+/// size, each ending at a character's end, so a stream with no terminator in it
+/// cannot grow without bound here. No longer than the tail, so the tail always
+/// holds the newest piece whole.
+pub(super) const PIECE_BYTES: usize = TAIL_BYTES;
 
 /// Reads stdout to its end, sending each chunk on. Ends at the end of the pipe,
 /// on a read error, or when the receiver has gone.
@@ -68,10 +77,8 @@ pub(super) fn read_stdout(mut pipe: ChildStdout, events: &SyncSender<Event>, gro
     group.pipe_closed();
 }
 
-/// Reads stderr to its end, sending each line on as it completes: a line ends
-/// at `\n` or, as git's progress meters redraw themselves, at `\r`. A line
-/// longer than [`TAIL_BYTES`] is sent in pieces of that size, so a stderr with
-/// no terminator in it cannot grow without bound here either.
+/// Reads stderr to its end, sending on the lines each read completes, split
+/// and scrubbed by [`Lines`].
 pub(super) fn read_stderr(mut pipe: ChildStderr, events: &SyncSender<Event>, group: &Group) {
     let mut lines = Lines::default();
     let mut chunk = vec![0u8; CHUNK];
@@ -82,13 +89,16 @@ pub(super) fn read_stderr(mut pipe: ChildStderr, events: &SyncSender<Event>, gro
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        let complete = lines.push(&chunk[..read]);
-        if !complete.is_empty() && events.send(Event::Lines(complete.join("\n"))).is_err() {
+        let mut complete = ScrubbedLines::new();
+        lines.push(&chunk[..read], &mut complete);
+        if !complete.is_empty() && events.send(Event::Lines(complete)).is_err() {
             break 'reading;
         }
     }
-    if let Some(line) = lines.rest() {
-        let _ = events.send(Event::Lines(line));
+    let mut last = ScrubbedLines::new();
+    lines.finish(&mut last);
+    if !last.is_empty() {
+        let _ = events.send(Event::Lines(last));
     }
     group.pipe_closed();
 }
@@ -105,112 +115,108 @@ pub(super) fn feed(mut pipe: impl io::Write, input: &[u8], group: &Group) {
     drop(pipe);
 }
 
-/// Splits stderr into lines across reads.
+/// git's output split into lines across reads — the one line type, for stdout and stderr
+/// alike (staging-and-commit R4.10, C31). A line ends at `\n` or at `\r`, on both streams: git's
+/// progress meters redraw themselves with `\r`, and a hook writing one to stdout redraws the
+/// same way, so each redraw is a line of its own whichever pipe carried it. A line is decoded
+/// whole, so a character is never split across two reads; one longer than [`PIECE_BYTES`] is
+/// handed on in pieces, each cut where a character ends, never inside one. Each line, and each
+/// piece, is scrubbed of a URL's userinfo as it is split (R12.2), before anything keeps or cuts
+/// it: the scrubber carries across the pieces of one line, and nothing across a line's end.
 #[derive(Debug, Default)]
-struct Lines {
+pub(super) struct Lines {
     pending: Vec<u8>,
+    scrubber: Scrubber,
 }
 
 impl Lines {
-    /// Every line `bytes` completes, and any piece of an over-long one.
-    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        let mut done = Vec::new();
+    /// Every line `bytes` completes, and any piece of an over-long one, added to `out`.
+    pub(super) fn push(&mut self, bytes: &[u8], out: &mut ScrubbedLines) {
         for &byte in bytes {
             if matches!(byte, b'\n' | b'\r') {
-                done.push(String::from_utf8_lossy(&self.pending).into_owned());
+                out.push(self.scrubber.line(&String::from_utf8_lossy(&self.pending)));
                 self.pending.clear();
             } else {
                 self.pending.push(byte);
-                if self.pending.len() >= TAIL_BYTES {
-                    done.push(String::from_utf8_lossy(&self.pending).into_owned());
-                    self.pending.clear();
+                if self.pending.len() >= PIECE_BYTES {
+                    let whole = whole_characters(&self.pending);
+                    out.push(
+                        self.scrubber
+                            .piece(&String::from_utf8_lossy(&self.pending[..whole])),
+                    );
+                    self.pending.drain(..whole);
                 }
             }
         }
-        done
     }
 
-    /// The last line, when stderr ended without a terminator.
-    fn rest(self) -> Option<String> {
-        (!self.pending.is_empty()).then(|| String::from_utf8_lossy(&self.pending).into_owned())
+    /// The last line, when the stream ended without a terminator, added to `out`.
+    pub(super) fn finish(mut self, out: &mut ScrubbedLines) {
+        if !self.pending.is_empty() {
+            out.push(self.scrubber.line(&String::from_utf8_lossy(&self.pending)));
+        }
     }
 }
 
-/// The retained end of stderr: at most [`TAIL_BYTES`], ending with the last
-/// line, starting at a line's start where one falls inside the window. While
-/// the process runs it holds at most twice that plus the line being added,
-/// because it cuts in batches.
+/// How many of `bytes` end at a character's end: all of them, unless they end inside a UTF-8
+/// sequence, whose started bytes are left out to go with the next piece. Bytes that are no
+/// UTF-8 at all are counted, to be read lossily as they always were.
+fn whole_characters(bytes: &[u8]) -> usize {
+    let length = bytes.len();
+    for back in 1..=length.min(3) {
+        let byte = bytes[length - back];
+        if (byte & 0xC0) == 0x80 {
+            continue;
+        }
+        // A lead byte: how long its sequence is, and whether all of it is here.
+        let needs = match byte {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1,
+        };
+        return if back < needs { length - back } else { length };
+    }
+    length
+}
+
+/// The retained end of git's output: at most [`TAIL_BYTES`] of whole lines, the oldest let go
+/// of first, already scrubbed. While the process runs it holds at most twice that plus the
+/// lines being added, because it lets go in batches.
 #[derive(Debug, Default)]
 pub(super) struct Tail {
-    text: String,
-    /// A prefix was let go of, and what is kept may begin part-way through a
-    /// line: inside one, or at a piece of a line [`Lines`] sent in pieces.
-    cut: bool,
-}
-
-/// What a [`Tail`] kept: its text, and whether that may begin part-way
-/// through a line (staging-and-commit phase 11's QA, TC5: said by the engine,
-/// never guessed from a length).
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct Retained {
-    pub(crate) text: String,
-    pub(crate) cut: bool,
+    lines: ScrubbedLines,
 }
 
 impl Tail {
-    pub(super) fn push(&mut self, line: &str) {
-        self.text.push_str(line);
-        self.text.push('\n');
-        // Cut in batches, so retaining is linear in what was said, not quadratic.
-        if self.text.len() > 2 * TAIL_BYTES {
-            self.cut();
+    pub(super) fn push(&mut self, lines: &ScrubbedLines) {
+        self.lines.append(lines);
+        // Let go in batches, so retaining is linear in what was said, not quadratic.
+        if self.lines.bytes() > 2 * TAIL_BYTES {
+            self.lines.keep_last(TAIL_BYTES);
         }
-    }
-
-    fn cut(&mut self) {
-        let length = self.text.len();
-        if length <= TAIL_BYTES {
-            return;
-        }
-        let mut start = length - TAIL_BYTES;
-        while !self.text.is_char_boundary(start) {
-            start += 1;
-        }
-        if self.text.as_bytes().get(start.wrapping_sub(1)) != Some(&b'\n')
-            && let Some(newline) = self.text[start..].find('\n')
-            && start + newline + 1 < length
-        {
-            start += newline + 1;
-        }
-        // Kept from a line's start only where the line before it ended there: not
-        // part-way, and not a piece of a line sent in pieces, which is as long as
-        // the window.
-        let at_a_line_start = start > 0
-            && self.text.as_bytes()[start - 1] == b'\n'
-            && self.text[..start - 1]
-                .rfind('\n')
-                .map_or(start - 1, |before| start - 2 - before)
-                < TAIL_BYTES;
-        self.cut |= !at_a_line_start;
-        self.text.drain(..start);
     }
 
     /// How many bytes it holds now, for a test of what it holds while running.
     #[cfg(test)]
     fn held(&self) -> usize {
-        self.text.len()
+        self.lines.bytes()
     }
 
-    /// The retained text, trailing whitespace trimmed, and whether it was cut.
-    pub(super) fn into_text(mut self) -> Retained {
-        self.cut();
-        let kept = self.text.trim_end().len();
-        self.text.truncate(kept);
-        Retained {
-            text: self.text,
-            cut: self.cut,
-        }
+    /// The retained lines, at most [`TAIL_BYTES`], trailing whitespace trimmed, saying whether
+    /// older lines were let go of.
+    pub(super) fn into_lines(mut self) -> ScrubbedLines {
+        self.lines.keep_last(TAIL_BYTES);
+        self.lines.trim_end();
+        self.lines
     }
+}
+
+/// The lines a person reads of `lines` — each with its trailing whitespace trimmed, the blank
+/// ones left out — owned, for a test of what a progress callback was handed.
+#[cfg(test)]
+pub(crate) fn spoken(lines: &ScrubbedLines) -> Vec<String> {
+    lines.spoken().map(str::to_owned).collect()
 }
 
 /// Splits stdout into NUL-terminated records across chunks, handing each to
@@ -257,6 +263,17 @@ mod tests {
         seen
     }
 
+    /// What `reads` split into, read by read, and the last line on finish.
+    fn split(reads: &[&[u8]]) -> Vec<String> {
+        let mut lines = Lines::default();
+        let mut out = ScrubbedLines::new();
+        for read in reads {
+            lines.push(read, &mut out);
+        }
+        lines.finish(&mut out);
+        out.lines().map(str::to_owned).collect()
+    }
+
     /// Caught by: a record split across two reads delivered as two, or a
     /// phantom empty record after the final NUL.
     #[test]
@@ -269,84 +286,153 @@ mod tests {
         assert!(records(&[b""]).is_empty());
     }
 
-    /// Caught by: splitting on one terminator only, or keeping the terminator.
+    /// The one line definition, pinned (R4.10): a line ends at `\n` or `\r`, on stdout and
+    /// stderr alike, across reads, the terminator not kept. Caught by: splitting on one
+    /// terminator only, or keeping the terminator.
     #[test]
-    fn stderr_lines_end_at_either_terminator_across_reads() {
-        let mut lines = Lines::default();
-        let mut seen = lines.push(b"Receiving:  5");
-        seen.extend(lines.push(b"0%\rReceiving: 100%\nFrom x"));
-        assert_eq!(seen, ["Receiving:  50%", "Receiving: 100%"]);
-        assert_eq!(lines.rest().as_deref(), Some("From x"));
+    fn lines_end_at_either_terminator_across_reads() {
+        assert_eq!(
+            split(&[b"Receiving:  5", b"0%\rReceiving: 100%\nFrom x"]),
+            ["Receiving:  50%", "Receiving: 100%", "From x"]
+        );
+        assert_eq!(split(&[b"a\r\nb\n"]), ["a", "", "b"]);
+        assert!(split(&[b""]).is_empty());
     }
 
     /// Caught by: a line with no terminator growing without bound.
     #[test]
-    fn a_line_without_a_terminator_is_sent_in_pieces_no_longer_than_the_tail() {
-        let mut lines = Lines::default();
-        let seen = lines.push(&vec![b'x'; TAIL_BYTES * 2 + 3]);
-        assert_eq!(seen.len(), 2);
-        assert!(seen.iter().all(|line| line.len() == TAIL_BYTES));
-        assert_eq!(lines.rest().map(|rest| rest.len()), Some(3));
+    fn a_line_without_a_terminator_is_sent_in_pieces_no_longer_than_the_limit() {
+        let seen = split(&[&vec![b'x'; PIECE_BYTES * 2 + 3]]);
+        assert_eq!(seen.len(), 3);
+        assert!(seen[..2].iter().all(|line| line.len() == PIECE_BYTES));
+        assert_eq!(seen[2].len(), 3);
+    }
+
+    /// C31, the live bug (R4.10): a line longer than the piece limit, with a multi-byte
+    /// character straddling the limit — every offset of a two-, three- and four-byte one —
+    /// arrives with the character whole, never as U+FFFD; so does one split across two reads.
+    /// Caught by: a piece cut at the byte count and decoded lossily, or a read decoded alone.
+    #[test]
+    fn a_character_straddling_the_piece_limit_arrives_whole() {
+        for character in ["é", "€", "😀"] {
+            for before in 1..character.len() {
+                let mut long = vec![b'x'; PIECE_BYTES - before];
+                long.extend_from_slice(character.as_bytes());
+                long.extend_from_slice(b"rest\n");
+                for reads in [vec![&long[..]], long.chunks(4096).collect()] {
+                    let seen = split(&reads).concat();
+                    assert!(
+                        !seen.contains('\u{FFFD}'),
+                        "{character} cut {before} bytes in read as U+FFFD"
+                    );
+                    assert!(seen.ends_with(&format!("{character}rest")), "{before}");
+                    assert_eq!(seen.len(), long.len() - 1);
+                }
+            }
+            // A character split across two reads, far from the limit.
+            let bytes = format!("a{character}b\n");
+            let (first, second) = bytes.as_bytes().split_at(2);
+            assert_eq!(split(&[first, second]), [format!("a{character}b")]);
+        }
+        assert_eq!(whole_characters("a€".as_bytes()), 4);
+        assert_eq!(whole_characters(&"a€".as_bytes()[..3]), 1);
+        assert_eq!(
+            whole_characters(&[b'a', 0xFF]),
+            2,
+            "not UTF-8: counted as it is"
+        );
+    }
+
+    /// C31: a URL's userinfo is removed as the line is split — across two reads, across the
+    /// piece limit at every byte of the URL, and across a `\r` redraw — so nothing kept or
+    /// handed on ever holds it. Caught by: a scrub after the cut, or none.
+    #[test]
+    fn a_urls_userinfo_never_survives_the_split() {
+        assert_eq!(
+            split(&[b"fatal: https://user:ghp_TO", b"KEN@host/r denied\n"]),
+            ["fatal: https://host/r denied"]
+        );
+        assert_eq!(
+            split(&[b"50%\rfrom https://u:SECRET@host/x\r100%\n"]),
+            ["50%", "from https://host/x", "100%"]
+        );
+        let url = "https://user:SECRET@host/r";
+        for at in 0..url.len() {
+            let mut long = vec![b'x'; PIECE_BYTES - at];
+            long.extend_from_slice(url.as_bytes());
+            long.push(b'\n');
+            let seen = split(&[&long]).concat();
+            assert!(
+                !seen.contains("SECRET") && !seen.contains("user:"),
+                "cut {at} bytes into the URL"
+            );
+            assert!(seen.ends_with("host/r"), "cut {at}: the host lost");
+        }
     }
 
     /// Caught by: retaining everything, or keeping the head instead of the end.
     #[test]
-    fn the_tail_keeps_the_last_256_kib_from_a_line_start() {
+    fn the_tail_keeps_the_last_256_kib_of_whole_lines() {
         let mut tail = Tail::default();
         for n in 0..40_000 {
-            tail.push(&format!("line {n:06} of a long stderr"));
+            tail.push(&ScrubbedLines::scrubbing(&format!(
+                "line {n:06} of a long stderr"
+            )));
         }
-        let Retained { text, cut } = tail.into_text();
+        let kept = tail.into_lines();
+        let text = kept.text();
         assert!(text.len() <= TAIL_BYTES, "{}", text.len());
         assert!(text.len() > TAIL_BYTES - 64, "{}", text.len());
         assert!(text.ends_with("line 039999 of a long stderr"));
         assert!(text.starts_with("line "), "{:?}", &text[..20]);
-        assert!(!cut, "kept from a line's start, after a line that ended");
+        assert!(kept.older_dropped(), "older lines let go of, and said");
         let mut short = Tail::default();
-        short.push("all of it");
-        assert_eq!(
-            short.into_text(),
-            Retained {
-                text: "all of it".to_owned(),
-                cut: false
-            }
-        );
+        short.push(&ScrubbedLines::scrubbing("all of it\n"));
+        let short = short.into_lines();
+        assert_eq!((short.text(), short.older_dropped()), ("all of it", false));
     }
 
     /// R3.5, while the process runs: what is held never grows past twice the
     /// window and the line being added, however much stderr goes by. Caught by:
-    /// cutting only at the end.
+    /// letting go only at the end.
     #[test]
     fn the_tail_holds_a_bounded_amount_while_stderr_runs_on() {
         let mut tail = Tail::default();
-        let line = "a line of a stderr that runs on and on, about sixty bytes long";
+        let line = ScrubbedLines::scrubbing(
+            "a line of a stderr that runs on and on, about sixty bytes long",
+        );
         for _ in 0..80_000 {
-            tail.push(line);
+            tail.push(&line);
             assert!(
-                tail.held() <= 2 * 256 * 1024 + line.len() + 1,
+                tail.held() <= 2 * 256 * 1024 + line.bytes() + 1,
                 "{}",
                 tail.held()
             );
         }
     }
 
-    /// One line longer than the window keeps its end, never more than the window.
+    /// A line as long as the window, then another: the newest kept whole, the older let go of
+    /// whole — the tail never starts part-way through a line.
     #[test]
-    fn a_single_line_longer_than_the_tail_keeps_its_end() {
+    fn a_line_as_long_as_the_tail_is_let_go_of_whole() {
         let mut tail = Tail::default();
-        tail.push("first");
-        tail.push(&format!("{}end", "é".repeat(TAIL_BYTES)));
-        let Retained { text, cut } = tail.into_text();
-        assert!(text.len() <= TAIL_BYTES);
-        assert!(text.ends_with("éend"));
-        assert!(cut, "kept from part-way through a line");
-        // A line sent in pieces: the kept text starts at a piece, part-way through the line.
-        let mut pieces = Tail::default();
-        let mut lines = Lines::default();
-        for piece in lines.push(&vec![b'x'; TAIL_BYTES * 2]) {
-            pieces.push(&piece);
-        }
-        pieces.push("the end");
-        assert!(pieces.into_text().cut, "a piece's start taken for a line's");
+        let mut pieces = Lines::default();
+        let mut long = ScrubbedLines::new();
+        pieces.push(&vec![b'x'; PIECE_BYTES * 2], &mut long);
+        tail.push(&ScrubbedLines::scrubbing("first"));
+        tail.push(&long);
+        tail.push(&ScrubbedLines::scrubbing("the end"));
+        let kept = tail.into_lines();
+        assert_eq!(kept.text(), "the end");
+        assert!(kept.older_dropped());
+        let mut only = Tail::default();
+        only.push(&ScrubbedLines::scrubbing(&"é".repeat(PIECE_BYTES / 2)));
+        let only = only.into_lines();
+        assert_eq!(
+            only.bytes(),
+            PIECE_BYTES,
+            "a piece as long as the tail kept whole"
+        );
+        assert!(!only.older_dropped());
     }
 }

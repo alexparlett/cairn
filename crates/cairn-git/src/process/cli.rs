@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use cairn_model::AskpassToken;
+use cairn_model::{AskpassToken, ScrubbedLines, Scrubber};
 
 use super::GitEnvironment;
 use super::environment::Profile;
@@ -264,7 +264,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             |chunk| stdout.extend_from_slice(chunk),
             |_| {},
         )?;
-        Ok(Output::new(stdout, output.stderr().to_owned()))
+        Ok(Output::new(stdout, output.stderr))
     }
 
     /// [`GitCommand::start`] with no thread able to start, for a test outside
@@ -379,11 +379,13 @@ fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> 
     location
 }
 
-/// The arguments as a user would have typed them, for an error message.
+/// The arguments as a user would have typed them, for an error message — each scrubbed of a
+/// URL's userinfo (R12.2), though Cairn passes none, so an error's text carries no token.
 fn describe(arguments: &[OsString]) -> String {
+    let mut scrubber = Scrubber::new();
     arguments
         .iter()
-        .map(|argument| argument.to_string_lossy())
+        .map(|argument| scrubber.line(&argument.to_string_lossy()).into_string())
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -392,11 +394,11 @@ fn describe(arguments: &[OsString]) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Output {
     stdout: Vec<u8>,
-    stderr: String,
+    stderr: ScrubbedLines,
 }
 
 impl Output {
-    pub(super) fn new(stdout: Vec<u8>, stderr: String) -> Self {
+    pub(super) fn new(stdout: Vec<u8>, stderr: ScrubbedLines) -> Self {
         Self { stdout, stderr }
     }
 
@@ -405,7 +407,8 @@ impl Output {
         &self.stdout
     }
 
-    /// Lossily decoded; git's stderr is prose for a person, never parsed.
+    /// Whole lines, lossily decoded and scrubbed (`pipes::Lines`); git's stderr is prose for
+    /// a person, never parsed.
     #[cfg_attr(
         not(test),
         expect(
@@ -415,7 +418,7 @@ impl Output {
         )
     )]
     pub(crate) fn stderr(&self) -> &str {
-        &self.stderr
+        self.stderr.text()
     }
 
     pub(crate) fn stdout_text(&self) -> Cow<'_, str> {
@@ -445,7 +448,7 @@ mod tests {
     fn output(stdout: &[u8]) -> Output {
         Output {
             stdout: stdout.to_vec(),
-            stderr: String::new(),
+            stderr: ScrubbedLines::new(),
         }
     }
 
@@ -865,7 +868,7 @@ mod stub_tests {
             .finish(
                 &CancelSignal::new(),
                 |chunk| stdout.extend_from_slice(chunk),
-                |line| seen.push(line.to_owned()),
+                |said| seen.extend(crate::process::spoken(said)),
             )
             .unwrap();
         assert_eq!(
@@ -900,7 +903,7 @@ mod stub_tests {
             .finish(
                 &CancelSignal::new(),
                 |_| {},
-                |line| seen.push(line.to_owned()),
+                |said| seen.extend(crate::process::spoken(said)),
             )
             .unwrap_err();
         match error {

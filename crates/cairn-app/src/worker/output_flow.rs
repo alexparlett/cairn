@@ -15,9 +15,10 @@
 //! so a hook that writes a burst the window cannot keep up with and then falls silent shows the
 //! end of the burst only when it writes again or ends.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use cairn_model::ScrubbedLines;
 
 /// How many bytes of output may wait for the window before the lane holds the rest itself.
 pub const IN_FLIGHT_BYTES: usize = 1024 * 1024;
@@ -76,49 +77,40 @@ impl std::fmt::Debug for OutputReceipt {
 /// The lane's side: what is held while the window is behind, and the budget it counts against.
 pub(super) struct OutputFlow {
     budget: Arc<AtomicUsize>,
-    held: VecDeque<String>,
-    held_bytes: usize,
+    held: ScrubbedLines,
 }
 
 impl OutputFlow {
     pub(super) fn new(budget: Arc<AtomicUsize>) -> Self {
         Self {
             budget,
-            held: VecDeque::new(),
-            held_bytes: 0,
+            held: ScrubbedLines::new(),
         }
     }
 
-    /// One read's lines: sent at once with what was held while the window has room, held
-    /// otherwise. `send` is handed the lines and their receipt.
+    /// One read's lines, as the engine split and scrubbed them: sent at once with what was held
+    /// while the window has room, held otherwise. `send` is handed the lines and their receipt.
     pub(super) fn read(
         &mut self,
-        lines: &[&str],
-        send: &mut dyn FnMut(Vec<String>, OutputReceipt),
+        lines: &ScrubbedLines,
+        send: &mut dyn FnMut(ScrubbedLines, OutputReceipt),
     ) {
-        for line in lines {
-            self.held_bytes += line.len();
-            self.held.push_back((*line).to_owned());
-        }
-        while self.held.len() > HELD_LINES || (self.held_bytes > HELD_BYTES && self.held.len() > 1)
-        {
-            if let Some(dropped) = self.held.pop_front() {
-                self.held_bytes -= dropped.len();
-            }
-        }
+        self.held.append(lines);
+        self.held.keep_last_lines(HELD_LINES);
+        self.held.keep_last(HELD_BYTES);
         if self.budget.load(Ordering::Acquire) < IN_FLIGHT_BYTES {
             self.flush(send);
         }
     }
 
     /// Everything held, sent whatever the window is behind by: the write is ending.
-    pub(super) fn flush(&mut self, send: &mut dyn FnMut(Vec<String>, OutputReceipt)) {
+    pub(super) fn flush(&mut self, send: &mut dyn FnMut(ScrubbedLines, OutputReceipt)) {
         if self.held.is_empty() {
             return;
         }
-        let bytes = std::mem::take(&mut self.held_bytes);
+        let lines = std::mem::take(&mut self.held);
+        let bytes = lines.bytes();
         self.budget.fetch_add(bytes, Ordering::AcqRel);
-        let lines = std::mem::take(&mut self.held).into();
         send(
             lines,
             OutputReceipt {
@@ -137,30 +129,38 @@ mod tests {
     /// newest lines, bounded, and sends them once the window gives bytes back, or as the write
     /// ends; and every byte sent is given back as its updates are dropped. Caught by: one
     /// update a line, an unbounded queue, the newest lines dropped, or a budget that leaks.
+    fn read(lines: &[&str]) -> ScrubbedLines {
+        ScrubbedLines::scrubbing(&lines.join("\n"))
+    }
+
     #[test]
     fn output_is_one_update_a_read_and_what_waits_is_bounded() {
         let budget = Arc::new(AtomicUsize::new(0));
         let mut flow = OutputFlow::new(Arc::clone(&budget));
-        let mut sent: Vec<(Vec<String>, OutputReceipt)> = Vec::new();
-        flow.read(&["a", "b", "c"], &mut |lines, receipt| {
+        let mut sent: Vec<(ScrubbedLines, OutputReceipt)> = Vec::new();
+        flow.read(&read(&["a", "b", "c"]), &mut |lines, receipt| {
             sent.push((lines, receipt))
         });
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].0, ["a", "b", "c"]);
-        assert_eq!(budget.load(Ordering::Acquire), 3);
+        assert_eq!(sent[0].0.lines().collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert_eq!(budget.load(Ordering::Acquire), "a\nb\nc".len());
 
         // The window falls behind: a read past the budget is held, not sent.
         let wide = "x".repeat(IN_FLIGHT_BYTES);
-        flow.read(&[&wide], &mut |lines, receipt| sent.push((lines, receipt)));
+        flow.read(&read(&[&wide]), &mut |lines, receipt| {
+            sent.push((lines, receipt))
+        });
         assert_eq!(sent.len(), 2, "sent while the window had room");
         for n in 0..HELD_LINES + 50 {
             let line = format!("held {n}");
-            flow.read(&[&line], &mut |lines, receipt| sent.push((lines, receipt)));
+            flow.read(&read(&[&line]), &mut |lines, receipt| {
+                sent.push((lines, receipt))
+            });
         }
         assert_eq!(sent.len(), 2, "sent while the window was behind");
-        assert!(flow.held.len() <= HELD_LINES);
+        assert!(flow.held.line_count() <= HELD_LINES);
         assert_eq!(
-            flow.held.back().map(String::as_str),
+            flow.held.lines().next_back(),
             Some(format!("held {}", HELD_LINES + 49).as_str()),
             "the newest line was let go"
         );
@@ -171,43 +171,54 @@ mod tests {
         let mut wide_flow = OutputFlow::new(Arc::new(AtomicUsize::new(IN_FLIGHT_BYTES)));
         for n in 0..40 {
             let line = wide_line(n);
-            wide_flow.read(&[&line], &mut |lines, receipt| {
+            wide_flow.read(&read(&[&line]), &mut |lines, receipt| {
                 sent_wide.push((lines, receipt))
             });
         }
         assert!(sent_wide.is_empty());
         assert!(
-            wide_flow.held_bytes <= HELD_BYTES + wide_line(0).len(),
+            wide_flow.held.bytes() <= HELD_BYTES,
             "{} bytes held",
-            wide_flow.held_bytes
+            wide_flow.held.bytes()
         );
-        assert!(wide_flow.held.len() < 40, "nothing let go of by bytes");
+        assert!(
+            wide_flow.held.line_count() < 40,
+            "nothing let go of by bytes"
+        );
         assert_eq!(
-            wide_flow.held.back(),
-            Some(&wide_line(39)),
+            wide_flow.held.lines().next_back(),
+            Some(wide_line(39).as_str()),
             "the newest let go of"
         );
 
         // The window drops what it was sent: the bytes come back, and the next read sends.
         sent.clear();
         assert_eq!(budget.load(Ordering::Acquire), 0);
-        flow.read(&["after"], &mut |lines, receipt| {
+        flow.read(&read(&["after"]), &mut |lines, receipt| {
             sent.push((lines, receipt))
         });
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].0.len(), HELD_LINES);
-        assert_eq!(sent[0].0.last().map(String::as_str), Some("after"));
+        assert_eq!(sent[0].0.line_count(), HELD_LINES);
+        assert!(
+            sent[0].0.older_dropped(),
+            "the lines let go of were not said"
+        );
+        assert_eq!(sent[0].0.lines().next_back(), Some("after"));
 
         // Behind again at the end: the flush sends what is held regardless.
         let receipt_held = sent.pop();
-        flow.read(&[&wide], &mut |lines, receipt| sent.push((lines, receipt)));
-        flow.read(&["tail"], &mut |lines, receipt| sent.push((lines, receipt)));
+        flow.read(&read(&[&wide]), &mut |lines, receipt| {
+            sent.push((lines, receipt))
+        });
+        flow.read(&read(&["tail"]), &mut |lines, receipt| {
+            sent.push((lines, receipt))
+        });
         let before = sent.len();
         flow.flush(&mut |lines, receipt| sent.push((lines, receipt)));
         assert_eq!(sent.len(), before + 1);
         assert_eq!(
-            sent.last().map(|(lines, _)| lines.clone()),
-            Some(vec!["tail".to_owned()])
+            sent.last().map(|(lines, _)| lines.text().to_owned()),
+            Some("tail".to_owned())
         );
         drop(receipt_held);
         let cloned = sent.last().map(|(_, receipt)| receipt.clone());

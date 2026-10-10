@@ -40,6 +40,21 @@ STEP 2  Implement.
            with git's command and words) and of `Error::CommitUnconfirmed`
            (including a `post-commit` hook that commits, item 10) is plain
            engine text today, and this phase gives each its sentence and home.
+           Carried from phase 15's QA: (#3) the discard count's refusal
+           sentence (`worker::local_lane::refused_while_counting`) draws the
+           engine's raw path unescaped ("{path} changed while it was read",
+           "{path}: {why}"), as every engine error's Display does — so a path
+           holding a newline or a bidi control can reshape the "Couldn't
+           Discard Changes" sentence. Test first (a refusal for "a\nb" and
+           "a\u{202e}b" carries the C-quoted form), then expose one
+           path-display function from cairn-model (today `c_quote::quoted` is
+           pub(crate) and `consequence::quoted` private) and route every path
+           the window draws in an engine error through it. (U1) The count's
+           other refusal sentences — "<path>: <why>.", "No file was given.",
+           and the engine's words with their "; nothing was written" tail
+           stripped — are interim; this phase words each. If this phase does
+           not take either, both go on state.md's teardown issue list ("engine
+           error paths drawn unescaped"; the count's refusal sentences).
         2. Progress (R14.1, F1, F9): the status box shows a spinner and the
            running operation's name once it has run 250 ms (a timer on the
            toolkit's executor, as the commit box's elapsed time is — never a

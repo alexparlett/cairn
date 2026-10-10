@@ -3,6 +3,25 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 15's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p15/adjudication.md`): FIX NOW 4 and 5; CARRY 3 and U1 to
+phase 19 (written into its doc, and onto the teardown list if it does not take them); dismissed
+2 (not a flake — a mutation probe compiled in the shared worktree at the same moment), N1-N6
+and U3-U6 (observations with no defect, or texts following the approved templates). Item 1 (an
+emptied intent-to-add file in the worst-loss clause) went to the user, who decided against it:
+the prompt stays as built, the file "Emptied" in Show files and nothing more in the sentence.
+
+- **#4**: `the_greyed_button_is_disabled_to_assistive_technology_until_the_count_arrives`
+  (`crates/cairn-ui/tests/confirm_dialog.rs`) reads the greyed button's accessibility node
+  disabled while counting and the caption's button enabled once the count fills the same
+  dialog; with `set_disabled` deleted from `answer_button::greyed_answer` it fails.
+- **#5**: the stale comments reworded — `local_changes_actions.rs`'s module doc (the dialog at
+  the press, the refusal inside it, nested repositories left as they are) and
+  `a_discards_consequence_is_counted_after_the_writes_asked_before_it`'s.
+- **Process** (#2): reviewers that mutate code must run in an isolated copy of the committed
+  tree, never the shared worktree another reviewer is testing in.
+
 ## 2026-10-10 — phase 15 built after the user's answers (packet mode)
 
 The user took the coordinator's recommendations on Q1, Q3, Q4 and Q5, and decided Q2 (the

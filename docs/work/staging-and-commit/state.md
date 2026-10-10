@@ -150,6 +150,12 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   `what_is_left_is_one_line_under_the_prompt_and_not_in_the_token`,
   `show_files_discloses_each_file_and_what_happens_to_it` and the viewport twin
   `show_files_over_50000_paths_builds_one_viewport` (named in the root CLAUDE.md).
+- **QA (2026-10-10), fixed**: #4 the greyed button disabled to assistive technology, pinned
+  (`the_greyed_button_is_disabled_to_assistive_technology_until_the_count_arrives`); #5 two stale
+  comments. Carried to phase 19 (in its doc): #3 the refusal sentence's unescaped path, one
+  path-display function from cairn-model; U1 the count's other refusal sentences — each onto the
+  teardown list if phase 19 does not take it. Item 1 decided by the user: an emptied
+  intent-to-add file stays "Emptied" in Show files alone, nothing added to the sentence.
 - **Carried**: the line under the lists for a write's ending stays until phase 19 (only the
   discard's own lines went); `refused_while_counting` is the count's sentence until phase 19
   gives every ending its own; the engine still refuses a nested repository before any

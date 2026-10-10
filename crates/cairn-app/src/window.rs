@@ -291,9 +291,11 @@ fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> E
     let serial = asking.serial();
     let title = asking.title().to_owned();
     let consequence = asking.consequence().clone();
+    let left = asking.left().map(str::to_owned);
     // Keyed by its serial: another confirmation is another dialog, never this one's handlers
     // and answered state under new words.
     ConfirmDialog::new(serial, title, consequence)
+        .left(left)
         .key(DiffKey::U64(serial))
         .on_confirm(move |token| {
             showing.set(None);

@@ -36,6 +36,8 @@ pub struct ConfirmDialog {
     serial: u64,
     title: String,
     consequence: Rc<Consequence>,
+    /// One line under the prompt: what the selection held that the operation leaves as it is.
+    left: Option<String>,
     on_confirm: EventHandler<Confirmed>,
     on_cancel: EventHandler<()>,
     platform: Os,
@@ -50,11 +52,20 @@ impl ConfirmDialog {
             serial,
             title: title.into(),
             consequence,
+            left: None,
             on_confirm: EventHandler::new(|_| {}),
             on_cancel: EventHandler::new(|()| {}),
             platform: Os::current(),
             key: DiffKey::None,
         }
+    }
+
+    /// One line said under the prompt — what the selection held that the operation leaves as
+    /// it is (the redesign's D1: "1 submodule and 1 conflicted file are left as they are.") —
+    /// never part of the prompt the token records, which names only what is destroyed.
+    pub fn left(mut self, left: Option<String>) -> Self {
+        self.left = left;
+        self
     }
 
     /// The button was pressed: the token, built from the consequence drawn, once.
@@ -171,7 +182,12 @@ impl Component for ConfirmDialog {
                     .child(PopupTitle::new(self.title.clone()))
                     .child(
                         PopupContent::new()
-                            .child(label().text(prompt).width(Size::fill()).font_size(14.)),
+                            .child(label().text(prompt).width(Size::fill()).font_size(14.))
+                            .maybe_child(
+                                self.left.clone().map(|left| {
+                                    label().text(left).width(Size::fill()).font_size(14.)
+                                }),
+                            ),
                     )
                     .child(buttons),
             )

@@ -459,35 +459,94 @@ fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
     ]
 }
 
-/// C8 (views), C24, R3.6, R8.4, R8.7, R8.8: no route discards a staged change, a submodule or a
-/// conflicted path — the chord asks nothing and the view says why; a conflicted row stages
-/// whole, by `git add`; and a refusal the engine makes before any dialog (a nested repository)
-/// is said, nothing discarded. Caught by: a discard's consequence asked for any of them, a
-/// refusal kept silent, or a conflict that cannot be staged.
+/// C8 (views), C24, R3.6, R8.4, R8.7, R8.8 and the redesign's D1 and rule 4: no route discards
+/// a staged change, a submodule or a conflicted path — over a selection with nothing that can be
+/// discarded the chord asks nothing and says nothing, as Fork's does (no line under the lists);
+/// a selection mixing them with a path that can be discarded asks for that path alone, and its
+/// confirmation says in one line what is left; a conflicted row stages whole, by `git add`; and
+/// a refusal the engine makes before any dialog (a nested repository) is said, nothing
+/// discarded. Caught by: a discard's consequence asked for any of them, a mixed selection
+/// refused whole or discarding a submodule or a conflict, a line drawn under the lists for the
+/// chord, or a conflict that cannot be staged.
 #[test]
 fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why() {
     let (mut test, view, submitted) = opened(with_a_submodule_and_a_conflict());
-    for (row, why) in [
-        ("sub", "is a submodule"),
-        ("clash.rs", "has a conflict"),
-        ("s.rs", "Staged changes can't be discarded"),
-    ] {
+    let before = labels(&test);
+    for row in ["sub", "clash.rs", "s.rs"] {
         press_row(&mut test, row, 0);
         for key in [NamedKey::Backspace, NamedKey::Delete] {
             press_key(&mut test, key);
         }
         press_chord(&mut test, Action::Discard);
-        assert!(
-            labels(&test).iter().any(|t| t.contains(why)),
-            "{row}: {:?}",
-            labels(&test)
+        assert_eq!(
+            consequences_asked(&submitted),
+            [],
+            "{row}: a discard was asked"
         );
+        assert_eq!(
+            labels(&test).len(),
+            before.len(),
+            "{row}: something was said"
+        );
+        for said in [
+            "a submodule",
+            "has a conflict",
+            "Staged changes can't be discarded",
+        ] {
+            assert!(
+                !labels(&test).iter().any(|t| t.contains(said)),
+                "{row}: said under the lists: {:?}",
+                labels(&test)
+            );
+        }
     }
-    // A selection holding one among discardable paths refuses whole.
-    choose_rows(&mut test, view, &["a.rs", "sub"]);
+    // A selection mixing them with a path that can be discarded asks for that path alone.
+    choose_rows(&mut test, view, &["a.rs", "sub", "clash.rs"]);
     press_chord(&mut test, Action::Discard);
-    assert_eq!(consequences_asked(&submitted), [], "a discard was asked");
-    assert!(view.confirming.peek().is_none());
+    let asked = consequences_asked(&submitted);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let (asked_id, paths) = asked[0].clone();
+    assert_eq!(
+        paths,
+        ["a.rs"],
+        "the discard took a submodule or a conflict"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Ok(Consequence::DiscardFiles {
+                files: vec![DiscardedFile {
+                    path: RepoPath::from("a.rs"),
+                    loss: FileLoss::Modified {
+                        index: Oid::from_bytes(&[1; 20]).unwrap_or_else(|_| unreachable!()),
+                        working_tree: Some(
+                            Oid::from_bytes(&[2; 20]).unwrap_or_else(|_| unreachable!()),
+                        ),
+                        executable: false,
+                        lines: Some(1),
+                        mode: None,
+                    },
+                }],
+            }),
+        },
+    );
+    assert_eq!(
+        view.confirming.peek().as_ref().and_then(Confirming::left),
+        Some("1 submodule and 1 conflicted file are left as they are.")
+    );
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|t| t == "1 submodule and 1 conflicted file are left as they are."),
+        "{:?}",
+        labels(&test)
+    );
+    let mut confirming = view.confirming;
+    confirming.set(None);
+    settle(&mut test);
 
     // The conflicted row stages whole — `git add`, which marks it resolved.
     press_row(&mut test, "clash.rs", 0);

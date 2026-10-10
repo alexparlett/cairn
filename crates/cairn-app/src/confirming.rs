@@ -24,6 +24,9 @@ pub struct Confirming {
     serial: u64,
     title: Rc<str>,
     consequence: Rc<Consequence>,
+    /// The one line under the prompt saying what the selection held that this leaves as it is
+    /// (the redesign's D1), when it held any.
+    left: Option<Rc<str>>,
     then: Rc<dyn Fn(Confirmed)>,
 }
 
@@ -39,8 +42,20 @@ impl Confirming {
             serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
             title: Rc::from(title.into()),
             consequence: Rc::new(consequence),
+            left: None,
             then: Rc::new(then),
         }
+    }
+
+    /// With `left` said in one line under the prompt: what the selection held that the
+    /// operation leaves as it is (`cairn_ui::left_as_they_are`).
+    pub fn leaving(mut self, left: Option<String>) -> Self {
+        self.left = left.map(Rc::from);
+        self
+    }
+
+    pub fn left(&self) -> Option<&str> {
+        self.left.as_deref()
     }
 
     /// Which confirmation this is; no other has the same.

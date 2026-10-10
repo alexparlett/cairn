@@ -59,7 +59,7 @@ pub use local_changes_drag::DRAG_THRESHOLD;
 mod local_changes_menu;
 pub use local_changes_menu::{
     COPY_PATH_CAPTION, DISCARD_CAPTION, MenuChoice, NoDiscard, STAGE_ALL_CAPTION, STAGE_CAPTION,
-    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, no_discard,
+    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, discards, left_as_they_are, no_discard,
 };
 mod message_lines;
 mod ref_chips;

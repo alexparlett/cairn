@@ -192,9 +192,9 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
 - each list's button — Stage or Unstage, dimmed with nothing to act on, and Stage All or
   Unstage All while the table's Stage All press is held (⌥, Alt on Linux) — and the double
   chevron's Stage All in Unstaged's heading;
-- the context menu (`local_changes_menu`): Stage or Unstage, Discard Changes… on the unstaged
-  side, Stage All or Unstage All, Copy Path; a right-press on a row outside the selection
-  chooses it first; each item closes the menu as it is chosen.
+- the context menu (`local_changes_menu`): Stage or Unstage, Discard Changes… (greyed on the
+  staged side, its reason beneath it), Stage All or Unstage All, Copy Path; a right-press on a
+  row outside the selection chooses it first; each item closes the menu as it is chosen.
 
 Stage All and Unstage All ask `LocalWrite::StageAll` or `LocalWrite::UnstageAll` with the
 lists drawn, shared, and — with a filter on — the rows it shows (the user's decision,
@@ -210,10 +210,17 @@ selected. For a selection with gaps it is measured from where the selection bega
 the first acted row's place, else the nearest above it — the rule the user ratified on
 2026-10-09. The same holds after a confirmed discard.
 
-**A discard** (R8.4) is offered on the unstaged side only. A selection holding a submodule
-(R8.8) or a conflicted path (R8.7), and any discard on the Staged list or a staged diff, asks
-nothing: the view says why (`cairn_ui::NoDiscard`), and the menu draws its Discard disabled with
-the reason beside it. Otherwise the discard chord (Backspace, Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D)
+**A discard** (R8.4) is offered on the unstaged side only, and never takes a submodule (R8.8)
+or a conflicted path (R8.7). A selection with nothing that can be discarded — any on the Staged
+list or a staged diff, or every row a submodule or a conflict — asks nothing, and the discard
+chord over it does nothing, as Fork's does, with no line under the lists (the redesign's rule
+4); the menu draws its Discard Changes… greyed with the reason wrapped beneath it, never cut
+(`cairn_ui::NoDiscard`; "Staged changes can't be discarded. Unstage them first."). A selection
+mixing submodules or conflicts with paths that can be discarded asks for those paths alone,
+and the confirmation says in one line under its prompt what is left — "1 submodule and 1
+conflicted file are left as they are." (`cairn_ui::left_as_they_are`, `Confirming::leaving`;
+the redesign's D1, where Fork asks twice) — the button counting only what it discards. The
+discard chord (Backspace, Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D)
 or the menu asks the engine what it would lose — `Request::DiscardConsequence`, computed by
 `ops::discard_files_consequence` on the local lane, in the order asked, so after every write
 asked before it — and the view says it is counting. The count is per path (a `git diff-files`
@@ -529,7 +536,8 @@ typed, the arrows are the editor's.
   (`a_selection_toggles_spans_and_holds_paths_of_one_list`,
   `the_nearest_row_left_is_the_one_that_takes_the_first_acted_rows_place`,
   `a_press_becomes_a_drag_past_the_threshold_and_drops_on_the_other_list_only`,
-  `a_discard_is_refused_for_staged_changes_submodules_and_conflicts_only`), and the edge
+  `a_discard_is_refused_only_where_nothing_can_be_discarded`,
+  `what_a_mixed_discard_leaves_is_said_in_one_line`), and the edge
   scroll's lost release (`a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost`).
 - The gesture: what a chunk and a drag select, from the layout
   (`crates/cairn-model/src/row_selection.rs`):
@@ -701,8 +709,12 @@ typed, the arrows are the editor's.
   xfwm, openbox and Plasma 5 take Alt with the first button to move a window, so there the press
   never reaches Cairn and the button stays Stage or Unstage: it fails safe, and the chevron, the
   menu and the chord still reach Stage All and Unstage All (the user's decision, 2026-10-09).
-- A discard asked on the staged side says "Staged changes can't be discarded: unstage them
-  first.", where Fork does nothing (the user's decision, 2026-10-09).
+- A discard asked on the staged side by the chord does nothing, as Fork's does; the menu
+  offers its Discard Changes… greyed with "Staged changes can't be discarded. Unstage them
+  first." beneath it (the redesign, rule 4, replacing the line under the lists of 2026-10-09).
+- A selection mixing a submodule or a conflicted path with paths that can be discarded
+  discards those, its confirmation saying in one line what is left, where Fork asks twice
+  (the redesign's D1).
 - A drag whose release was made outside the window, where it could not be heard, ends at the
   next press — but a press on another view's text field (the sidebar's filter) is not heard,
   since the field cancels the global pointer-down as it takes it, so a release over the other

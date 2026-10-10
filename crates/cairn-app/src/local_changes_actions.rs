@@ -17,8 +17,11 @@
 //! left, and its diff is asked (R8.3, `cairn_ui::nearest_remaining`): the row that slides into
 //! the first acted row's place, else the nearest above it.
 //!
-//! **A discard** (R8.4) is only ever offered on the unstaged side, never for a submodule or a
-//! conflicted path (`cairn_ui::no_discard`, said in the view instead). What it would lose is
+//! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule or
+//! a conflicted path: a selection mixing them with paths that can be discarded asks for those
+//! alone, and the confirmation says in one line what is left (`cairn_ui::left_as_they_are`, the
+//! redesign's D1); a selection with nothing that can be discarded asks nothing, and the chord
+//! over it does nothing, as Fork's does — the menu says why (`cairn_ui::no_discard`). What it would lose is
 //! computed by the engine on the local lane, behind the writes asked before it
 //! (`Request::DiscardConsequence`); the answer opens the confirmation (`Confirming`), whose
 //! token asks the discard. No route reaches a discard without the dialog. The engine refuses a
@@ -39,13 +42,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cairn_model::{
-    ChangeList, ChangeStatus, Consequence, FileDiff, LocalChanges, RepoPath, Selection,
+    ChangeKind, ChangeList, ChangeStatus, Consequence, FileDiff, LocalChanges, RepoPath, Selection,
     StagedAgainst,
 };
 use cairn_ui::accelerators::Action;
 use cairn_ui::{
-    GestureAct, GestureVerb, LineDrag, ListIntent, ListSelection, ShownFiles, nearest_remaining,
-    no_discard,
+    GestureAct, GestureVerb, LineDrag, ListIntent, ListSelection, ShownFiles, discards,
+    left_as_they_are, nearest_remaining, no_discard,
 };
 use freya::prelude::*;
 
@@ -66,7 +69,8 @@ pub const READING_DISCARD: &str = "Reading what the discard would lose…";
 /// one deleted — or the lines of one diff the gesture selected (R9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Discarding {
-    Files(Vec<RepoPath>),
+    /// The paths, and the line saying what the selection held that the discard leaves.
+    Files(Vec<RepoPath>, Option<String>),
     Lines,
 }
 
@@ -82,9 +86,15 @@ pub struct Acting {
 }
 
 impl Acting {
-    /// A discard of `paths` was asked under `asked`: any answer for an earlier one is dropped.
-    pub fn discard_asked(&mut self, asked: OperationId, paths: Vec<RepoPath>) {
-        self.asked = Some((asked, Discarding::Files(paths)));
+    /// A discard of `paths` was asked under `asked`, leaving what `left` says: any answer for
+    /// an earlier one is dropped.
+    pub fn discard_asked(
+        &mut self,
+        asked: OperationId,
+        paths: Vec<RepoPath>,
+        left: Option<String>,
+    ) {
+        self.asked = Some((asked, Discarding::Files(paths, left)));
         self.arrived = None;
         self.said = None;
     }
@@ -133,10 +143,6 @@ impl Acting {
     pub fn forget_discard(&mut self) {
         self.asked = None;
         self.arrived = None;
-    }
-
-    fn say(&mut self, said: String) {
-        self.said = Some(said);
     }
 
     fn quiet(&mut self) {
@@ -442,9 +448,8 @@ fn discard_lines(
         let local = view.local.state.peek();
         no_discard(drawn_changes(&local), list, [&path])
     };
-    if let Some(refused) = refused {
-        let mut acting = view.local.acting;
-        acting.write().say(refused.text());
+    // Nothing here can be discarded: the chord does nothing, as Fork's does (R8.4, rule 4).
+    if refused.is_some() {
         return;
     }
     let Some(submit) = submit else {
@@ -457,7 +462,9 @@ fn discard_lines(
             .text()
             .is_some_and(|text| selection.holds_every_change(text));
     if whole_new_file {
-        acting.write().discard_asked(asked, vec![path.clone()]);
+        acting
+            .write()
+            .discard_asked(asked, vec![path.clone()], None);
         submit(Request::DiscardConsequence {
             asked,
             paths: vec![path],
@@ -759,11 +766,12 @@ fn range(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Reques
     diff_actions::choose_working(list, row, view, submit);
 }
 
-/// A discard of the rows `acted` names (R8.4): refused in the view for the staged side, a
-/// submodule or a conflict; otherwise what it would lose asked of the engine, whose answer
-/// opens the confirmation.
+/// A discard of the rows `acted` names (R8.4, the redesign's D1): nothing asked — the chord
+/// doing nothing, as Fork's does — on the staged side or where every row is a submodule or a
+/// conflict; otherwise what discarding the rows that can be discarded would lose asked of the
+/// engine, whose answer opens the confirmation, with one line saying what the rest leave.
 fn discard(list: ChangeList, acted: Acted, view: View, submit: Option<&dyn Fn(Request)>) {
-    let paths = {
+    let (paths, left) = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
         let rows = acted.rows(view, lists, list);
@@ -774,19 +782,39 @@ fn discard(list: ChangeList, acted: Acted, view: View, submit: Option<&dyn Fn(Re
             .iter()
             .filter_map(|row| lists.get(list, *row).map(|change| change.path))
             .collect();
-        if let Some(refused) = no_discard(lists, list, named) {
-            let mut acting = view.local.acting;
-            acting.write().say(refused.text());
+        if no_discard(lists, list, named).is_some() {
             return;
         }
-        lists.whole_file_paths(list, rows.iter().copied())
+        let (mut submodules, mut conflicted) = (0, 0);
+        let taken: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(
+                |row| match lists.get(list, *row).map(|change| change.kind) {
+                    Some(kind) if discards(kind) => true,
+                    Some(ChangeKind::Submodule) => {
+                        submodules += 1;
+                        false
+                    }
+                    Some(_) => {
+                        conflicted += 1;
+                        false
+                    }
+                    None => false,
+                },
+            )
+            .collect();
+        (
+            lists.whole_file_paths(list, taken),
+            left_as_they_are(submodules, conflicted),
+        )
     };
     let Some(submit) = submit else {
         return;
     };
     let asked = OperationId::next();
     let mut acting = view.local.acting;
-    acting.write().discard_asked(asked, paths.clone());
+    acting.write().discard_asked(asked, paths.clone(), left);
     submit(Request::DiscardConsequence { asked, paths });
 }
 
@@ -799,8 +827,8 @@ pub fn confirm_arrived(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
         return;
     };
     let mut confirming = view.confirming;
-    let paths = match discarding {
-        Discarding::Files(paths) => paths,
+    let (paths, left) = match discarding {
+        Discarding::Files(paths, left) => (paths, left),
         // The lines' confirmation asks their discard; the selection stays on the path.
         Discarding::Lines => {
             confirming.set(Some(Confirming::new(
@@ -811,10 +839,8 @@ pub fn confirm_arrived(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
             return;
         }
     };
-    confirming.set(Some(Confirming::new(
-        DISCARD_TITLE,
-        consequence,
-        move |token| {
+    confirming.set(Some(
+        Confirming::new(DISCARD_TITLE, consequence, move |token| {
             let next = {
                 let local = view.local.state.peek();
                 let lists = drawn_changes(&local);
@@ -827,8 +853,9 @@ pub fn confirm_arrived(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
             };
             ask(view, submit.as_deref(), LocalWrite::DiscardFiles(token));
             move_to(ChangeList::Unstaged, next, view, submit.as_deref());
-        },
-    )));
+        })
+        .leaving(left),
+    ));
 }
 
 /// Copy Path: the paths the selection names in `list`, one per line, to the clipboard.
@@ -864,8 +891,8 @@ mod tests {
     fn only_the_discard_asked_last_is_confirmed_and_a_refusal_is_said() {
         let mut acting = Acting::default();
         let (first, second) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        acting.discard_asked(first, vec![RepoPath::from("a")]);
-        acting.discard_asked(second, vec![RepoPath::from("b")]);
+        acting.discard_asked(first, vec![RepoPath::from("a")], None);
+        acting.discard_asked(second, vec![RepoPath::from("b")], None);
         assert!(!acting.consequence_arrived(first, Err("x".to_owned())));
         assert!(acting.is_reading());
         assert!(acting.consequence_arrived(second, Err("sub is a repository".to_owned())));

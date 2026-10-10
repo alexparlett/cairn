@@ -455,12 +455,13 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     );
 }
 
-/// R8.2, R8.4, R8.7, R8.8, C8, C24: an unstaged row's menu offers Stage, Discard Changes…,
-/// Stage All and Copy Path, each closing the menu as it is chosen; a submodule's and a
-/// conflicted row's offer Stage and their Discard disabled, saying why; a staged row's offers
-/// Unstage, Unstage All and Copy Path and no discard at all. A right-press on an unselected row
-/// chooses it first. Caught by: a discard offered on Staged, for a submodule or a conflict, a
-/// reason missing, or a menu left open after its item was chosen.
+/// R8.2, R8.4, R8.7, R8.8, R14.4, C8, C24: an unstaged row's menu offers Stage, Discard
+/// Changes…, Stage All and Copy Path, each closing the menu as it is chosen; a submodule's and a
+/// conflicted row's offer Stage and their Discard greyed, saying why; a staged row's offers
+/// Unstage, Unstage All and Copy Path, and its Discard greyed with "Staged changes can't be
+/// discarded. Unstage them first." beneath it (the redesign, rule 4). A right-press on an
+/// unselected row chooses it first. Caught by: a discard offered on Staged, for a submodule or
+/// a conflict, a reason missing, or a menu left open after its item was chosen.
 #[test]
 fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let (mut test, _, log) = launch(lists());
@@ -531,8 +532,23 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     assert!(drawn.iter().any(|t| t == UNSTAGE_CAPTION));
     assert!(drawn.iter().any(|t| t == UNSTAGE_ALL_CAPTION));
     assert!(
-        !drawn.iter().any(|t| t == DISCARD_CAPTION),
-        "a staged row offers a discard: {drawn:?}"
+        drawn
+            .iter()
+            .any(|t| t == "Staged changes can't be discarded. Unstage them first."),
+        "a staged row's menu does not say why: {drawn:?}"
+    );
+    let disabled = labels(&test)
+        .into_iter()
+        .rfind(|(text, ..)| text == DISCARD_CAPTION)
+        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y)))
+        .expect("the staged row's greyed Discard Changes…");
+    test.click_cursor(disabled);
+    test.sync_and_update();
+    assert!(
+        heard(&log)
+            .iter()
+            .all(|heard| !matches!(heard, Heard::Intent(ListIntent::Act(_, Action::Discard)))),
+        "a staged row's greyed discard acted"
     );
     let copy = at(&test, COPY_PATH_CAPTION);
     test.click_cursor(copy);

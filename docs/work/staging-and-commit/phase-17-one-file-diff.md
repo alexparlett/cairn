@@ -71,6 +71,21 @@ STEP 2  Implement.
         files_drawn_together_build_one_viewport) and CLAUDE.md's prose on the
         files-together view's per-frame cost.
 
+        Carried from phase 16's QA (2026-10-10): #3 — on_the_diff's together
+        branch in local_changes_actions.rs (it acts on together_read_paths, not
+        the selection intersected with the filter) goes with together.rs, and
+        with it the comment "each one the selection holds", which overclaims;
+        the chords from the diff then take the selection alone, through
+        selected_rows. #5 — the togethering use_side_effect in
+        local_changes_pane.rs, which re-runs together_wanted (a binary search,
+        a clone and a sort per selected path) on every write of the lists'
+        state, goes with draw_together; and the root CLAUDE.md's residual
+        sentence on files drawn together ("... what the selection asks a binary
+        search per path selected (local_changes_pane::together_wanted), run as
+        the selection, the lists or the settings move; and each page of them
+        that arrives rebuilds their Expansion table ...") is taken out in the
+        same commit.
+
         Review refactors: review-code-app-ui.md H1 — in this phase; H2 (one
         pointer-drag primitive) — follow-up issue at teardown.
 

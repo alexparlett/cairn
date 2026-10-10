@@ -162,6 +162,12 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   selection acts on the selection (rule 8, "wherever focus is"), while the Stage All chord takes
   the list it is heard on, and from the diff the selection's list; (e) `NO_PATH_CHOSEN`'s words
   are left to phase 17, which owns "No file selected".
+- **QA (2026-10-10), fixed**: #1 the shown-row filter pinned
+  (`nothing_is_acted_on_while_the_filters_rows_are_on_their_way`, failing with the filter
+  removed); #4 a selection kept whole is neither copied nor written (`next_selection::Next`,
+  `a_status_that_keeps_the_selection_leaves_it_uncopied`); #6 a bare heading press in the table
+  pin's self-test. Carried to phase 17 (in its doc): #3 the together branch and its comment, #5
+  the togethering effect and CLAUDE.md's sentence on it. Dismissed: 2.
 - **Carried to phase 17**: the files drawn together (`together_wanted` reads the new selection;
   the chords over them still take `together_read_paths`), "No file selected", Ctrl+S from the
   diff and bare Return from the lists only, H1 (the lane owner). **To teardown**: H2 (one
@@ -1451,7 +1457,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 13 the commit engine asks git | built in packet mode, full gate green — the token hand-back (a′) and the stripspace parity fix by the coordinator's decisions (2026-10-10); QA the coordinator's |
 | 14 Create Branch | built in packet mode after its stopping rule was decided (2026-10-10), full gate green; QA the coordinator's |
 | 15 the discard prompts | built in packet mode after the user's answers (2026-10-10), QA fixes applied, full gate green |
-| 16 one selection | built in packet mode, full gate green, neither stopping rule triggered; QA the coordinator's |
+| 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
 | 17 one file's diff | planned |
 | 18 the commit box | planned |
 | 19 one home for each message | planned — F7 decided (2026-10-10) |

@@ -1243,7 +1243,9 @@ Project invariants:
     (`diff_actions::show_primary`) — proportional to the logarithm of the paths, never to the
     paths. Where the selection goes as each status or filter's rows arrive
     (`next_selection::next_selection`, run inside `LocalChangesState` from `session::apply`)
-    costs two binary searches per selected path, and, when none stays, one search for the
+    costs two binary searches per selected path — a selection kept whole copied and written
+    not at all (`next_selection::Next::Unchanged`) — and, when some went, a copy of what stays,
+    and, when none stays, one search for the
     first one's place (`LocalChanges::row_from`, `ShownFiles::row_from`) and a step past each
     path an action took — proportional to the selection, never to the lists. A status is held twice, by the refresh's answers and by the lists
     drawn (which may be the older while a filter's rows for the newer are on their way), and
@@ -1254,8 +1256,7 @@ Project invariants:
     (`LocalChanges::row_of`, then the filter's row) and sorts the paths it took, a range press
     clones the paths of the rows it spans and sorts them in the lists' order — and Shift+↑/↓
     spans them afresh on every key and key repeat — a ⌘- or Ctrl-press clones the selection
-    and inserts into it (a shift of the paths after it), the selection is compared with the one
-    it replaces before it is written, the rule then moves it as above (Stage All and Unstage
+    and inserts into it (a shift of the paths after it), the rule then moves it as above (Stage All and Unstage
     All named as their whole list without walking it), and the menu asks of each
     selected path whether it is a submodule, a conflict or a nested repository (`cairn_ui::no_discard`),
     and a discard's press reads each selected row's kind once to split what it takes from what it

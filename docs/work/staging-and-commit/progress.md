@@ -3,6 +3,28 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 16's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p16/adjudication.md`): FIX NOW 1, 4 and 6; CARRY 3 and 5 to
+phase 17 (written into its doc); dismissed 2 (the two lists' rows are only ever written as a
+pair, so Staged waiting beside Unstaged answered cannot happen), 3 (the together branch acts on
+exactly the diffs drawn, the user's 2026-10-09 decision, and goes in phase 17) and 5 (the range
+rebuild is a stated residual; the together re-run goes in phase 17).
+
+- **#1**: `nothing_is_acted_on_while_the_filters_rows_are_on_their_way`
+  (`local_changes_actions_tests.rs`): a path selected, `filter("x")` leaving the lists waiting,
+  the stage and discard chords heard on the diff ask no write, no consequence and no dialog.
+  With `selected_rows`' shown-row filter removed — in a throwaway copy of the tree, the shared
+  worktree untouched — it fails.
+- **#4**: `next_selection` answers `Next::Unchanged` for a selection kept whole, which `follow`
+  and `acted` write nothing for; `LocalSelection::kept` asks every path before it collects any;
+  `set_selection` assigns and `make_selection` no longer compares. Pinned by the `Unchanged`
+  assertion in `after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor` and
+  `a_status_that_keeps_the_selection_leaves_it_uncopied` (`local_changes_state.rs`, the same
+  paths buffer before and after); the root `CLAUDE.md` residual says so.
+- **#6**: the table's pin shows a bare heading press failing beside the bare press
+  (`chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`).
+
 ## 2026-10-10 — phase 16 built (packet mode)
 
 What shipped is state.md's "Phase 16". Notes for the record:

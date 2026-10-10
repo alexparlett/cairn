@@ -170,7 +170,7 @@ nothing else is drawn selected. Selecting in the other list starts a selection t
 pure function): the selected paths the lists still show, and an action did not take, stay
 selected, the primary kept or moved to the nearest of them and the anchor kept or moved to the
 primary — so a refresh with nothing changed leaves the selection, its primary and its anchor
-exactly as they were. When none stays, the row that took the first selected path's place is
+exactly as they were, neither copied nor written (`next_selection::Next::Unchanged`). When none stays, the row that took the first selected path's place is
 selected — the first row shown at or after it in the lists' order, past any the action took,
 found by a binary search (`LocalChanges::row_from`, `ShownFiles::row_from`), so it is the right
 row however many rows above it went too — else the nearest row above; with no row left in that
@@ -655,7 +655,8 @@ typed, the arrows are the editor's.
   `a_write_is_drawn_queued_running_and_stale_where_it_was_asked`,
   `a_discard_names_only_paths_the_lists_drawn_still_list`,
   `the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first`,
-  `every_route_takes_the_selection_and_nothing_the_person_did_not_select`; the table's held key
+  `every_route_takes_the_selection_and_nothing_the_person_did_not_select`,
+  `nothing_is_acted_on_while_the_filters_rows_are_on_their_way`; the table's held key
   (`crates/cairn-ui/src/accelerators.rs`): `a_press_resolves_against_the_keys_the_window_heard`
   and `the_table_is_forks_chords_and_no_others`; through the real
   boundary (`worker/local_lane_tests.rs`):
@@ -692,7 +693,9 @@ typed, the arrows are the editor's.
   `after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor`,
   `a_vanished_selection_gives_its_place_to_the_row_that_took_it`,
   `a_filter_prunes_the_selection_to_the_rows_it_shows`,
-  `nothing_selected_becomes_the_first_row_only_as_files_appear`, with a path's place in a list
+  `nothing_selected_becomes_the_first_row_only_as_files_appear`,
+  `a_status_that_keeps_the_selection_leaves_it_uncopied` (`local_changes_state.rs`), with a
+  path's place in a list
   `a_path_is_given_its_place_in_a_list_listed_or_not` (`cairn-model`); the count
   (`the_count_beside_local_changes_is_of_distinct_paths`, `sidebar_pane.rs`).
 - The window (`crates/cairn-app/src/local_changes_tests.rs`, headless, updates applied through

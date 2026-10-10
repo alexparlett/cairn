@@ -3,6 +3,45 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 12's QA fixes (packet mode)
+
+The coordinator's adjudication confirmed 13 findings (3 dismissed: #3, #9, #14). Fixed, test
+first where a bug:
+
+- **#1** escapes stripped after the scrub could rebuild a credential (`https\x07://u:T@h`,
+  `https:\x1b[0m//u:T@h`): `strip_ansi` moved into `cairn_model` beside the `Scrubber`, which now
+  strips a line's terminal controls before it scrubs, and `pipes::piece_end` never cuts a piece
+  inside an escape. **Deviation from phase 12's spec item 5** ("strip_ansi moves to
+  shown_output.rs, its one owner"): an engineering decision, nothing a person sees changes — the
+  window still strips as it draws, now idempotently — and it closes a credential path the residual
+  had stated. Pins: `an_escape_inside_a_url_does_not_hide_it` (model; failed first),
+  `an_escape_inside_a_url_draws_no_token` (app), `an_escape_straddling_the_piece_limit_hides_no_url`
+  (pipes; fails with the piece cut at the character alone). The residual is gone from CLAUDE.md and
+  `git-processes.md`.
+- **#2** `WriteEnding::of`'s `command`: the runner already named its errors from scrubbed
+  arguments (`cli::describe`), so the test passed as written; the arguments are now one scrubbed
+  copy, `cli::scrubbed_arguments`, that the record books and every runner error names. Pins:
+  `git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams` (asserts `GitFailed`'s
+  arguments), `arguments_are_described_as_typed_and_scrubbed`, and
+  `an_ending_carries_the_engines_scrubbed_text` (asserts `command`).
+- **#4 and #5**: a piece ending inside an authority removes all of it and carries, whether or not
+  an `@` was seen, and a carried run filling a piece is removed and carried again; a whole line's
+  authority ends at the line's end, its host kept (`From https://github.com` drawn whole). Pins:
+  `a_userinfo_cut_by_pieces_is_never_drawn` and `a_url_ending_a_line_keeps_its_host` (both failed
+  first), and the pipes test over `https://u:SEC@RET@host/y` at every offset across the piece limit.
+- **#6** `stdouts_last_line_without_a_newline_is_handed_on_kept_and_recorded`; replacing the
+  splitter's `finish` with a drop fails it.
+- **#7** the hook test's docstring says its lines travel git's stderr.
+- **#11** `.claude/agents/qa-checklist.md` item 12, the scrubbing residuals.
+- **#12** the CLAUDE.md invariant scoped to git's diagnostic output; reads' answers stay as git
+  gave them, for parity.
+- **#13** the passing scaffold names `cairn_model::ScrubbedLine`.
+
+Carried: #10 to phase 13, #15 and #16 to phase 20 (written into those docs); #8 in state.md's
+teardown list. Note: `git-floor`'s `--lib diff:: reads:: ops::` run sits at zero slack — phase 12
+removed three of commit's splitter tests and added two commit tests, so it is at its floor of 149
+exactly and any further loss fails it.
+
 ## 2026-10-10 — phase 12 of the rebuild: git's output read once (packet mode)
 
 Test first: `a_character_straddling_the_piece_limit_arrives_whole` written against `pipes.rs` as

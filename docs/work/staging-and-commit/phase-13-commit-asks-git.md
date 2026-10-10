@@ -101,6 +101,13 @@ STEP 2  Implement, test-first against real git on the host and both floors.
         only ops/ mutates; reads are named functions in reads/ (a new one);
         every git runs with Cairn's environment; no message on argv.
 
+        Carried from phase 12's QA (#10, 2026-10-10): a commit's success is
+        git's exit status alone — nothing checks that HEAD moved. With the
+        amend's press-time read and the re-check here, decide whether a commit
+        or amend reported made confirms HEAD moved (and to a commit whose
+        parent is the HEAD it ran on), and pin it beside "HEAD moved in
+        between".
+
         Out of scope: the commit box's view (18); the Git Error dialog's footer
         (18).
 STEP 3  Validate: scripts/gate.sh, git-floor included. Then orchestrate this

@@ -65,6 +65,14 @@ STEP 2  Implement.
         Review refactors: review-code-app-ui.md H3 (b), (c) and M6 — in this
         phase; H4 (the write ledger) — follow-up issue at teardown.
 
+        Carried from phase 12's QA (2026-10-10): #15 — OutputFlow::read lets go
+        of the front of one String on every read once at its cap (up to 1 MiB
+        moved a read, where the old VecDeque popped in O(1)); the one shared
+        bounded tail lets go in batches, as pipes::Tail does at twice its
+        bound. #16 — Update::FetchProgress is not flow-controlled (an
+        unbounded queue, one update a read); fetch's progress joins the shared
+        bounded tail the window drains, as a commit's output does.
+
         Invariants in play: no unbounded list renders without virtualization
         (both lists; CLAUDE.md's ItemSize::Dynamic residual removed with Show
         All); the UI thread never waits; no credential value is drawn (the

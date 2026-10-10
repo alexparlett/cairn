@@ -92,8 +92,8 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   the runner's lines, in arrival order. git's text crosses into cairn-app only as
   `cairn_model::ScrubbedLines` (`GitFailed::stderr`, `CommandRecord::stderr`, `CommitWatch::output`,
   fetch's progress, `Update::WriteOutput`, `Update::FetchProgress`, `WriteEnding::Failed::output`);
-  an error's text as `Error::shown`; arguments scrubbed as the record is booked (`Registration::new`,
-  `cli::describe`). The type holds "no render file takes git's raw text" (compile_fail doctests in
+  an error's text as `Error::shown`; arguments scrubbed once for the record and every runner error
+  (`cli::scrubbed_arguments`). The type holds "no render file takes git's raw text" (compile_fail doctests in
   `scrub.rs`); no guard written, said in CLAUDE.md as a new invariant with its residuals.
 - **Removed**: `pipes.rs`'s lossy piece decode and its second line definition (commit's `Lines`);
   `Scrubber::after_cut`, `Carried::Cut` and the cross-line carry; `scrub_userinfo`;
@@ -110,12 +110,18 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   redraw as a line; a commit's `$ git commit` entry in the popover keeps its stdout lines after it
   ends (they were stderr-only); a commit's kept failure output is in arrival order rather than
   stdout's tail ahead of stderr's. Nothing else drawn changes.
+- **QA (2026-10-10), fixed**: #1 escapes stripped by the scrubber before it scrubs
+  (`cairn_model::strip_ansi` moved beside it; a piece never cut inside an escape), the residual
+  removed; #2 one scrubbed copy of the arguments for the record and every runner error; #4/#5 a
+  piece's authority removed and carried whole, a line's authority ending at the line's end (its
+  host kept); #6 stdout's unterminated last line pinned; #7 the hook test's docstring; #11
+  `qa-checklist`'s item 12; #12 the invariant scoped to git's diagnostic output; #13 the
+  scaffold names `ScrubbedLine`. Carried: #10 to phase 13, #15 and #16 to phase 20 (written into
+  those docs); #8 in the teardown list. Dismissed: #3, #9, #14.
 - **Carried**: `review-code-app-ui.md` H3 (b) one bounded tail and (c) the receipt protocol — phase
   20, as planned (`OutputFlow`, `OutputTail` and `ActivityLog` still bound separately, now over
   scrubbed lines); `WriteEnding`'s messages stay `String`s rendered in the lane from
-  `Error::shown` — phase 19 rewrites the messages; the residual that an escape sequence between a
-  scheme and its `://` hides a URL from the scrubber (stated in `git-processes.md`, "The
-  runner"); #46 to be commented at teardown with what this closes (the engine keeps git's stderr
+  `Error::shown` — phase 19 rewrites the messages; #46 to be commented at teardown with what this closes (the engine keeps git's stderr
   scrubbed now).
 
 ## Phase 12, the merge bar (2026-10-09)
@@ -166,6 +172,11 @@ commented, not filed again.
   2026-10-10, 5): observed `am1`; Cairn has no background operations yet.
 - **A staged rename's measurement** for C21 (the user's answer of 2026-10-10, 6): stage, unstage
   and discard a hunk of a staged rename on the bench clone, beside C21's four.
+- **A `lines` invocation unwound mid-run loses stdout from its log record** (phase 12's QA #8):
+  the hand-off drop keeps only queued `Event::Lines` (stderr), and the reaper drives
+  `StdoutSink::Bytes`, so a pending stdout line and queued stdout chunks never reach the command
+  log — only on an unwind or an unfinished drop; a kill and a reap keep them. Fix: the reaper
+  keeps a `Lines` sink for an invocation `Invocation::lines` drives.
 - **GI7** (pre-existing): `code_without_test_modules` blanks the block after a `#[cfg(test)]` on a
   field, variant or arm, which would hide production code from every guard using it.
 - **F3**: skipping the amend re-check's walk when the tips it read have not moved (phase 05's QA
@@ -1101,7 +1112,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
 | 12 QA (first merge bar, doc now `phase-21-qa.md`) | merge-bar QA adjudicated, fixes applied; W1 and W3 resolved by the redesign, F2 and F7 by the user's answers (2026-10-10); design pass done, rebuild planned (2026-10-10) |
-| 12 output once | built in packet mode — C31 pinned, full gate green; QA the coordinator's |
+| 12 output once | done — C31 pinned; QA adjudicated, fix-now items fixed, full gate green |
 | 13 the commit engine asks git | planned — the confirmed amend's skip decided (option (a), 2026-10-10) |
 | 14 Create Branch | planned |
 | 15 the discard prompts | planned |

@@ -29,12 +29,40 @@ pub(crate) fn answer(
     .into()
 }
 
+/// An answer drawn greyed and not yet pressable — the confirmation's button while the engine
+/// counts what it would destroy (staging-and-commit R7.4): never focusable, never pressed, read
+/// by assistive technology as disabled.
+pub(crate) fn greyed_answer(caption: String, colours: &AnswerColours) -> Element {
+    rect()
+        .a11y_role(AccessibilityRole::Button)
+        .a11y_alt(caption.clone())
+        .a11y_builder(|node| node.set_disabled())
+        .padding(Gaps::new(6., 14., 6., 14.))
+        .corner_radius(6.)
+        .border(
+            Border::new()
+                .fill(colours.border_disabled)
+                .width(1.)
+                .alignment(BorderAlignment::Inner),
+        )
+        .background(colours.background)
+        .child(
+            label()
+                .text(caption)
+                .font_size(14.)
+                .color(colours.text_disabled),
+        )
+        .into()
+}
+
 /// The theme's colours an answer is drawn in.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct AnswerColours {
     border: Color,
     focus_ring: Color,
     background: Color,
+    border_disabled: Color,
+    text_disabled: Color,
 }
 
 impl AnswerColours {
@@ -47,6 +75,8 @@ impl AnswerColours {
             border: sheet.border,
             focus_ring: sheet.border_focus,
             background: sheet.surface_primary,
+            border_disabled: sheet.border_disabled,
+            text_disabled: sheet.text_placeholder,
         }
     }
 }

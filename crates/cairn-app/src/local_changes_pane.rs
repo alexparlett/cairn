@@ -370,14 +370,6 @@ impl Component for LocalChangesPane {
             let _ = view.local.selection.read().list();
             draw_together(view, togethering.as_deref());
         });
-        // What a discard would lose has arrived: the confirmation opens over the window, its
-        // token asking the discard (R8.4).
-        let confirming = self.submit.clone();
-        use_side_effect(move || {
-            if view.local.acting.read().has_arrived() {
-                local_changes_actions::confirm_arrived(view, confirming.clone());
-            }
-        });
         // A discard's count nobody will now confirm stops holding the local lane as the view
         // goes (phase 07's QA item 1): the view moved on, so the count is let go of and ended.
         let stopping = self.submit.clone();
@@ -387,6 +379,15 @@ impl Component for LocalChangesPane {
                 acting.write().forget_discard();
                 if let Some(submit) = stopping.as_deref() {
                     submit(Request::StopCounting);
+                }
+                // A confirmation still counting for it would wait on nothing.
+                let mut confirming = view.confirming;
+                if confirming
+                    .peek()
+                    .as_ref()
+                    .is_some_and(crate::confirming::Confirming::is_counting)
+                {
+                    confirming.set(None);
                 }
             }
         });
@@ -458,8 +459,7 @@ impl Component for LocalChangesPane {
         .on_intent(move |intent: ListIntent| {
             local_changes_actions::intent(intent, view, intending.clone());
         });
-        let said =
-            local_changes_actions::acting_line(&view.local.acting.read(), &view.writes.read());
+        let said = local_changes_actions::acting_line(&view.writes.read());
         let list = rect()
             .expanded()
             .content(Content::Flex)
@@ -648,7 +648,7 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
         .on_key_down(move |e: Event<KeyboardEventData>| {
             if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
                 e.stop_propagation();
-                local_changes_actions::on_the_diff(action, view, hearing.as_deref());
+                local_changes_actions::on_the_diff(action, view, hearing.as_ref());
             }
         })
         .child(header)
@@ -698,7 +698,7 @@ fn together_side(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elem
             .on_key_down(move |e: Event<KeyboardEventData>| {
                 if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
                     e.stop_propagation();
-                    local_changes_actions::on_the_diff(action, view, hearing.as_deref());
+                    local_changes_actions::on_the_diff(action, view, hearing.as_ref());
                 }
             })
             .child(header)
@@ -723,7 +723,7 @@ fn gesture_side(list: ChangeList) -> GestureSide {
 /// What the gesture asks, done: the gesture's own actions and the mode row's alike.
 fn gesture_acts(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> EventHandler<GestureAct> {
     EventHandler::new(move |act: GestureAct| {
-        local_changes_actions::on_gesture(act, view, submit.as_deref());
+        local_changes_actions::on_gesture(act, view, submit.as_ref());
     })
 }
 

@@ -258,6 +258,63 @@ impl Consequence {
         }
     }
 
+    /// How many files "Show files" lists under the prompt (staging-and-commit R1.2, R7.4, the
+    /// redesign's D2): a discard of several files lists each; one file, lines and every other
+    /// operation list none, since what they take is already on screen (rule 6).
+    pub fn listed(&self) -> usize {
+        match self {
+            Self::DiscardFiles { files } if files.len() > 1 => files.len(),
+            Self::DiscardFiles { .. }
+            | Self::DiscardLines { .. }
+            | Self::Amend { .. }
+            | Self::RemoveLock { .. }
+            | Self::CheckoutDiscarding { .. } => 0,
+        }
+    }
+
+    /// The `at`th file "Show files" lists: its path, quoted as a prompt quotes one, and what
+    /// happens to it in the user's words of 2026-10-10 (phase 15's Q3) — "14 lines" or "1
+    /// line", "Binary", "Restored" (a file deleted in the working tree, brought back),
+    /// "Deleted" (an untracked file), "Emptied" (an intent-to-add file), "Mode change", "14
+    /// lines and mode change", "Binary and mode change"; no mode in octal. Read one row at a
+    /// time, so a virtualized list asks only for the rows it draws. `None` past
+    /// [`Self::listed`].
+    pub fn listed_file(&self, at: usize) -> Option<(String, String)> {
+        let file = match self {
+            Self::DiscardFiles { files } if files.len() > 1 => files.get(at)?,
+            Self::DiscardFiles { .. }
+            | Self::DiscardLines { .. }
+            | Self::Amend { .. }
+            | Self::RemoveLock { .. }
+            | Self::CheckoutDiscarding { .. } => return None,
+        };
+        let what = match &file.loss {
+            FileLoss::Modified {
+                index: _,
+                working_tree: None,
+                executable: _,
+                lines: _,
+                mode: _,
+            } => "Restored".to_owned(),
+            FileLoss::Modified {
+                index: _,
+                working_tree: Some(_),
+                executable: _,
+                lines,
+                mode,
+            } => match (lines, mode) {
+                (Some(0), Some(_)) => "Mode change".to_owned(),
+                (Some(n), Some(_)) => format!("{} and mode change", counted(*n, "line", "lines")),
+                (None, Some(_)) => "Binary and mode change".to_owned(),
+                (Some(n), None) => counted(*n, "line", "lines"),
+                (None, None) => "Binary".to_owned(),
+            },
+            FileLoss::Emptied { .. } => "Emptied".to_owned(),
+            FileLoss::Untracked { .. } => "Deleted".to_owned(),
+        };
+        Some((quoted(file.path.as_bytes()), what))
+    }
+
     /// The commit an amend replaces: what its prompt names and its re-check holds `HEAD` to.
     /// `None` for every other operation.
     pub fn amended(&self) -> Option<Oid> {
@@ -874,6 +931,85 @@ mod tests {
         );
         for prompt in [alone.prompt(), both.prompt()] {
             assert!(!prompt.contains("100"), "no octal: {prompt}");
+        }
+    }
+
+    /// The user's decision of 2026-10-10 on phase 15's Q3: "Show files" lists each file of a
+    /// discard of several, its path quoted and what happens to it in the decided words, no
+    /// octal; one file, lines and the other operations list nothing. Caught by: a kind worded
+    /// otherwise, a mode named in octal, a binary file counted as no lines, a row past the end,
+    /// or a list where what is taken is already on screen.
+    #[test]
+    fn show_files_lists_each_file_and_what_happens_to_it() {
+        let changed = |path: &str, lines, mode| DiscardedFile {
+            path: RepoPath::from(path),
+            loss: FileLoss::Modified {
+                index: oid(1),
+                working_tree: Some(oid(2)),
+                executable: false,
+                lines,
+                mode,
+            },
+        };
+        let moded = Some((FileMode::Regular, FileMode::Executable));
+        let emptied = DiscardedFile {
+            path: RepoPath::from("new.txt"),
+            loss: FileLoss::Emptied {
+                index: oid(1),
+                working_tree: oid(2),
+                executable: false,
+                lines: Some(5),
+            },
+        };
+        let consequence = Consequence::DiscardFiles {
+            files: vec![
+                changed("a.rs", Some(14), None),
+                changed("b.rs", Some(1), None),
+                changed("logo.png", None, None),
+                deleted("gone.rs"),
+                untracked("notes.txt", 2150),
+                emptied,
+                changed("run.sh", Some(0), moded),
+                changed("tool", Some(14), moded),
+                changed("icon.bin", None, moded),
+                changed("we\nird", Some(2), None),
+            ],
+        };
+        assert_eq!(consequence.listed(), 10);
+        let rows: Vec<(String, String)> = (0..consequence.listed())
+            .filter_map(|at| consequence.listed_file(at))
+            .collect();
+        let expected = [
+            ("a.rs", "14 lines"),
+            ("b.rs", "1 line"),
+            ("logo.png", "Binary"),
+            ("gone.rs", "Restored"),
+            ("notes.txt", "Deleted"),
+            ("new.txt", "Emptied"),
+            ("run.sh", "Mode change"),
+            ("tool", "14 lines and mode change"),
+            ("icon.bin", "Binary and mode change"),
+            ("\"we\\nird\"", "2 lines"),
+        ];
+        assert_eq!(
+            rows,
+            expected
+                .iter()
+                .map(|(path, what)| ((*path).to_owned(), (*what).to_owned()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(consequence.listed_file(10), None);
+        let one = Consequence::DiscardFiles {
+            files: vec![changed("a.rs", Some(1), None)],
+        };
+        for nothing in [
+            one,
+            lines("a.rs", selection(1, 0)),
+            checkout(),
+            lock("/r/.git/index.lock", Duration::ZERO, 0),
+        ] {
+            assert_eq!(nothing.listed(), 0);
+            assert_eq!(nothing.listed_file(0), None);
         }
     }
 

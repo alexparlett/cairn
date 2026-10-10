@@ -14,14 +14,17 @@ use cairn_model::{
     StagedChange, StatusEntry, SubmoduleState, UnstagedChange,
 };
 use cairn_ui::accelerators::{self, Action, Os};
-use cairn_ui::{IGNORE_WHITESPACE_LABEL, ListIntent, STAGE_CAPTION, STAGED_CAPTION};
+use cairn_ui::{
+    CANCEL_CAPTION, CLOSE_CAPTION, COUNTING_TEXT, IGNORE_WHITESPACE_LABEL, ListIntent,
+    STAGE_CAPTION, STAGED_CAPTION,
+};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
 
 use crate::confirming::Confirming;
 use crate::fetch_state::PromptView;
-use crate::local_changes_actions::{self, DISCARD_TITLE, READING_DISCARD};
+use crate::local_changes_actions::{self, DISCARD_TITLE};
 use crate::local_changes_tests::{
     Submitted, apply, asked, changed, conflicted, labels, launch, open_local_changes, path_of,
     press_row, status, untracked,
@@ -192,6 +195,24 @@ fn at(test: &TestingRunner, text: &str, nth: usize) -> (f64, f64) {
 fn click(test: &mut TestingRunner, text: &str) {
     let at = at(test, text, 0);
     test.click_cursor(at);
+    settle(test);
+}
+
+/// Clicks the lowest label reading `text`: a dialog's button under its title.
+fn click_last(test: &mut TestingRunner, text: &str) {
+    let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|_| {
+                let area = node.layout().area;
+                (area.center().y, area.min_x())
+            })
+    });
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((y, x)) = found.last().copied() else {
+        panic!("no label reads {text}: {:?}", labels(test));
+    };
+    test.click_cursor((f64::from(x) + 4., f64::from(y)));
     settle(test);
 }
 
@@ -375,31 +396,48 @@ fn mixed_loss() -> Consequence {
     }
 }
 
-/// C18, R8.4, R1.2: the discard chord on a selection asks the engine what it would lose —
-/// nothing discarded, no dialog yet, the view saying it is counting — and its answer opens the
-/// confirmation drawn from it; confirming asks the discard with the token built from exactly
-/// that consequence, and the selection moves on. An answer for an earlier ask is dropped.
-/// Caught by: a dialog opened without the engine's consequence, a discard asked without the
-/// dialog, a stale answer confirmed, or a token naming other words.
+/// C17, C18, R7.4, R8.4, R1.2 and the redesign's rule 3: the discard chord on a selection opens
+/// the confirmation at once — "Counting…", its button greyed and reading the title, nothing
+/// pressable but Cancel — and asks the engine what it would lose; the answer for that ask makes
+/// the same dialog the confirmation drawn from it, and confirming asks the discard with the
+/// token built from exactly that consequence, the selection moving on. An answer for an earlier
+/// ask is dropped. Caught by: a dialog only once the engine answered, a greyed button that
+/// confirms, a discard asked without the dialog, a stale answer confirmed, or a token naming
+/// other words.
 #[test]
 fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
     let (mut test, view, submitted) = opened(several());
     choose_rows(&mut test, view, &["a.rs", "c.rs"]);
     press_chord(&mut test, Action::Discard);
+    settle(&mut test);
     let consequences = consequences_asked(&submitted);
     assert_eq!(consequences.len(), 1);
     let (asked_id, paths) = consequences[0].clone();
     assert_eq!(paths, ["a.rs", "c.rs"]);
+    let serial = view.confirming.peek().as_ref().map(Confirming::serial);
     assert!(
-        view.confirming.peek().is_none(),
-        "a dialog before the engine answered"
+        view.confirming
+            .peek()
+            .as_ref()
+            .is_some_and(Confirming::is_counting),
+        "no dialog opened at the press"
     );
-    assert!(
-        labels(&test).iter().any(|t| t == READING_DISCARD),
-        "{:?}",
-        labels(&test)
-    );
-    // An answer for another ask is not confirmed.
+    for drawn in [DISCARD_TITLE, COUNTING_TEXT, CANCEL_CAPTION] {
+        assert!(
+            labels(&test).iter().any(|t| t == drawn),
+            "{drawn}: {:?}",
+            labels(&test)
+        );
+    }
+    // The greyed button, which reads the title, confirms nothing.
+    let greyed: Vec<String> = labels(&test)
+        .into_iter()
+        .filter(|t| t == DISCARD_TITLE)
+        .collect();
+    assert_eq!(greyed.len(), 2, "the title and the greyed button");
+    click_last(&mut test, DISCARD_TITLE);
+    assert!(writes(&submitted).is_empty(), "the greyed button confirmed");
+    // An answer for another ask does not fill it.
     apply(
         &mut test,
         view,
@@ -410,8 +448,11 @@ fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
         },
     );
     assert!(
-        view.confirming.peek().is_none(),
-        "a stale answer opened a dialog"
+        view.confirming
+            .peek()
+            .as_ref()
+            .is_some_and(Confirming::is_counting),
+        "a stale answer filled the dialog"
     );
 
     apply(
@@ -425,11 +466,17 @@ fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
     );
     settle(&mut test);
     assert_eq!(
+        view.confirming.peek().as_ref().map(Confirming::serial),
+        serial,
+        "another dialog opened for the answer"
+    );
+    assert_eq!(
         view.confirming.peek().as_ref().map(Confirming::title),
         Some(DISCARD_TITLE)
     );
     let prompt = mixed_loss().prompt();
     assert!(labels(&test).contains(&prompt), "{:?}", labels(&test));
+    assert!(!labels(&test).iter().any(|t| t == COUNTING_TEXT));
     assert!(
         writes(&submitted).is_empty(),
         "discarded before the dialog was answered"
@@ -440,7 +487,88 @@ fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
     assert_eq!(selected(view), ["b.rs"]);
 }
 
-/// Unstaged: a.rs, clash.rs (conflicted), sub (a submodule); Staged: s.rs.
+/// The user's decisions of 2026-10-10 on phase 15's Q2 (rule 4): the engine refusing while it
+/// counts makes the open dialog the refusal — "Couldn't Discard Changes", the engine's sentence
+/// and "Nothing was changed.", Close alone — and nothing is said under the lists; and Cancel
+/// while counting lets the dialog go and ends the count (`Request::StopCounting`), its answer
+/// arriving later dropped. Caught by: the refusal said under the lists, a confirm button left on
+/// a refusal, a count left holding the local lane, or a late answer reopening a dialog.
+#[test]
+fn a_refusal_while_counting_is_said_in_the_dialog_and_cancel_ends_the_count() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs"]);
+    let before = labels(&test);
+    press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let (asked_id, _) = consequences_asked(&submitted)[0].clone();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Err("a.rs changed while it was read.".to_owned()),
+        },
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|t| t == "Couldn't Discard Changes"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|t| t == "a.rs changed while it was read. Nothing was changed."),
+        "{drawn:?}"
+    );
+    assert!(drawn.iter().any(|t| t == CLOSE_CAPTION), "{drawn:?}");
+    assert!(!drawn.iter().any(|t| t == CANCEL_CAPTION), "{drawn:?}");
+    click(&mut test, CLOSE_CAPTION);
+    assert!(view.confirming.peek().is_none());
+    assert_eq!(labels(&test), before, "something was said under the lists");
+    assert!(writes(&submitted).is_empty());
+
+    // Cancel while counting (another row, so the press is not a double press).
+    press_row(&mut test, "b.rs", 0);
+    press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let (asked_id, _) = consequences_asked(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("no second ask"));
+    let stops = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .filter(|r| matches!(r, Request::StopCounting))
+            .count()
+    };
+    let stopped_before = stops(&submitted);
+    click(&mut test, CANCEL_CAPTION);
+    assert!(view.confirming.peek().is_none());
+    assert_eq!(
+        stops(&submitted),
+        stopped_before + 1,
+        "the count was not ended"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Ok(mixed_loss()),
+        },
+    );
+    settle(&mut test);
+    assert!(
+        view.confirming.peek().is_none(),
+        "a late answer reopened a dialog"
+    );
+}
+
+/// Unstaged: a.rs, clash.rs (conflicted), sub (a submodule), lib/ (a nested repository);
+/// Staged: s.rs.
 fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
     vec![
         changed("a.rs", None, Some(UnstagedChange::Modified)),
@@ -456,6 +584,7 @@ fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
             }),
         }),
         changed("s.rs", Some(StagedChange::Modified), None),
+        untracked("lib/"),
     ]
 }
 
@@ -463,16 +592,16 @@ fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
 /// a staged change, a submodule or a conflicted path — over a selection with nothing that can be
 /// discarded the chord asks nothing and says nothing, as Fork's does (no line under the lists);
 /// a selection mixing them with a path that can be discarded asks for that path alone, and its
-/// confirmation says in one line what is left; a conflicted row stages whole, by `git add`; and
-/// a refusal the engine makes before any dialog (a nested repository) is said, nothing
-/// discarded. Caught by: a discard's consequence asked for any of them, a mixed selection
-/// refused whole or discarding a submodule or a conflict, a line drawn under the lists for the
-/// chord, or a conflict that cannot be staged.
+/// confirmation says in one line what is left — a nested repository among them, which is never
+/// touched (the user's decision of 2026-10-10 on phase 15's Q6); and a conflicted row stages
+/// whole, by `git add`. Caught by: a discard's consequence asked for any of them, a mixed
+/// selection refused whole or discarding a submodule, a conflict or a nested repository, a line
+/// drawn under the lists for the chord, or a conflict that cannot be staged.
 #[test]
 fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why() {
     let (mut test, view, submitted) = opened(with_a_submodule_and_a_conflict());
     let before = labels(&test);
-    for row in ["sub", "clash.rs", "s.rs"] {
+    for row in ["sub", "clash.rs", "s.rs", "lib/"] {
         press_row(&mut test, row, 0);
         for key in [NamedKey::Backspace, NamedKey::Delete] {
             press_key(&mut test, key);
@@ -501,7 +630,7 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
         }
     }
     // A selection mixing them with a path that can be discarded asks for that path alone.
-    choose_rows(&mut test, view, &["a.rs", "sub", "clash.rs"]);
+    choose_rows(&mut test, view, &["a.rs", "sub", "clash.rs", "lib/"]);
     press_chord(&mut test, Action::Discard);
     let asked = consequences_asked(&submitted);
     assert_eq!(asked.len(), 1, "{asked:?}");
@@ -509,7 +638,7 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
     assert_eq!(
         paths,
         ["a.rs"],
-        "the discard took a submodule or a conflict"
+        "the discard took a submodule, a conflict or a nested repository"
     );
     apply(
         &mut test,
@@ -533,14 +662,13 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
             }),
         },
     );
+    let left = "1 submodule, 1 conflicted file and 1 nested repository are left as they are.";
     assert_eq!(
         view.confirming.peek().as_ref().and_then(Confirming::left),
-        Some("1 submodule and 1 conflicted file are left as they are.")
+        Some(left)
     );
     assert!(
-        labels(&test)
-            .iter()
-            .any(|t| t == "1 submodule and 1 conflicted file are left as they are."),
+        labels(&test).iter().any(|t| t == left),
         "{:?}",
         labels(&test)
     );
@@ -552,30 +680,6 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
     press_row(&mut test, "clash.rs", 0);
     press_key(&mut test, NamedKey::Enter);
     assert_eq!(writes(&submitted), [write("stage", &["clash.rs"])]);
-
-    // The engine's own refusal, before any dialog.
-    press_row(&mut test, "a.rs", 0);
-    press_chord(&mut test, Action::Discard);
-    let Some((asked_id, _)) = consequences_asked(&submitted).pop() else {
-        panic!("a.rs's discard was not asked");
-    };
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        Update::DiscardConsequence {
-            asked: asked_id,
-            outcome: Err("a.rs is a repository nested in the working tree".to_owned()),
-        },
-    );
-    assert!(view.confirming.peek().is_none());
-    assert!(
-        labels(&test)
-            .iter()
-            .any(|t| t.contains("nested in the working tree")),
-        "{:?}",
-        labels(&test)
-    );
 }
 
 /// Phase 06's QA item 4, R7.4, and phase 07's QA item 6: with a confirmation open, Enter,
@@ -619,8 +723,8 @@ fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
             local_changes_actions::intent(intent, view, Some(Rc::clone(&submit)));
         }
         local_changes_actions::choose(ChangeList::Unstaged, 3, view, Some(&*submit));
-        local_changes_actions::on_the_diff(Action::StageOrUnstage, view, Some(&*submit));
-        local_changes_actions::on_the_diff(Action::Discard, view, Some(&*submit));
+        local_changes_actions::on_the_diff(Action::StageOrUnstage, view, Some(&submit));
+        local_changes_actions::on_the_diff(Action::Discard, view, Some(&submit));
     });
     settle(&mut test);
     // Enter, last: the modal's Cancel takes it, closing the dialog and asking nothing.

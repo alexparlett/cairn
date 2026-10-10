@@ -1118,7 +1118,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     // Superseded, let go of or closing: nobody waits on it.
                     Err(Error::ConsequenceCancelled) => continue,
                     Ok(consequence) => Ok(consequence),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(refused_while_counting(&error)),
                 };
                 serving
                     .outbox
@@ -1137,7 +1137,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 }
                 let outcome =
                     ops::discard_lines_consequence(serving.git, &repo, &diff, selection, chunk)
-                        .map_err(|error| error.to_string());
+                        .map_err(|error| refused_while_counting(&error));
                 drop(diff);
                 serving
                     .outbox
@@ -1313,6 +1313,40 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
     }
 }
 
+/// Why counting what a discard would lose refused, in one sentence for the "Couldn't Discard
+/// Changes" dialog, which adds "Nothing was changed." itself (R14.2; the user's decision of
+/// 2026-10-10 on phase 15's Q2): a file that moved while it was read says so — "src/a.rs changed
+/// while it was read." — and any other refusal is the engine's own words ([`Error::shown`]),
+/// their "; nothing was written" tail left to the dialog. Phase 19 gives every ending its
+/// sentence; this is the count's.
+pub(super) fn refused_while_counting(error: &Error) -> String {
+    let sentence = match error {
+        Error::ChangedSinceRead { path } | Error::ContentReadsDisagree { path, .. } => {
+            format!("{path} changed while it was read")
+        }
+        Error::Refused { path, why } => format!("{path}: {why}"),
+        Error::NoPaths => "No file was given".to_owned(),
+        // The engine's own words, which begin with its own word rather than a path.
+        _ => {
+            let shown = error.shown().to_string();
+            let words = shown
+                .strip_suffix("; nothing was written")
+                .or_else(|| shown.strip_suffix("; nothing was discarded"))
+                .unwrap_or(&shown);
+            let mut chars = words.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        }
+    };
+    if sentence.ends_with('.') {
+        sentence
+    } else {
+        format!("{sentence}.")
+    }
+}
+
 /// `error`'s text as the window draws it — the engine's ([`Error::shown`], git's words in it
 /// scrubbed there, R12.2) — and, where no prompt could have been answered, why: a failure's own
 /// message ("terminal prompts disabled") does not say why nothing answered.
@@ -1420,6 +1454,45 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user's decision of 2026-10-10 on phase 15's Q2: a refusal while counting is one
+    /// sentence for "Couldn't Discard Changes", which adds "Nothing was changed." itself — a file
+    /// that moved while it was read named so, a path left as written (never capitalised), the
+    /// engine's own words with their "; nothing was written" tail left off, each ending with one
+    /// full stop. Caught by: the tail kept (said twice with the dialog's), a path capitalised, or
+    /// a sentence without its stop.
+    #[test]
+    fn a_refusal_while_counting_is_one_sentence() {
+        assert_eq!(
+            refused_while_counting(&Error::ChangedSinceRead {
+                path: "src/a.rs".to_owned()
+            }),
+            "src/a.rs changed while it was read."
+        );
+        assert_eq!(
+            refused_while_counting(&Error::ContentReadsDisagree {
+                path: "src/a.rs".to_owned(),
+                detail: "x".to_owned()
+            }),
+            "src/a.rs changed while it was read."
+        );
+        assert_eq!(
+            refused_while_counting(&Error::Refused {
+                path: "dir".to_owned(),
+                why: cairn_git::Refusal::NotAFile
+            }),
+            "dir: the path is not a file: a directory or a special file."
+        );
+        assert_eq!(
+            refused_while_counting(&Error::NoPaths),
+            "No file was given."
+        );
+        let other = refused_while_counting(&Error::ChangedSinceConfirmed {
+            path: "a".to_owned(),
+        });
+        assert_eq!(other, "A changed since you confirmed.");
+        assert!(!other.contains("nothing was"), "{other}");
+    }
 
     /// Phase 04's QA item 11: a write whose askpass token could not be made says why in its
     /// ending, as one under a channel never opened does. Caught by: the failure dropped with

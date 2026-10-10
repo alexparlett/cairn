@@ -1141,7 +1141,7 @@ fn writes_check() {
                     chunk: false,
                 },
                 view,
-                Some(&submit),
+                Some(&(std::rc::Rc::new(submit) as crate::local_changes_actions::Submit)),
             );
         });
     };
@@ -1196,8 +1196,12 @@ fn writes_check() {
     for run in 0..=RUNS {
         set_up(&mut harness, &clean_index, &edited, unstaged);
         act(&mut harness, cairn_ui::GestureVerb::Discard);
+        // The dialog opens counting at the press; the count arriving fills it.
         let _ = harness.pump(Stimulus::Nothing, 0, |view| {
-            view.confirming.peek().is_some()
+            view.confirming
+                .peek()
+                .as_ref()
+                .is_some_and(|asking| asking.consequence().is_some())
         });
         let mut confirming = harness.view.confirming;
         let pressed = Instant::now();
@@ -1205,8 +1209,10 @@ fn writes_check() {
             let asking = confirming.peek().clone();
             if let Some(asking) = asking {
                 confirming.set(None);
-                let token = cairn_model::Confirmed::by_user((**asking.consequence()).clone());
-                asking.confirmed(token);
+                if let Some(consequence) = asking.consequence() {
+                    let token = cairn_model::Confirmed::by_user((**consequence).clone());
+                    asking.confirmed(token);
+                }
             }
         });
         let lead = pressed.elapsed();

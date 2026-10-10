@@ -210,30 +210,45 @@ selected. For a selection with gaps it is measured from where the selection bega
 the first acted row's place, else the nearest above it — the rule the user ratified on
 2026-10-09. The same holds after a confirmed discard.
 
-**A discard** (R8.4) is offered on the unstaged side only, and never takes a submodule (R8.8)
-or a conflicted path (R8.7). A selection with nothing that can be discarded — any on the Staged
-list or a staged diff, or every row a submodule or a conflict — asks nothing, and the discard
-chord over it does nothing, as Fork's does, with no line under the lists (the redesign's rule
-4); the menu draws its Discard Changes… greyed with the reason wrapped beneath it, never cut
-(`cairn_ui::NoDiscard`; "Staged changes can't be discarded. Unstage them first."). A selection
-mixing submodules or conflicts with paths that can be discarded asks for those paths alone,
-and the confirmation says in one line under its prompt what is left — "1 submodule and 1
-conflicted file are left as they are." (`cairn_ui::left_as_they_are`, `Confirming::leaving`;
-the redesign's D1, where Fork asks twice) — the button counting only what it discards. The
-discard chord (Backspace, Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D)
-or the menu asks the engine what it would lose — `Request::DiscardConsequence`, computed by
+**A discard** (R8.4) is offered on the unstaged side only, and never takes a submodule (R8.8),
+a conflicted path (R8.7) or a nested repository — an untracked row git lists as its directory,
+with a trailing `/` (`LocalChange::is_nested_repository`; the user's decision of 2026-10-10,
+where Fork deletes one and its history, `fork-observed-nested-repo-2026-10-10.md`). A
+selection with nothing that can be discarded — any on the Staged list or a staged diff, or
+every row one of those three — asks nothing, and the discard chord over it does nothing, as
+Fork's does, with no line under the lists (the redesign's rule 4); the menu draws its Discard
+Changes… greyed with the reason wrapped beneath it, never cut (`cairn_ui::NoDiscard`): "Staged
+changes can't be discarded. Unstage them first.", or one sentence per kind the selection holds,
+submodules first — "Submodule changes can't be discarded.", "Conflicted files can't be
+discarded. Resolve or stage them first.", "Nested repositories can't be discarded." A
+selection mixing them with paths that can be discarded asks for those paths alone, and the
+confirmation says in one line under its prompt what is left — "1 submodule and 1 conflicted
+file are left as they are.", "1 nested repository is left as it is." (`cairn_ui::kept`,
+`cairn_ui::Left`, `Confirming::leaving`; the redesign's D1, where Fork asks twice) — the button
+counting only what it discards.
+
+**The dialog opens at the press** (R7.4, the redesign's rule 3): the discard chord (Backspace,
+Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D), the menu or a chunk's or a selection's Discard… opens the
+confirmation at once, counting (`Confirming::counting`, `cairn_ui::DialogAnswer::Counting`):
+"Counting…", its button greyed and reading "Discard Changes", Cancel focused — and asks the
+engine what it would lose: `Request::DiscardConsequence`, computed by
 `ops::discard_files_consequence` on the local lane, in the order asked, so after every write
-asked before it — and the view says it is counting. The count is per path (a `git diff-files`
-read for each tracked file) and holds the local lane while it runs, so it is numbered in a lane
-of its own: a newer discard asked, the view being let go of (`Request::StopCounting`, asked as
-Local Changes unmounts) and a close each end it, between paths or by ending its read, and it
-then answers nothing. The answer for the discard asked last opens
-the confirmation (`Confirming::new`, `cairn_ui::ConfirmDialog`: the prompt and the button drawn
-from the `Consequence`, Cancel focused), and its token asks `LocalWrite::DiscardFiles`; an
-answer for an earlier ask, or one arriving once the view is no longer shown, is dropped. A
-refusal the engine makes before any dialog — a nested repository among untracked rows, a path
-that is not a file — is said. No modifier, setting or route reaches a discard without the
-dialog.
+asked before it, or `Request::DiscardLinesConsequence` for lines. The count is per path (a `git
+diff-files` read for each tracked file) and holds the local lane while it runs, so it is
+numbered in a lane of its own: a newer discard asked, Cancel while it counts
+(`Confirming::on_let_go`, which asks `Request::StopCounting`), the view being let go of and a
+close each end it, between paths or by ending its read, and it then answers nothing. The answer
+for the discard asked last fills the same dialog (`local_changes_actions::consequence_arrived`,
+by the confirmation's serial): the prompt, the line of what is left, "Show files" for a discard
+of several — its caption kept, its glyph turning ▸ to ▾, a virtualized list of each path and
+what happens to it (`Consequence::listed_file`: "14 lines", "Binary", "Restored", "Deleted",
+"Emptied", "Mode change", "14 lines and mode change") — and the button its own caption; its
+token asks `LocalWrite::DiscardFiles` or `LocalWrite::DiscardLines`. An answer for an earlier
+ask, or for a confirmation let go of, is dropped. A refusal the engine makes while counting —
+a file that changed while it was read, a path that is not a file — makes the same dialog the
+refusal (rule 4): "Couldn't Discard Changes", the engine's one sentence
+(`worker::local_lane::refused_while_counting`) and "Nothing was changed.", Close alone; nothing
+is said under the lists. No modifier, setting or route reaches a discard without the dialog.
 
 **A conflicted row** (R8.7, C24) stages whole by every route — `git add`, which marks it
 resolved — and is never discarded. As in Fork, nothing more is said before it is staged (the
@@ -588,6 +603,13 @@ typed, the arrows are the editor's.
   `a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen`,
   `leaving_local_changes_ends_a_discards_count`,
   `a_discard_asks_what_it_would_lose_and_confirms_exactly_that`,
+  `a_refusal_while_counting_is_said_in_the_dialog_and_cancel_ends_the_count`, the dialog's own
+  (`crates/cairn-ui/tests/confirm_dialog.rs`:
+  `while_counting_the_dialog_says_so_and_its_greyed_button_builds_nothing`,
+  `a_refusal_is_the_same_dialog_with_close_alone`,
+  `what_is_left_is_one_line_under_the_prompt_and_not_in_the_token`,
+  `show_files_discloses_each_file_and_what_happens_to_it` and the viewport twin
+  `show_files_over_50000_paths_builds_one_viewport`),
   `no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why`,
   `a_conflicted_row_stages_whole_by_every_route`,
   `local_changes_acts_on_nothing_while_a_confirmation_is_open`,
@@ -724,8 +746,12 @@ typed, the arrows are the editor's.
   Patch are not built; its items name no chord, since a chord spelled in a label is a modifier
   named in a component; nothing opens the menu from the keyboard.
 - A submodule's row offers no discard (Fork's Discard Submodule Changes) and says why; a
-  nested repository among untracked rows is refused before any dialog; the confirmation's
-  default is Cancel (staging-and-commit L8, L24).
+  nested repository among untracked rows is left as it is, where Fork deletes it and its
+  history (the user's decision of 2026-10-10); the confirmation's default is Cancel
+  (staging-and-commit L8, L24).
+- The confirmation opens at the press, "Counting…", where Fork's opens once it has its words,
+  and a refusal while counting is the same dialog, "Couldn't Discard Changes" (the redesign's
+  rules 3 and 4).
 - Ignore Whitespace is disabled in Local Changes and the diff drawn is always the exact one,
   where Fork lets it hide changes it then stages (L6).
 - The submodule's badge is a shape of Cairn's drawing (a box in a box); Fork's own submodule

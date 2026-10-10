@@ -286,22 +286,27 @@ pub fn window(
 }
 
 /// The confirmation a destructive operation waits on (R7.4): its token handed where the
-/// asking view said, and the dialog let go of on either answer.
+/// asking view said, and the dialog let go of on either answer — counting, ready or refused,
+/// one dialog under one serial from the press to its answer.
 fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> Element {
     let serial = asking.serial();
     let title = asking.title().to_owned();
-    let consequence = asking.consequence().clone();
+    let answer = asking.answer().clone();
     let left = asking.left().map(str::to_owned);
+    let letting_go = asking.clone();
     // Keyed by its serial: another confirmation is another dialog, never this one's handlers
     // and answered state under new words.
-    ConfirmDialog::new(serial, title, consequence)
+    ConfirmDialog::answering(serial, title, answer)
         .left(left)
         .key(DiffKey::U64(serial))
         .on_confirm(move |token| {
             showing.set(None);
             asking.confirmed(token);
         })
-        .on_cancel(move |()| showing.set(None))
+        .on_cancel(move |()| {
+            showing.set(None);
+            letting_go.let_go();
+        })
         .into()
 }
 

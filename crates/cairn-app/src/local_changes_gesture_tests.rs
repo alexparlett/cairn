@@ -35,6 +35,12 @@ fn settle(test: &mut TestingRunner) {
     }
 }
 
+/// A submitter that keeps what it is asked, as the window's own is handed to the actions.
+fn submitter(submitted: &Submitted) -> crate::local_changes_actions::Submit {
+    let submitted = std::rc::Rc::clone(submitted);
+    std::rc::Rc::new(move |request: Request| submitted.borrow_mut().push(request))
+}
+
 /// Unstaged: a.rs, n.rs (untracked); Staged: s.rs.
 fn entries() -> Vec<StatusEntry> {
     vec![
@@ -361,7 +367,13 @@ fn a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file() 
     );
     assert_eq!(diff, drawn, "the discard was asked of another diff");
     assert_eq!(selection.len(), 2);
-    assert!(view.confirming.peek().is_none());
+    assert!(
+        view.confirming
+            .peek()
+            .as_ref()
+            .is_some_and(Confirming::is_counting),
+        "the dialog did not open, counting, at the press"
+    );
     apply(
         &mut test,
         view,
@@ -488,7 +500,7 @@ fn nothing_acts_on_lines_while_a_confirmation_is_open() {
     crate::local_changes_actions::on_the_diff(
         Action::StageOrUnstage,
         view,
-        Some(&|request: Request| submitted.borrow_mut().push(request)),
+        Some(&submitter(&submitted)),
     );
     settle(&mut test);
     assert!(lines_asked(&submitted).is_empty());
@@ -815,7 +827,7 @@ fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
                 chunk: false,
             },
             view,
-            Some(&|request: Request| submitted.borrow_mut().push(request)),
+            Some(&submitter(&submitted)),
         );
     }
     settle(&mut test);
@@ -914,6 +926,13 @@ fn the_chords_over_files_drawn_together_take_only_the_files_drawn() {
     test.click_cursor((x, y));
     settle(&mut test);
     crate::window::tests::press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    // The discard's dialog opened, counting, at the press; let go of, the diff hears again.
+    let mut confirming = view.confirming;
+    confirming.set(None);
+    settle(&mut test);
+    let (x, y) = row(&test, "EDIT 4");
+    test.click_cursor((x, y));
     settle(&mut test);
     crate::window::tests::press_chord(&mut test, Action::StageOrUnstage);
     settle(&mut test);

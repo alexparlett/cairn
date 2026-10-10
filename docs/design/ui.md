@@ -74,7 +74,7 @@ Kept, and why:
 | A failed commit or amend always offers **Skip pre-commit hooks and commit**, where Fork offers it where it finds a hook; hooks git finds by configuration Fork misses (Tracker #948). | `engine.md`, D1 — git decides, Cairn does not model it |
 | A merge message is shown **as git's editor would leave it** — comment lines stripped by git — so what is shown is what is committed; Fork commits git's `# Conflicts:` lines, its open bug (Tracker #180). | `engine.md`, D1 |
 | A leftover `index.lock` is **a state of the repository**: a banner while the file exists, no `git` of Cairn's runs and it is older than a few seconds, offering its removal — which, from there or from a Git Error, is confirmed. Fork offers the removal only in the failure, and removes unasked. | `processes.md`, "Cancellation"; `engine.md`, D1's one deletion made without `git` |
-| A nested repository among the untracked rows is refused before any dialog, since deleting it deletes history no prompt can count. | `engine.md`, the write verbs |
+| A nested repository among the untracked rows is never touched — left as it is, a line in the dialog saying so, as a submodule is — since deleting it deletes history no prompt can count; Fork deletes it as an untracked folder. | `engine.md`, the write verbs |
 | A submodule row's discard is greyed and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
 | During a rebase, `git am` or a sequence of cherry-picks or reverts the commit box is disabled and names git's own command to continue or abort; Fork pre-fills and commits. Continuing those operations is their own design. A single cherry-pick or revert is concluded by Commit, as in Fork. | `cairn.md`, the milestone — rewrites are the second lap |
 | **Show Lost Commits has a control in the history's toolbar area** — a check box at the right end of the "Graph and subject" heading's cell, its tooltip the chord — as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
@@ -242,25 +242,32 @@ R9.
 ### Discard
 
 Discard always asks, and the question cannot be skipped. The dialog opens at once
-on the press — "Counting…" with its button greyed while the engine works out what
-the discard takes — titled "Discard Changes", in one sentence: "Discard all changes
+on the press — "Counting…" with its button greyed, reading "Discard Changes", while
+the engine works out what the discard takes — titled "Discard Changes", in one sentence: "Discard all changes
 in 31 files? 2 untracked files will be deleted. You can't undo this.", with Show
 files opening the list of paths and what happens to each, and the button naming the
 count, `Discard Changes in 31 Files`. Lines from the diff ask "Discard 2 changed
 lines in src/main.rs? You can't undo this." under `Discard 2 Lines`. Its words are
 rendered from the operation's consequence and are the `Confirmed` prompt
 (`engine.md`, "The confirmation seal"). Focus starts on Cancel; Escape goes back;
-Tab stays inside the dialog.
+Tab stays inside the dialog. Show files keeps its caption and turns its glyph (▸, ▾),
+each row a path and "14 lines", "Binary", "Restored", "Deleted", "Emptied", "Mode
+change" or "14 lines and mode change". Should the engine refuse while it counts, the
+same dialog becomes "Couldn't Discard Changes" — "src/a.rs changed while it was read.
+Nothing was changed." — with Close alone.
 
 Staged changes are never discardable, and there is no Discard All: select
 everything, then discard. Over a staged selection the menu's Discard Changes… is
 greyed, "Staged changes can't be discarded. Unstage them first.", and the chord does
 nothing, as Fork's does. An untracked file is discarded by deleting it, through the
-same dialog; a nested repository among the selection is refused, with its reason,
-before any dialog, because deleting one deletes history no prompt can count. A
-submodule or a conflicted file is never discarded: alone, its Discard is greyed and
-says why; among other files, the dialog discards the rest and says in one line what
-is left — "1 submodule and 1 conflicted file are left as they are." Fork has no
+same dialog. A submodule, a conflicted file or a nested repository is never
+discarded — a nested repository because deleting one deletes history no prompt can
+count, which Fork does (observed losing the repository's history): alone,
+its Discard is greyed and says why ("Submodule changes can't be discarded.",
+"Conflicted files can't be discarded. Resolve or stage them first.", "Nested
+repositories can't be discarded."); among other files, the dialog discards the rest
+and says in one line what is left — "1 submodule and 1 conflicted file are left as
+they are.", "1 nested repository is left as it is." Fork has no
 Clean command, and neither does Cairn: deleting untracked files is discarding them.
 No backup is taken and none is promised — the confirmation is the whole protection,
 as in Fork (`feature-inventory.md`, "Recovery").

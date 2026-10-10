@@ -90,6 +90,16 @@ pub struct LocalChange<'a> {
     pub state: PathState,
 }
 
+impl LocalChange<'_> {
+    /// Whether the row is a repository nested in the working tree: an untracked row git lists
+    /// as its directory, with a trailing `/` — git lists every other untracked path one per file
+    /// ([`StatusEntry::Untracked`]). A discard never touches one (staging-and-commit R8.4, the
+    /// user's decision of 2026-10-10 on phase 15's Q6).
+    pub fn is_nested_repository(&self) -> bool {
+        self.state == PathState::Untracked && self.path.as_bytes().ends_with(b"/")
+    }
+}
+
 /// Which rows of each list a filter's text leaves, by their place in the list, in order, and
 /// how many distinct paths those rows show — a path left in both lists counted once, as
 /// [`LocalChanges::paths`] counts the status's (the user's decision, 2026-10-07: "Showing N of M
@@ -1053,5 +1063,35 @@ mod tests {
             names(changes.whole_file_paths(ChangeList::Unstaged, [0])),
             ["moved.rs", "was.rs"]
         );
+    }
+
+    /// The user's decision of 2026-10-10 (phase 15, Q6): an untracked row with a trailing `/` —
+    /// how git lists a nested repository — is one, and nothing else is: an untracked file, a
+    /// tracked directory-like path, a submodule. Caught by: a nested repository read as a file a
+    /// discard deletes, or a file kept as if it were one.
+    #[test]
+    fn a_nested_repository_is_the_untracked_row_git_lists_as_its_directory() {
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            StatusEntry::Untracked(RepoPath::from("vendor/lib/")),
+            StatusEntry::Untracked(RepoPath::from("notes.txt")),
+        ]));
+        let rows: Vec<(String, bool)> = (0..2)
+            .filter_map(|row| changes.get(ChangeList::Unstaged, row))
+            .map(|change| (change.path.to_string(), change.is_nested_repository()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("notes.txt".to_owned(), false),
+                ("vendor/lib/".to_owned(), true)
+            ]
+        );
+        let tracked = LocalChange {
+            path: &RepoPath::from("dir/"),
+            from: None,
+            kind: ChangeKind::Submodule,
+            state: PathState::Tracked,
+        };
+        assert!(!tracked.is_nested_repository());
     }
 }

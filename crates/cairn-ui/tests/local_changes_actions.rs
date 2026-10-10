@@ -498,13 +498,19 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
         ]
     );
 
-    for (row, why) in [("sub", "is a submodule"), ("clash.rs", "has a conflict")] {
+    for (row, why) in [
+        ("sub", "Submodule changes can't be discarded."),
+        (
+            "clash.rs",
+            "Conflicted files can't be discarded. Resolve or stage them first.",
+        ),
+    ] {
         log.borrow_mut().clear();
         let pressed = at(&test, row);
         right_click(&mut test, pressed);
         let drawn = texts(&test);
         assert!(
-            drawn.iter().any(|t| t.contains(why)),
+            drawn.iter().any(|t| t == why),
             "{row}'s menu does not say why it offers no discard: {drawn:?}"
         );
         // The disabled Discard reports nothing when pressed.

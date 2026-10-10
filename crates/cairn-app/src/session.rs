@@ -78,9 +78,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::LockConsequence { asked, outcome } => {
             activity.write().lock_answered(asked, outcome);
         }
-        // What a discard would lose, for the confirmation Local Changes opens (R8.4): kept only
-        // for the discard asked last, and only while the view that asked it is shown — one
-        // that arrives once the person has moved on is dropped rather than popped up later.
+        // What a discard would lose, for the confirmation Local Changes opened at the press
+        // (R7.4, R8.4): kept only for the discard asked last and only while that confirmation is
+        // still open and counting — one let go of drops it.
         Update::CommitReads(reads) => crate::commit_box_pane::reads_arrived(*reads, view),
         Update::BranchName { name, outcome } => {
             crate::create_branch::name_checked(view, name, outcome);
@@ -92,12 +92,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::commit_box_pane::amend_arrived(status, *read, view, worker.submit);
         }
         Update::DiscardConsequence { asked, outcome } => {
-            let mut acting = view.local.acting;
-            if *view.sidebar.main.peek() == cairn_ui::MainView::LocalChanges {
-                acting.write().consequence_arrived(asked, outcome);
-            } else {
-                acting.write().forget_discard();
-            }
+            crate::local_changes_actions::consequence_arrived(view, asked, outcome);
         }
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);

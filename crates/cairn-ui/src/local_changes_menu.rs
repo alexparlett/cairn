@@ -6,14 +6,16 @@
 //! **What is never discarded.** Nothing on the staged side, anywhere (R3.6). A conflicted path
 //! stages whole — `git add`, which marks it resolved — and is never discarded (R8.7, L25); a
 //! submodule's changes are never discarded, since `git restore` leaves its commit where it was
-//! and no prompt can count what is dirty inside it (R8.8, L24). A selection mixing either with
-//! paths that can be discarded discards those, and the confirmation says in one line what is
-//! left ([`left_as_they_are`]; the redesign's D1, where Fork asks twice). A selection with
-//! nothing that can be discarded offers its Discard greyed, the reason wrapped beneath it and
-//! never cut ([`NoDiscard`]; R14.4), and the discard chord over it does nothing, as Fork's
-//! does (rule 4: there is no line under the lists to say it in).
+//! and no prompt can count what is dirty inside it (R8.8, L24); and a repository nested in the
+//! working tree is never touched, since deleting it would take every commit only it has (R8.4,
+//! the user's decision of 2026-10-10 — Fork deletes one as an untracked folder and loses its
+//! history). A selection mixing any of them with paths that can be discarded discards those, and
+//! the confirmation says in one line what is left ([`Left`]; the redesign's D1, where Fork asks
+//! twice). A selection with nothing that can be discarded offers its Discard greyed, the reason
+//! wrapped beneath it and never cut ([`NoDiscard`]; R14.4), and the discard chord over it does
+//! nothing, as Fork's does (rule 4: there is no line under the lists to say it in).
 
-use cairn_model::{ChangeKind, ChangeList, LocalChanges, RepoPath};
+use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::Action;
@@ -26,54 +28,126 @@ pub const UNSTAGE_ALL_CAPTION: &str = "Unstage All";
 pub const DISCARD_CAPTION: &str = "Discard Changes…";
 pub const COPY_PATH_CAPTION: &str = "Copy Path";
 
-/// Why a selection offers no discard: nothing in it can be discarded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NoDiscard {
-    /// The Staged list: staged changes are never discarded (R3.6).
-    Staged,
-    /// Every path a submodule or a conflicted one, the first a submodule (R8.8).
-    Submodule(RepoPath),
-    /// Every path a submodule or a conflicted one, the first conflicted (R8.7).
-    Conflicted(RepoPath),
+/// A row a discard leaves as it is (R8.4, R8.7, R8.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    Submodule,
+    Conflicted,
+    NestedRepository,
 }
 
-impl NoDiscard {
-    /// The reason, as the menu says it beneath its greyed Discard.
-    pub fn text(&self) -> String {
-        match self {
-            Self::Staged => "Staged changes can't be discarded. Unstage them first.".to_owned(),
-            Self::Submodule(path) => format!(
-                "{} is a submodule: its changes can't be discarded, since what they would \
-                 lose inside it can't be counted.",
-                path.display()
-            ),
-            Self::Conflicted(path) => format!(
-                "{} has a conflict: it can't be discarded. Stage it to mark it resolved.",
-                path.display()
-            ),
-        }
+/// What a discard does to `change`: `None` when it takes it, else why it leaves it as it is.
+pub fn kept(change: &LocalChange<'_>) -> Option<Kept> {
+    if change.is_nested_repository() {
+        return Some(Kept::NestedRepository);
     }
-}
-
-/// What a discard does to a row of `kind`: whether it can take it at all (R8.7, R8.8).
-pub fn discards(kind: ChangeKind) -> bool {
-    match kind {
-        ChangeKind::Submodule | ChangeKind::Conflicted => false,
+    match change.kind {
+        ChangeKind::Submodule => Some(Kept::Submodule),
+        ChangeKind::Conflicted => Some(Kept::Conflicted),
         ChangeKind::Modified
         | ChangeKind::Added
         | ChangeKind::Deleted
         | ChangeKind::Renamed
         | ChangeKind::Copied
-        | ChangeKind::TypeChanged => true,
+        | ChangeKind::TypeChanged => None,
+    }
+}
+
+/// How many rows of each kind a discard leaves as they are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Left {
+    pub submodules: usize,
+    pub conflicted: usize,
+    pub nested: usize,
+}
+
+impl Left {
+    /// One more row of `kind` left.
+    pub fn count(&mut self, kind: Kept) {
+        match kind {
+            Kept::Submodule => self.submodules += 1,
+            Kept::Conflicted => self.conflicted += 1,
+            Kept::NestedRepository => self.nested += 1,
+        }
+    }
+
+    /// The one line a discard's confirmation adds under its prompt (the redesign's D1 and the
+    /// user's decision of 2026-10-10 on phase 15's Q6): "1 submodule and 1 conflicted file are
+    /// left as they are.", "1 nested repository is left as it is.", "2 nested repositories are
+    /// left as they are.", "1 submodule and 1 nested repository are left as they are." — each
+    /// kind in that order, three joined "a, b and c". `None` when it leaves none.
+    pub fn text(&self) -> Option<String> {
+        let counted =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let kinds: Vec<String> = [
+            (self.submodules, "submodule", "submodules"),
+            (self.conflicted, "conflicted file", "conflicted files"),
+            (self.nested, "nested repository", "nested repositories"),
+        ]
+        .into_iter()
+        .filter(|(n, ..)| *n > 0)
+        .map(|(n, one, many)| counted(n, one, many))
+        .collect();
+        let what = match kinds.as_slice() {
+            [] => return None,
+            [only] => only.clone(),
+            [before @ .., last] => format!("{} and {last}", before.join(", ")),
+        };
+        let verb = if self.submodules + self.conflicted + self.nested == 1 {
+            "is left as it is"
+        } else {
+            "are left as they are"
+        };
+        Some(format!("{what} {verb}."))
+    }
+}
+
+/// Why a selection offers no discard: nothing in it can be discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoDiscard {
+    /// The Staged list: staged changes are never discarded (R3.6).
+    Staged,
+    /// Every row one a discard leaves as it is, and which kinds there were.
+    Kept {
+        submodules: bool,
+        conflicted: bool,
+        nested: bool,
+    },
+}
+
+impl NoDiscard {
+    /// The reason, as the menu says it beneath its greyed Discard — one template, "<what> can't
+    /// be discarded. <way forward>." (the redesign; the user's decisions of 2026-10-10 on phase
+    /// 15's Q5 and Q6): one sentence per kind the selection holds, submodules first.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Staged => "Staged changes can't be discarded. Unstage them first.".to_owned(),
+            Self::Kept {
+                submodules,
+                conflicted,
+                nested,
+            } => [
+                (*submodules, "Submodule changes can't be discarded."),
+                (
+                    *conflicted,
+                    "Conflicted files can't be discarded. Resolve or stage them first.",
+                ),
+                (*nested, "Nested repositories can't be discarded."),
+            ]
+            .into_iter()
+            .filter_map(|(held, sentence)| held.then_some(sentence))
+            .collect::<Vec<_>>()
+            .join(" "),
+        }
     }
 }
 
 /// Why discarding `paths` of `list` is not offered, if it is not: the Staged list, else every
-/// path `list` lists a submodule or a conflicted one, the first of them named. A selection with
-/// one path that can be discarded is offered, whatever else it holds (the redesign's D1). A
-/// path `list` does not list is left out, as acting on the selection leaves it out, and a
-/// selection of none of its paths offers nothing to refuse. A binary search per path, stopping
-/// at the first path that can be discarded.
+/// path `list` lists one a discard leaves as it is ([`kept`]), with the kinds there were. A
+/// selection with one path that can be discarded is offered, whatever else it holds (the
+/// redesign's D1). A path `list` does not list is left out, as acting on the selection leaves it
+/// out, and a selection of none of its paths offers nothing to refuse. A binary search per path,
+/// stopping at the first path that can be discarded.
 pub fn no_discard<'a>(
     changes: &LocalChanges,
     list: ChangeList,
@@ -82,7 +156,7 @@ pub fn no_discard<'a>(
     if list == ChangeList::Staged {
         return Some(NoDiscard::Staged);
     }
-    let mut first = None;
+    let mut left = Left::default();
     for path in paths {
         let Some(change) = changes
             .row_of(list, path)
@@ -90,51 +164,14 @@ pub fn no_discard<'a>(
         else {
             continue;
         };
-        if discards(change.kind) {
-            return None;
-        }
-        if first.is_none() {
-            first = Some(match change.kind {
-                ChangeKind::Submodule => NoDiscard::Submodule(path.clone()),
-                ChangeKind::Conflicted
-                | ChangeKind::Modified
-                | ChangeKind::Added
-                | ChangeKind::Deleted
-                | ChangeKind::Renamed
-                | ChangeKind::Copied
-                | ChangeKind::TypeChanged => NoDiscard::Conflicted(path.clone()),
-            });
-        }
+        // One path a discard takes is enough to offer it.
+        left.count(kept(&change)?);
     }
-    first
-}
-
-/// The one line a discard's confirmation adds under its prompt when the selection held rows it
-/// leaves (the redesign's D1): "1 submodule and 1 conflicted file are left as they are.", "2
-/// submodules are left as they are.", "1 conflicted file is left as it is." `None` when it
-/// leaves none.
-pub fn left_as_they_are(submodules: usize, conflicted: usize) -> Option<String> {
-    let counted =
-        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-    let (what, rows) = match (submodules, conflicted) {
-        (0, 0) => return None,
-        (n, 0) => (counted(n, "submodule", "submodules"), n),
-        (0, n) => (counted(n, "conflicted file", "conflicted files"), n),
-        (s, c) => (
-            format!(
-                "{} and {}",
-                counted(s, "submodule", "submodules"),
-                counted(c, "conflicted file", "conflicted files")
-            ),
-            s + c,
-        ),
-    };
-    let verb = if rows == 1 {
-        "is left as it is"
-    } else {
-        "are left as they are"
-    };
-    Some(format!("{what} {verb}."))
+    (left != Left::default()).then_some(NoDiscard::Kept {
+        submodules: left.submodules > 0,
+        conflicted: left.conflicted > 0,
+        nested: left.nested > 0,
+    })
 }
 
 /// One item of the menu: what it does when chosen.
@@ -225,15 +262,17 @@ mod tests {
                 submodule: None,
             }),
             StatusEntry::Untracked(RepoPath::from("new.rs")),
+            StatusEntry::Untracked(RepoPath::from("lib/")),
         ]))
     }
 
-    /// R3.6, R8.7, R8.8 and the redesign's D1: the Staged list offers no discard whatever it
-    /// holds; on the unstaged side a selection is refused only when nothing in it can be
-    /// discarded — every path a submodule or a conflicted one — and a selection mixing them
-    /// with paths that can be is offered; modified and untracked paths, and a path the list
-    /// does not hold, refuse nothing. Caught by: a discard offered on Staged, a mixed selection
-    /// refused whole (the first offender's refusal), a submodule or conflict alone let through,
+    /// R3.6, R8.7, R8.8, the redesign's D1 and the user's decisions of 2026-10-10 on phase 15's
+    /// Q5 and Q6: the Staged list offers no discard whatever it holds; on the unstaged side a
+    /// selection is refused only when nothing in it can be discarded — every path a submodule, a
+    /// conflicted one or a nested repository — saying so per kind, submodules first; a selection
+    /// mixing them with paths that can be is offered; modified and untracked paths, and a path
+    /// the list does not hold, refuse nothing. Caught by: a discard offered on Staged, a mixed
+    /// selection refused whole, a nested repository read as a file, a kind's reason left out,
     /// or a refusal for an ordinary path.
     #[test]
     fn a_discard_is_refused_only_where_nothing_can_be_discarded() {
@@ -259,58 +298,79 @@ mod tests {
             no_discard(
                 &changes,
                 ChangeList::Unstaged,
-                &[path("sub"), path("clash.rs"), path("a.rs")]
+                &[path("sub"), path("clash.rs"), path("lib/"), path("a.rs")]
             ),
             None,
             "a mixed selection discards what it can"
         );
+        let refused = |paths: &[RepoPath]| {
+            no_discard(&changes, ChangeList::Unstaged, paths).map(|why| why.text())
+        };
         assert_eq!(
-            no_discard(
-                &changes,
-                ChangeList::Unstaged,
-                &[path("sub"), path("clash.rs")]
-            ),
-            Some(NoDiscard::Submodule(path("sub")))
+            refused(&[path("sub")]).as_deref(),
+            Some("Submodule changes can't be discarded.")
         );
         assert_eq!(
-            no_discard(&changes, ChangeList::Unstaged, &[path("clash.rs")]),
-            Some(NoDiscard::Conflicted(path("clash.rs")))
+            refused(&[path("clash.rs")]).as_deref(),
+            Some("Conflicted files can't be discarded. Resolve or stage them first.")
         );
         assert_eq!(
-            no_discard(&changes, ChangeList::Unstaged, &[path("gone.rs")]),
-            None
+            refused(&[path("lib/")]).as_deref(),
+            Some("Nested repositories can't be discarded.")
         );
+        assert_eq!(
+            refused(&[path("clash.rs"), path("sub")]).as_deref(),
+            Some(
+                "Submodule changes can't be discarded. Conflicted files can't be discarded. \
+                 Resolve or stage them first."
+            )
+        );
+        assert_eq!(
+            refused(&[path("lib/"), path("clash.rs"), path("sub")]).as_deref(),
+            Some(
+                "Submodule changes can't be discarded. Conflicted files can't be discarded. \
+                 Resolve or stage them first. Nested repositories can't be discarded."
+            )
+        );
+        assert_eq!(refused(&[path("gone.rs")]), None);
     }
 
-    /// The redesign's D1: the one line under a mixed discard's prompt counts what is left by
-    /// kind, in the user's approved words, singular and plural. Caught by: a kind left out, a
-    /// count or a verb that does not agree, or a line where nothing is left.
+    /// The redesign's D1 and the user's decision of 2026-10-10 on phase 15's Q6: the one line
+    /// under a mixed discard's prompt counts what is left by kind, in the approved words,
+    /// singular and plural. Caught by: a kind left out, a count or a verb that does not agree,
+    /// or a line where nothing is left.
     #[test]
     fn what_a_mixed_discard_leaves_is_said_in_one_line() {
-        assert_eq!(left_as_they_are(0, 0), None);
-        assert_eq!(
-            left_as_they_are(1, 1).as_deref(),
-            Some("1 submodule and 1 conflicted file are left as they are.")
-        );
-        assert_eq!(
-            left_as_they_are(2, 0).as_deref(),
-            Some("2 submodules are left as they are.")
-        );
-        assert_eq!(
-            left_as_they_are(1, 0).as_deref(),
-            Some("1 submodule is left as it is.")
-        );
-        assert_eq!(
-            left_as_they_are(0, 1).as_deref(),
-            Some("1 conflicted file is left as it is.")
-        );
-        assert_eq!(
-            left_as_they_are(0, 3).as_deref(),
-            Some("3 conflicted files are left as they are.")
-        );
-        assert_eq!(
-            left_as_they_are(3, 2).as_deref(),
-            Some("3 submodules and 2 conflicted files are left as they are.")
-        );
+        let left = |submodules, conflicted, nested| {
+            Left {
+                submodules,
+                conflicted,
+                nested,
+            }
+            .text()
+        };
+        assert_eq!(left(0, 0, 0), None);
+        for (counts, said) in [
+            (
+                (1, 1, 0),
+                "1 submodule and 1 conflicted file are left as they are.",
+            ),
+            ((2, 0, 0), "2 submodules are left as they are."),
+            ((1, 0, 0), "1 submodule is left as it is."),
+            ((0, 1, 0), "1 conflicted file is left as it is."),
+            ((0, 3, 0), "3 conflicted files are left as they are."),
+            ((0, 0, 1), "1 nested repository is left as it is."),
+            ((0, 0, 2), "2 nested repositories are left as they are."),
+            (
+                (1, 0, 1),
+                "1 submodule and 1 nested repository are left as they are.",
+            ),
+            (
+                (3, 2, 1),
+                "3 submodules, 2 conflicted files and 1 nested repository are left as they are.",
+            ),
+        ] {
+            assert_eq!(left(counts.0, counts.1, counts.2).as_deref(), Some(said));
+        }
     }
 }

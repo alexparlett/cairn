@@ -58,8 +58,8 @@ mod local_changes_drag;
 pub use local_changes_drag::DRAG_THRESHOLD;
 mod local_changes_menu;
 pub use local_changes_menu::{
-    COPY_PATH_CAPTION, DISCARD_CAPTION, MenuChoice, NoDiscard, STAGE_ALL_CAPTION, STAGE_CAPTION,
-    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, discards, left_as_they_are, no_discard,
+    COPY_PATH_CAPTION, DISCARD_CAPTION, Kept, Left, MenuChoice, NoDiscard, STAGE_ALL_CAPTION,
+    STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, kept, no_discard,
 };
 mod message_lines;
 mod ref_chips;
@@ -93,7 +93,10 @@ pub use commit_tab::{
     EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
     budget_notice, cut_short_notice, file_text, status_letter,
 };
-pub use confirm_dialog::{CANCEL_CAPTION, ConfirmDialog};
+pub use confirm_dialog::{
+    CANCEL_CAPTION, COUNTING_TEXT, ConfirmDialog, DialogAnswer, NOTHING_CHANGED,
+    SHOW_FILES_CAPTION, SHOWN_FILE_HEIGHT,
+};
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,

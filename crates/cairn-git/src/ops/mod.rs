@@ -225,7 +225,7 @@ pub use branch::create_branch;
 pub use checkout::{
     checkout_discarding_consequence, create_branch_and_checkout, create_branch_discarding,
 };
-pub use commit::{CommitCancel, CommitWatch, Hooks, amend, commit};
+pub use commit::{AmendAnswer, CommitCancel, CommitWatch, Hooks, amend, amend_unconfirmed, commit};
 pub use discard::{
     CLEAN_ARGUMENT_BYTES, discard_files, discard_files_consequence, discard_lines,
     discard_lines_consequence,

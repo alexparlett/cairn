@@ -1,41 +1,49 @@
-//! `git config`, in query form: what a fetch of one remote will read from the
-//! repository's configuration, answered by the git that will fetch.
+//! `git config`, in query form: what a git that is about to run will read from the
+//! repository's configuration, answered by that git — for a fetch of one remote, and for a
+//! commit and an amend.
 //!
-//! The fetch's refspec check (`crate::ops::refspec_policy`) refuses a fetch whose
-//! remote is a mirror, whose refspecs write local branches, or whose pruning would
-//! delete local tags. What it decides on has to be what the fetch's own git will
-//! read, and no second reader is that: gix 0.87 evaluates a linked worktree's
-//! `includeIf "gitdir:..."` against the common directory where git evaluates it
-//! against the worktree's own git directory (`.git/worktrees/<id>`), reads the
-//! system file from `/etc/gitconfig` where git reads its own `$(sysconfdir)`, and
-//! decides trust by an owner rule of its own. So git answers — the same binary,
-//! environment and `--git-dir`/`--work-tree` as the fetch (`in_repository`), a
-//! moment before it — and parses its own booleans (`--type=bool`). This is the
-//! second porcelain verb a read runs, accepted by the user on 2026-10-04 beside
-//! `git diff --no-index` (`crate::reads`, "What a read may run").
+//! **Why git answers.** A check made before a git runs has to decide on what that git will
+//! read, and no second reader is that: gix 0.87 evaluates a linked worktree's `includeIf
+//! "gitdir:..."` against the common directory where git evaluates it against the worktree's own
+//! git directory (`.git/worktrees/<id>`), reads the system file from `/etc/gitconfig` where git
+//! reads its own `$(sysconfdir)`, and decides trust by an owner rule of its own. So git answers
+//! — the same binary, environment and `--git-dir`/`--work-tree` as the operation
+//! (`in_repository`), a moment before it.
 //!
-//! Every invocation is `git config --includes --null` and then a query: `--type=bool
-//! --get <key>` for a boolean, which prints the LAST value as git parses it — git's
-//! `remote.c` and `builtin/fetch.c` read these keys last-one-wins through
-//! `git_config_bool` too, at v2.30.0 and v2.56.0 — or `--get-all <key>` for
-//! `remote.<name>.fetch`, every value in order, as `remote.c` appends each. Never a
-//! setter: no `--add`, `--unset`, `--replace-all`, `--edit` or `--rename-section`,
-//! and no `set`/`unset` subcommand (`the_porcelain_reads_are_the_three_named_queries`).
-//! `--type`, `--get`, `--get-all`, `--null` and `--includes` are all in git 2.18 and
-//! later (`builtin/config.c` at v2.30.0), and v2.56.0 still takes this form without a
-//! word on stderr (reproduced with 2.30.9, 2.32.7 and 2.56.0). The key always starts
-//! `remote.` or `fetch.`, so it is never read as an option.
+//! - **A fetch** (`crate::ops::refspec_policy`): the refspec check refuses a fetch whose remote
+//!   is a mirror, whose refspecs write local branches, or whose pruning would delete local tags
+//!   ([`fetch_settings`]).
+//! - **A commit and an amend** (staging-and-commit R6.11, `review-code-engine.md` M4):
+//!   `i18n.commitEncoding`, which a commit is refused for when it names anything but UTF-8, and
+//!   `core.logAllRefUpdates`, which decides whether git logs an amend's move, so whether the
+//!   replaced commit can be recovered ([`commit_settings`]).
 //!
-//! What the exit says: 0 with an answer; 1 with none — the key is unset, or not a
-//! key at all (a remote name with a newline, which no configuration can hold either);
-//! anything else, a value git will not parse as a boolean or a configuration file it
-//! cannot read (128), is [`Error::GitFailed`], and the check refuses the fetch on it,
-//! as git would then die on the same value. It writes nothing: `git config` in query
-//! form takes no lock and reads no index (`the_refspec_checks_reads_write_nothing`,
-//! in `crates/cairn-git/tests/fetch.rs`, holds the git directory byte-identical), and
-//! it runs no program. As a read it runs with `GIT_OPTIONAL_LOCKS=0` and
-//! `GIT_NO_LAZY_FETCH=1` and carries no askpass token, neither of which `git config`
-//! has a use for.
+//! This is the second porcelain verb a read runs, accepted by the user on 2026-10-04 beside
+//! `git diff --no-index`, and widened to the commit's settings on 2026-10-10
+//! (`crate::reads`, "What a read may run").
+//!
+//! Every invocation is `git config --includes --null` and then one named query of one key:
+//! `--type=bool --get <key>` for a boolean, which prints the LAST value as git parses it — git
+//! reads these keys last-one-wins through `git_config_bool`, at v2.30.0 and v2.56.0; `--get
+//! <key>`, the last value as written, for a key git does not read as a boolean (a name, or
+//! `core.logAllRefUpdates`, whose `always` no boolean parse takes); or `--get-all <key>` for
+//! `remote.<name>.fetch`, every value in order, as `remote.c` appends each. Never a setter: no
+//! `--add`, `--unset`, `--replace-all`, `--edit` or `--rename-section`, and no `set`/`unset`
+//! subcommand (`the_porcelain_reads_are_the_named_queries`). `--type`, `--get`, `--get-all`,
+//! `--null` and `--includes` are all in git 2.18 and later (`builtin/config.c` at v2.30.0), and
+//! v2.56.0 still takes this form without a word on stderr (reproduced with 2.30.9, 2.32.7 and
+//! 2.56.0). A key always starts `remote.`, `fetch.`, `core.` or `i18n.`, so it is never read as
+//! an option.
+//!
+//! What the exit says: 0 with an answer; 1 with none — the key is unset, or not a key at all (a
+//! remote name with a newline, which no configuration can hold either); anything else, a value
+//! git will not parse as a boolean or a configuration file it cannot read (128), is
+//! [`Error::GitFailed`], and the caller refuses on it, as git would then die on the same value.
+//! It writes nothing: `git config` in query form takes no lock and reads no index
+//! (`the_refspec_checks_reads_write_nothing`, in `crates/cairn-git/tests/fetch.rs`, holds the
+//! git directory byte-identical), and it runs no program. As a read it runs with
+//! `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and carries no askpass token, neither of
+//! which `git config` has a use for.
 
 use std::ffi::OsString;
 
@@ -62,6 +70,20 @@ const QUERY: [&str; 3] = ["config", "--includes", "--null"];
 const BOOLEAN: [&str; 2] = ["--type=bool", "--get"];
 /// A multi-valued key: every value, as written.
 const EVERY_VALUE: [&str; 1] = ["--get-all"];
+/// A key git reads as text: its last value, as written.
+const LAST_VALUE: [&str; 1] = ["--get"];
+
+/// `core.logAllRefUpdates` as git reads it (`git_default_core_config` in git's `config.c`, at
+/// v2.30.0 and v2.56.0): `always` in any case, else a boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogRefUpdates {
+    /// False: git creates no reflog, but appends to one that exists.
+    None,
+    /// True: git logs `HEAD`, branches, remote-tracking refs and notes.
+    Normal,
+    /// `always`: git logs every ref it updates.
+    Always,
+}
 
 /// The settings a fetch of `remote` will read in `repo`, each asked of `git`.
 /// Cancelled through `cancel` as any read is, answering [`Error::GitReadCancelled`];
@@ -79,6 +101,79 @@ pub(crate) fn fetch_settings(
         remote_prune: boolean(git, repo, &key("prune"), cancel)?,
         fetch_prune: boolean(git, repo, "fetch.prune", cancel)?,
     })
+}
+
+/// `i18n.commitEncoding` as written (staging-and-commit R6.1, R6.11): what git names a commit's
+/// encoding, refused before a commit runs unless it names UTF-8; `None` when it is unset. A key
+/// with no value reads as empty, which no encoding is called — git itself dies on it.
+pub(crate) fn commit_encoding(
+    git: &GitBinary,
+    repo: &Repository,
+    cancel: &impl Cancel,
+) -> Result<Option<Vec<u8>>, Error> {
+    text(git, repo, "i18n.commitEncoding", cancel)
+}
+
+/// `core.logAllRefUpdates` as git reads it (R6.4, R6.11): `always`, in any case, or else the
+/// value as a boolean; `None` when it is unset, where git logs unless the repository is bare.
+///
+/// git reads each value in turn, taking `always` before its boolean parse, so the last value
+/// decides. `--type=bool --get` cannot ask that: it parses every value of the key, and fails on
+/// an `always` in the user's global configuration beneath the `true` `git init` writes in the
+/// repository's own. So the last value is asked as written, and parsed here by git's own
+/// rules (`crate::diff::git_config::parse_bool`, `git_config_bool`); only an empty one — the bare
+/// key, which is true, or `= `, which is false, both printed as nothing by `--get` — is asked
+/// of git's boolean parse, which tells them apart, and fails, as a residual, where an earlier
+/// value is `always`. A value git refuses is [`Error::InvalidConfig`], as git dies on it.
+pub(crate) fn log_all_ref_updates(
+    git: &GitBinary,
+    repo: &Repository,
+    cancel: &impl Cancel,
+) -> Result<Option<LogRefUpdates>, Error> {
+    const KEY: &str = "core.logAllRefUpdates";
+    let Some(value) = text(git, repo, KEY, cancel)? else {
+        return Ok(None);
+    };
+    if value.eq_ignore_ascii_case(b"always") {
+        return Ok(Some(LogRefUpdates::Always));
+    }
+    let logs = if value.is_empty() {
+        boolean(git, repo, KEY, cancel)?
+    } else {
+        Some(
+            crate::diff::git_config::parse_bool(Some(&value)).ok_or_else(|| {
+                Error::InvalidConfig {
+                    key: KEY.to_owned(),
+                    value: String::from_utf8_lossy(&value).into_owned(),
+                }
+            })?,
+        )
+    };
+    Ok(logs.map(|logs| {
+        if logs {
+            LogRefUpdates::Normal
+        } else {
+            LogRefUpdates::None
+        }
+    }))
+}
+
+/// The last value of `key` as written, or `None` when it is unset.
+fn text(
+    git: &GitBinary,
+    repo: &Repository,
+    key: &str,
+    cancel: &impl Cancel,
+) -> Result<Option<Vec<u8>>, Error> {
+    let records = query(git, repo, &LAST_VALUE, key, cancel)?;
+    match records {
+        None => Ok(None),
+        Some(mut records) if records.len() == 1 => Ok(records.pop()),
+        Some(other) => Err(Error::UnexpectedGitOutput {
+            arguments: described(&LAST_VALUE, key),
+            record: format!("{} records, where a last value is one record", other.len()),
+        }),
+    }
 }
 
 /// The last value of `key` as git parses a boolean, or `None` when it is unset.
@@ -154,12 +249,14 @@ mod tests {
 
     /// Each query is `config --includes --null` and a query action, never a setter.
     /// Caught by: another verb, a dropped `--null` (answers split on newlines), a dropped
-    /// `--type=bool` (git's booleans read by Cairn), or `--get` where every value counts.
+    /// `--type=bool` (git's booleans read by Cairn), `--get` where every value counts, or
+    /// `--type=bool` on a key whose `always` it refuses.
     #[test]
     fn the_queries_are_config_reads_in_query_form() {
         assert_eq!(QUERY, ["config", "--includes", "--null"]);
         assert_eq!(BOOLEAN, ["--type=bool", "--get"]);
         assert_eq!(EVERY_VALUE, ["--get-all"]);
+        assert_eq!(LAST_VALUE, ["--get"]);
         assert_eq!(
             described(&BOOLEAN, "fetch.prune"),
             "config --includes --null --type=bool --get fetch.prune"
@@ -355,5 +452,119 @@ mod tests {
             fetch_settings(&fresh.binary(), &repo, "origin", &cancel),
             Err(Error::GitReadCancelled { .. })
         ));
+    }
+
+    /// The commit's two settings in `at`, each asked of git.
+    fn commit_reads(fixture: &Fixture, at: &Path) -> (Option<Vec<u8>>, Option<LogRefUpdates>) {
+        let repo = Repository::discover(at).unwrap_or_else(|e| panic!("{e}"));
+        let git = fixture.binary();
+        let cancel = CancelSignal::new();
+        (
+            commit_encoding(&git, &repo, &cancel).unwrap_or_else(|e| panic!("{e}")),
+            log_all_ref_updates(&git, &repo, &cancel).unwrap_or_else(|e| panic!("{e}")),
+        )
+    }
+
+    /// R6.11: `core.logAllRefUpdates` as git reads it — unset, true and false in git's
+    /// spellings and as numbers, `always` in any case, the bare key (true) and `= ` (false), the
+    /// last of several (an `always` beneath a `true`, as a global setting sits beneath the one
+    /// `git init` writes) — and `i18n.commitEncoding` as written. Caught by: a boolean parse of
+    /// every value (which an `always` fails), `always` read case-sensitively, the first value
+    /// taken, or the bare key and an empty value read alike.
+    #[test]
+    fn the_commits_settings_are_read_as_git_reads_them() {
+        let fixture = Fixture::new("commit");
+        let main = fixture.main();
+        // `git init` writes `logAllRefUpdates = true`; unset, it is git's default.
+        fixture.git(&["config", "--unset", "core.logAllRefUpdates"]);
+        assert_eq!(commit_reads(&fixture, &main), (None, None));
+        for (written, read) in [
+            ("true", LogRefUpdates::Normal),
+            ("yes", LogRefUpdates::Normal),
+            ("2k", LogRefUpdates::Normal),
+            ("false", LogRefUpdates::None),
+            ("off", LogRefUpdates::None),
+            ("0", LogRefUpdates::None),
+            ("always", LogRefUpdates::Always),
+            ("ALWAYS", LogRefUpdates::Always),
+        ] {
+            fixture.git(&["config", "core.logAllRefUpdates", written]);
+            assert_eq!(commit_reads(&fixture, &main).1, Some(read), "{written}");
+        }
+        let config = main.join(".git/config");
+        let original = std::fs::read_to_string(&config).unwrap_or_else(|e| panic!("{e}"));
+        let with = |tail: &str| {
+            std::fs::write(&config, format!("{original}{tail}")).unwrap_or_else(|e| panic!("{e}"));
+        };
+        // `always` above, `true` last.
+        with("[core]\n\tlogAllRefUpdates = true\n[i18n]\n\tcommitEncoding = latin1\n");
+        assert_eq!(
+            commit_reads(&fixture, &main),
+            (Some(b"latin1".to_vec()), Some(LogRefUpdates::Normal)),
+            "the last value decides"
+        );
+        fixture.git(&["config", "--unset-all", "core.logAllRefUpdates"]);
+        let original = std::fs::read_to_string(&config).unwrap_or_else(|e| panic!("{e}"));
+        let with = |tail: &str| {
+            std::fs::write(&config, format!("{original}{tail}")).unwrap_or_else(|e| panic!("{e}"));
+        };
+        with("[core]\n\tlogAllRefUpdates\n");
+        assert_eq!(
+            commit_reads(&fixture, &main).1,
+            Some(LogRefUpdates::Normal),
+            "the bare key"
+        );
+        with("[core]\n\tlogAllRefUpdates =\n");
+        assert_eq!(
+            commit_reads(&fixture, &main).1,
+            Some(LogRefUpdates::None),
+            "empty"
+        );
+        with("[core]\n\tlogAllRefUpdates = never\n");
+        let repo = Repository::discover(&main).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            matches!(
+                log_all_ref_updates(&fixture.binary(), &repo, &CancelSignal::new()),
+                Err(Error::InvalidConfig { .. })
+            ),
+            "a value git will not read was read"
+        );
+    }
+
+    /// C32: set only through a linked worktree's `includeIf "gitdir:..."`, both settings are
+    /// read in that worktree and not in the main one, as git reads them. Caught by: gix's
+    /// reading of the include, which evaluates it against the common directory.
+    #[test]
+    fn a_linked_worktrees_conditional_include_sets_the_commits_settings() {
+        let fixture = Fixture::new("commit-worktree");
+        fixture.git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        fixture.git(&["worktree", "add", "-q", "-b", "linked", "../linked"]);
+        let linked = fixture.root.join("linked");
+        let git_dir = std::fs::canonicalize(fixture.git(&[
+            "-C",
+            "../linked",
+            "rev-parse",
+            "--absolute-git-dir",
+        ]))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let include = fixture.root.join("commit.inc");
+        std::fs::write(
+            &include,
+            "[core]\n\tlogAllRefUpdates = false\n[i18n]\n\tcommitEncoding = Shift_JIS\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&[
+            "config",
+            &format!("includeIf.gitdir:{}.path", git_dir.display()),
+            &include.display().to_string(),
+        ]);
+        assert_eq!(
+            commit_reads(&fixture, &linked),
+            (Some(b"Shift_JIS".to_vec()), Some(LogRefUpdates::None))
+        );
+        assert_eq!(
+            commit_reads(&fixture, &fixture.main()),
+            (None, Some(LogRefUpdates::Normal))
+        );
     }
 }

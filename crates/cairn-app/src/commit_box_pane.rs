@@ -4,22 +4,25 @@
 //! worker sends for the box applied here (`session::apply` hands them on).
 //!
 //! **What is asked, and where.** As the box is shown, and as each refresh's refs arrive while it
-//! is, the box's reads are asked (`Request::CommitReads`: the operation in progress, the hooks
-//! git would run, the recent messages), on the local lane after the writes asked before them.
+//! is, the box's reads are asked (`Request::CommitReads`: the operation in progress, the message
+//! git prepared for the commit that concludes it, cleaned, and the recent messages), on the
+//! local lane after the writes asked before them.
 //! While Amend is ticked, each status that arrives asks what an amend would replace and amend's
 //! lists over that status (`Request::Amending`), in a lane of its own, so the next supersedes
 //! the last; the lists that answer are drawn as a status's are, and unticking Amend draws the
 //! status's own lists again. Nothing here waits: each is a submit.
 //!
-//! **The seal.** An amend is destructive (R1.5): its token is built only by a confirmation
-//! surface (R1.1), never here. An amend no remote has is confirmed by the box's amend button or
-//! the commit chord — the commit box itself, `cairn_ui::AmendButton`, which draws the line it
-//! confirms and hands its token to [`amend_confirmed`]; an amend a remote has opens the
-//! confirmation dialog (`Confirming`) over the window first, by button or chord; and the skip of
-//! a hook that failed an amend is `cairn_ui::AmendSkip` in the Git Error dialog, which draws the
-//! prompt the amend was confirmed with and builds its token from that consequence — one press,
-//! no second dialog (the user's decision, 2026-10-09). The engine re-checks every token's
-//! consequence before git runs.
+//! **The seal.** An amend's token is built only by a confirmation surface (R1.1), never here. An
+//! amend that need not be confirmed — git logs it and no remote has it — is confirmed by the
+//! box's amend button or the commit chord — the commit box itself, `cairn_ui::AmendButton`, which
+//! hands its token to [`amend_confirmed`]; one a remote has, or one git keeps no reflog for
+//! (`Consequence::needs_confirming`), opens the confirmation dialog (`Confirming`) over the window
+//! first, by button or chord; and the skip of a hook that failed an amend is
+//! `cairn_ui::AmendSkip` in the Git Error dialog, which draws the prompt the amend was confirmed
+//! with and builds its token from that consequence — one press, no second dialog (the user's
+//! decision, 2026-10-09). The engine re-checks every token's consequence before git runs.
+//! Phase 18 rebuilds this on the engine's amend at the press (`LocalWrite::AmendAtPress`), which
+//! runs a recoverable amend with no token at all.
 
 use std::rc::Rc;
 
@@ -39,8 +42,8 @@ use crate::worker::{
     AmendRead, CommitReads, LocalWrite, OperationId, Request, Retired, WriteEnding,
 };
 
-/// The confirmation dialog's title for an amend.
-pub const AMEND_TITLE: &str = "Amend commit";
+/// The confirmation dialog's title for an amend (R10.6).
+pub const AMEND_TITLE: &str = "Amend Commit";
 
 pub struct CommitBoxPane {
     view: View,
@@ -89,7 +92,7 @@ impl Component for CommitBoxPane {
                     operation.name()
                 )
             });
-        let merging = matches!(operation, Some(OperationInProgress::Merge { .. }));
+        let merging = matches!(operation, Some(OperationInProgress::Merge));
         let born = refreshed
             .refs()
             .is_some_and(|refs| !matches!(refs.head, cairn_model::HeadState::Unborn(_)));
@@ -129,7 +132,7 @@ impl Component for CommitBoxPane {
                         )
                     });
                     match &amendable.consequence {
-                        Ok(consequence) if consequence.needs_force_push() => (
+                        Ok(consequence) if consequence.needs_confirming() => (
                             CommitButton::AmendAsking {
                                 serial: amendable.serial,
                                 consequence: consequence.clone(),
@@ -245,8 +248,8 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// The commit button, or the commit chord heard in a field (R10.1, R7.3): commits what is
-/// staged; amending a commit a remote has, opens the confirmation dialog. An amend no remote has
-/// is confirmed by the box itself and comes through [`amend_confirmed`].
+/// staged; amending a commit a remote has, or one git keeps no reflog for, opens the confirmation
+/// dialog. Any other amend is confirmed by the box itself and comes through [`amend_confirmed`].
 pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let commit = view.local.commit;
     let (amending, consequence) = {
@@ -263,7 +266,7 @@ pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     };
     let message = compose_message(&commit.subject.peek(), &commit.description.peek());
     if amending {
-        if let Some(consequence) = consequence.filter(|c| c.needs_force_push()) {
+        if let Some(consequence) = consequence.filter(|c| c.needs_confirming()) {
             open_amend_dialog(view, submit, &consequence, message, false);
         }
         return;
@@ -426,8 +429,8 @@ fn draft_empty(view: View) -> bool {
     commit.subject.peek().is_empty() && commit.description.peek().is_empty()
 }
 
-/// What the box reads has arrived (R10.2, R10.8): kept, and git's `MERGE_MSG` filling an empty
-/// draft as a merge begins.
+/// What the box reads has arrived (R10.2, R10.8): kept, and the message git prepared, cleaned,
+/// filling an empty draft as a merge, a single cherry-pick or a single revert begins.
 pub fn reads_arrived(reads: CommitReads, view: View) {
     let empty = draft_empty(view);
     let mut state = view.local.commit.state;
@@ -556,10 +559,13 @@ pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &d
             let command = command.clone();
             state.write().failed(asked, command, output);
         }
+        // An amend at the press that must be confirmed: nothing asks one here yet (phase 18
+        // opens the dialog on it).
         WriteEnding::Failed { command: None, .. }
         | WriteEnding::Stale { .. }
         | WriteEnding::Refused { .. }
-        | WriteEnding::MayHaveTakenEffect { .. }
+        | WriteEnding::Cancelled { .. }
+        | WriteEnding::NeedsConfirming { .. }
         | WriteEnding::Incomplete { .. }
         | WriteEnding::NotRun { .. } => {}
     }

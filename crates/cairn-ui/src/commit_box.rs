@@ -15,17 +15,18 @@
 //! (R7.3 as amended); the subject offers a bare ↑ or ↓ to the window first, which recalls a
 //! recent message while the subject is empty or holds the one last recalled (R10.2).
 //!
-//! **The button.** `Commit N Files` — plain `Commit` with none staged — or, amending,
-//! `Amend <short id>` above the line its `Consequence` renders ("Replaces …", R10.6). This file
-//! is the second confirmation surface (staging-and-commit R1.1, `CONFIRMATION_SURFACES`): an
-//! amend no remote has is confirmed by that button — or by the commit chord from either field,
-//! which does exactly what the button does — and [`AmendButton`], one component drawing the
-//! button and the line it confirms, builds the token from the consequence it draws, once per
-//! consequence. It refuses a consequence a remote has (`needs_force_push`): that amend's button
-//! only reports the press, and the window asks the confirmation dialog first (L12). A hook that
-//! fails an amend is skipped by [`AmendSkip`], which draws the line the person confirmed and
-//! builds the skipped amend's token from it, in the Git Error dialog. While the consequence is
-//! read the button says so and does nothing.
+//! **The button.** `Commit N Files` — plain `Commit` with none staged — or, amending, the
+//! `Consequence`'s button, "Amend" (R10.6; its line under the button cut by staging-and-commit
+//! phase 13, and the box rebuilt by phase 18). This file is the second confirmation surface
+//! (staging-and-commit R1.1, `CONFIRMATION_SURFACES`): an amend that need not be confirmed — git
+//! logs it and no remote has it — is confirmed by that button, or by the commit chord from either
+//! field, which does exactly what the button does; [`AmendButton`] builds the token from the
+//! consequence it holds, once per consequence. It refuses a consequence that must be confirmed
+//! (`Consequence::needs_confirming`: a remote has the commit, or git keeps no reflog): that
+//! amend's button only reports the press, and the window asks the confirmation dialog first. A
+//! hook that fails an amend is skipped by [`AmendSkip`], which draws the prompt the amend was
+//! confirmed with and builds the skipped amend's token from it, in the Git Error dialog. While
+//! the consequence is read the button says so and does nothing.
 //!
 //! **Amend reports its state.** The toggle is a check box to assistive technology whose toggled
 //! state is set ([`AMEND_CAPTION`]), which Freya's own `Checkbox` does not set
@@ -54,6 +55,10 @@ pub const RECENT_MESSAGES_CAPTION: &str = "Recent Commit Messages";
 pub const CANCEL_COMMIT_CAPTION: &str = "Cancel";
 /// Said in place of the amend button while what it would replace is read.
 pub const READING_AMEND: &str = "Reading what Amend would replace…";
+/// The amend button's caption, Fork's (R10.6, the user's answer of 2026-10-10, 3): it names no
+/// commit; the dialog, where one is asked, names it once. `…` follows it where the press asks the
+/// dialog.
+pub const AMEND_BUTTON_CAPTION: &str = "Amend Last Commit";
 /// The Git Error dialog's skip (R10.5), Fork's words.
 pub const SKIP_HOOKS_CAPTION: &str = "Skip pre-commit hooks and commit";
 
@@ -421,8 +426,7 @@ impl Component for CommitBox {
             .spacing(8.)
             .child(toggle)
             .maybe_child(busy);
-        // The amend confirmed in place: its button and the line it confirms, one component,
-        // taking the room left of the toggle.
+        // The amend confirmed in place: its button, taking the room left of the toggle.
         let actions = match &self.button {
             CommitButton::AmendInPlace {
                 serial,
@@ -438,15 +442,6 @@ impl Component for CommitBox {
             | CommitButton::AmendUnreadable(_) => actions
                 .child(rect().width(Size::flex(1.)))
                 .child(commit_button(&self.button, ready, self.on_commit.clone())),
-        };
-        // An amend the dialog confirms: the line it replaces, said under the box; the dialog
-        // draws it again with the force push and builds the token.
-        let replaces = match &self.button {
-            CommitButton::AmendAsking { consequence, .. } => consequence.replaces(),
-            CommitButton::AmendInPlace { .. }
-            | CommitButton::Commit { .. }
-            | CommitButton::ReadingAmend
-            | CommitButton::AmendUnreadable(_) => None,
         };
 
         rect()
@@ -466,7 +461,6 @@ impl Component for CommitBox {
             .child(subject_row)
             .child(description)
             .child(actions)
-            .maybe_child(replaces.map(|text| line(text, colours.text_secondary)))
             .maybe_child(self.note.clone().map(|(text, failed)| {
                 line(
                     text,
@@ -552,9 +546,9 @@ fn commit_button(button: &CommitButton, ready: bool, on_commit: EventHandler<()>
         CommitButton::AmendInPlace { .. } => rect().into(),
         CommitButton::AmendAsking {
             serial: _,
-            consequence,
+            consequence: _,
         } => {
-            let caption = format!("{}…", consequence.action());
+            let caption = format!("{AMEND_BUTTON_CAPTION}…");
             control(caption.clone(), caption, ready, move || on_commit.call(()))
         }
         CommitButton::ReadingAmend => control(
@@ -584,7 +578,7 @@ fn confirm_in_place(
     mut confirmed: State<Option<u64>>,
     on_confirmed: &EventHandler<Confirmed>,
 ) -> bool {
-    if consequence.needs_force_push() || *confirmed.peek() == Some(serial) {
+    if consequence.needs_confirming() || *confirmed.peek() == Some(serial) {
         return false;
     }
     confirmed.set(Some(serial));
@@ -592,10 +586,9 @@ fn confirm_in_place(
     true
 }
 
-/// The amend button confirmed in place (R10.6): `Amend <short id>` above the line its
-/// `Consequence` renders — "Replaces <short id> '<subject>'.", then whether the old commit can
-/// be found again — and, pressed, the token built from that same consequence, once. It refuses
-/// a consequence a remote has, drawing it disabled and building nothing.
+/// The amend button confirmed in place (R10.6): the `Consequence`'s button, and, pressed, the
+/// token built from that same consequence, once. It refuses a consequence that must be
+/// confirmed in the dialog, drawing it disabled and building nothing.
 pub struct AmendButton {
     serial: u64,
     consequence: Rc<Consequence>,
@@ -658,16 +651,9 @@ impl KeyExt for AmendButton {
 
 impl Component for AmendButton {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
-        // Rendered once, as the button mounts: one serial's words never change.
-        let (action, line) = use_hook(|| {
-            (
-                self.consequence.action(),
-                self.consequence.replaces().unwrap_or_default(),
-            )
-        });
+        let action = AMEND_BUTTON_CAPTION.to_owned();
         let enabled = self.ready
-            && !self.consequence.needs_force_push()
+            && !self.consequence.needs_confirming()
             && *self.confirmed.read() != Some(self.serial);
         let (serial, consequence, confirmed, on_confirmed) = (
             self.serial,
@@ -678,20 +664,9 @@ impl Component for AmendButton {
         rect()
             .width(Size::flex(1.))
             .cross_align(Alignment::End)
-            .spacing(4.)
             .child(control(action.clone(), action, enabled, move || {
                 confirm_in_place(serial, &consequence, confirmed, &on_confirmed);
             }))
-            .child(
-                label()
-                    .text(line)
-                    .width(Size::fill())
-                    .text_align(TextAlign::End)
-                    .max_lines(3)
-                    .text_overflow(TextOverflow::Ellipsis)
-                    .font_size(12.)
-                    .color(colours.text_secondary),
-            )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -700,10 +675,10 @@ impl Component for AmendButton {
 }
 
 /// The skip of a hook that failed an amend (R10.5, the user's decision of 2026-10-09), drawn in
-/// the Git Error dialog: the prompt the person confirmed the amend with — the line, and a
-/// remote's force push before it where there was one — and `Skip pre-commit hooks and commit`,
-/// whose press builds the skipped amend's token from that same consequence, once. The engine
-/// re-checks it before git runs, so an amend whose `HEAD` moved or was pushed since is refused.
+/// the Git Error dialog: the prompt the person confirmed the amend with and `Skip pre-commit
+/// hooks and commit`, whose press builds the skipped amend's token from that same consequence,
+/// once. The engine re-checks it before git runs, so an amend whose `HEAD` moved or was pushed
+/// since is refused.
 pub struct AmendSkip {
     serial: u64,
     consequence: Rc<Consequence>,

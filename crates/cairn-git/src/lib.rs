@@ -6,7 +6,6 @@ mod branch_names;
 mod cancel;
 mod commit;
 mod commit_encoding;
-mod commit_hooks;
 mod diff;
 mod error;
 mod history;

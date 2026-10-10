@@ -1,7 +1,8 @@
-//! staging-and-commit's commit engine against real `git` (R6, R1.4): C13's and C24's engine
-//! halves, C14's engine half, C2's amend half and C12's identity case, on the host's git and,
-//! through `scripts/git-floor.sh`, on 2.30.9 and 2.32.7. Every oracle is git's own — what
-//! `git commit -F <file>` stores, `git diff --cached --name-status`, `git log`, `git status`,
+//! staging-and-commit's commit engine against real `git` (R6, R1.4, R4.7): C13's, C24's and
+//! C33's engine halves, C14's engine half, C32's stripspace and config halves, C2's amend half
+//! and C12's identity case, on the host's git and, through `scripts/git-floor.sh`, on 2.30.9
+//! and 2.32.7. Every oracle is git's own — what `git commit -F <file>` stores, what `git
+//! commit` with an editor leaves, `git diff --cached --name-status`, `git log`, `git status`,
 //! `git reflog` — never the code under test.
 //!
 //! Every commit the engine makes here runs with an environment built for the test: `PATH`, an
@@ -9,11 +10,13 @@
 //! `commit.gpgSign`, a hooks path — reaches it; the fixture's own configuration names the
 //! identity.
 
-use cairn_git::ops::{self, Askpass, CommitWatch, GitBinary, GitEnvironment, Hooks};
+use cairn_git::ops::{
+    self, AmendAnswer, Askpass, CommitCancel, CommitWatch, GitBinary, GitEnvironment, Hooks,
+};
 use cairn_git::{CancelSignal, CommitRefusal, Error, Repository};
 use cairn_model::{
-    ChangeStatus, ChangedFile, CommitHooks, Confirmed, Consequence, OperationInProgress,
-    Publication, Reflog, RepoPath,
+    ChangeStatus, ChangedFile, Confirmed, Consequence, OperationInProgress, Publication, Reflog,
+    RepoPath,
 };
 
 use super::repositories::{Repo, empty_home};
@@ -107,7 +110,27 @@ fn amend_with(repo: &Repo, confirmed: Confirmed, message: &str) -> Result<ops::P
 }
 
 fn consequence(repo: &Repo) -> Result<Consequence, Error> {
-    ops::amend_consequence(&engine(repo), &CancelSignal::new())
+    ops::amend_consequence(committer(), &engine(repo), &CancelSignal::new())
+}
+
+/// Amends at the press (R6.4): run where it is recoverable, its `Consequence` answered where it
+/// must be confirmed.
+fn amend_at_press(repo: &Repo, message: &str, hooks: Hooks) -> Result<AmendAnswer, Error> {
+    let cancel = CancelSignal::new();
+    let mut running = |_| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
+    ops::amend_unconfirmed(
+        committer(),
+        &engine(repo),
+        message,
+        hooks,
+        None,
+        CommitWatch {
+            cancel: &cancel,
+            running: &mut running,
+            output: &mut output,
+        },
+    )
 }
 
 /// The bytes of `HEAD`'s message as stored: everything after the commit's header.
@@ -234,41 +257,21 @@ fn a_non_utf8_commit_encoding_is_refused_before_git_runs() {
 
 /// C13: a failing `pre-commit` hook fails the commit with its output — stdout and stderr
 /// alike, handed on as it ran and carried on the failure — nothing is committed, the staged
-/// change stays staged and no lock is left; the skip, `--no-verify`, commits past it. And the
-/// hooks found are the ones git would run: `.git/hooks`, a `core.hooksPath`, an executable
-/// file only. Caught by: a failure that drops git's or the hook's words, a lock left, the skip
-/// offered with no hook, or a hook counted that git would not run.
+/// change stays staged and no lock is left; the skip, `--no-verify`, commits past it; and a
+/// `commit-msg` hook in a `core.hooksPath` git resolves fails it too, git finding the hook (C4:
+/// Cairn keeps no hook model, so the skip is offered on every failure). Caught by: a failure
+/// that drops git's or the hook's words, a lock left, or the skip not passing `--no-verify`.
 #[test]
 fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits() {
     let repo = identified("c13-hook");
     repo.write("file.txt", b"one\n");
     repo.commit("base");
-    let hooks = || {
-        ok(
-            engine(&repo).commit_hooks(git(), &CancelSignal::new()),
-            "hooks",
-        )
-    };
-    assert_eq!(
-        hooks(),
-        CommitHooks::default(),
-        "a hook counted that is not there"
-    );
-    hook(&repo, ".git/hooks", "pre-commit", "exit 0\n", 0o644);
-    assert!(!hooks().skippable(), "a hook git would not run was counted");
     hook(
         &repo,
         ".git/hooks",
         "pre-commit",
         "echo 'to stdout'\necho 'lint failed: src/a.rs' >&2\nexit 3\n",
         0o755,
-    );
-    assert_eq!(
-        hooks(),
-        CommitHooks {
-            pre_commit: true,
-            commit_msg: false
-        }
     );
     repo.write("file.txt", b"two\n");
     repo.git(&["add", "file.txt"]);
@@ -317,15 +320,7 @@ fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commi
 
     // A hooks path git resolves, and a commit-msg hook in it.
     repo.config("core.hooksPath", "my hooks");
-    assert_eq!(hooks(), CommitHooks::default(), ".git/hooks still counted");
     hook(&repo, "my hooks", "commit-msg", "exit 1\n", 0o755);
-    assert_eq!(
-        hooks(),
-        CommitHooks {
-            pre_commit: false,
-            commit_msg: true
-        }
-    );
     repo.write("file.txt", b"three\n");
     repo.git(&["add", "file.txt"]);
     assert!(
@@ -748,23 +743,167 @@ fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
     assert!(by_git("HEAD"));
 }
 
-/// C14: the button's text and the prompt are rendered from the engine's `Consequence`:
-/// `HEAD`'s short id and subject.
+/// C14's engine half: the `Consequence` names `HEAD`, the remote ref that has it and the
+/// reflog fact, and nothing drawn for display — its prompt the fixed sentences of R10.6, its
+/// button "Amend". Caught by: a subject back in the value (a display field the re-check would
+/// compare), or the prompt drifting from the fixed sentences.
 #[test]
-fn the_amend_button_and_prompt_name_head() {
-    let repo = identified("c14-text");
-    repo.write("a.txt", b"a\n");
-    let head = repo.commit("the subject");
-    let consequence = ok(consequence(&repo), "the consequence");
+fn the_amends_consequence_names_head_and_why_it_is_confirmed() {
+    let (_origin, clone) = cloned("c14-text");
+    let head = clone.rev("HEAD");
     let short = head.short();
-    assert_eq!(consequence.action(), format!("Amend {}", short.as_str()));
+    let read = ok(consequence(&clone), "the consequence");
     assert_eq!(
-        consequence.prompt(),
+        read,
+        Consequence::Amend {
+            commit: head,
+            published: Publication::Upstream(cairn_model::RefName::new("refs/remotes/origin/main")),
+            reflog: Reflog::Written,
+        }
+    );
+    assert_eq!(read.action(), "Amend");
+    assert_eq!(
+        read.prompt(),
         format!(
-            "Replaces {} 'the subject'. The old commit stays in Show Lost Commits.",
+            "{} is already on origin/main. Amending it rewrites history others may have.",
             short.as_str()
         )
     );
+    assert!(read.needs_confirming());
+}
+
+// --- C14 and R6.4: the amend at the press ---
+
+/// The QA brief, its first case: an amend no remote has and git logs runs at once, unconfirmed
+/// — no `Confirmed` is built — and the replaced commit is in the reflog git wrote, so Show Lost
+/// Commits draws it as lost. Caught by: the recoverable amend sent to the dialog, or run under
+/// a setting git does not log by.
+#[test]
+fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
+    let repo = identified("press-recoverable");
+    repo.write("a.txt", b"a\n");
+    let replaced = repo.commit("one");
+    repo.write("a.txt", b"b\n");
+    repo.git(&["add", "a.txt"]);
+    let performed = match ok(
+        amend_at_press(&repo, "one, amended", Hooks::Run),
+        "the press",
+    ) {
+        AmendAnswer::Amended(performed) => performed,
+        AmendAnswer::NeedsConfirming(consequence) => {
+            panic!("a recoverable amend asked to be confirmed: {consequence:?}")
+        }
+    };
+    assert_eq!(
+        performed.acknowledged(),
+        None,
+        "a prompt recorded with none shown"
+    );
+    assert!(performed.invalidated().refs);
+    assert_eq!(repo.git(&["log", "--format=%s"]), "one, amended\n");
+    assert_ne!(repo.rev("HEAD"), replaced);
+    assert!(logged_a_move_from(&repo, &replaced));
+    assert_eq!(shown_by_show_lost_commits(&repo, &replaced), Some(true));
+}
+
+/// The QA brief, its second case, and C14: the same press on a commit a remote has, and on a
+/// repository whose `core.logAllRefUpdates` is false with no log yet — and one whose include
+/// sets it only for a linked worktree — runs no git: `HEAD`, the index and the git directory's
+/// refs as they were, the `Consequence` answered for the dialog. Caught by: a published or
+/// unlogged amend run unconfirmed, or the setting read by another reader than git.
+#[test]
+fn an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run() {
+    let unchanged = |repo: &Repo, what: &str| {
+        let head = repo.rev("HEAD");
+        let index = std::fs::read(repo.path().join(".git/index")).unwrap_or_default();
+        let consequence = match ok(amend_at_press(repo, "amended", Hooks::Run), what) {
+            AmendAnswer::NeedsConfirming(consequence) => consequence,
+            AmendAnswer::Amended(performed) => panic!("{what}: amended unconfirmed: {performed:?}"),
+        };
+        assert_eq!(repo.rev("HEAD"), head, "{what}");
+        assert_eq!(
+            std::fs::read(repo.path().join(".git/index")).unwrap_or_default(),
+            index,
+            "{what}"
+        );
+        assert_eq!(consequence, ok(self::consequence(repo), what));
+        consequence
+    };
+
+    let (_origin, clone) = cloned("press-published");
+    clone.write("a.txt", b"staged\n");
+    clone.git(&["add", "a.txt"]);
+    let published = unchanged(&clone, "published");
+    assert!(matches!(
+        published,
+        Consequence::Amend {
+            published: Publication::Upstream(_),
+            reflog: Reflog::Written,
+            ..
+        }
+    ));
+
+    let unlogged = identified("press-unlogged");
+    unlogged.write("a.txt", b"a\n");
+    unlogged.commit("one");
+    std::fs::remove_dir_all(unlogged.path().join(".git/logs")).unwrap_or_else(|e| panic!("{e}"));
+    unlogged.config("core.logAllRefUpdates", "false");
+    let read = unchanged(&unlogged, "no reflog");
+    assert!(matches!(
+        read,
+        Consequence::Amend {
+            published: Publication::Unpublished,
+            reflog: Reflog::NotWritten,
+            ..
+        }
+    ));
+    assert!(!logged_a_move_from(&unlogged, &unlogged.rev("HEAD")));
+
+    // Set only through a linked worktree's include: unlogged there, and not in the main one.
+    let main = identified("press-include");
+    main.write("a.txt", b"a\n");
+    main.commit("one");
+    let linked = Repo::new("press-include-linked");
+    std::fs::remove_dir_all(linked.path()).unwrap_or_else(|e| panic!("{e}"));
+    main.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "linked",
+        linked.path().to_str().unwrap_or_default(),
+    ]);
+    let git_dir = linked.git(&["rev-parse", "--absolute-git-dir"]);
+    let include = main.path().join("../press-include.inc");
+    std::fs::write(&include, "[core]\n\tlogAllRefUpdates = false\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    main.git(&[
+        "config",
+        &format!("includeIf.gitdir:{}.path", git_dir.trim()),
+        include.to_str().unwrap_or_default(),
+    ]);
+    std::fs::remove_dir_all(std::path::Path::new(git_dir.trim()).join("logs"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::remove_file(main.path().join(".git/logs/refs/heads/linked"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    linked.config("user.name", "Commit Ter");
+    linked.config("user.email", "committer@example.com");
+    let read = unchanged(&linked, "an include's false");
+    assert!(matches!(
+        read,
+        Consequence::Amend {
+            reflog: Reflog::NotWritten,
+            ..
+        }
+    ));
+    assert!(matches!(
+        ok(
+            amend_at_press(&main, "main, amended", Hooks::Run),
+            "the main worktree"
+        ),
+        AmendAnswer::Amended(_)
+    ));
+    let _ = std::fs::remove_file(include);
 }
 
 // --- R6.4: the reflog, each arm against what git then writes ---
@@ -1022,10 +1161,20 @@ fn refused_for(outcome: Result<ops::Performed, Error>, operation: &OperationInPr
     matches!(outcome, Err(Error::CommitRefused { why: CommitRefusal::InProgress(found) }) if &found == operation)
 }
 
-/// C24: a merge in progress is reported with git's `MERGE_MSG`; once the conflict is staged
-/// (`git add`, which `git status` then reports resolved) the commit is the merge commit, its
-/// parents `HEAD` and `MERGE_HEAD`; an amend is refused. Caught by: a merge commit with one
-/// parent, or an amend offered mid-merge.
+/// The message git prepared for the operation in progress, as the engine cleans it.
+fn prepared(repo: &Repo) -> Option<String> {
+    ok(
+        engine(repo).prepared_message(committer(), &CancelSignal::new()),
+        "the prepared message",
+    )
+}
+
+/// C24 and C32: a merge in progress is reported; git's `MERGE_MSG`, cleaned, has no `#
+/// Conflicts:` block; once the conflict is staged (`git add`, which `git status` then reports
+/// resolved) the commit of that cleaned message is the merge commit, its parents `HEAD` and
+/// `MERGE_HEAD`, and its message what `git commit` with an editor leaves; an amend is refused.
+/// Caught by: a merge commit with one parent, git's comment lines committed, or an amend
+/// offered mid-merge.
 #[test]
 fn a_merge_in_progress_commits_the_merge_and_refuses_an_amend() {
     let repo = conflicting("c24-merge");
@@ -1033,18 +1182,17 @@ fn a_merge_in_progress_commits_the_merge_and_refuses_an_amend() {
     let merge_head = repo.rev("MERGE_HEAD");
     let head = repo.rev("HEAD");
     let message = std::fs::read_to_string(repo.path().join(".git/MERGE_MSG")).unwrap_or_default();
-    assert!(message.starts_with("Merge branch 'other'"), "{message}");
+    assert!(message.contains("# Conflicts:"), "{message}");
     assert_eq!(
         engine(&repo).operation_in_progress(),
-        Some(OperationInProgress::Merge {
-            message: Some(message)
-        })
+        Some(OperationInProgress::Merge)
     );
+    assert_eq!(prepared(&repo).as_deref(), Some("Merge branch 'other'\n"));
     assert!(status_says(&repo).contains("You have unmerged paths"));
     assert!(matches!(
         consequence(&repo),
         Err(Error::CommitRefused {
-            why: CommitRefusal::InProgress(OperationInProgress::Merge { .. })
+            why: CommitRefusal::InProgress(OperationInProgress::Merge)
         })
     ));
     repo.write("a.txt", b"resolved\n");
@@ -1053,32 +1201,287 @@ fn a_merge_in_progress_commits_the_merge_and_refuses_an_amend() {
         "staging the conflict",
     );
     assert!(status_says(&repo).contains("All conflicts fixed but you are still merging"));
-    ok(commit(&repo, "the merge", Hooks::Run), "the merge commit");
+    let filled = prepared(&repo).unwrap_or_default();
+    ok(commit(&repo, &filled, Hooks::Run), "the merge commit");
     assert_eq!(
         repo.git(&["log", "-1", "--format=%P"]).trim(),
         format!("{head} {merge_head}")
     );
+    assert_eq!(stored_message(&repo), b"Merge branch 'other'\n");
     assert_eq!(engine(&repo).operation_in_progress(), None);
+    assert_eq!(
+        prepared(&repo),
+        None,
+        "a message prepared with no MERGE_MSG"
+    );
 }
 
-/// C24: during a rebase, `git am`, a cherry-pick (one, and a sequence whose stopped pick was
-/// resolved and committed) and a revert, the engine reports each as `git status` does, and a
-/// commit and an amend are refused before git runs, naming it — `HEAD` and the index as they
-/// were. Caught by: gix's reading (the committed sequence reads as nothing), or a commit
-/// made mid-rebase.
+/// A conflicted merge of `other`, its `MERGE_MSG` written under `config` and with `message` as
+/// the merge's own message.
+fn merging(name: &str, config: &[(&str, &str)], message: &str) -> Repo {
+    let repo = conflicting(name);
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    let _ = repo.run(&["merge", "-q", "-m", message, "other"], &[], None);
+    assert!(
+        repo.path().join(".git/MERGE_HEAD").exists(),
+        "{name}: no merge in progress"
+    );
+    repo.write("a.txt", b"resolved\n");
+    repo.git(&["add", "a.txt"]);
+    repo
+}
+
+/// What `git commit` with an editor that changes nothing stores for the merge in progress —
+/// the oracle for what the box shows and commits (C32).
+fn committed_by_gits_editor(repo: &Repo) -> Vec<u8> {
+    let _ = repo.run(&["commit", "-q"], &[("GIT_EDITOR", "true")], None);
+    stored_message(repo)
+}
+
+/// C32 and R6.10, the QA brief's last case: a `MERGE_MSG` with `# Conflicts:`, under
+/// `core.commentChar` unset and `;`, and under `commit.cleanup=scissors` with its scissors line,
+/// is shown cleaned and committed exactly as `git commit` with an editor leaves it — the
+/// merge's own `#123` line dropped as a comment where `#` is the comment character and kept
+/// where `;` is. Caught by: the read run outside the repository (git would strip `#` whatever
+/// the setting), Cairn's own idea of a comment, or the cleaned text committed differently.
 #[test]
-fn a_rebase_am_cherry_pick_or_revert_in_progress_refuses_commit_and_amend() {
-    let check = |repo: &Repo, operation: OperationInProgress, says: &str| {
+fn merge_msg_is_cleaned_and_committed_as_gits_editor_leaves_it() {
+    let marked = "Merge other\n\n#123 fixes the bug\n;45 also\n";
+    for (name, config, message, shown, scissors) in [
+        ("default", vec![], marked, "Merge other\n\n;45 also\n", None),
+        (
+            "semicolon",
+            vec![("core.commentChar", ";")],
+            marked,
+            "Merge other\n\n#123 fixes the bug\n",
+            None,
+        ),
+        (
+            "scissors",
+            vec![("commit.cleanup", "scissors")],
+            "Merge other\n",
+            "Merge other\n",
+            Some("# ------------------------ >8"),
+        ),
+        (
+            "scissors-semicolon",
+            vec![("commit.cleanup", "scissors"), ("core.commentChar", ";")],
+            "Merge other\n",
+            "Merge other\n",
+            Some("; ------------------------ >8"),
+        ),
+    ] {
+        let cairn = merging(&format!("c32-cairn-{name}"), &config, message);
+        let written =
+            std::fs::read_to_string(cairn.path().join(".git/MERGE_MSG")).unwrap_or_default();
+        assert!(written.contains("Conflicts:"), "{name}: {written}");
+        if let Some(line) = scissors {
+            assert!(
+                written.contains(line),
+                "{name}: no scissors line: {written}"
+            );
+        }
+        let filled = prepared(&cairn).unwrap_or_default();
+        assert_eq!(filled, shown, "{name}");
+        ok(commit(&cairn, &filled, Hooks::Run), name);
         assert_eq!(
-            engine(repo).operation_in_progress(),
-            Some(operation.clone())
+            stored_message(&cairn),
+            shown.as_bytes(),
+            "{name}: committed"
         );
+        let editor = merging(&format!("c32-git-{name}"), &config, message);
+        assert_eq!(
+            committed_by_gits_editor(&editor),
+            shown.as_bytes(),
+            "{name}: shown is not what git's editor leaves"
+        );
+    }
+}
+
+/// R6.10 against git's editor where `git stripspace --strip-comments` — C32's read, whatever
+/// `commit.cleanup` says — is not it, each divergence pinned so a change in either is seen:
+/// under `scissors` the editor keeps the merge's own `#123` line above the scissors line,
+/// which the strip drops; under `whitespace` the editor keeps `# Conflicts:`; and under
+/// `core.commentChar=auto` git's commit picks another comment character because a line starts
+/// with `#`, keeping `# Conflicts:`, where `stripspace` reads `auto` as `#`. Caught by: the
+/// read changed to follow `commit.cleanup` without the PRD saying so, or git changing either.
+#[test]
+fn where_gits_editor_is_not_the_strip_of_comments_it_is_pinned() {
+    let message = "Merge other\n\n#123 fixes the bug\n;45 also\n";
+    for (name, config, editor_keeps) in [
+        (
+            "scissors",
+            vec![("commit.cleanup", "scissors")],
+            "#123 fixes the bug",
+        ),
+        (
+            "whitespace",
+            vec![("commit.cleanup", "whitespace")],
+            "# Conflicts:",
+        ),
+        ("auto", vec![("core.commentChar", "auto")], "# Conflicts:"),
+    ] {
+        let cairn = merging(&format!("c32-diverge-cairn-{name}"), &config, message);
+        let filled = prepared(&cairn).unwrap_or_default();
+        assert_eq!(filled, "Merge other\n\n;45 also\n", "{name}");
+        let editor = merging(&format!("c32-diverge-git-{name}"), &config, message);
+        let left = String::from_utf8_lossy(&committed_by_gits_editor(&editor)).into_owned();
+        assert!(
+            left.contains(editor_keeps),
+            "{name}: git's editor left {left:?}"
+        );
+    }
+}
+
+/// C33 and C24: a single cherry-pick in progress is reported naming the picked commit, its
+/// `MERGE_MSG` cleaned; Commit concludes it as `git commit -F` does — the picked commit's author
+/// kept, `CHERRY_PICK_HEAD` gone, one parent; and an amend is refused. Caught by: a single pick
+/// refused, the author made the committer, or the marker left for git to trip on.
+#[test]
+fn a_single_cherry_pick_is_concluded_by_commit_keeping_its_author() {
+    let made = |name: &str| {
+        let repo = conflicting(name);
+        repo.git(&["checkout", "-q", "other"]);
+        repo.write("a.txt", b"picked\n");
+        repo.try_git(
+            &["commit", "-q", "-am", "the picked change"],
+            &[
+                ("GIT_AUTHOR_NAME", "Pick Author"),
+                ("GIT_AUTHOR_EMAIL", "pick@example.com"),
+            ],
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let picked = repo.rev("HEAD");
+        repo.git(&["checkout", "-q", "main"]);
+        let _ = repo.run(&["cherry-pick", &picked.to_string()], &[], None);
+        assert!(repo.path().join(".git/CHERRY_PICK_HEAD").exists());
+        assert!(
+            !repo.path().join(".git/sequencer").exists(),
+            "git kept a sequence for one pick"
+        );
+        repo.write("a.txt", b"resolved\n");
+        repo.git(&["add", "a.txt"]);
+        (repo, picked)
+    };
+    let (cairn, picked) = made("c33-pick-cairn");
+    let head = cairn.rev("HEAD");
+    assert_eq!(
+        engine(&cairn).operation_in_progress(),
+        Some(OperationInProgress::CherryPick {
+            picked: Some(picked)
+        })
+    );
+    assert!(status_says(&cairn).contains("cherry-pick"));
+    let filled = prepared(&cairn).unwrap_or_default();
+    assert_eq!(filled, "the picked change\n");
+    assert!(matches!(
+        consequence(&cairn),
+        Err(Error::CommitRefused {
+            why: CommitRefusal::InProgress(OperationInProgress::CherryPick { .. })
+        })
+    ));
+    ok(commit(&cairn, &filled, Hooks::Run), "the pick concluded");
+    let (theirs, _) = made("c33-pick-git");
+    theirs.write("../pick-message", filled.as_bytes());
+    theirs.git(&["commit", "-q", "-F", "../pick-message"]);
+    let _ = std::fs::remove_file(theirs.path().join("../pick-message"));
+    // The committer is each one's own — the engine's configured identity, the oracle's
+    // environment — and the author and the message git's alike.
+    let shown = |repo: &Repo| repo.git(&["log", "-1", "--format=%an <%ae>|%B"]);
+    assert_eq!(shown(&cairn), shown(&theirs));
+    assert!(
+        shown(&cairn).starts_with("Pick Author <pick@example.com>|"),
+        "{}",
+        shown(&cairn)
+    );
+    assert_eq!(cairn.git(&["log", "-1", "--format=%cn"]), "Commit Ter\n");
+    assert_eq!(
+        cairn.git(&["log", "-1", "--format=%P"]).trim(),
+        head.to_string()
+    );
+    assert!(!cairn.path().join(".git/CHERRY_PICK_HEAD").exists());
+    assert_eq!(engine(&cairn).operation_in_progress(), None);
+}
+
+/// C33: a single revert in progress is reported naming the reverted commit; Commit concludes
+/// it as `git commit -F` does — `REVERT_HEAD` gone, the commit by the committer. Caught by: a
+/// single revert refused, or its marker left.
+#[test]
+fn a_single_revert_is_concluded_by_commit() {
+    let made = |name: &str| {
+        let repo = conflicting(name);
+        repo.write("a.txt", b"later\n");
+        repo.commit("later");
+        let reverted = repo.rev("HEAD^");
+        let _ = repo.run(&["revert", "--no-edit", "HEAD^"], &[], None);
+        assert!(repo.path().join(".git/REVERT_HEAD").exists());
+        repo.write("a.txt", b"resolved\n");
+        repo.git(&["add", "a.txt"]);
+        (repo, reverted)
+    };
+    let (cairn, reverted) = made("c33-revert-cairn");
+    assert_eq!(
+        engine(&cairn).operation_in_progress(),
+        Some(OperationInProgress::Revert {
+            reverted: Some(reverted)
+        })
+    );
+    let filled = prepared(&cairn).unwrap_or_default();
+    assert!(filled.starts_with("Revert \"main\""), "{filled}");
+    assert!(!filled.contains("Conflicts"), "{filled}");
+    ok(commit(&cairn, &filled, Hooks::Run), "the revert concluded");
+    let (theirs, _) = made("c33-revert-git");
+    theirs.write("../revert-message", filled.as_bytes());
+    theirs.git(&["commit", "-q", "-F", "../revert-message"]);
+    let _ = std::fs::remove_file(theirs.path().join("../revert-message"));
+    let message = |repo: &Repo| repo.git(&["log", "-1", "--format=%B"]);
+    assert_eq!(message(&cairn), message(&theirs));
+    // A revert is the committer's own, in each: no author carried from the reverted commit.
+    let identity = |repo: &Repo| repo.git(&["log", "-1", "--format=%an <%ae>|%cn <%ce>"]);
+    assert_eq!(
+        identity(&cairn),
+        "Commit Ter <committer@example.com>|Commit Ter <committer@example.com>\n"
+    );
+    assert_eq!(
+        identity(&theirs),
+        "A U Thor <author@example.com>|C O Mitter <committer@example.com>\n"
+    );
+    assert!(!cairn.path().join(".git/REVERT_HEAD").exists());
+    assert_eq!(engine(&cairn).operation_in_progress(), None);
+}
+
+/// C24 and C33: during a rebase, `git am`, and a sequence of cherry-picks — stopped on its
+/// first pick, and with that pick resolved and committed — or of reverts, the engine reports
+/// each as `git status` does, and a commit and an amend are refused before git runs, naming it
+/// and git's command to continue or abort it — `HEAD` and the index as they were. Caught by:
+/// gix's reading (the committed sequence reads as nothing), a sequence's stopped pick concluded
+/// as a single one, or a commit made mid-rebase.
+#[test]
+fn a_rebase_am_or_sequence_in_progress_refuses_commit_and_amend() {
+    let check = |repo: &Repo, operation: OperationInProgress, says: &str, command: &str| {
+        assert_eq!(engine(repo).operation_in_progress(), Some(operation));
         assert!(status_says(repo).contains(says), "{}", status_says(repo));
         let head = repo.rev("HEAD");
         let index = std::fs::read(repo.path().join(".git/index")).unwrap_or_default();
-        assert!(refused_for(commit(repo, "x", Hooks::Run), &operation));
+        let refused = commit(repo, "x", Hooks::Run);
+        let text = refused
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(refused_for(refused, &operation), "{operation:?}");
+        assert!(
+            text.contains(&format!("{command} --continue or --abort")),
+            "{text}"
+        );
         assert!(
             matches!(consequence(repo), Err(Error::CommitRefused { why: CommitRefusal::InProgress(found) }) if found == operation)
+        );
+        assert!(
+            matches!(amend_at_press(repo, "x", Hooks::Run), Err(Error::CommitRefused { why: CommitRefusal::InProgress(found) }) if found == operation)
         );
         assert_eq!(repo.rev("HEAD"), head);
         assert_eq!(
@@ -1089,37 +1492,86 @@ fn a_rebase_am_cherry_pick_or_revert_in_progress_refuses_commit_and_amend() {
 
     let rebase = conflicting("c24-rebase");
     let _ = rebase.run(&["rebase", "other"], &[], None);
-    check(&rebase, OperationInProgress::Rebase, "rebas");
-
-    let pick = conflicting("c24-pick");
-    let _ = pick.run(&["cherry-pick", "other"], &[], None);
-    check(&pick, OperationInProgress::CherryPick, "cherry-pick");
-
-    let revert = conflicting("c24-revert");
-    revert.git(&["checkout", "-q", "other"]);
-    revert.write("a.txt", b"later\n");
-    revert.commit("later");
-    let _ = revert.run(&["revert", "--no-edit", "HEAD^"], &[], None);
-    check(&revert, OperationInProgress::Revert, "revert");
+    check(&rebase, OperationInProgress::Rebase, "rebas", "git rebase");
 
     let am = conflicting("c24-am");
     let patch = am.git(&["format-patch", "-1", "--stdout", "other"]);
     let _ = am.run(&["am"], &[], Some(patch.as_bytes()));
-    check(&am, OperationInProgress::ApplyingPatches, "am session");
+    check(
+        &am,
+        OperationInProgress::ApplyingPatches,
+        "am session",
+        "git am",
+    );
 
-    // A sequence: the first pick conflicts, is resolved and committed by git; the second is
-    // still to come, and git still says a cherry-pick is in progress.
+    // A sequence: the first pick conflicts; then it is resolved and committed by git, the
+    // second still to come, and git still says a cherry-pick is in progress.
     let sequence = conflicting("c24-sequence");
     sequence.git(&["checkout", "-q", "other"]);
     sequence.write("b.txt", b"b\n");
     sequence.commit("second");
     sequence.git(&["checkout", "-q", "main"]);
     let _ = sequence.run(&["cherry-pick", "other~1", "other"], &[], None);
+    assert!(sequence.path().join(".git/CHERRY_PICK_HEAD").exists());
+    check(
+        &sequence,
+        OperationInProgress::CherryPickSequence,
+        "cherry-pick",
+        "git cherry-pick",
+    );
     sequence.write("a.txt", b"resolved\n");
     sequence.git(&["add", "a.txt"]);
     sequence.git(&["-c", "core.editor=true", "commit", "-q", "--no-edit"]);
     assert!(!sequence.path().join(".git/CHERRY_PICK_HEAD").exists());
-    check(&sequence, OperationInProgress::CherryPick, "cherry-pick");
+    check(
+        &sequence,
+        OperationInProgress::CherryPickSequence,
+        "cherry-pick",
+        "git cherry-pick",
+    );
+
+    let reverts = conflicting("c24-revert-sequence");
+    reverts.git(&["checkout", "-q", "other"]);
+    reverts.write("a.txt", b"later\n");
+    reverts.commit("later");
+    reverts.write("b.txt", b"b\n");
+    reverts.commit("latest");
+    let _ = reverts.run(&["revert", "--no-edit", "HEAD~2", "HEAD~1"], &[], None);
+    if reverts.path().join(".git/sequencer").exists() {
+        check(
+            &reverts,
+            OperationInProgress::RevertSequence,
+            "revert",
+            "git revert",
+        );
+    } else {
+        panic!("git left no revert sequence: {}", status_says(&reverts));
+    }
+}
+
+/// C8 and R6.9: on a detached `HEAD` a commit is made — on no branch, refused by nothing, no
+/// operation reported — and the refs say `HEAD` is detached. Caught by: a detached `HEAD`
+/// refused, or reported as an operation in progress.
+#[test]
+fn a_commit_on_a_detached_head_is_made() {
+    let repo = identified("c8-detached");
+    repo.write("a.txt", b"a\n");
+    let base = repo.commit("base");
+    repo.git(&["checkout", "-q", "--detach"]);
+    assert_eq!(engine(&repo).operation_in_progress(), None);
+    let refs = ok(engine(&repo).refs(&CancelSignal::new()), "the refs");
+    assert_eq!(refs.snapshot.head, cairn_model::HeadState::Detached(base));
+    repo.write("a.txt", b"b\n");
+    repo.git(&["add", "a.txt"]);
+    ok(
+        commit(&repo, "on no branch", Hooks::Run),
+        "the detached commit",
+    );
+    assert_eq!(
+        repo.git(&["log", "-1", "--format=%s %P"]).trim(),
+        format!("on no branch {base}")
+    );
+    assert_eq!(repo.rev("main"), base, "a branch moved");
 }
 
 /// R1.6: an amend's record quotes the prompt the user accepted, and the commit's declares the
@@ -1179,6 +1631,207 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
     );
 }
 
+// --- R4.7 and phase 12's QA item #10: made is read from HEAD ---
+
+/// Commits (or, with `amend`, amends at the press) `message` with what is staged, cancelling
+/// from another thread as soon as `marker` exists — a hook writes it, then sleeps — and hands
+/// back the outcome. A hook refused as "Text file busy", while another test's fork still holds
+/// it open, is run again.
+fn cancelled_at(repo: &Repo, marker: &std::path::Path, amend: bool) -> Result<bool, Error> {
+    use std::time::{Duration, Instant};
+    for _ in 0..20 {
+        let _ = std::fs::remove_file(marker);
+        let cancel = CancelSignal::new();
+        let mut waiter = None;
+        let watched = marker.to_owned();
+        let mut running = |handle: CommitCancel| {
+            let watched = watched.clone();
+            waiter = Some(std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !watched.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                handle.cancel();
+            }));
+        };
+        let mut output = |_: &cairn_model::ScrubbedLines| {};
+        let watch = CommitWatch {
+            cancel: &cancel,
+            running: &mut running,
+            output: &mut output,
+        };
+        let outcome = if amend {
+            ops::amend_unconfirmed(
+                committer(),
+                &engine(repo),
+                "amended",
+                Hooks::Run,
+                None,
+                watch,
+            )
+            .map(|answer| matches!(answer, AmendAnswer::Amended(_)))
+        } else {
+            ops::commit(
+                committer(),
+                &engine(repo),
+                "committed",
+                Hooks::Run,
+                None,
+                watch,
+            )
+            .map(|_| true)
+        };
+        if let Some(waiter) = waiter {
+            let _ = std::fs::write(marker, b"");
+            let _ = waiter.join();
+        }
+        match &outcome {
+            Err(Error::GitFailed { stderr, .. }) if stderr.contains("Text file busy") => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => return outcome,
+        }
+    }
+    panic!("the hook stayed busy");
+}
+
+/// R4.7: a commit or an amend cancelled while its `pre-commit` hook runs was not made — `HEAD`
+/// read after the reap says so — and is the cancel it is; one cancelled while its
+/// `post-commit` hook runs, after git made it, is reported made. Caught by: a cancel reported
+/// as "may have taken effect" whatever `HEAD` says, or a made commit reported cancelled, which
+/// would keep a draft already committed.
+#[test]
+fn a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so() {
+    for amend in [false, true] {
+        for (when, made) in [("pre-commit", false), ("post-commit", true)] {
+            let label = format!(
+                "{} cancelled in {when}",
+                if amend { "amend" } else { "commit" }
+            );
+            let repo = identified(&format!(
+                "r47-{}-{when}",
+                if amend { "amend" } else { "commit" }
+            ));
+            repo.write("a.txt", b"a\n");
+            repo.commit("base");
+            repo.write("a.txt", b"b\n");
+            repo.git(&["add", "a.txt"]);
+            let marker = repo.path().join(".git/hook-ran");
+            hook(
+                &repo,
+                ".git/hooks",
+                when,
+                &format!("touch '{}'\nsleep 30\n", marker.display()),
+                0o755,
+            );
+            let before = repo.rev("HEAD");
+            let outcome = cancelled_at(&repo, &marker, amend);
+            if made {
+                assert!(matches!(outcome, Ok(true)), "{label}: {outcome:?}");
+                assert_ne!(repo.rev("HEAD"), before, "{label}");
+            } else {
+                assert!(
+                    matches!(outcome, Err(Error::GitCancelled { .. })),
+                    "{label}: {outcome:?}"
+                );
+                assert_eq!(repo.rev("HEAD"), before, "{label}");
+            }
+        }
+    }
+}
+
+/// Phase 12's QA item #10, beside "HEAD moved in between": git exits 0, but `HEAD` is not the
+/// commit it made — a `post-commit` hook moved it back — so the commit and the amend are
+/// reported unconfirmed, never made. Caught by: success read from git's exit status alone.
+#[test]
+fn a_commit_git_says_it_made_with_head_elsewhere_is_unconfirmed() {
+    let repo = identified("r10-moved");
+    repo.write("a.txt", b"a\n");
+    repo.commit("one");
+    repo.write("a.txt", b"b\n");
+    repo.commit("two");
+    hook(
+        &repo,
+        ".git/hooks",
+        "post-commit",
+        "git reset -q --soft HEAD^\n",
+        0o755,
+    );
+    repo.write("a.txt", b"c\n");
+    repo.git(&["add", "a.txt"]);
+    assert!(
+        matches!(
+            commit(&repo, "three", Hooks::Run),
+            Err(Error::CommitUnconfirmed { verb: "committed" })
+        ),
+        "a commit git made and something undid was reported made"
+    );
+    assert_eq!(repo.git(&["log", "--format=%s"]), "two\none\n");
+    let confirmed = Confirmed::by_user(ok(consequence(&repo), "the consequence"));
+    assert!(
+        matches!(
+            amend_with(&repo, confirmed, "two, amended"),
+            Err(Error::CommitUnconfirmed { verb: "amended" })
+        ),
+        "a confirmed amend git made and something undid was reported made"
+    );
+    assert_eq!(repo.git(&["log", "--format=%s"]), "one\n");
+    repo.try_git(
+        &[
+            "-c",
+            "core.hooksPath=/nonexistent",
+            "commit",
+            "-q",
+            "-m",
+            "two again",
+        ],
+        &[],
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        matches!(
+            amend_at_press(&repo, "two, amended", Hooks::Run),
+            Err(Error::CommitUnconfirmed { verb: "amended" })
+        ),
+        "an amend git made and something undid was reported made"
+    );
+    // Without the hook, each is made and confirmed.
+    std::fs::remove_file(repo.path().join(".git/hooks/post-commit"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    repo.git(&["add", "a.txt"]);
+    ok(commit(&repo, "three", Hooks::Run), "the commit");
+    assert!(matches!(
+        ok(
+            amend_at_press(&repo, "three, amended", Hooks::Run),
+            "the amend"
+        ),
+        AmendAnswer::Amended(_)
+    ));
+    assert_eq!(repo.git(&["log", "--format=%s"]), "three, amended\none\n");
+}
+
+/// An amend that makes the very commit it replaces — the same tree, message, parents, author
+/// and committer second, so the same object — is made: git exited 0 and `HEAD`'s parents are
+/// the replaced commit's. Amended again until one lands in the second of the last. Caught by:
+/// a made amend reported unconfirmed for leaving `HEAD` where it was.
+#[test]
+fn an_amend_that_makes_the_same_commit_is_made() {
+    let repo = identified("r10-same");
+    repo.write("a.txt", b"a\n");
+    repo.git(&["add", "a.txt"]);
+    ok(commit(&repo, "same\n", Hooks::Run), "the commit");
+    for _ in 0..50 {
+        let before = repo.rev("HEAD");
+        let answer = amend_at_press(&repo, "same\n", Hooks::Run);
+        assert!(matches!(answer, Ok(AmendAnswer::Amended(_))), "{answer:?}");
+        if repo.rev("HEAD") == before {
+            return;
+        }
+    }
+    panic!("no amend made the commit it replaced within fifty tries");
+}
+
 /// The pushed check's cost where history is long (the phase's stopping rule): an ignored
 /// reporter that times [`ops::amend_consequence`] on the repository `CAIRN_BENCH_REPO` names,
 /// in whatever state its `HEAD` is, and prints what it found. It only reads.
@@ -1197,7 +1850,7 @@ fn the_pushed_check_on_a_large_repository() {
     let repo = ok(Repository::discover(&path), "the bench repository opens");
     for round in 0..3 {
         let started = std::time::Instant::now();
-        let outcome = ops::amend_consequence(&repo, &CancelSignal::new());
+        let outcome = ops::amend_consequence(git(), &repo, &CancelSignal::new());
         let elapsed = started.elapsed();
         match outcome {
             Ok(Consequence::Amend {

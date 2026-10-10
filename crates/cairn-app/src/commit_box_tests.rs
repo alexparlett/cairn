@@ -1,7 +1,7 @@
 //! The commit box in the window, headless (staging-and-commit R10; criteria C13, C14 and C24's
 //! view halves): the draft kept through Amend's toggling, a failed hook and its skip, the
-//! amend's button, its line and its token naming one `HEAD`, the dialog asked first exactly when
-//! a remote has it, a commit running drawn with its Cancel, a merge's message and the operations
+//! amend's button and its token naming one `HEAD`, the dialog asked first exactly when a remote
+//! has it or git keeps no reflog, a commit running drawn with its Cancel, a merge's message and the operations
 //! that disable the box, amend's staged list drawn and unstaged from, and the recent messages.
 //! Updates are applied through `session::apply`, as the worker's stream applies them, and
 //! requests read back from the window's submit.
@@ -9,12 +9,13 @@
 use std::sync::Arc;
 
 use cairn_model::{
-    ChangeStatus, ChangedFile, CommitHooks, Consequence, FileMode, HeadState, LocalChanges, Oid,
+    ChangeStatus, ChangedFile, Consequence, FileMode, HeadState, LocalChanges, Oid,
     OperationInProgress, Publication, RefName, Reflog, RefsSnapshot, RepoPath, ScrubbedLines,
     StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
 };
 use cairn_ui::{
-    AMEND_CAPTION, CANCEL_COMMIT_CAPTION, GIT_ERROR_TITLE, SKIP_HOOKS_CAPTION, UNSTAGE_CAPTION,
+    AMEND_BUTTON_CAPTION, AMEND_CAPTION, CANCEL_COMMIT_CAPTION, GIT_ERROR_TITLE,
+    SKIP_HOOKS_CAPTION, UNSTAGE_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -64,18 +65,15 @@ fn entries() -> Vec<StatusEntry> {
     ]
 }
 
-fn reads(operation: Option<OperationInProgress>, hooks: CommitHooks, recent: &[&str]) -> Update {
+/// What the box reads: the operation in progress, the message git prepared for it (cleaned),
+/// and the recent messages.
+fn reads(operation: Option<OperationInProgress>, message: Option<&str>, recent: &[&str]) -> Update {
     Update::CommitReads(Box::new(CommitReads {
         operation,
-        hooks: Ok(hooks),
+        message: Ok(message.map(str::to_owned)),
         recent: Ok(recent.iter().map(|message| (*message).to_owned()).collect()),
     }))
 }
-
-const NO_HOOKS: CommitHooks = CommitHooks {
-    pre_commit: false,
-    commit_msg: false,
-};
 
 /// Local Changes opened over `entries`, `HEAD` born or not, and the box's reads answered.
 fn opened_with(entries: Vec<StatusEntry>, born: bool) -> (TestingRunner, View, Submitted) {
@@ -83,7 +81,7 @@ fn opened_with(entries: Vec<StatusEntry>, born: bool) -> (TestingRunner, View, S
     apply(&mut test, view, &submitted, status(entries));
     apply(&mut test, view, &submitted, refs(born));
     open_local_changes(&mut test);
-    apply(&mut test, view, &submitted, reads(None, NO_HOOKS, &[]));
+    apply(&mut test, view, &submitted, reads(None, None, &[]));
     settle(&mut test);
     (test, view, submitted)
 }
@@ -118,6 +116,21 @@ fn at(test: &TestingRunner, text: &str) -> (f64, f64) {
 fn click(test: &mut TestingRunner, text: &str) {
     let at = at(test, text);
     test.click_cursor(at);
+    settle(test);
+}
+
+/// Clicks the last label reading `text`: a dialog's button, drawn over the window after the box
+/// whose Amend toggle reads the same.
+fn click_last(test: &mut TestingRunner, text: &str) {
+    let centres = test.find_many(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|_| node.layout().area.center())
+    });
+    let Some(centre) = centres.last() else {
+        panic!("nothing reads {text:?}: {:?}", labels(test));
+    };
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
     settle(test);
 }
 
@@ -183,7 +196,6 @@ fn amend_consequence(published: Publication) -> Consequence {
 fn amend_consequence_of(commit: u8, published: Publication) -> Consequence {
     Consequence::Amend {
         commit: oid(commit),
-        subject: "Fix the parser".to_owned(),
         published,
         reflog: Reflog::Written,
     }
@@ -321,18 +333,19 @@ fn a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly() {
     assert_eq!(draft(view), (String::new(), String::new()));
 }
 
-/// R10.6, C14's view half and the QA brief's third case: an amend no remote has is confirmed by
-/// its own button, which reads `Amend <short id>` above the line its `Consequence` renders; the
-/// token it builds records exactly that line and names the same `HEAD`; one press is one
-/// amend, and the box waits while it runs. Caught by: a button or line typed apart from the
-/// consequence, a token recording other words, or a second press building a second token.
+/// R10.6, C14's view half and the QA brief's third case: an amend no remote has and git logs is
+/// confirmed by its own button, Fork's "Amend Last Commit", with no line under it (cut back by
+/// phase 13; phase 18 runs it with no token at all); the token it builds records the
+/// consequence's prompt and names the same `HEAD`; one press is one amend, and the box waits
+/// while it runs. Caught by: the line drawn again, a token recording other words, or a second
+/// press building a second token.
 #[test]
-fn the_amend_button_its_line_and_its_token_name_one_head() {
+fn the_amend_button_and_its_token_name_one_head() {
     let (mut test, view, submitted) = opened();
     set(&mut test, view.local.commit.subject, "Fix the parser");
     click(&mut test, AMEND_CAPTION);
     assert!(
-        drawn(&test, cairn_ui::AMEND_CAPTION) && !drawn(&test, "Amend abababa"),
+        drawn(&test, cairn_ui::AMEND_CAPTION) && !drawn(&test, AMEND_BUTTON_CAPTION),
         "an amend button before what it replaces was read"
     );
     apply(
@@ -342,15 +355,15 @@ fn the_amend_button_its_line_and_its_token_name_one_head() {
         amend_answer(Publication::Unpublished, Some(oid(0x0c))),
     );
     let consequence = amend_consequence(Publication::Unpublished);
-    let line = consequence.replaces().unwrap_or_default();
-    assert!(drawn(&test, "Amend abababa"), "{:?}", labels(&test));
+    let line = consequence.prompt();
+    assert!(drawn(&test, AMEND_BUTTON_CAPTION), "{:?}", labels(&test));
     assert!(
-        drawn(&test, &line),
-        "the line under the button: {:?}",
+        !drawn(&test, &line),
+        "a line under the button: {:?}",
         labels(&test)
     );
-    click(&mut test, "Amend abababa");
-    click(&mut test, "Amend abababa");
+    click(&mut test, AMEND_BUTTON_CAPTION);
+    click(&mut test, AMEND_BUTTON_CAPTION);
     let asked = writes(&submitted);
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert_eq!(
@@ -388,7 +401,7 @@ fn a_published_amend_and_the_commit_chord_ask_the_dialog_first() {
             Some(oid(0x0c)),
         ),
     );
-    click(&mut test, "Amend abababa…");
+    click(&mut test, &format!("{AMEND_BUTTON_CAPTION}…"));
     assert!(writes(&submitted).is_empty(), "amended before the dialog");
     let prompt = amend_consequence(Publication::Upstream(RefName::new(
         "refs/remotes/origin/main",
@@ -399,7 +412,7 @@ fn a_published_amend_and_the_commit_chord_ask_the_dialog_first() {
         "the dialog's words: {:?}",
         labels(&test)
     );
-    click(&mut test, "Amend abababa");
+    click_last(&mut test, "Amend");
     let asked = writes(&submitted);
     assert_eq!(asked.len(), 1);
     assert!(asked[0].1.contains(&format!("{prompt:?}")), "{asked:?}");
@@ -430,7 +443,7 @@ fn a_published_amend_and_the_commit_chord_ask_the_dialog_first() {
 
 /// The user's decision (2026-10-09), R10.6 as written: while amending a commit no remote has,
 /// the commit chord from a field does exactly what the button does — amends at once, no
-/// dialog, under a token recording the line drawn under the button. Caught by: the chord
+/// dialog, under a token recording the consequence's prompt. Caught by: the chord
 /// opening the dialog, or a token recording other words.
 #[test]
 fn the_commit_chord_amends_an_unpublished_commit_as_the_button_does() {
@@ -445,9 +458,7 @@ fn the_commit_chord_amends_an_unpublished_commit_as_the_button_does() {
     );
     press_commit_chord(&mut test, "Fix the parser");
     press_commit_chord(&mut test, "Fix the parser");
-    let line = amend_consequence(Publication::Unpublished)
-        .replaces()
-        .unwrap_or_default();
+    let line = amend_consequence(Publication::Unpublished).prompt();
     assert_eq!(
         writes(&submitted)
             .into_iter()
@@ -482,7 +493,7 @@ fn the_commit_chord_asks_nothing_while_the_box_is_not_ready() {
         &mut test,
         view,
         &submitted,
-        reads(Some(OperationInProgress::Rebase), NO_HOOKS, &[]),
+        reads(Some(OperationInProgress::Rebase), None, &[]),
     );
     test.click_cursor(field_at(&test, "Something"));
     settle(&mut test);
@@ -506,7 +517,7 @@ fn the_commit_chord_asks_nothing_while_the_box_is_not_ready() {
 }
 
 /// QA item 6: a newer amend read naming another `HEAD` replaces the last — the button, its
-/// line and the token all name the second. Caught by: a consequence kept from the first read.
+/// token names the second. Caught by: a consequence kept from the first read.
 #[test]
 fn a_newer_amend_read_names_its_own_head() {
     let (mut test, view, submitted) = opened();
@@ -524,12 +535,7 @@ fn a_newer_amend_read_names_its_own_head() {
         &submitted,
         amend_answer_of(0xcd, Publication::Unpublished, Some(oid(0x0c))),
     );
-    assert!(!drawn(&test, "Amend abababa"), "{:?}", labels(&test));
-    let line = amend_consequence_of(0xcd, Publication::Unpublished)
-        .replaces()
-        .unwrap_or_default();
-    assert!(drawn(&test, &line), "{:?}", labels(&test));
-    click(&mut test, "Amend cdcdcdc");
+    click(&mut test, AMEND_BUTTON_CAPTION);
     let head = submitted.borrow().iter().find_map(|request| match request {
         Request::Write {
             write: LocalWrite::Amend { confirmed, .. },
@@ -577,19 +583,7 @@ fn done(id: OperationId) -> Update {
 #[test]
 fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     let (mut test, view, submitted) = opened();
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        reads(
-            None,
-            CommitHooks {
-                pre_commit: true,
-                commit_msg: false,
-            },
-            &[],
-        ),
-    );
+    apply(&mut test, view, &submitted, reads(None, None, &[]));
     set(&mut test, view.local.commit.subject, "Fix the parser");
     set(&mut test, view.local.commit.description, "Twice.");
     click(&mut test, "Commit 1 File");
@@ -721,10 +715,12 @@ fn the_git_error_draws_no_token_a_hook_printed() {
     }
 }
 
-/// R10.5: the skip is offered only where git would run a hook it skips; with none, the dialog
-/// offers Close alone, and Escape closes it. Caught by: the skip offered whatever the hooks.
+/// R10.5 as C4 amended it: the skip is offered on every failed commit — Cairn keeps no hook
+/// model, and where no hook ran it fails the same way again, harmlessly — even one no hook
+/// caused, git's own error drawn; Escape closes the dialog, the draft kept. Caught by: a skip
+/// withheld for want of a hook Cairn found.
 #[test]
-fn with_no_hook_the_git_error_offers_no_skip() {
+fn every_failed_commit_offers_the_skip() {
     let (mut test, view, submitted) = opened();
     set(&mut test, view.local.commit.subject, "No identity");
     click(&mut test, "Commit 1 File");
@@ -741,7 +737,7 @@ fn with_no_hook_the_git_error_offers_no_skip() {
         "git's own error: {:?}",
         labels(&test)
     );
-    assert!(!drawn(&test, SKIP_HOOKS_CAPTION));
+    assert!(drawn(&test, SKIP_HOOKS_CAPTION), "{:?}", labels(&test));
     test.press_key(Key::Named(NamedKey::Escape));
     settle(&mut test);
     assert!(!drawn(&test, GIT_ERROR_TITLE));
@@ -793,13 +789,13 @@ fn cancel_reaches_only_the_running_commit() {
     assert_eq!(cancels, [commit]);
 }
 
-/// R10.8, C24 and the user's decision E: with a merge in progress the box fills an empty draft
-/// with `MERGE_MSG` exactly as git wrote it, its `# Conflicts:` lines visible; the commit is
-/// asked with that text, whatever is staged; and Amend is disabled. Caught by: comment lines
-/// stripped, a merge commit refused for nothing staged, or an amend offered during a merge.
+/// R10.8, C24 and C32's view half: with a merge in progress the box fills an empty draft with
+/// the message git prepared, cleaned of its comment lines as git's editor cleans it (R6.10); the
+/// commit is asked with that text, whatever is staged; and Amend is disabled. Caught by: a
+/// merge commit refused for nothing staged, or an amend offered during a merge.
 #[test]
-fn a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend() {
-    let merge_msg = "Merge branch 'feature'\n\n# Conflicts:\n#\ta.rs\n";
+fn a_merge_fills_the_draft_with_the_cleaned_message_and_disables_amend() {
+    let cleaned = "Merge branch 'feature'\n\nWith its body.\n";
     let (mut test, view, submitted) = opened_with(
         vec![changed("a.rs", None, Some(UnstagedChange::Modified))],
         true,
@@ -808,21 +804,15 @@ fn a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend() {
         &mut test,
         view,
         &submitted,
-        reads(
-            Some(OperationInProgress::Merge {
-                message: Some(merge_msg.to_owned()),
-            }),
-            NO_HOOKS,
-            &[],
-        ),
+        reads(Some(OperationInProgress::Merge), Some(cleaned), &[]),
     );
     let (subject, description) = draft(view);
     assert_eq!(subject, "Merge branch 'feature'");
-    assert_eq!(description, "# Conflicts:\n#\ta.rs\n");
+    assert_eq!(description, "With its body.\n");
     assert_eq!(
         crate::commit_box_state::compose_message(&subject, &description),
-        merge_msg,
-        "the prefill is not MERGE_MSG's text"
+        cleaned,
+        "the prefill is not the cleaned message"
     );
     click(&mut test, AMEND_CAPTION);
     assert_eq!(
@@ -836,19 +826,21 @@ fn a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend() {
             .iter()
             .map(|(_, w)| w.clone())
             .collect::<Vec<_>>(),
-        [format!("commit {merge_msg:?} skip=false")]
+        [format!("commit {cleaned:?} skip=false")]
     );
 }
 
-/// R10.8 and C24: during a rebase, `git am`, a cherry-pick or a revert the box is disabled and
-/// names the operation; nothing it offers asks a write. Caught by: a commit asked during one.
+/// R10.8, C24 and C33's view half: during a rebase, `git am` or a sequence of picks or reverts
+/// the box is disabled and names the operation; nothing it offers asks a write. A single
+/// cherry-pick fills the draft with its cleaned message and is committed. Caught by: a commit
+/// asked during a refusing operation, or a single pick refused.
 #[test]
-fn during_a_rebase_am_cherry_pick_or_revert_the_box_is_disabled_and_names_it() {
+fn during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it() {
     for (operation, named) in [
         (OperationInProgress::Rebase, "a rebase"),
         (OperationInProgress::ApplyingPatches, "git am"),
-        (OperationInProgress::CherryPick, "a cherry-pick"),
-        (OperationInProgress::Revert, "a revert"),
+        (OperationInProgress::CherryPickSequence, "a cherry-pick"),
+        (OperationInProgress::RevertSequence, "a revert"),
     ] {
         let (mut test, view, submitted) = opened();
         set(&mut test, view.local.commit.subject, "Something");
@@ -856,7 +848,7 @@ fn during_a_rebase_am_cherry_pick_or_revert_the_box_is_disabled_and_names_it() {
             &mut test,
             view,
             &submitted,
-            reads(Some(operation), NO_HOOKS, &[]),
+            reads(Some(operation), None, &[]),
         );
         let said = format!("Committing is unavailable while {named} is in progress.");
         assert!(drawn(&test, &said), "{said:?}: {:?}", labels(&test));
@@ -869,6 +861,28 @@ fn during_a_rebase_am_cherry_pick_or_revert_the_box_is_disabled_and_names_it() {
             "{named}: an amend was asked"
         );
     }
+    let (mut test, view, submitted) = opened();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        reads(
+            Some(OperationInProgress::CherryPick {
+                picked: Some(oid(0xab)),
+            }),
+            Some("The picked change\n"),
+            &[],
+        ),
+    );
+    assert_eq!(draft(view), ("The picked change".to_owned(), String::new()));
+    click(&mut test, "Commit 1 File");
+    assert_eq!(
+        writes(&submitted)
+            .iter()
+            .map(|(_, w)| w.clone())
+            .collect::<Vec<_>>(),
+        ["commit \"The picked change\" skip=false"]
+    );
 }
 
 /// R10.1, R6.3 and C13: on an unborn branch Amend is disabled — ticking it asks nothing — and a
@@ -965,7 +979,7 @@ fn amends_staged_list_unread_is_said_and_the_status_lists_stay() {
         labels(&test)
     );
     assert!(!crate::local_changes_tests::in_lists_reads(&test, "h.rs"));
-    assert!(drawn(&test, "Amend abababa"));
+    assert!(drawn(&test, AMEND_BUTTON_CAPTION));
 }
 
 /// R10.2: the `≡` lists the recent messages' subjects and a choice fills both fields; ↑ in an
@@ -979,7 +993,7 @@ fn recent_messages_fill_both_fields_from_the_menu_and_the_arrows() {
         &mut test,
         view,
         &submitted,
-        reads(None, NO_HOOKS, &["Fix A\n\nBody A\n", "Fix B\n"]),
+        reads(None, None, &["Fix A\n\nBody A\n", "Fix B\n"]),
     );
     click(&mut test, "≡");
     click(&mut test, "Fix B");
@@ -1008,26 +1022,14 @@ fn recent_messages_fill_both_fields_from_the_menu_and_the_arrows() {
 }
 
 /// The user's decision (2026-10-09) and QA item 4: a hook fails on an amend; the Git Error
-/// dialog draws the line the person confirmed, and its skip amends at once without hooks — one
-/// press, one `LocalWrite::Amend { skip_hooks: true }` under a token recording that same line,
+/// dialog draws the prompt the person confirmed, and its skip amends at once without hooks — one
+/// press, one `LocalWrite::Amend { skip_hooks: true }` under a token recording that same prompt,
 /// no commit and no second dialog. Caught by: the skip reopening the dialog, committing rather
 /// than amending, or confirming other words than the ones confirmed.
 #[test]
 fn a_failed_amends_skip_amends_at_once_under_the_line_confirmed() {
     let (mut test, view, submitted) = opened();
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        reads(
-            None,
-            CommitHooks {
-                pre_commit: true,
-                commit_msg: false,
-            },
-            &[],
-        ),
-    );
+    apply(&mut test, view, &submitted, reads(None, None, &[]));
     set(&mut test, view.local.commit.subject, "Fix the parser");
     click(&mut test, AMEND_CAPTION);
     apply(
@@ -1036,7 +1038,7 @@ fn a_failed_amends_skip_amends_at_once_under_the_line_confirmed() {
         &submitted,
         amend_answer(Publication::Unpublished, Some(oid(0x0c))),
     );
-    click(&mut test, "Amend abababa");
+    click(&mut test, AMEND_BUTTON_CAPTION);
     let id = writes(&submitted)[0].0;
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
     apply(
@@ -1045,9 +1047,7 @@ fn a_failed_amends_skip_amends_at_once_under_the_line_confirmed() {
         &submitted,
         failed(id, "git commit -q --amend -F -", "lint failed"),
     );
-    let line = amend_consequence(Publication::Unpublished)
-        .replaces()
-        .unwrap_or_default();
+    let line = amend_consequence(Publication::Unpublished).prompt();
     assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
     assert!(drawn(&test, &line), "the skip's line: {:?}", labels(&test));
     click(&mut test, SKIP_HOOKS_CAPTION);

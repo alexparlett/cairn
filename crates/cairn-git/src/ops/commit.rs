@@ -1,36 +1,54 @@
-//! Commit and amend (`docs/prd/staging-and-commit.md` R6.1, R6.2, R6.5, R6.8, R6.9): `git
-//! commit -q -F -` and `git commit -q --amend -F -`, the message on stdin, byte for byte.
+//! Commit and amend (`docs/prd/staging-and-commit.md` R6.1, R6.2, R6.4, R6.5, R6.8, R6.9,
+//! R6.11): `git commit -q -F -` and `git commit -q --amend -F -`, the message on stdin, byte
+//! for byte.
 //!
 //! **The message is git's to clean.** No `--cleanup` is passed, so `commit.cleanup` and git's
 //! default for a message given with `-F` (`whitespace`: trailing spaces and blank lines go,
 //! `#` lines stay) decide what is stored, exactly as the user's `git commit -F <file>` would
 //! store it — compared byte for byte under every value on git 2.30.9, 2.32.7 and the host's
 //! (`crates/cairn-git/tests/diff/commit.rs`). The message never reaches `argv`, so neither
-//! the process table nor the command log holds it. A non-UTF-8 `i18n.commitEncoding` is
-//! refused before git runs: git stores the bytes it is given under that encoding's name, and
-//! a draft is UTF-8 (git-write-verbs.md §5).
+//! the process table nor the command log holds it. A non-UTF-8 `i18n.commitEncoding` — as
+//! `git config` answers it (`crate::reads::commit_encoding`, R6.11), a linked worktree's
+//! `includeIf` included — is refused before git runs: git stores the bytes it is given under
+//! that encoding's name, and a draft is UTF-8 (git-write-verbs.md §5).
 //!
 //! **Hooks run as git runs them.** `--no-verify` — which skips `pre-commit` and `commit-msg`
-//! and nothing else — is passed only for [`Hooks::Skip`], the hook failure's skip (R10.5). No
-//! `--literal-pathspecs` either: a commit takes no pathspec, and git would export the mode to
-//! every hook it runs (`GIT_LITERAL_PATHSPECS=1`), where a `pre-commit` hook's own `git diff
-//! -- '*.rs'` would then match nothing. `-q` leaves out the summary git prints once the
-//! commit is made — nothing Cairn reads, and a line an orphaned commit could die writing.
+//! and nothing else — is passed only for [`Hooks::Skip`], the skip a failed commit or amend
+//! offers (R10.5). No `--literal-pathspecs` either: a commit takes no pathspec, and git would
+//! export the mode to every hook it runs (`GIT_LITERAL_PATHSPECS=1`), where a `pre-commit`
+//! hook's own `git diff -- '*.rs'` would then match nothing. `-q` leaves out the summary git
+//! prints once the commit is made — nothing Cairn reads, and a line an orphaned commit could
+//! die writing.
 //!
 //! **The identity is git's** (R6.8, L26): no author or committer is passed and none is read,
 //! so git uses the configuration and the inherited identity variables a terminal's commit
 //! would; with none, git's own error is the failure.
 //!
 //! **An operation in progress** (R6.9, L25): during a merge the commit is the merge commit, as
-//! git makes it from `MERGE_HEAD`; during a rebase, `git am`, a cherry-pick or a revert — and,
-//! for an amend, a merge too — it is refused before git runs, naming the operation.
+//! git makes it from `MERGE_HEAD`; during a single cherry-pick or revert it concludes it, as
+//! `git commit` does — the picked commit's author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD`
+//! removed by git; during a rebase, `git am` or a sequence of picks or reverts — and, for an
+//! amend, during any of them — it is refused before git runs, naming git's command to continue
+//! or abort it. A detached `HEAD` refuses nothing: the commit is made on no branch.
 //!
-//! **Amend is destructive** (R1.5): it takes the [`Confirmed`] built from
-//! [`super::amend_consequence`] by value, re-computes that `Consequence` before git runs and
-//! refuses, writing nothing, when anything in it moved — `HEAD`, whether a remote has it, the
-//! reflog setting — ([`Error::AmendChangedSinceConfirmed`], R1.4), and records the prompt the
-//! user accepted. Between the re-check and git's run is a window no check closes, as for a
+//! **An amend is read at the press** (R6.4, rules 2 and 3 of the redesign): what it costs
+//! ([`super::amend_consequence`]) is read in the job that runs it. One git logs and no remote
+//! has is recoverable from Show Lost Commits, so [`amend_unconfirmed`] runs it at once, taking
+//! no token — it is not destructive (R1.5) and not on the destructive-operation roster; any
+//! other ends without running git, answering its `Consequence`
+//! ([`AmendAnswer::NeedsConfirming`]) for the confirmation dialog, and runs through [`amend`]
+//! with the token the dialog builds. [`amend`] re-computes that `Consequence` before git runs
+//! and refuses, writing nothing, when anything in it moved — `HEAD`, whether a remote has it,
+//! the reflog setting — ([`Error::AmendChangedSinceConfirmed`], R1.4), and records the prompt
+//! the user accepted. Between the re-check and git's run is a window no check closes, as for a
 //! discard.
+//!
+//! **Made is read from `HEAD`** (R4.7, and phase 12's QA item #10). After git is reaped `HEAD`
+//! is read again: a commit is made when `HEAD` is a commit whose first parent is the `HEAD` it
+//! ran on (none, on an unborn branch), an amend when `HEAD`'s parents are the replaced commit's.
+//! git's exit 0 with `HEAD` anything else is [`Error::CommitUnconfirmed`] — something else moved
+//! `HEAD` while it ran; and a commit or amend the user cancelled that git had already made is
+//! reported made, one it had not is [`Error::GitCancelled`].
 //!
 //! **While it runs** a commit is the one write that can be cancelled (R4.3): once git is
 //! running, [`CommitWatch::running`] is handed a [`CommitCancel`], which ends git's process
@@ -42,12 +60,12 @@
 //! the runner's tail of both, in the order the lines arrived, since git says "nothing to
 //! commit" and "would make it empty" on stdout; the command log records the same.
 
-use cairn_model::{AskpassToken, Confirmed, Consequence, ScrubbedLines};
+use cairn_model::{AskpassToken, Confirmed, Consequence, Oid, ScrubbedLines};
 
 use super::amend::amend_consequence;
 use super::local_write::{locks_around, locks_now};
 use super::{GitBinary, Invalidated, Performed, WriteAuthority};
-use crate::diff::git_config::last_value;
+use crate::object_id::{model_id, object_id};
 use crate::process::KillHandle;
 use crate::{Cancel, CancelSignal, CommitRefusal, Error, Repository};
 
@@ -56,7 +74,7 @@ use crate::{Cancel, CancelSignal, CommitRefusal, Error, Repository};
 pub enum Hooks {
     /// As git runs them: the default.
     Run,
-    /// `--no-verify`: only from the hook failure's skip (R10.5).
+    /// `--no-verify`: only from the skip a failed commit or amend offers (R10.5).
     Skip,
 }
 
@@ -92,9 +110,20 @@ impl std::fmt::Debug for CommitWatch<'_> {
     }
 }
 
+/// What an amend asked at the press came to (R6.4): run, being recoverable, or not run, its
+/// `Consequence` answered for the confirmation dialog.
+#[derive(Debug)]
+pub enum AmendAnswer {
+    /// git logs it and no remote has `HEAD`: amended at once, asking nothing.
+    Amended(Performed),
+    /// A remote has `HEAD`, or git will keep no reflog: no git ran. Confirm this and run
+    /// [`amend`] with the token.
+    NeedsConfirming(Consequence),
+}
+
 /// Commits what is staged with `message` (module docs). Refused before git runs
 /// ([`Error::CommitRefused`]) for a non-UTF-8 `i18n.commitEncoding` and during a rebase,
-/// `git am`, a cherry-pick or a revert; git's own failure — a hook's, an empty message,
+/// `git am` or a sequence of picks or reverts; git's own failure — a hook's, an empty message,
 /// nothing staged, no identity — is [`Error::GitFailed`] with its output.
 pub fn commit(
     git: &GitBinary,
@@ -104,7 +133,7 @@ pub fn commit(
     token: Option<&AskpassToken>,
     watch: CommitWatch<'_>,
 ) -> Result<Performed, Error> {
-    utf8_messages(repo)?;
+    utf8_messages(git, repo, watch.cancel)?;
     if let Some(operation) = repo.operation_in_progress()
         && operation.refuses_commit()
     {
@@ -113,15 +142,70 @@ pub fn commit(
         });
     }
     let before = locks_now(repo);
-    run(git, repo, &arguments(false, hooks), message, token, watch)?;
+    let made = Made::Commit {
+        on: head_commit(repo)?,
+    };
+    run(
+        git,
+        repo,
+        &arguments(false, hooks),
+        message,
+        token,
+        watch,
+        &made,
+    )?;
     Ok(Performed::new("committed", everything_a_commit_moves())
         .with_locks(locks_around(repo, before)))
 }
 
+/// Amends `HEAD` with `message` and what is staged, at the press (module docs): what it costs is
+/// read first, and it runs only where it is recoverable — git logs it and no remote has `HEAD` —
+/// taking no token, since nothing it replaces is lost (R1.5). Otherwise nothing runs and the
+/// `Consequence` is answered, for the dialog. Refused as [`amend`] is.
+pub fn amend_unconfirmed(
+    git: &GitBinary,
+    repo: &Repository,
+    message: &str,
+    hooks: Hooks,
+    token: Option<&AskpassToken>,
+    watch: CommitWatch<'_>,
+) -> Result<AmendAnswer, Error> {
+    utf8_messages(git, repo, watch.cancel)?;
+    let consequence = cost_now(git, repo, watch.cancel)?;
+    let replaced = match &consequence {
+        Consequence::Amend { commit, .. } if !consequence.needs_confirming() => *commit,
+        Consequence::Amend { .. }
+        | Consequence::DiscardLines { .. }
+        | Consequence::DiscardFiles { .. }
+        | Consequence::RemoveLock { .. }
+        | Consequence::CheckoutDiscarding { .. } => {
+            return Ok(AmendAnswer::NeedsConfirming(consequence));
+        }
+    };
+    let before = locks_now(repo);
+    let made = Made::amend_of(repo, replaced)?;
+    run(
+        git,
+        repo,
+        &arguments(true, hooks),
+        message,
+        token,
+        watch,
+        &made,
+    )?;
+    Ok(AmendAnswer::Amended(
+        Performed::new(
+            format!("amended {}", replaced.short().as_str()),
+            everything_a_commit_moves(),
+        )
+        .with_locks(locks_around(repo, before)),
+    ))
+}
+
 /// Amends `HEAD` with `message` and what is staged (module docs), once the `Consequence`
 /// `confirmed` carries is still what the repository says. Refused as [`commit`] is, and for
-/// a merge in progress or an unborn branch; [`Error::AmendChangedSinceConfirmed`] when what
-/// was confirmed moved.
+/// any operation in progress or an unborn branch; [`Error::AmendChangedSinceConfirmed`] when
+/// what was confirmed moved.
 pub fn amend(
     git: &GitBinary,
     repo: &Repository,
@@ -131,8 +215,8 @@ pub fn amend(
     token: Option<&AskpassToken>,
     watch: CommitWatch<'_>,
 ) -> Result<Performed, Error> {
-    let short = match confirmed.consequence() {
-        Consequence::Amend { commit, .. } => commit.short().as_str().to_owned(),
+    let replaced = match confirmed.consequence() {
+        Consequence::Amend { commit, .. } => *commit,
         Consequence::DiscardLines { .. }
         | Consequence::DiscardFiles { .. }
         | Consequence::RemoveLock { .. }
@@ -142,25 +226,39 @@ pub fn amend(
             });
         }
     };
-    utf8_messages(repo)?;
-    let now = amend_consequence(repo, &watch.cancel).map_err(|error| {
-        if watch.cancel.is_cancelled() {
-            Error::CommitCancelledBeforeRunning
-        } else {
-            error
-        }
-    })?;
-    if &now != confirmed.consequence() {
+    utf8_messages(git, repo, watch.cancel)?;
+    if &cost_now(git, repo, watch.cancel)? != confirmed.consequence() {
         return Err(Error::AmendChangedSinceConfirmed);
     }
     let before = locks_now(repo);
-    run(git, repo, &arguments(true, hooks), message, token, watch)?;
+    let made = Made::amend_of(repo, replaced)?;
+    run(
+        git,
+        repo,
+        &arguments(true, hooks),
+        message,
+        token,
+        watch,
+        &made,
+    )?;
     Ok(Performed::destructive(
-        format!("amended {short}"),
+        format!("amended {}", replaced.short().as_str()),
         confirmed,
         everything_a_commit_moves(),
     )
     .with_locks(locks_around(repo, before)))
+}
+
+/// What amending costs now, read through `cancel` — a cancel while it reads is the commit
+/// cancelled before git ran.
+fn cost_now(git: &GitBinary, repo: &Repository, cancel: &dyn Cancel) -> Result<Consequence, Error> {
+    amend_consequence(git, repo, &cancel).map_err(|error| {
+        if cancel.is_cancelled() {
+            Error::CommitCancelledBeforeRunning
+        } else {
+            error
+        }
+    })
 }
 
 /// A ref moved, the index was written (a hook may stage), and objects were added.
@@ -184,16 +282,23 @@ fn arguments(amend: bool, hooks: Hooks) -> Vec<&'static str> {
     arguments
 }
 
-/// Refuses a non-UTF-8 `i18n.commitEncoding` as git reads the name (`is_encoding_utf8` in
-/// git's `utf8.c`: `UTF-8` or `UTF8` in any case, an optional `-` after `utf`).
-fn utf8_messages(repo: &Repository) -> Result<(), Error> {
-    let config = repo.inner().config_snapshot();
-    match last_value(config.plumbing(), "i18n", None, "commitEncoding") {
+/// Refuses a non-UTF-8 `i18n.commitEncoding`, as `git config` answers it, as git reads the
+/// name (`is_encoding_utf8` in git's `utf8.c`: `UTF-8` or `UTF8` in any case, an optional `-`
+/// after `utf`). A cancel while it reads is the commit cancelled before git ran.
+fn utf8_messages(git: &GitBinary, repo: &Repository, cancel: &dyn Cancel) -> Result<(), Error> {
+    let encoding = crate::reads::commit_encoding(git, repo, &cancel).map_err(|error| {
+        if cancel.is_cancelled() {
+            Error::CommitCancelledBeforeRunning
+        } else {
+            error
+        }
+    })?;
+    match encoding {
         None => Ok(()),
-        Some(Some(name)) if names_utf8(&name) => Ok(()),
-        Some(value) => Err(Error::CommitRefused {
+        Some(name) if names_utf8(&name) => Ok(()),
+        Some(name) => Err(Error::CommitRefused {
             why: CommitRefusal::CommitEncoding {
-                encoding: value.map_or_else(String::new, |name| name.to_string()),
+                encoding: String::from_utf8_lossy(&name).into_owned(),
             },
         }),
     }
@@ -211,7 +316,68 @@ fn names_utf8(name: &[u8]) -> bool {
     rest == b"8"
 }
 
-/// Runs the commit, its message on stdin, watched as [`CommitWatch`] says.
+/// `HEAD`'s commit; `None` on an unborn branch.
+fn head_commit(repo: &Repository) -> Result<Option<Oid>, Error> {
+    match repo.inner().head_id() {
+        Ok(id) => Ok(Some(model_id(&id)?)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// `commit`'s parents as the object names them — not as a shallow clone's boundary hides them,
+/// since an amend of the boundary commit writes the parents the object holds.
+fn parents_of(repo: &Repository, commit: &Oid) -> Result<Vec<Oid>, Error> {
+    let found = repo
+        .inner()
+        .find_commit(object_id(commit)?)
+        .map_err(|source| Error::ReadCommit {
+            id: commit.to_string(),
+            source: Box::new(source),
+        })?;
+    found
+        .parent_ids()
+        .map(|parent| model_id(&parent.detach()))
+        .collect()
+}
+
+/// What `HEAD` is once the commit or amend was made (module docs).
+#[derive(Debug)]
+enum Made {
+    /// A commit whose first parent is `on` — none on an unborn branch.
+    Commit { on: Option<Oid> },
+    /// An amend of `replaced`: a commit with `replaced`'s parents.
+    Amend { replaced: Oid, parents: Vec<Oid> },
+}
+
+impl Made {
+    fn amend_of(repo: &Repository, replaced: Oid) -> Result<Self, Error> {
+        Ok(Self::Amend {
+            replaced,
+            parents: parents_of(repo, &replaced)?,
+        })
+    }
+
+    /// Whether `HEAD` now is what this made; `None` where `HEAD` or its commit cannot be read.
+    /// `exited` is git's word that it finished: an amend may then leave `HEAD` the very commit
+    /// it replaced — the same tree, message, parents and author within one second make the
+    /// same object — where after a cancel `HEAD` unmoved is an amend not made.
+    fn holds(&self, repo: &Repository, exited: bool) -> Option<bool> {
+        let Some(now) = head_commit(repo).ok()? else {
+            return Some(false);
+        };
+        let parents = parents_of(repo, &now).ok()?;
+        Some(match self {
+            Self::Commit { on } => Some(now) != *on && parents.first() == on.as_ref(),
+            Self::Amend {
+                replaced,
+                parents: was,
+            } => parents == *was && (exited || now != *replaced),
+        })
+    }
+}
+
+/// Runs the commit, its message on stdin, watched as [`CommitWatch`] says, and reads `HEAD`
+/// after the reap to say whether `made` holds (module docs).
 fn run(
     git: &GitBinary,
     repo: &Repository,
@@ -219,6 +385,7 @@ fn run(
     message: &str,
     token: Option<&AskpassToken>,
     watch: CommitWatch<'_>,
+    made: &Made,
 ) -> Result<(), Error> {
     if watch.cancel.is_cancelled() {
         return Err(Error::CommitCancelledBeforeRunning);
@@ -234,9 +401,21 @@ fn run(
     let invocation = command.start()?;
     (watch.running)(CommitCancel(invocation.kill_handle()));
     // Both pipes' lines, as the runner splits and scrubs them, to the one output.
-    invocation
-        .lines(&CancelSignal::new(), |lines| (watch.output)(lines))
-        .map(|_| ())
+    let outcome = invocation.lines(&CancelSignal::new(), |lines| (watch.output)(lines));
+    let verb = match made {
+        Made::Commit { .. } => "committed",
+        Made::Amend { .. } => "amended",
+    };
+    match outcome {
+        // git's word, unless `HEAD` says otherwise; one that cannot be read is git's word.
+        Ok(_) => match made.holds(repo, true) {
+            Some(false) => Err(Error::CommitUnconfirmed { verb }),
+            Some(true) | None => Ok(()),
+        },
+        // Cancelled after git had made it: made. One that cannot be read is cancelled.
+        Err(Error::GitCancelled { .. }) if made.holds(repo, false) == Some(true) => Ok(()),
+        Err(other) => Err(other),
+    }
 }
 
 #[cfg(test)]
@@ -291,7 +470,7 @@ mod tests {
             },
         )
         .unwrap();
-        let consequence = amend_consequence(&repo, &cancel).unwrap();
+        let consequence = amend_consequence(&git, &repo, &cancel).unwrap();
         amend(
             &git,
             &repo,
@@ -307,7 +486,14 @@ mod tests {
         )
         .unwrap();
         let recorded = stub.recorded();
-        let verbs: Vec<Vec<String>> = recorded
+        let (commits, reads): (Vec<_>, Vec<_>) = recorded.iter().partition(|record| {
+            record
+                .arguments_after_location()
+                .first()
+                .map(String::as_str)
+                == Some("commit")
+        });
+        let verbs: Vec<Vec<String>> = commits
             .iter()
             .map(|record| record.arguments_after_location())
             .collect();
@@ -318,9 +504,24 @@ mod tests {
                 vec!["commit", "-q", "--amend", "--no-verify", "-F", "-"],
             ]
         );
-        for record in &recorded {
+        for record in &commits {
             assert_eq!(record.stdin, message.as_bytes(), "{record:?}");
             record.assert_a_write();
+        }
+        // What each asks first is git's configuration (R6.11), read as reads, the message on no
+        // stdin of theirs.
+        assert!(!reads.is_empty());
+        for record in &reads {
+            assert_eq!(
+                record
+                    .arguments_after_location()
+                    .first()
+                    .map(String::as_str),
+                Some("config"),
+                "{record:?}"
+            );
+            assert!(record.stdin.is_empty(), "{record:?}");
+            record.assert_a_read();
         }
         let logged = repo.processes().log();
         assert!(logged.len() >= 2, "{logged:?}");

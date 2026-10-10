@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, BranchName, ChangeSet, ChangedFile, CommandRecord, CommitHooks, Consequence,
-    Context, Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress,
-    RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, ScrubbedLines, Selection, SidebarRow,
+    AheadBehind, BranchName, ChangeSet, ChangedFile, CommandRecord, Consequence, Context,
+    Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress, RefName,
+    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, ScrubbedLines, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -912,15 +912,18 @@ pub enum RanBy {
     Fetch,
 }
 
-/// What the commit box reads beside a commit (staging-and-commit R6.6, R6.7, R6.9): each
+/// What the commit box reads beside a commit (staging-and-commit R6.7, R6.9, R6.10): each
 /// read's answer, or why it failed as display text — one failing alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitReads {
-    /// What git is in the middle of: a merge fills an empty draft and makes the commit the
-    /// merge commit; a rebase, `git am`, a cherry-pick or a revert disables the box (R10.8).
+    /// What git is in the middle of: a merge, a single cherry-pick or a single revert fills an
+    /// empty draft and is concluded by the commit; a rebase, `git am` or a sequence disables
+    /// the box (R10.8).
     pub operation: Option<OperationInProgress>,
-    /// The hooks git would run, which the failed commit's skip is offered for (R10.5).
-    pub hooks: Result<CommitHooks, String>,
+    /// The message git prepared for the commit that concludes the operation — `MERGE_MSG`,
+    /// cleaned as git's editor cleans it (R6.10) — read only while one a commit concludes is in
+    /// progress; `None` otherwise, or where git prepared none.
+    pub message: Result<Option<String>, String>,
     /// The latest messages on the current branch, newest first (R10.2).
     pub recent: Result<Vec<String>, String>,
 }

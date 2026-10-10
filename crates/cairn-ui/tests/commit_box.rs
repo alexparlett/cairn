@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use cairn_model::{Confirmed, Consequence, Oid, Publication, Reflog};
 use cairn_ui::{
-    AMEND_CAPTION, AmendButton, CLOSE_CAPTION, CommitBox, CommitButton, GIT_ERROR_TITLE,
-    GitErrorDialog, OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
+    AMEND_BUTTON_CAPTION, AMEND_CAPTION, AmendButton, CLOSE_CAPTION, CommitBox, CommitButton,
+    GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -21,7 +21,6 @@ const HEIGHT: f32 = 600.;
 fn amend() -> Consequence {
     Consequence::Amend {
         commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        subject: "Fix the parser".to_owned(),
         published: Publication::Unpublished,
         reflog: Reflog::Written,
     }
@@ -129,7 +128,7 @@ fn the_amend_toggle_reports_its_toggled_state_to_assistive_technology() {
 }
 
 /// R10.6 and C1: the amend button confirmed in place is the confirmation surface's own — its
-/// label the consequence's `action`, its token built from that consequence and recording the
+/// label Fork's "Amend Last Commit", its token built from that consequence and recording the
 /// prompt rendered from it — and one consequence buys one token, however often it is pressed;
 /// the box itself reports no commit for it. Caught by: a token per press, a label typed apart
 /// from the consequence, or the press reported as a plain commit.
@@ -146,18 +145,9 @@ fn the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws() {
         None,
     );
     let shown = labels(&test);
-    assert!(
-        shown.iter().any(|l| *l == consequence.action()),
-        "{shown:?}"
-    );
-    assert!(
-        shown
-            .iter()
-            .any(|l| Some(l.as_str()) == consequence.replaces().as_deref()),
-        "the line under the button: {shown:?}"
-    );
-    click(&mut test, "Amend abababa");
-    click(&mut test, "Amend abababa");
+    assert!(shown.iter().any(|l| l == AMEND_BUTTON_CAPTION), "{shown:?}");
+    click(&mut test, AMEND_BUTTON_CAPTION);
+    click(&mut test, AMEND_BUTTON_CAPTION);
     let tokens = reports.tokens.borrow();
     assert_eq!(tokens.len(), 1, "one consequence bought two tokens");
     assert_eq!(tokens[0].consequence(), &*consequence);
@@ -172,7 +162,6 @@ fn the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws() {
 fn a_published_amends_button_asks_rather_than_confirms() {
     let consequence = Rc::new(Consequence::Amend {
         commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        subject: "Fix the parser".to_owned(),
         published: Publication::SomeRemote,
         reflog: Reflog::Written,
     });
@@ -185,26 +174,30 @@ fn a_published_amends_button_asks_rather_than_confirms() {
         "Fix the parser",
         None,
     );
-    click(&mut test, "Amend abababa…");
+    click(&mut test, &format!("{AMEND_BUTTON_CAPTION}…"));
     assert!(reports.tokens.borrow().is_empty());
     assert_eq!(*reports.commits.borrow(), 1);
 }
 
-/// R1.1 and the user's decision (2026-10-09): the amend button confirmed in place is one
-/// component drawing the button and the line it confirms; it refuses a consequence a remote has
-/// — that amend goes through the dialog — and builds nothing while not ready. Caught by: a
-/// pushed commit amended by the box's button, or a press heard while the box is not ready.
+/// R1.1 and the user's decision (2026-10-09), its line cut back by phase 13 (staging-and-commit
+/// R6.4 as amended; phase 18 rebuilds the box): the amend button confirmed in place refuses a
+/// consequence that must be confirmed — a remote has the commit, or git keeps no reflog — which
+/// the dialog confirms, and builds nothing while not ready. Caught by: a pushed or unlogged
+/// commit amended by the box's button, or a press heard while the box is not ready.
 #[test]
 fn the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready() {
     let published = Consequence::Amend {
         commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        subject: "Fix the parser".to_owned(),
         published: Publication::SomeRemote,
         reflog: Reflog::Written,
     };
-    for (consequence, ready) in [(published, true), (amend(), false)] {
+    let unlogged = Consequence::Amend {
+        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
+        published: Publication::Unpublished,
+        reflog: Reflog::NotWritten,
+    };
+    for (consequence, ready) in [(published, true), (unlogged, true), (amend(), false)] {
         let tokens: Rc<RefCell<Vec<Confirmed>>> = Rc::default();
-        let drawn = consequence.replaces().unwrap_or_default();
         let (mut test, _) = TestingRunner::new(
             {
                 let tokens = tokens.clone();
@@ -223,12 +216,7 @@ fn the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready() {
             1.,
         );
         settle(&mut test);
-        assert!(
-            labels(&test).contains(&drawn),
-            "the line it confirms is not drawn: {:?}",
-            labels(&test)
-        );
-        click(&mut test, "Amend abababa");
+        click(&mut test, AMEND_BUTTON_CAPTION);
         assert!(
             tokens.borrow().is_empty(),
             "ready {ready}: a token was built"

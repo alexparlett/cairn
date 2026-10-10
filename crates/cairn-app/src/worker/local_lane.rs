@@ -47,11 +47,13 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cairn_askpass::Channel;
-use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo};
+use cairn_git::ops::{
+    self, AmendAnswer, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo,
+};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{
-    AskpassToken, ChangeList, CommandRecord, Confirmed, FileDiff, LocalChanges, Oid, RepoPath,
-    ScrubbedLines, Selection,
+    AskpassToken, ChangeList, CommandRecord, Confirmed, Consequence, FileDiff, LocalChanges, Oid,
+    RepoPath, ScrubbedLines, Selection,
 };
 
 use super::epoch::{Epoch, Superseded};
@@ -144,12 +146,25 @@ pub enum LocalWrite {
     /// failure's skip (R10.5).
     Commit { message: String, skip_hooks: bool },
     /// `HEAD` amended with `message` and what is staged (R6.2), under the confirmation of the
-    /// `Consequence` the commit box drew.
+    /// `Consequence` the dialog drew.
     Amend {
         confirmed: Confirmed,
         message: String,
         skip_hooks: bool,
     },
+    /// Amend pressed (R6.4, rules 2 and 3 of the redesign): what it costs read in this job, and
+    /// the amend run at once, taking no token, where git logs it and no remote has `HEAD`
+    /// (`ops::amend_unconfirmed`); otherwise nothing runs and the ending answers the
+    /// `Consequence` for the dialog ([`WriteEnding::NeedsConfirming`]), whose token then asks
+    /// [`LocalWrite::Amend`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "phase 18's commit box asks it as Amend is pressed"
+        )
+    )]
+    AmendAtPress { message: String, skip_hooks: bool },
     /// The branch `name` put on `at`: Create Branch, unticked (staging-and-commit R11.3).
     CreateBranch { name: String, at: Oid },
     /// The branch `name` put on `at` and checked out, the working tree's changes carried over
@@ -197,6 +212,13 @@ impl Clone for LocalWrite {
                 message,
                 skip_hooks,
             } => Self::Commit {
+                message: message.clone(),
+                skip_hooks: *skip_hooks,
+            },
+            Self::AmendAtPress {
+                message,
+                skip_hooks,
+            } => Self::AmendAtPress {
                 message: message.clone(),
                 skip_hooks: *skip_hooks,
             },
@@ -258,7 +280,7 @@ impl LocalWrite {
             | Self::CreateBranchAndCheckout { .. }
             | Self::CreateBranchDiscarding(_)
             | Self::RemoveLock(_) => false,
-            Self::Commit { .. } | Self::Amend { .. } => true,
+            Self::Commit { .. } | Self::Amend { .. } | Self::AmendAtPress { .. } => true,
         }
     }
 
@@ -279,6 +301,7 @@ impl LocalWrite {
             // branch on is no longer lost.
             Self::Commit { .. }
             | Self::Amend { .. }
+            | Self::AmendAtPress { .. }
             | Self::CreateBranch { .. }
             | Self::CreateBranchAndCheckout { .. }
             | Self::CreateBranchDiscarding(_) => ReadAgain::Everything,
@@ -321,7 +344,7 @@ impl LocalWrite {
             Self::DiscardLines(_) => "discarding lines".to_owned(),
             Self::DiscardFiles(_) => "discarding files".to_owned(),
             Self::Commit { .. } => "commit".to_owned(),
-            Self::Amend { .. } => "amend".to_owned(),
+            Self::Amend { .. } | Self::AmendAtPress { .. } => "amend".to_owned(),
             Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
                 format!("creating branch {name}")
             }
@@ -365,6 +388,7 @@ impl LocalWrite {
                 )
             ),
             Self::Commit { .. } => "Commit".to_owned(),
+            Self::AmendAtPress { .. } => "Amend".to_owned(),
             Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
                 format!("Create branch '{name}'")
             }
@@ -398,16 +422,19 @@ impl LocalWrite {
             | Self::StageAll { .. }
             | Self::UnstageAll { .. }
             | Self::Commit { .. }
+            | Self::AmendAtPress { .. }
             | Self::CreateBranch { .. }
             | Self::CreateBranchAndCheckout { .. } => None,
         }
     }
 
     /// The commit an amend replaces, which Show Lost Commits draws once it has (R12.1's way
-    /// back): `None` for every other write.
+    /// back): `None` for every other write, and for an amend at the press, whose commit is read
+    /// as it runs (phase 20 brings its way back).
     pub fn replaces(&self) -> Option<Oid> {
         match self {
             Self::Amend { confirmed, .. } => confirmed.consequence().amended(),
+            Self::AmendAtPress { .. } => None,
             Self::StageLines { .. }
             | Self::UnstageLines { .. }
             | Self::StageFiles { .. }
@@ -438,7 +465,7 @@ impl LocalWrite {
             }
             Self::DiscardLines(_) | Self::DiscardFiles(_) => "the discard to finish",
             Self::Commit { .. } => "the commit to finish",
-            Self::Amend { .. } => "the amend to finish",
+            Self::Amend { .. } | Self::AmendAtPress { .. } => "the amend to finish",
             Self::CreateBranch { .. } => "the branch to be created",
             Self::CreateBranchAndCheckout { .. } | Self::CreateBranchDiscarding(_) => {
                 "the checkout to finish"
@@ -455,8 +482,8 @@ impl LocalWrite {
         repo: &Repository,
         token: Option<&AskpassToken>,
         watch: &Watch<'_>,
-    ) -> Result<Performed, Error> {
-        match self {
+    ) -> Result<Ran, Error> {
+        let performed = match self {
             Self::StageLines { diff, selection } => {
                 ops::stage_lines(git, repo, &diff, &selection, token)
             }
@@ -508,8 +535,39 @@ impl LocalWrite {
                 ops::create_branch_discarding(git, repo, confirmed, token)
             }
             Self::RemoveLock(confirmed) => ops::remove_index_lock(repo, confirmed),
-        }
+            Self::AmendAtPress {
+                message,
+                skip_hooks,
+            } => {
+                return watch
+                    .commit(|commit| {
+                        ops::amend_unconfirmed(
+                            git,
+                            repo,
+                            &message,
+                            hooks(skip_hooks),
+                            token,
+                            commit,
+                        )
+                    })
+                    .map(|answer| match answer {
+                        AmendAnswer::Amended(performed) => Ran::Performed(performed),
+                        AmendAnswer::NeedsConfirming(consequence) => {
+                            Ran::NeedsConfirming(consequence)
+                        }
+                    });
+            }
+        };
+        performed.map(Ran::Performed)
     }
+}
+
+/// What a write's run came to: what it did, or — an amend at the press that must be confirmed —
+/// the `Consequence` it ran nothing for.
+#[derive(Debug)]
+enum Ran {
+    Performed(Performed),
+    NeedsConfirming(Consequence),
 }
 
 /// Every path `list` lists — or, with a filter on, of its rows `shown` — and each rename's
@@ -598,12 +656,16 @@ pub enum WriteEnding {
         command: Option<String>,
         output: ScrubbedLines,
     },
-    /// Cancelled, or Cairn lost hold of its git: it may have taken effect, in part or whole,
-    /// and the read after it shows what did (R4.7). With the lock files left.
-    MayHaveTakenEffect {
+    /// Cancelled by the user (R4.7, rule 5 of the redesign): a commit or an amend git had not
+    /// made — `HEAD` read after its `git` was reaped, or the cancel heard before git ran. One
+    /// git had made ended [`WriteEnding::Done`]. With the lock files left.
+    Cancelled {
         message: String,
         locks: Vec<PathBuf>,
     },
+    /// Nothing ran: an amend at the press that must be confirmed — a remote has `HEAD`, or git
+    /// keeps no reflog (R6.4) — its `Consequence` answered for the confirmation dialog.
+    NeedsConfirming { consequence: Consequence },
     /// A discard of files that did not take every file: what it did, the prompt it confirmed,
     /// and the paths still as they were confirmed.
     Incomplete {
@@ -642,22 +704,31 @@ impl WriteEnding {
     pub fn locks(&self) -> &[PathBuf] {
         match self {
             Self::Done(done) | Self::Incomplete { done, .. } => &done.locks_after,
-            Self::Failed { locks, .. } | Self::MayHaveTakenEffect { locks, .. } => locks,
-            Self::Stale { .. } | Self::Refused { .. } | Self::NotRun { .. } => &[],
+            Self::Failed { locks, .. } | Self::Cancelled { locks, .. } => locks,
+            Self::Stale { .. }
+            | Self::Refused { .. }
+            | Self::NotRun { .. }
+            | Self::NeedsConfirming { .. } => &[],
         }
     }
 
     /// How `outcome` ended, and what it left stale when it ran (wholly or in part). A failure
     /// while no prompt could have been answered says so, as a fetch's does.
     fn of(
-        outcome: Result<Performed, Error>,
+        outcome: Result<Ran, Error>,
         prompting: &Result<(), String>,
     ) -> (Self, Option<Invalidated>) {
         let error = match outcome {
-            Ok(performed) => {
+            Ok(Ran::Performed(performed)) => {
                 return (
                     Self::Done(Done::of(&performed)),
                     Some(performed.invalidated()),
+                );
+            }
+            Ok(Ran::NeedsConfirming(consequence)) => {
+                return (
+                    Self::NeedsConfirming { consequence },
+                    Some(Invalidated::NOTHING),
                 );
             }
             Err(error) => error,
@@ -679,11 +750,22 @@ impl WriteEnding {
             | Error::CheckoutRefused { .. }
             | Error::LockRefused { .. } => Self::Refused { message },
             Error::LockChangedSinceConfirmed { path } => Self::Stale { path, message },
-            Error::CommitCancelledBeforeRunning => Self::NotRun { message },
-            Error::GitCancelled { stranded_locks, .. }
-            | Error::GitUnwatched { stranded_locks, .. } => Self::MayHaveTakenEffect {
+            Error::CommitCancelledBeforeRunning => Self::Cancelled {
+                message,
+                locks: Vec::new(),
+            },
+            Error::GitCancelled { stranded_locks, .. } => Self::Cancelled {
                 message,
                 locks: stranded_locks,
+            },
+            // Cairn lost hold of its git (R4.7): a failure, which may have done its work in part.
+            Error::GitUnwatched { stranded_locks, .. } => Self::Failed {
+                message: format!(
+                    "{message}. The lists and history show anything it had already done."
+                ),
+                locks: stranded_locks,
+                command: None,
+                output: ScrubbedLines::new(),
             },
             Error::GitFailed {
                 arguments,
@@ -1113,23 +1195,27 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     }
 }
 
-/// What the commit box reads (R6.6, R6.7, R6.9): each read's answer or its failure, or `None`
-/// once `reading` is cancelled — nobody waits on it.
+/// What the commit box reads (R6.7, R6.9, R6.10): each read's answer or its failure, or `None`
+/// once `reading` is cancelled — nobody waits on it. The message git prepared is read, and
+/// cleaned through git, only while an operation a commit concludes is in progress.
 fn commit_reads(git: &GitBinary, repo: &Repository, reading: &Counting<'_>) -> Option<CommitReads> {
     use cairn_git::Cancel as _;
     if reading.is_cancelled() {
         return None;
     }
     let operation = repo.operation_in_progress();
-    let hooks = repo
-        .commit_hooks(git, reading)
-        .map_err(|error| error.to_string());
+    let message = match operation {
+        Some(operation) if operation.concluded_by_commit() => repo
+            .prepared_message(git, reading)
+            .map_err(|error| error.to_string()),
+        Some(_) | None => Ok(None),
+    };
     let recent = repo
         .recent_messages(reading)
         .map_err(|error| error.to_string());
     (!reading.is_cancelled()).then_some(CommitReads {
         operation,
-        hooks,
+        message,
         recent,
     })
 }
@@ -1148,7 +1234,7 @@ fn amend_read(
     if reading.is_cancelled() {
         return None;
     }
-    let consequence = ops::amend_consequence(repo, reading);
+    let consequence = ops::amend_consequence(git, repo, reading);
     let message = match &consequence {
         Ok(consequence) => match consequence.amended() {
             Some(commit) => repo
@@ -1666,8 +1752,11 @@ mod tests {
 
     /// R4.5, R4.7: a write that ran reads again what its `Invalidated` names; one that failed
     /// or was cancelled reads what it could have changed; a stale patch is dropped naming its
-    /// path; a cancelled write may have taken effect, with its locks. Caught by: an ending
-    /// that loses the path, the locks or the may-have.
+    /// path; a cancel — git ended, or heard before it ran — is a cancel, with its locks, never
+    /// "may have taken effect"; a write whose git Cairn lost hold of is a failure that says the
+    /// lists and history show what it did; and an amend at the press that must be confirmed
+    /// answers its `Consequence`. Caught by: an ending that loses the path, the locks, the
+    /// cancel, or the consequence.
     #[test]
     fn every_ending_says_what_happened_and_what_to_read_again() {
         let lock = PathBuf::from("/r/.git/index.lock");
@@ -1693,10 +1782,36 @@ mod tests {
             &Ok(()),
         );
         assert!(
-            matches!(&cancelled, WriteEnding::MayHaveTakenEffect { locks, .. } if *locks == [lock.clone()]),
+            matches!(&cancelled, WriteEnding::Cancelled { locks, .. } if *locks == [lock.clone()]),
             "{cancelled:?}"
         );
-        assert_eq!(cancelled.locks(), [lock]);
+        assert_eq!(cancelled.locks(), std::slice::from_ref(&lock));
+        let (lost, _) = WriteEnding::of(
+            Err(Error::GitUnwatched {
+                arguments: "commit".to_owned(),
+                source: std::io::Error::other("the pipe broke"),
+                stranded_locks: vec![lock.clone()],
+            }),
+            &Ok(()),
+        );
+        match &lost {
+            WriteEnding::Failed { message, locks, .. } => {
+                assert!(
+                    message.ends_with("The lists and history show anything it had already done."),
+                    "{message}"
+                );
+                assert_eq!(*locks, [lock]);
+            }
+            other => panic!("a write Cairn lost hold of ended {other:?}"),
+        }
+        let amend = cairn_model::Consequence::Amend {
+            commit: Oid::from_bytes(&[0xab; 20]).unwrap(),
+            published: cairn_model::Publication::SomeRemote,
+            reflog: cairn_model::Reflog::Written,
+        };
+        let (asked, read) = WriteEnding::of(Ok(Ran::NeedsConfirming(amend.clone())), &Ok(()));
+        assert_eq!(asked, WriteEnding::NeedsConfirming { consequence: amend });
+        assert_eq!(read, Some(Invalidated::NOTHING));
         let (refused, _) = WriteEnding::of(Err(Error::NoPaths), &Err("no socket".to_owned()));
         match refused {
             WriteEnding::Refused { message } => {
@@ -1721,8 +1836,8 @@ mod tests {
         );
         let (early, _) = WriteEnding::of(Err(Error::CommitCancelledBeforeRunning), &Ok(()));
         assert!(
-            matches!(&early, WriteEnding::NotRun { message } if message.contains("before git ran")),
-            "a commit cancelled before git ran may have taken effect: {early:?}"
+            matches!(&early, WriteEnding::Cancelled { message, locks } if message.contains("before git ran") && locks.is_empty()),
+            "a commit cancelled before git ran was not a cancel: {early:?}"
         );
         assert_eq!(
             ReadAgain::after(Invalidated::index()),

@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
-use cairn_model::{CommitHooks, Consequence, OperationInProgress, ScrubbedLines};
+use cairn_model::{Consequence, OperationInProgress, ScrubbedLines};
 use freya::prelude::*;
 
 use crate::shown_output::{shown_lines, spoken_lines};
@@ -89,8 +89,9 @@ pub struct GitError {
     pub command: String,
     /// git's output, a hook's among it, ANSI sequences stripped.
     pub lines: Rc<Vec<String>>,
-    /// Whether the skip is offered: a hook git would run exists, and the hooks were not skipped
-    /// already.
+    /// Whether the skip is offered: on every failed commit or amend whose hooks were not skipped
+    /// already (C4 — Cairn keeps no hook model, so a failure no hook caused fails the same way
+    /// again, harmlessly).
     pub skip: bool,
     /// The commit that failed, for the skip to ask again.
     pub failed: AskedCommit,
@@ -146,7 +147,8 @@ pub struct CommitBox {
     reads: Option<CommitReads>,
     /// The recent messages, shared with the box that draws them.
     recent: Rc<Vec<String>>,
-    /// The merge whose message filled the draft: it fills an empty draft once per merge.
+    /// The operation whose message filled the draft — a merge, a single cherry-pick or revert:
+    /// it fills an empty draft once per operation.
     merge_filled: bool,
     /// While Amend is ticked: what it would replace, once read; `reading` while a newer read
     /// is on its way.
@@ -172,14 +174,6 @@ impl CommitBox {
     /// The operation in progress, as last read.
     pub fn operation(&self) -> Option<&OperationInProgress> {
         self.reads.as_ref()?.operation.as_ref()
-    }
-
-    /// The hooks git would run, as last read; none known when the read failed.
-    pub fn hooks(&self) -> CommitHooks {
-        self.reads
-            .as_ref()
-            .and_then(|reads| reads.hooks.as_ref().ok().copied())
-            .unwrap_or_default()
     }
 
     pub fn amendable(&self) -> Option<&Amendable> {
@@ -267,25 +261,23 @@ impl CommitBox {
         }
     }
 
-    /// What the box reads has arrived: kept, and — with a merge newly in progress and the draft
-    /// empty — git's `MERGE_MSG` to fill it with, as git wrote it (R10.8, the user's decision E).
+    /// What the box reads has arrived: kept, and — with a merge, a single cherry-pick or a
+    /// single revert newly in progress and the draft empty — the message git prepared for it,
+    /// cleaned as git's editor cleans it, to fill it with (R10.8, R6.10).
     pub fn reads_arrived(&mut self, reads: CommitReads, draft_empty: bool) -> Option<String> {
         self.recent = Rc::new(reads.recent.clone().unwrap_or_default());
-        let fill = match &reads.operation {
-            Some(OperationInProgress::Merge { message }) => {
+        let fill = match reads.operation {
+            Some(operation) if operation.concluded_by_commit() => {
                 let first = !self.merge_filled;
                 self.merge_filled = true;
-                message
+                reads
+                    .message
                     .clone()
+                    .ok()
+                    .flatten()
                     .filter(|_| first && draft_empty && !self.amend)
             }
-            Some(
-                OperationInProgress::Rebase
-                | OperationInProgress::ApplyingPatches
-                | OperationInProgress::CherryPick
-                | OperationInProgress::Revert,
-            )
-            | None => {
+            Some(_) | None => {
                 self.merge_filled = false;
                 None
             }
@@ -350,8 +342,8 @@ impl CommitBox {
     }
 
     /// A commit failed with git's own failure: the Git Error dialog opens over its output —
-    /// what streamed, or else what the engine kept of it — the skip offered only where a hook
-    /// exists and it was not already skipped (R10.5).
+    /// what streamed, or else what the engine kept of it — the skip offered on every failure
+    /// whose hooks were not already skipped (R10.5 as amended, C4).
     pub fn failed(&mut self, failed: AskedCommit, command: String, kept: &ScrubbedLines) {
         let lines = if self.output.is_empty() {
             shown_lines(kept)
@@ -364,11 +356,9 @@ impl CommitBox {
             serial,
             command,
             lines: Rc::new(lines),
-            // Offered only where it can act: a hook to skip, not skipped already, and — for an
-            // amend — the consequence it was confirmed with, to confirm again.
-            skip: self.hooks().skippable()
-                && !failed.skip_hooks
-                && (!failed.amend || failed.confirmed_with.is_some()),
+            // Offered wherever it can act: not skipped already, and — for an amend — the
+            // consequence it was confirmed with, to confirm again.
+            skip: !failed.skip_hooks && (!failed.amend || failed.confirmed_with.is_some()),
             failed,
         });
     }
@@ -407,10 +397,9 @@ pub fn compose_message(subject: &str, description: &str) -> String {
 mod tests {
     use super::*;
 
-    /// R10.8 and the user's decision E: `MERGE_MSG` as git wrote it — its `# Conflicts:` lines
-    /// among it — is what the two fields hold, and the message they compose is the file's text
-    /// unchanged; so is any subject-and-body message, a recalled one or `HEAD`'s. Caught by: the
-    /// comment lines stripped, the blank separator kept in the description, or a body's own
+    /// A message split into the two fields composes back unchanged — one with `#` lines among it
+    /// (a person may type them; `git commit -F` keeps them), a recalled one or `HEAD`'s. Caught
+    /// by: the comment lines stripped, the blank separator kept in the description, or a body's own
     /// blank lines folded.
     #[test]
     fn a_message_split_into_the_fields_composes_back_unchanged() {
@@ -496,21 +485,18 @@ mod tests {
         );
     }
 
-    /// R10.8: a merge fills an empty draft with `MERGE_MSG` once, as git wrote it, and never
-    /// over a draft or while amending; a merge ended and another begun fills again. Caught by:
-    /// a draft overwritten on every refresh during a merge.
+    /// R10.8: a merge fills an empty draft with the message git prepared, cleaned (R6.10), once,
+    /// and never over a draft or while amending; a merge ended and another begun fills again; a
+    /// single cherry-pick fills the same way, and a rebase never. Caught by: a draft overwritten
+    /// on every refresh during a merge, or a refusing operation's message filled.
     #[test]
     fn a_merge_fills_an_empty_draft_once() {
         let reads = |operation| CommitReads {
             operation,
-            hooks: Ok(CommitHooks::default()),
+            message: Ok(Some("Merge branch 'x'\n".to_owned())),
             recent: Ok(vec!["Last\n".to_owned()]),
         };
-        let merge = || {
-            Some(OperationInProgress::Merge {
-                message: Some("Merge branch 'x'\n\n# Conflicts:\n#\ta\n".to_owned()),
-            })
-        };
+        let merge = || Some(OperationInProgress::Merge);
         let mut state = CommitBox::default();
         assert_eq!(
             state.reads_arrived(reads(merge()), false),
@@ -520,7 +506,7 @@ mod tests {
         let mut state = CommitBox::default();
         assert_eq!(
             state.reads_arrived(reads(merge()), true).as_deref(),
-            Some("Merge branch 'x'\n\n# Conflicts:\n#\ta\n")
+            Some("Merge branch 'x'\n")
         );
         assert_eq!(
             state.reads_arrived(reads(merge()), true),
@@ -530,14 +516,26 @@ mod tests {
         assert_eq!(state.recent().as_slice(), ["Last\n"]);
         let _ = state.reads_arrived(reads(None), true);
         assert!(state.reads_arrived(reads(merge()), true).is_some());
+        let mut state = CommitBox::default();
+        let pick = Some(OperationInProgress::CherryPick { picked: None });
+        assert!(
+            state.reads_arrived(reads(pick), true).is_some(),
+            "a pick's message"
+        );
+        let mut state = CommitBox::default();
+        assert_eq!(
+            state.reads_arrived(reads(Some(OperationInProgress::Rebase)), true),
+            None,
+            "a rebase's message filled"
+        );
     }
 
-    /// R10.5: the skip is offered only where a hook git would run exists, and never for a
-    /// commit whose hooks were already skipped; the dialog shows what streamed, or else the
-    /// engine's kept output, ANSI stripped. Caught by: a skip offered with no hook, or offered
-    /// again after the skip (an endless `--no-verify` loop).
+    /// R10.5 as C4 amended it: the skip is offered on every failed commit — no hook model —
+    /// and never for one whose hooks were already skipped; the dialog shows what streamed, or
+    /// else the engine's kept output, ANSI stripped. Caught by: a skip withheld for want of a
+    /// hook Cairn found, or offered again after the skip (an endless `--no-verify` loop).
     #[test]
-    fn a_failure_offers_the_skip_only_where_a_hook_exists() {
+    fn a_failure_offers_the_skip_unless_it_was_skipped() {
         let asked = |skip_hooks| AskedCommit {
             id: OperationId::for_tests(3),
             amend: false,
@@ -569,20 +567,8 @@ mod tests {
         );
         assert_eq!(
             error.map(|error| error.skip),
-            Some(false),
-            "no hook, yet a skip"
-        );
-
-        let _ = state.reads_arrived(
-            CommitReads {
-                operation: None,
-                hooks: Ok(CommitHooks {
-                    pre_commit: true,
-                    commit_msg: false,
-                }),
-                recent: Ok(Vec::new()),
-            },
-            false,
+            Some(true),
+            "a failure, yet no skip"
         );
         state.failed(
             asked(false),

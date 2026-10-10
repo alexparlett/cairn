@@ -10,7 +10,6 @@ mod changed_file;
 mod chunked_store;
 mod command_log;
 mod commit_details;
-mod commit_hooks;
 mod confirm;
 mod consequence;
 mod diff_content;
@@ -50,7 +49,6 @@ pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
 pub use command_log::{CommandExit, CommandRecord};
 pub use commit_details::{CommitDetails, Signature, Timestamp};
-pub use commit_hooks::CommitHooks;
 pub use confirm::Confirmed;
 pub use consequence::{
     ChangeLoss, ChangedKind, Consequence, DiscardedFile, FileLoss, LostChange, Publication, Reflog,

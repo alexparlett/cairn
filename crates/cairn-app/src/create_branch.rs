@@ -405,9 +405,10 @@ pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding) {
         }
         WriteEnding::Stale { message, .. }
         | WriteEnding::Refused { message }
-        | WriteEnding::MayHaveTakenEffect { message, .. }
+        | WriteEnding::Cancelled { message, .. }
         | WriteEnding::Incomplete { message, .. }
         | WriteEnding::NotRun { message } => (String::new(), vec![message.clone()]),
+        WriteEnding::NeedsConfirming { consequence } => (String::new(), vec![consequence.prompt()]),
     };
     state.kept_name = Some(name);
     let serial = state.serial();

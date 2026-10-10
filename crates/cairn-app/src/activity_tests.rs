@@ -437,8 +437,8 @@ fn a_write_refused_before_it_started_keeps_its_name() {
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
-/// R12.1, the merge bar's W2: a destructive write that git failed, or that may have done part
-/// before it was cancelled, still quotes the prompt the user accepted — copied as it was asked,
+/// R12.1, the merge bar's W2: a destructive write that git failed, or that was cancelled, still
+/// quotes the prompt the user accepted — copied as it was asked,
 /// since the verb spent the token and only an ending that ran carries it back — and so does one
 /// that never ran. Caught by: the prompt drawn only for a write that succeeded.
 #[test]
@@ -446,7 +446,6 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
     let (mut test, view, submitted) = launch();
     let amend = Consequence::Amend {
         commit: Oid::from_bytes(&[0xab; 20]).unwrap(),
-        subject: "Fix the parser".to_owned(),
         published: Publication::Unpublished,
         reflog: Reflog::NotWritten,
     };
@@ -473,7 +472,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         "{prompts:?}"
     );
 
-    // An amend cancelled part way: it may have taken effect.
+    // An amend cancelled before git made it.
     let killed = started(
         &mut test,
         view,
@@ -490,8 +489,8 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         &submitted,
         Update::WriteEnded {
             id: killed,
-            ending: WriteEnding::MayHaveTakenEffect {
-                message: "git commit was cancelled; it may have taken effect".to_owned(),
+            ending: WriteEnding::Cancelled {
+                message: "git commit -q --amend -F - was cancelled".to_owned(),
                 locks: Vec::new(),
             },
             read_again: crate::worker::ReadAgain::Everything,

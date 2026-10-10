@@ -197,10 +197,9 @@ pub fn acting_line(acting: &Acting, writes: &LocalWrites) -> Option<(String, boo
             ),
             true,
         )),
-        WriteEnding::MayHaveTakenEffect { message, .. } => Some((
-            format!("{what} may have taken effect in part: {message}"),
-            true,
-        )),
+        // A cancel opens nothing and says nothing here (R4.7, rule 5); an amend waiting for its
+        // confirmation is the dialog's to say.
+        WriteEnding::Cancelled { .. } | WriteEnding::NeedsConfirming { .. } => None,
         WriteEnding::Incomplete { kept, message, .. } => Some((
             format!(
                 "{what} did not take every file — {} kept as they were: {message}",

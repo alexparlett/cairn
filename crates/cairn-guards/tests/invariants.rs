@@ -2644,13 +2644,24 @@ fn the_runner_is_named_only_by_ops_and_reads() {
 const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
 
 /// The one file that may build the second porcelain read, `git config` in query form —
-/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
-const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
+/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04), and
+/// what a commit and an amend will (staging-and-commit R6.11, 2026-10-10).
+const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/config.rs";
 
 /// The one file that may build the third porcelain read, `git stash show` in raw form —
 /// what a stash changed, untracked files paired as git pairs them (the user's decision of
 /// 2026-10-07).
 const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
+
+/// The one file that may build the fourth porcelain read, `git stripspace --strip-comments` — a
+/// merge's message cleaned as git's editor cleans it (staging-and-commit R6.10, C32, the user's
+/// decision of 2026-10-10).
+const STRIPSPACE_READ_FILE: &str = "crates/cairn-git/src/reads/stripspace.rs";
+
+/// The one option the stripspace read passes, and must: the strip of comment lines. Any
+/// literal of [`STRIPSPACE_READ_FILE`]'s production code that starts with `-` must be it — not
+/// `--comment-lines` (`-c`), which comments every line, nor any other.
+const STRIPSPACE_OPTIONS: &[&str] = &["--strip-comments"];
 
 /// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
 /// the working tree, a branch or a ref (`export` writes a ref, `import` the stash), and none
@@ -2720,8 +2731,8 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the reads of `reads/` say about the three porcelain verbs, as `path:line ..` for each
-/// way they break the three accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// What the reads of `reads/` say about the four porcelain verbs, as `path:line ..` for each
+/// way they break the four accepted exceptions. `diff`: the exact literal `"diff"` (plain,
 /// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
 /// with the next literal on its line `"--no-index"`, and that file's production code holds
 /// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
@@ -2733,12 +2744,66 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// exact literal `"stash"` appears in production code of [`STASH_READ_FILE`] alone, exactly
 /// once, `"show"` the literal after it; every literal there that starts with `-` is one of
 /// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
-/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. Comments and test modules are not read; a
-/// verb or an option built by `format!` or `concat!` is not seen.
+/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. `stripspace` ([`stripspace_read_violations`]):
+/// the exact literal `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`]
+/// alone, exactly once, and every literal there that starts with `-` is `--strip-comments`,
+/// which it passes. Comments and test modules are not read; a verb or an option built by
+/// `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
     found.extend(config_read_violations(files));
     found.extend(stash_read_violations(files));
+    found.extend(stripspace_read_violations(files));
+    found
+}
+
+/// The `git stripspace` fourth of [`porcelain_read_violations`]: the exact literal
+/// `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`] alone, exactly once;
+/// every literal there that starts with `-` is one of [`STRIPSPACE_OPTIONS`], each of which it
+/// passes.
+fn stripspace_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut passed: Vec<String> = Vec::new();
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(STRIPSPACE_READ_FILE);
+        for (line, text) in production_string_literals(source) {
+            if home && text.starts_with('-') {
+                if STRIPSPACE_OPTIONS.contains(&text.as_str()) {
+                    passed.push(text.clone());
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the stripspace read, which is not its option",
+                        at(line)
+                    ));
+                }
+            }
+            if text != "stripspace" {
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the verb `stripspace` outside {STRIPSPACE_READ_FILE}",
+                    at(line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `stripspace` {verbs} times in production code; the one \
+             accepted stripspace read is built once, in {STRIPSPACE_READ_FILE}"
+        ));
+    }
+    for required in STRIPSPACE_OPTIONS {
+        if !passed.iter().any(|option| option == required) {
+            found.push(format!(
+                "{STRIPSPACE_READ_FILE} does not pass `{required}`, which the stripspace read must"
+            ));
+        }
+    }
     found
 }
 
@@ -2943,23 +3008,30 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The three porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// The four porcelain verbs a read runs are `git diff --no-index`, built once, by the
 /// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
-/// in query form, built once, by the fetch-settings read (the user's decision of
-/// 2026-10-04), and `git stash show`, built once, by the stash read (the user's decision of
-/// 2026-10-07); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
-/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a
-/// setter writes the configuration, and every `git stash` subcommand but `show` and `list`
-/// writes a stash, the working tree or a branch, so a second `"diff"`, `"config"` or
-/// `"stash"` in `reads/`, an option outside the query form in the config read, a setter
-/// anywhere in `reads/`, `stash` without `show` after it, or a writing stash subcommand
-/// anywhere in `reads/` is the regression this catches. Scoped to those literals; a verb or
-/// option built at run time (`format!`), and whether every other verb a read runs is query
-/// plumbing, stay the reviewer's.
+/// in query form, built once, by the config read (the user's decisions of 2026-10-04 and
+/// 2026-10-10), `git stash show`, built once, by the stash read (the user's decision of
+/// 2026-10-07), and `git stripspace --strip-comments`, built once, by the stripspace read (the
+/// user's decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
+/// diff` against the working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git
+/// config` with a setter writes the configuration, and every `git stash` subcommand but
+/// `show` and `list` writes a stash, the working tree or a branch, so a second `"diff"`,
+/// `"config"`, `"stash"` or `"stripspace"` in `reads/`, an option outside the query form in the
+/// config read, a setter anywhere in `reads/`, `stash` without `show` after it, a writing stash
+/// subcommand anywhere in `reads/`, or an option of stripspace's but `--strip-comments` is the
+/// regression this catches. Scoped to those literals; a verb or option built at run time
+/// (`format!`), and whether every other verb a read runs is query plumbing, stay the
+/// reviewer's.
 #[test]
-fn the_porcelain_reads_are_the_three_named_queries() {
+fn the_porcelain_reads_are_the_named_queries() {
     let sources = rust_sources(READS_DIR);
-    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE, STASH_READ_FILE] {
+    for home in [
+        PORCELAIN_READ_FILE,
+        CONFIG_READ_FILE,
+        STASH_READ_FILE,
+        STRIPSPACE_READ_FILE,
+    ] {
         assert!(
             sources.iter().any(|(path, _)| path == Path::new(home)),
             "{home} is gone; this guard names it as the home of a porcelain read — move the \
@@ -2981,8 +3053,9 @@ fn the_porcelain_reads_are_the_three_named_queries() {
         found.is_empty(),
         "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
          `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
-         `git config` in query form built in {CONFIG_READ_FILE}, or `git stash show` built \
-         in {STASH_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
+         `git config` in query form built in {CONFIG_READ_FILE}, `git stash show` built \
+         in {STASH_READ_FILE}, or `git stripspace --strip-comments` built in \
+         {STRIPSPACE_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
          config` setter the configuration, and any other `git stash` the stashes or the \
          working tree."
     );
@@ -2997,13 +3070,18 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     let config_home = Path::new(CONFIG_READ_FILE);
     let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
                            const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
-                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
+                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n\
+                           const LAST_VALUE: [&str; 1] = [\"--get\"];\n";
     let stash_home = Path::new(STASH_READ_FILE);
     let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\", \"-z\", \
                           \"--no-abbrev\", \"--no-color\", \"--no-ext-diff\", \
                           \"--no-textconv\", \"--no-relative\", \"--end-of-options\"]; }";
-    // The `diff` cases are judged beside the accepted config and stash reads, unless they
-    // bring their own; the `config` and `stash` cases below bring theirs beside the rest.
+    let stripspace_home = Path::new(STRIPSPACE_READ_FILE);
+    let accepted_stripspace =
+        "const ARGUMENTS: [&str; 2] = [\"stripspace\", \"--strip-comments\"];";
+    // The `diff` cases are judged beside the accepted config, stash and stripspace reads,
+    // unless they bring their own; the `config`, `stash` and `stripspace` cases below bring
+    // theirs beside the rest.
     let verdict = |files: &[(&Path, &str)]| {
         let mut all = files.to_vec();
         if !files.iter().any(|(path, _)| *path == config_home) {
@@ -3011,6 +3089,9 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
         }
         if !files.iter().any(|(path, _)| *path == stash_home) {
             all.push((stash_home, accepted_stash));
+        }
+        if !files.iter().any(|(path, _)| *path == stripspace_home) {
+            all.push((stripspace_home, accepted_stripspace));
         }
         porcelain_read_violations(&all)
     };
@@ -3129,7 +3210,11 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     }
     // The config read: once, in its file, in query form, and no setter anywhere.
     let config_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted), (stash_home, accepted_stash)];
+        let mut all = vec![
+            (home, accepted),
+            (stash_home, accepted_stash),
+            (stripspace_home, accepted_stripspace),
+        ];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -3182,6 +3267,16 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
             ],
         ),
         (
+            "the config read back at the path it was moved from",
+            &[
+                (config_home, "fn a() {}"),
+                (
+                    Path::new("crates/cairn-git/src/reads/fetch_settings.rs"),
+                    accepted_config,
+                ),
+            ],
+        ),
+        (
             "a second `config` in its file",
             &[(
                 config_home,
@@ -3217,7 +3312,11 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
 
     // The stash read: once, in its file, `show` after it, and no writing subcommand anywhere.
     let stash_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted), (config_home, accepted_config)];
+        let mut all = vec![
+            (home, accepted),
+            (config_home, accepted_config),
+            (stripspace_home, accepted_stripspace),
+        ];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -3332,6 +3431,83 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
         assert!(
             !stash_verdict(&[(stash_home, accepted_stash), (other, &source)]).is_empty(),
             "`{subcommand}` was not caught"
+        );
+    }
+
+    // The stripspace read: once, in its file, `--strip-comments` its one option and passed.
+    let stripspace_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![
+            (home, accepted),
+            (config_home, accepted_config),
+            (stash_home, accepted_stash),
+        ];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        stripspace_verdict(&[(stripspace_home, accepted_stripspace)]).is_empty(),
+        "the accepted stripspace read"
+    );
+    assert!(
+        stripspace_verdict(&[
+            (stripspace_home, accepted_stripspace),
+            (
+                other,
+                "#[cfg(test)]\nmod tests {\n    fn t() { [\"stripspace\", \"-s\"]; }\n}\n"
+            ),
+        ])
+        .is_empty(),
+        "a test module's stripspace"
+    );
+    let refused_stripspace: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "`stripspace` in another file",
+            &[
+                (stripspace_home, accepted_stripspace),
+                (
+                    other,
+                    "fn b() { x.args([\"stripspace\", \"--strip-comments\"]); }",
+                ),
+            ],
+        ),
+        (
+            "a second `stripspace` in its file",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\"]; [\"stripspace\"]; }",
+            )],
+        ),
+        (
+            "`--comment-lines`, which comments every line",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\", \"--comment-lines\"]; }",
+            )],
+        ),
+        (
+            "`-s`, the short spelling, not the one option",
+            &[(stripspace_home, "fn s() { [\"stripspace\", \"-s\"]; }")],
+        ),
+        (
+            "no `--strip-comments`",
+            &[(stripspace_home, "fn s() { [\"stripspace\"]; }")],
+        ),
+        (
+            "no stripspace read at all",
+            &[(stripspace_home, "fn s() {}")],
+        ),
+        (
+            "`stripspace` as a raw string elsewhere",
+            &[
+                (stripspace_home, accepted_stripspace),
+                (other, "fn b() { x.arg(r#\"stripspace\"#); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused_stripspace {
+        assert!(
+            !stripspace_verdict(files).is_empty(),
+            "{shape} was not caught"
         );
     }
 

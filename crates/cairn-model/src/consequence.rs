@@ -13,7 +13,7 @@
 //!
 //! Every count and path a prompt renders is read from the value: nothing here
 //! looks at a repository, a clock or a setting, so the same `Consequence`
-//! always renders the same words. A path or a subject is text a repository's
+//! always renders the same words. A path or a branch's name is text a repository's
 //! author chose, so a control character, a line separator or a bidirectional
 //! override in it is escaped before it is drawn: it cannot rewrite the prompt
 //! around it.
@@ -70,11 +70,11 @@ pub enum Consequence {
     /// index, each untracked file deleted. Never empty when the engine builds
     /// it.
     DiscardFiles { files: Vec<DiscardedFile> },
-    /// `HEAD` replaced by an amended commit.
+    /// `HEAD` replaced by an amended commit (staging-and-commit R6.4): the commit, the remote
+    /// ref that has it, and whether git will log the move — what the amend re-checks, and
+    /// nothing drawn for display alone, so no display field is ever a freshness condition.
     Amend {
         commit: Oid,
-        /// The replaced commit's subject, as the history draws it.
-        subject: String,
         published: Publication,
         /// Whether git will record the move in a reflog, which is where Show Lost
         /// Commits finds the replaced commit.
@@ -299,16 +299,9 @@ impl Consequence {
             } => checkout_discarding_prompt(branch, *at, changes, *kept_untracked),
             Self::Amend {
                 commit,
-                subject,
                 published,
                 reflog,
-            } => {
-                let replaces = amend_replaces(*commit, subject, *reflog);
-                match amend_force_push(*commit, published) {
-                    Some(warning) => format!("{warning} {replaces}"),
-                    None => replaces,
-                }
-            }
+            } => amend_prompt(*commit, published, *reflog),
             Self::RemoveLock {
                 path,
                 modified,
@@ -327,34 +320,12 @@ impl Consequence {
         }
     }
 
-    /// An amend's first sentences, when a remote already has the commit it replaces (R10.6):
-    /// "<short id> is already on <remote ref>. Sharing the amended commit needs a force push."
-    /// — what the dialog asks first. `None` for an amend no remote has, and for every other
-    /// operation. [`Consequence::prompt`] is this, then [`Consequence::replaces`], so a
-    /// surface that draws the two apart draws exactly the words the token records
-    /// (staging-and-commit phase 01's QA item 21).
-    pub fn force_push_warning(&self) -> Option<String> {
-        match self {
-            Self::Amend {
-                commit,
-                subject: _,
-                published,
-                reflog: _,
-            } => amend_force_push(*commit, published),
-            Self::DiscardLines { .. }
-            | Self::DiscardFiles { .. }
-            | Self::RemoveLock { .. }
-            | Self::CheckoutDiscarding { .. } => None,
-        }
-    }
-
     /// The commit an amend replaces: what its prompt names and its re-check holds `HEAD` to.
     /// `None` for every other operation.
     pub fn amended(&self) -> Option<Oid> {
         match self {
             Self::Amend {
                 commit,
-                subject: _,
                 published: _,
                 reflog: _,
             } => Some(*commit),
@@ -365,27 +336,21 @@ impl Consequence {
         }
     }
 
-    /// Whether confirming this needs the dialog first: an amend a remote already has, whose
-    /// replacement needs a force push to share (R10.6, L12). Nothing else asks a dialog by
-    /// this rule.
-    pub fn needs_force_push(&self) -> bool {
-        self.force_push_warning().is_some()
-    }
-
-    /// An amend's line under its button (R10.6): "Replaces <short id> '<subject>'.", then
-    /// whether the old commit can be found again. `None` for every other operation.
-    pub fn replaces(&self) -> Option<String> {
+    /// Whether the operation must be confirmed before it runs (staging-and-commit R1.5): every
+    /// destructive operation but an amend git logs and no remote has, which Show Lost Commits
+    /// recovers and which runs at once, asking nothing. An amend a remote already has, or one
+    /// git keeps no reflog for, is confirmed first.
+    pub fn needs_confirming(&self) -> bool {
         match self {
             Self::Amend {
-                commit,
-                subject,
-                published: _,
+                commit: _,
+                published,
                 reflog,
-            } => Some(amend_replaces(*commit, subject, *reflog)),
+            } => *published != Publication::Unpublished || *reflog == Reflog::NotWritten,
             Self::DiscardLines { .. }
             | Self::DiscardFiles { .. }
             | Self::RemoveLock { .. }
-            | Self::CheckoutDiscarding { .. } => None,
+            | Self::CheckoutDiscarding { .. } => true,
         }
     }
 
@@ -417,12 +382,7 @@ impl Consequence {
                     counted(files.len(), "File", "Files")
                 )
             }
-            Self::Amend {
-                commit,
-                subject: _,
-                published: _,
-                reflog: _,
-            } => format!("Amend {}", commit.short().as_str()),
+            Self::Amend { .. } => "Amend".to_owned(),
             Self::CheckoutDiscarding { .. } => "Discard Changes and Check Out".to_owned(),
             Self::RemoveLock {
                 path,
@@ -488,33 +448,28 @@ impl Consequence {
     }
 }
 
-/// R10.6's line under the amend button: the commit replaced and whether it can be found
-/// again afterwards.
-fn amend_replaces(commit: Oid, subject: &str, reflog: Reflog) -> String {
-    let short = commit.short();
-    let subject = escaped(subject.as_bytes());
-    let afterwards = match reflog {
-        Reflog::Written => "The old commit stays in Show Lost Commits.",
-        Reflog::NotWritten => {
-            "The old commit can't be recovered afterwards: this repository keeps no reflog."
-        }
-    };
-    format!("Replaces {} '{subject}'. {afterwards}", short.as_str())
-}
-
-/// R10.6's dialog text, when a remote already has the commit an amend replaces.
-fn amend_force_push(commit: Oid, published: &Publication) -> Option<String> {
+/// R10.6's dialog text (the redesign of 2026-10-10): one fixed sentence for each reason the amend
+/// is confirmed, naming the commit — that a remote already has it, and that git keeps no reflog
+/// to recover it from — both where both hold. An amend for neither is recoverable and never
+/// asks; its prompt, drawn by no dialog, says where the old commit stays.
+fn amend_prompt(commit: Oid, published: &Publication, reflog: Reflog) -> String {
     let short = commit.short();
     let short = short.as_str();
-    match published {
+    let on = match published {
         Publication::Unpublished => None,
-        Publication::Upstream(upstream) => Some(format!(
-            "{short} is already on {}. Sharing the amended commit needs a force push.",
-            quoted(upstream.shorthand().as_bytes())
-        )),
-        Publication::SomeRemote => Some(format!(
-            "{short} is already on a remote. Sharing the amended commit needs a force push."
-        )),
+        Publication::Upstream(upstream) => Some(quoted(upstream.shorthand().as_bytes())),
+        Publication::SomeRemote => Some("a remote".to_owned()),
+    };
+    let shared = on.map(|on| {
+        format!("{short} is already on {on}. Amending it rewrites history others may have.")
+    });
+    let unrecoverable = (reflog == Reflog::NotWritten).then(|| {
+        format!("{short} can't be recovered after this: this repository keeps no reflog.")
+    });
+    match (shared, unrecoverable) {
+        (Some(shared), Some(unrecoverable)) => format!("{shared} {unrecoverable}"),
+        (Some(sentence), None) | (None, Some(sentence)) => sentence,
+        (None, None) => format!("Amend {short}? The old commit stays in Show Lost Commits."),
     }
 }
 
@@ -1030,7 +985,6 @@ mod tests {
             kept.prompt()
                 .contains("(1 line). Untracked files are kept. You can't")
         );
-        assert!(!kept.needs_force_push() && kept.replaces().is_none());
         assert_eq!(kept.amended(), None);
     }
 
@@ -1527,118 +1481,86 @@ mod tests {
         );
     }
 
-    /// R10.6's text, and the force push named exactly when a remote has the commit.
+    /// R10.6 as the redesign of 2026-10-10 fixed it: one sentence for each reason an amend is
+    /// confirmed — a remote has the commit (its upstream named, or "a remote"), git keeps no
+    /// reflog — the id named in each, both where both hold; the button "Amend". Caught by: a
+    /// subject or a force-push sentence back in the prompt, or a reason left unsaid.
     #[test]
-    fn an_amend_names_the_commit_it_replaces_and_whether_a_remote_has_it() {
+    fn an_amend_says_why_it_is_confirmed_in_fixed_sentences() {
         let commit = oid(0xab);
-        let amend = |published| Consequence::Amend {
-            commit,
-            subject: "Fix the parser".to_owned(),
-            published,
-            reflog: Reflog::Written,
-        };
-        assert_eq!(commit.short().as_str(), "abababa");
-        assert_eq!(
-            amend(Publication::Unpublished).prompt(),
-            "Replaces abababa 'Fix the parser'. The old commit stays in Show Lost Commits."
-        );
-        assert_eq!(
-            amend(Publication::Upstream(RefName::new(
-                "refs/remotes/origin/main"
-            )))
-            .prompt(),
-            "abababa is already on origin/main. Sharing the amended commit needs a force \
-             push. Replaces abababa 'Fix the parser'. The old commit stays in Show Lost \
-             Commits."
-        );
-        assert_eq!(
-            amend(Publication::SomeRemote).prompt(),
-            "abababa is already on a remote. Sharing the amended commit needs a force push. \
-             Replaces abababa 'Fix the parser'. The old commit stays in Show Lost Commits."
-        );
-        assert_eq!(amend(Publication::Unpublished).action(), "Amend abababa");
-    }
-
-    /// R10.6 as the user decided it on 2026-10-08: "stays in Show Lost Commits" only when
-    /// git will write the reflog entry that keeps the old commit findable, and otherwise
-    /// that it cannot be recovered and why. Caught by: the promise made whatever the
-    /// repository keeps.
-    #[test]
-    fn an_amend_promises_recovery_only_where_a_reflog_is_written() {
         let amend = |published, reflog| Consequence::Amend {
-            commit: oid(0xab),
-            subject: "Fix the parser".to_owned(),
+            commit,
             published,
             reflog,
         };
+        let upstream = || Publication::Upstream(RefName::new("refs/remotes/origin/main"));
+        assert_eq!(commit.short().as_str(), "abababa");
         assert_eq!(
-            amend(Publication::Unpublished, Reflog::Written).prompt(),
-            "Replaces abababa 'Fix the parser'. The old commit stays in Show Lost Commits."
+            amend(upstream(), Reflog::Written).prompt(),
+            "abababa is already on origin/main. Amending it rewrites history others may have."
+        );
+        assert_eq!(
+            amend(Publication::SomeRemote, Reflog::Written).prompt(),
+            "abababa is already on a remote. Amending it rewrites history others may have."
         );
         assert_eq!(
             amend(Publication::Unpublished, Reflog::NotWritten).prompt(),
-            "Replaces abababa 'Fix the parser'. The old commit can't be recovered afterwards: \
-             this repository keeps no reflog."
+            "abababa can't be recovered after this: this repository keeps no reflog."
         );
         assert_eq!(
-            amend(
-                Publication::Upstream(RefName::new("refs/remotes/origin/main")),
-                Reflog::NotWritten
-            )
-            .prompt(),
-            "abababa is already on origin/main. Sharing the amended commit needs a force \
-             push. Replaces abababa 'Fix the parser'. The old commit can't be recovered \
-             afterwards: this repository keeps no reflog."
+            amend(upstream(), Reflog::NotWritten).prompt(),
+            "abababa is already on origin/main. Amending it rewrites history others may have. \
+             abababa can't be recovered after this: this repository keeps no reflog."
         );
         assert_eq!(
-            amend(Publication::Unpublished, Reflog::NotWritten).action(),
-            "Amend abababa"
+            amend(Publication::Unpublished, Reflog::Written).prompt(),
+            "Amend abababa? The old commit stays in Show Lost Commits."
         );
+        for published in [
+            Publication::Unpublished,
+            upstream(),
+            Publication::SomeRemote,
+        ] {
+            for reflog in [Reflog::Written, Reflog::NotWritten] {
+                let consequence = amend(published.clone(), reflog);
+                assert_eq!(consequence.action(), "Amend");
+                assert_eq!(consequence.name(), "Amend");
+                assert_eq!(consequence.amended(), Some(commit));
+            }
+        }
     }
 
-    /// Phase 01's QA item 21: the amend's two texts are rendered apart — the force push the
-    /// dialog asks first, the line under the button — and the prompt a token records is
-    /// exactly the two joined, so what a surface draws of either is what the token quotes.
-    /// The dialog is needed exactly when a remote has the commit, and for nothing else.
-    /// Caught by: a part that drifts from the prompt, or a dialog asked for an unpublished
-    /// amend or a discard.
+    /// R1.5 as the redesign amended it: an amend git logs and no remote has is recoverable and
+    /// asks nothing; one a remote has, or one git keeps no reflog for, is confirmed; and every
+    /// other destructive operation is confirmed always. Caught by: a published or unlogged amend
+    /// run unconfirmed, or a discard let through without a confirmation.
     #[test]
-    fn an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog() {
+    fn only_an_amend_git_logs_and_no_remote_has_runs_unconfirmed() {
         let amend = |published, reflog| Consequence::Amend {
             commit: oid(0xab),
-            subject: "Fix the parser".to_owned(),
             published,
             reflog,
         };
-        for reflog in [Reflog::Written, Reflog::NotWritten] {
-            let unpublished = amend(Publication::Unpublished, reflog);
-            assert_eq!(unpublished.amended(), Some(oid(0xab)));
-            assert_eq!(unpublished.force_push_warning(), None);
-            assert!(!unpublished.needs_force_push());
-            assert_eq!(unpublished.replaces(), Some(unpublished.prompt()));
-            for published in [
-                Publication::Upstream(RefName::new("refs/remotes/origin/main")),
-                Publication::SomeRemote,
-            ] {
-                let consequence = amend(published, reflog);
-                assert!(consequence.needs_force_push());
-                let (Some(warning), Some(replaces)) =
-                    (consequence.force_push_warning(), consequence.replaces())
-                else {
-                    panic!("a published amend lost a part: {consequence:?}");
-                };
-                assert!(warning.ends_with("needs a force push."), "{warning}");
-                assert!(replaces.starts_with("Replaces abababa"), "{replaces}");
-                assert_eq!(consequence.prompt(), format!("{warning} {replaces}"));
+        assert!(!amend(Publication::Unpublished, Reflog::Written).needs_confirming());
+        assert!(amend(Publication::Unpublished, Reflog::NotWritten).needs_confirming());
+        for published in [
+            Publication::Upstream(RefName::new("refs/remotes/origin/main")),
+            Publication::SomeRemote,
+        ] {
+            for reflog in [Reflog::Written, Reflog::NotWritten] {
+                assert!(amend(published.clone(), reflog).needs_confirming());
             }
         }
         let discard = lines("a.rs", selection(1, 0));
-        assert!(!discard.needs_force_push());
-        assert_eq!(discard.replaces(), None);
+        assert!(discard.needs_confirming());
         assert_eq!(discard.amended(), None);
-        assert_eq!(
-            lock("/r/.git/index.lock", Duration::from_secs(1), 0).replaces(),
-            None
+        assert!(lock("/r/.git/index.lock", Duration::from_secs(1), 0).needs_confirming());
+        assert!(checkout(vec![lost("a.rs", ChangedKind::Modified, Some(1))], 0).needs_confirming());
+        assert!(
+            Consequence::DiscardFiles {
+                files: vec![modified("a.rs", Some(1))],
+            }
+            .needs_confirming()
         );
     }
 
@@ -1669,7 +1591,6 @@ mod tests {
         );
         let amend = Consequence::Amend {
             commit: oid(0xab),
-            subject: "s".to_owned(),
             published: Publication::Unpublished,
             reflog: Reflog::Written,
         };
@@ -1715,11 +1636,11 @@ mod tests {
         );
     }
 
-    /// A name a repository's author chose cannot rewrite the prompt around it: a newline,
-    /// a line separator and a right-to-left override are escaped as git escapes a C-quoted
-    /// path, and the path is quoted, as git quotes it, once anything in it is.
+    /// A name a repository's author chose — a path, a remote branch — cannot rewrite the prompt
+    /// around it: a newline, a line separator and a right-to-left override are escaped as git
+    /// escapes a C-quoted path, and the name is quoted, as git quotes it, once anything in it is.
     #[test]
-    fn a_path_or_a_subject_cannot_rewrite_the_prompt() {
+    fn a_path_or_a_remotes_name_cannot_rewrite_the_prompt() {
         let path = "a\nYou can undo this action.\u{202e}txt.exe";
         let consequence = Consequence::DiscardFiles {
             files: vec![modified(path, Some(1))],
@@ -1750,16 +1671,17 @@ mod tests {
             "{}",
             bytes.prompt()
         );
-        let subject = Consequence::Amend {
+        let remote = Consequence::Amend {
             commit: oid(0xab),
-            subject: "Fix\u{2028}Replaces nothing\u{7}".to_owned(),
-            published: Publication::Unpublished,
+            published: Publication::Upstream(RefName::new(
+                "refs/remotes/origin/x\u{2028}Amending is safe\u{7}",
+            )),
             reflog: Reflog::Written,
         };
         assert_eq!(
-            subject.prompt(),
-            "Replaces abababa 'Fix\\342\\200\\250Replaces nothing\\a'. The old commit stays \
-             in Show Lost Commits."
+            remote.prompt(),
+            "abababa is already on \"origin/x\\342\\200\\250Amending is safe\\a\". Amending it \
+             rewrites history others may have."
         );
         let plain = Consequence::DiscardFiles {
             files: vec![modified("docs/naïve café.md", Some(2))],

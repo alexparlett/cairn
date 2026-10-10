@@ -5,7 +5,7 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Seven functions today, five for `crate::diff`:
+//! nowhere else but `ops/`. For `crate::diff`:
 //! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
 //! decision E); [`patches`], `git diff-tree -p` for the content query's
 //! changed ranges and function context, which gix's line diff placed
@@ -20,27 +20,35 @@
 //! whole index, the rename or copy the user's `git diff --cached` pairs a path
 //! into, since plumbing reads no `diff.renames` and a one-path pathspec pairs
 //! nothing (`staging-and-commit` R2.6);
-//! and one for fetch's refspec check, [`fetch_settings`], `git config` in query
-//! form, what a fetch of a remote will read, because the check must decide on
-//! exactly what the fetch's own git reads and gix's reading of a linked
-//! worktree's `includeIf`, of the system file and of trust is not git's (the
-//! user's decision of 2026-10-04); and one for the working tree's status,
+//! and the config read, `git config` in query form — [`fetch_settings`], what a fetch of a
+//! remote will read, because fetch's refspec check must decide on exactly what the fetch's own
+//! git reads and gix's reading of a linked worktree's `includeIf`, of the system file and of
+//! trust is not git's (the user's decision of 2026-10-04), and [`commit_encoding`] and
+//! [`log_all_ref_updates`], what a commit and an amend will read (staging-and-commit R6.11); and
+//! one for the working tree's status,
 //! [`status()`], `git status --porcelain=v2 -z`, because gix's status differs from
 //! git's wherever status is hard — staged renames past its limit, conflicted paths,
 //! sparse checkouts, a lying fsmonitor hook — and starts clean filters outside
 //! `process/` (the refs-and-status packet's L1); and one for a stash's changes,
 //! [`stash_changes`], `git stash show --raw`, because with `stash.showIncludeUntracked` set
 //! git pairs a stash's untracked files with its tracked changes in one diff, which no
-//! plumbing can ask without writing a tree (refs-and-status R6.2); and one for Create
-//! Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git takes a
-//! name as a branch's is git's rule to apply (staging-and-commit R11.3), with
+//! plumbing can ask without writing a tree (refs-and-status R6.2); and one for a merge's
+//! message, [`stripspace`], `git stripspace --strip-comments`, git's own cleaning of
+//! `MERGE_MSG` with the comment character it reads (staging-and-commit R6.10); and one for
+//! Create Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git
+//! takes a name as a branch's is git's rule to apply (staging-and-commit R11.3), with
 //! [`change_lines`] beside it, `git diff-index --cached --numstat` and `git diff-files
 //! --numstat`, the lines Create Branch's discard counts, and [`untracked_paths`], `git ls-files
 //! --others --exclude-standard`, every untracked path whatever the display setting says.
 //!
 //! # What a read may run
 //!
-//! **Query plumbing, or `git status`, and three named porcelain exceptions.**
+//! **Query plumbing, or `git status`, and four named porcelain exceptions.**
+//!
+//! **The fourth, `git stripspace --strip-comments`, the message on stdin** (accepted by the
+//! user on 2026-10-10, C2), built only in [`stripspace`], whose module docs carry its
+//! evidence: it reads its stdin and the configuration, takes no lock, reads no index or object
+//! and runs no program (`the_stripspace_read_writes_nothing_and_runs_nothing`).
 //!
 //! **The third, `git stash show --raw -z --no-abbrev --no-color --no-ext-diff
 //! --no-textconv --no-relative --end-of-options <stash commit>`** (accepted by the user on
@@ -50,10 +58,10 @@
 //! reads `stash.showIncludeUntracked` itself, so git 2.30 and 2.31, which do not know it,
 //! list what the user's own `git stash show` lists there.
 //!
-//! **The second, `git config --includes --null` with `--type=bool --get <key>`
-//! or `--get-all <key>`** (accepted by the user on 2026-10-04): query form
-//! only, never a setter, built only in [`fetch_settings`], whose module docs
-//! carry its evidence — it takes no lock, reads no index and runs no program,
+//! **The second, `git config --includes --null` with `--type=bool --get <key>`,
+//! `--get <key>` or `--get-all <key>`** (accepted by the user on 2026-10-04, and widened to a
+//! commit's settings on 2026-10-10): query form only, never a setter, built only in
+//! `config.rs`, whose module docs carry its evidence — it takes no lock, reads no index and runs no program,
 //! and `the_refspec_checks_reads_write_nothing` holds the git directory
 //! byte-identical after it; the flags are all in git 2.18 and later, and git
 //! 2.56 takes the form without a word.
@@ -193,20 +201,21 @@
 //! out by its tests; that only this module and `ops/` name the runner is
 //! `the_runner_is_named_only_by_ops_and_reads`; that a read cannot build a
 //! write is the compiler's, because only `ops/` can construct the
-//! `WriteAuthority` a write needs; and that the three porcelain verbs are built
+//! `WriteAuthority` a write needs; and that the four porcelain verbs are built
 //! once each, in their accepted forms, is
-//! `the_porcelain_reads_are_the_three_named_queries` (matcher self-test
+//! `the_porcelain_reads_are_the_named_queries` (matcher self-test
 //! `the_porcelain_read_matcher_catches_the_shapes_it_claims`): the exact
 //! literal `"diff"` appears in this module's production code only in
 //! `working_tree.rs`, once, with `"--no-index"` the next literal on its line
 //! and `"/dev/null"` in the file — the `diff` attribute's two lines in
 //! `attributes.rs` excused by name — and the exact literal `"config"` only in
-//! `fetch_settings.rs`, once, every option literal there a query option and
-//! no `git config` setter literal anywhere here; and the exact literal
+//! `config.rs`, once, every option literal there a query option and
+//! no `git config` setter literal anywhere here; the exact literal
 //! `"stash"` only in `stash_changes.rs`, once, `"show"` the literal after it,
 //! and no `git stash` subcommand that writes (`push`, `pop`, `apply`, `drop`,
 //! `store`, `clear`, `create`, `branch`, `save`, `export`, `import`) as a
-//! literal anywhere here.
+//! literal anywhere here; and the exact literal `"stripspace"` only in
+//! `stripspace.rs`, once, `--strip-comments` its one option.
 //! What it cannot see is a
 //! review obligation (`destructive-ops-reviewer`, check 10): a verb or option
 //! built at run time — by `format!`, `concat!` or from bytes — and whether
@@ -217,12 +226,12 @@ mod attributes;
 mod branch_name;
 mod change_lines;
 mod changes;
-mod fetch_settings;
+mod config;
 mod hash_object;
-mod hooks_path;
 mod patches;
 mod stash_changes;
 mod status;
+mod stripspace;
 mod untracked;
 mod working_tree;
 
@@ -230,14 +239,16 @@ pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use branch_name::branch_name;
 pub(crate) use change_lines::change_lines;
 pub(crate) use changes::{Detection, Submodules, changes};
-pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
+pub(crate) use config::{
+    FetchSettings, LogRefUpdates, commit_encoding, fetch_settings, log_all_ref_updates,
+};
 pub(crate) use hash_object::hash_object;
-pub(crate) use hooks_path::hooks_path;
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
+pub(crate) use stripspace::stripspace;
 pub(crate) use untracked::untracked_paths;
 pub(crate) use working_tree::{
     Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, staged_since,

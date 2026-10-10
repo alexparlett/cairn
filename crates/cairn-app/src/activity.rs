@@ -71,8 +71,6 @@ pub enum Outcome {
     Failed(String),
     /// Nothing was written: refused, stale, or never started.
     NotRun(String),
-    /// Cancelled, or Cairn lost hold of its `git`: it may have done part of its work.
-    MayHaveTakenEffect(String),
     /// A discard of files that did not take every file.
     PartlyDone(String),
     Cancelled,
@@ -88,7 +86,6 @@ impl Outcome {
             Self::Succeeded => "succeeded",
             Self::Failed(_) => "failed",
             Self::NotRun(_) => "not run",
-            Self::MayHaveTakenEffect(_) => "may have taken effect",
             Self::PartlyDone(_) => "partly done",
             Self::Cancelled => "cancelled",
             Self::Found => "found",
@@ -97,10 +94,9 @@ impl Outcome {
 
     fn message(&self) -> Option<String> {
         match self {
-            Self::Failed(message)
-            | Self::NotRun(message)
-            | Self::MayHaveTakenEffect(message)
-            | Self::PartlyDone(message) => Some(message.clone()),
+            Self::Failed(message) | Self::NotRun(message) | Self::PartlyDone(message) => {
+                Some(message.clone())
+            }
             Self::Running | Self::Succeeded | Self::Cancelled | Self::Found => None,
         }
     }
@@ -498,8 +494,11 @@ impl ActivityLog {
             | WriteEnding::Refused { message }
             | WriteEnding::NotRun { message } => (Outcome::NotRun(message.clone()), None),
             WriteEnding::Failed { message, .. } => (Outcome::Failed(message.clone()), None),
-            WriteEnding::MayHaveTakenEffect { message, .. } => {
-                (Outcome::MayHaveTakenEffect(message.clone()), None)
+            WriteEnding::Cancelled { .. } => (Outcome::Cancelled, None),
+            // An amend at the press that must be confirmed: nothing ran, for the reason its
+            // confirmation will say.
+            WriteEnding::NeedsConfirming { consequence } => {
+                (Outcome::NotRun(consequence.prompt()), None)
             }
         };
         entry.prompt = acknowledged.or_else(|| asked.and_then(|asked| asked.prompt.clone()));

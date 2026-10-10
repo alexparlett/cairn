@@ -755,10 +755,10 @@ fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
     drop(handle);
 }
 
-/// C10, R4.3 and the QA brief, against real commits held in their hooks: a cancel names its
-/// write and reaches only that one — a cancel for a commit still queued does nothing, the
-/// running commit's ends it as one that may have taken effect (its hook killed, nothing
-/// committed), and that same cancel sent again once the next commit runs leaves the next one
+/// C10, R4.3, R4.7 and the QA brief, against real commits held in their hooks: a cancel names
+/// its write and reaches only that one — a cancel for a commit still queued does nothing, the
+/// running commit's ends it as cancelled (its hook killed, nothing committed, `HEAD` read after
+/// the reap), and that same cancel sent again once the next commit runs leaves the next one
 /// to finish and commit what is staged. Caught by: a cancel that reaches whatever runs (#47's
 /// shape), or one kept for a write it was not for.
 #[test]
@@ -778,7 +778,7 @@ fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     handle.submit(Request::CancelWrite { id: first });
     let seen = until_ended(&mut updates, first);
     match ending_of(&seen, first) {
-        (WriteEnding::MayHaveTakenEffect { message, .. }, ReadAgain::Everything) => {
+        (WriteEnding::Cancelled { message, .. }, ReadAgain::Everything) => {
             assert!(message.contains("cancelled"), "{message}");
         }
         other => panic!("the cancelled commit ended {other:?}"),
@@ -1254,8 +1254,9 @@ fn an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back() {
     held_hook(&fixture.path, &stub.directory);
 
     let repo = Repository::discover(&fixture.path).unwrap_or_else(|error| panic!("{error}"));
-    let consequence = cairn_git::ops::amend_consequence(&repo, &CancelSignal::new())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let consequence =
+        cairn_git::ops::amend_consequence(&reading_git(), &repo, &CancelSignal::new())
+            .unwrap_or_else(|error| panic!("{error}"));
     let prompt = consequence.prompt();
     let amend = ask(
         &handle,
@@ -1289,6 +1290,85 @@ fn an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(details.message, "amended\n");
     assert!(details.parents.is_empty(), "the amend made a second commit");
+    drop(handle);
+}
+
+/// The `git` this process finds, for a read a test makes beside the lane.
+fn reading_git() -> GitBinary {
+    GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None))
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// C14's worker half and the QA brief (R6.4, rules 2 and 3 of the redesign): Amend pressed is one
+/// job on the lane that reads what the amend costs and, in the same job, runs it — git logs it
+/// and no remote has `HEAD`: amended, with no token and no prompt — or ends without running git,
+/// answering the `Consequence` for the dialog — a remote-tracking ref holds `HEAD`: nothing
+/// amended — and the dialog's token then runs it. Caught by: a recoverable amend sent to the
+/// dialog, a published one run unconfirmed, or the answer carrying another `HEAD`.
+#[test]
+fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog() {
+    let fixture = to_commit("cairn-lane-amend-press", &["a", "b", "c"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    let first = ask(&handle, commit());
+    until_ended(&mut updates, first);
+    let committed = head_commit(&fixture.path);
+    staged(&handle, &mut updates, &["b"]);
+    let press = |message: &str| LocalWrite::AmendAtPress {
+        message: message.to_owned(),
+        skip_hooks: false,
+    };
+
+    let recoverable = ask(&handle, press("amended at once"));
+    let seen = until_ended(&mut updates, recoverable);
+    match ending_of(&seen, recoverable) {
+        (WriteEnding::Done(done), ReadAgain::Everything) => {
+            assert_eq!(done.acknowledged, None, "a prompt recorded with none shown");
+        }
+        other => panic!("the recoverable amend ended {other:?}"),
+    }
+    let amended = head_commit(&fixture.path);
+    assert_ne!(amended, committed);
+
+    // A remote-tracking ref at `HEAD`: a remote has it.
+    std::fs::create_dir_all(fixture.path.join(".git/refs/remotes/origin"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(
+        fixture.path.join(".git/refs/remotes/origin/main"),
+        format!("{amended}\n"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    staged(&handle, &mut updates, &["c"]);
+    let published = ask(&handle, press("amended after asking"));
+    let seen = until_ended(&mut updates, published);
+    let consequence = match ending_of(&seen, published) {
+        (WriteEnding::NeedsConfirming { consequence }, _) => consequence,
+        other => panic!("the published amend ended {other:?}"),
+    };
+    assert_eq!(consequence.amended(), Some(amended));
+    assert!(consequence.needs_confirming());
+    assert_eq!(
+        head_commit(&fixture.path),
+        amended,
+        "git ran before the dialog"
+    );
+
+    let prompt = consequence.prompt();
+    let confirmed = ask(
+        &handle,
+        LocalWrite::Amend {
+            confirmed: Confirmed::by_user(consequence),
+            message: "amended after asking".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let seen = until_ended(&mut updates, confirmed);
+    match ending_of(&seen, confirmed) {
+        (WriteEnding::Done(done), _) => assert_eq!(done.acknowledged, Some(prompt)),
+        other => panic!("the confirmed amend ended {other:?}"),
+    }
+    assert_ne!(head_commit(&fixture.path), amended);
     drop(handle);
 }
 
@@ -1641,9 +1721,9 @@ fn status_now(handle: &RepositoryHandle, updates: &mut Updates) -> Arc<cairn_mod
     }
 }
 
-/// Staging-and-commit R6.6, R6.7, R6.3, R6.4 and R10 through the real boundary: the commit box's
-/// reads answer the hooks git would run and the branch's messages newest first, the last
-/// commit's among them; and an amend's read answers `HEAD` — the commit the message is read
+/// Staging-and-commit R6.7, R6.3, R6.4 and R10 through the real boundary: the commit box's
+/// reads answer no operation, no message prepared, and the branch's messages newest first, the
+/// last commit's among them; and an amend's read answers `HEAD` — the commit the message is read
 /// from — no remote having it, `HEAD`'s message, and amend's lists over the status asked with:
 /// the file `HEAD` added and the one staged since in Staged, the first commit's file in
 /// neither. Caught by: a read run on the UI thread's terms (an answer missing), the message
@@ -1668,20 +1748,13 @@ fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
             "{seen:?}"
         );
     }
-    hook(&fixture.path, "pre-commit", "exit 0\n");
     handle.submit(Request::CommitReads);
     let seen = collect_until(&mut updates, |u| matches!(u, Update::CommitReads(_)));
     let Some(Update::CommitReads(reads)) = seen.into_iter().last() else {
         panic!("no reads");
     };
     assert_eq!(reads.operation, None);
-    assert_eq!(
-        reads
-            .hooks
-            .as_ref()
-            .map(|hooks| (hooks.pre_commit, hooks.commit_msg)),
-        Ok((true, false))
-    );
+    assert_eq!(reads.message, Ok(None));
     assert_eq!(
         reads.recent.as_deref(),
         Ok(["second\n\nwith a body\n".to_owned(), "first\n".to_owned()].as_slice())
@@ -1701,7 +1774,10 @@ fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
         consequence.amended().map(|oid| oid.to_string()),
         Some(head.trim().to_owned())
     );
-    assert!(!consequence.needs_force_push(), "no remote has HEAD");
+    assert!(
+        !consequence.needs_confirming(),
+        "no remote has HEAD, and git logs it"
+    );
     assert_eq!(read.message.as_deref(), Ok("second\n\nwith a body\n"));
     let lists = read.lists.unwrap_or_else(|error| panic!("{error}"));
     let staged: Vec<String> = (0..lists.len(cairn_model::ChangeList::Staged))

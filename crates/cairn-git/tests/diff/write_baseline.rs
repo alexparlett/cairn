@@ -391,7 +391,7 @@ fn cairn_write_costs() {
         || {},
         || {
             let started = Instant::now();
-            cairn_git::ops::amend_consequence(&reading, &CancelSignal::new())
+            cairn_git::ops::amend_consequence(git, &reading, &CancelSignal::new())
                 .unwrap_or_else(|e| panic!("{e}"));
             started.elapsed()
         },
@@ -408,13 +408,13 @@ fn cairn_write_costs() {
         },
     );
     let box_reads = time(
-        "the commit box's reads (hooks path, recent messages, operation in progress)",
+        "the commit box's reads (recent messages, operation in progress, its message)",
         || {},
         || {
             let started = Instant::now();
             let _ = reading.operation_in_progress();
             reading
-                .commit_hooks(git, &CancelSignal::new())
+                .prepared_message(git, &CancelSignal::new())
                 .unwrap_or_else(|e| panic!("{e}"));
             reading
                 .recent_messages(&CancelSignal::new())

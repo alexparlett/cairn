@@ -423,6 +423,16 @@ pub enum Error {
     #[error("HEAD changed since you confirmed the amend; nothing was amended")]
     AmendChangedSinceConfirmed,
 
+    /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a
+    /// commit whose parent is the `HEAD` it ran on, or for an amend, whose parents are the
+    /// replaced commit's (the carried item #10 of phase 12's QA). Something else moved `HEAD`
+    /// while it ran; what is there now is what the refresh after it draws.
+    #[error(
+        "git said it {verb}, but HEAD is not the commit it made: something else moved HEAD \
+         while it ran"
+    )]
+    CommitUnconfirmed { verb: &'static str },
+
     /// `Remove index.lock…` refused before touching anything (staging-and-commit R12.4): no
     /// lock to remove, one that is not a plain file, a `git` Cairn runs in the repository, or
     /// a confirmation of another operation.
@@ -613,9 +623,10 @@ impl std::fmt::Display for CheckoutRefusal {
 /// Why a commit or an amend refused before any `git` ran; see [`Error::CommitRefused`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRefusal {
-    /// git is in the middle of an operation a commit or an amend is refused during (L25): a
-    /// rebase, `git am`, a cherry-pick or a revert — or, for an amend, a merge, which git
-    /// itself refuses to amend in.
+    /// git is in the middle of an operation a commit or an amend is refused during (L25, R6.9):
+    /// a rebase, `git am` or a sequence of cherry-picks or reverts — or, for an amend, any
+    /// operation, a merge and a single pick included, which git itself refuses to amend in. Its
+    /// text names git's command to continue or abort it.
     InProgress(cairn_model::OperationInProgress),
     /// The branch has no commit yet, so there is nothing to amend (R6.3).
     NothingToAmend,
@@ -632,8 +643,9 @@ impl std::fmt::Display for CommitRefusal {
         match self {
             Self::InProgress(operation) => write!(
                 f,
-                "{} is in progress: continue or abort it first",
-                operation.name()
+                "{} is in progress: continue or abort it with {} --continue or --abort",
+                operation.name(),
+                operation.git_command()
             ),
             Self::NothingToAmend => f.write_str("the branch has no commit to amend yet"),
             Self::CommitEncoding { encoding } => write!(

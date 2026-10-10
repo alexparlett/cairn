@@ -1,8 +1,11 @@
 //! What an amend will cost, computed from the repository as it is
-//! (`docs/prd/staging-and-commit.md` R6.4, R10.6): the [`Consequence::Amend`] the commit box
-//! builds its confirmation from, and the amend re-checks before it runs (R1.4).
+//! (`docs/prd/staging-and-commit.md` R6.4, R10.6): the [`Consequence::Amend`] an amend is
+//! confirmed with when it must be, and re-checked against before a confirmed one runs (R1.4).
+//! It is read when Amend is pressed, in the job that then runs the amend — never on a refresh —
+//! and holds only what the amend's freshness rests on, no display field (`review-code-engine.md`
+//! M2).
 //!
-//! - **The commit** it replaces: `HEAD`'s id and its subject, as the history draws it.
+//! - **The commit** it replaces: `HEAD`'s id.
 //! - **Whether a remote already has it.** With an upstream — the current branch's, a
 //!   remote-tracking ref that exists — whether that upstream reaches `HEAD`: its ahead
 //!   count is zero (the walk `HEAD --not <upstream>` yields nothing), and the walk stops at
@@ -21,7 +24,15 @@
 //!   (`is_bare_repository` in git, which a linked worktree of a bare repository is not) —
 //!   or, whatever it is set to, when that ref's log file already exists, since git appends
 //!   to a log it finds (`should_autocreate_reflog` and `log_ref_setup` in git's
-//!   `refs/files-backend.c`). Only the files backend is opened (`crate::ref_storage`).
+//!   `refs/files-backend.c`). The setting is git's answer, `git config` in query form
+//!   (`crate::reads::log_all_ref_updates`, R6.11), so a linked worktree's `includeIf`, the
+//!   system file and trust are read as the amend's own git reads them; gix's configuration is
+//!   not asked. Only the files backend is opened (`crate::ref_storage`).
+//!
+//! An amend git logs and no remote has is recoverable — Show Lost Commits finds the replaced
+//! commit in the reflog — so it runs at once, unconfirmed ([`super::amend_unconfirmed`], R1.5);
+//! any other is confirmed first ([`Consequence::needs_confirming`]) and run by
+//! [`super::amend`] with the token.
 //!
 //! Refused before any of it ([`Error::CommitRefused`]): an unborn branch, which has nothing
 //! to amend, and any operation in progress — a merge among them, which git refuses to amend
@@ -30,15 +41,20 @@
 use cairn_model::{Consequence, HeadState, Oid, Publication, RefKind, RefName, Reflog, Upstream};
 use gix::bstr::ByteSlice as _;
 
-use crate::commit_encoding::CommitEncoding;
-use crate::diff::git_config::{invalid, last_value, parse_bool};
+use super::GitBinary;
 use crate::history::walk;
 use crate::object_id::object_id;
+use crate::reads::LogRefUpdates;
 use crate::{Cancel, CommitRefusal, Error, Repository};
 
-/// The `Consequence` of amending `HEAD` now (module docs). `cancel` stops the refs read and
-/// the walk; a cancelled one is [`Error::RefsCancelled`] or [`Error::Cancelled`].
-pub fn amend_consequence(repo: &Repository, cancel: &impl Cancel) -> Result<Consequence, Error> {
+/// The `Consequence` of amending `HEAD` now (module docs). `cancel` stops the refs read, the
+/// walk and the configuration read; a cancelled one is [`Error::RefsCancelled`],
+/// [`Error::Cancelled`] or [`Error::GitReadCancelled`].
+pub fn amend_consequence(
+    git: &GitBinary,
+    repo: &Repository,
+    cancel: &impl Cancel,
+) -> Result<Consequence, Error> {
     if let Some(operation) = repo.operation_in_progress()
         && operation.refuses_amend()
     {
@@ -92,9 +108,8 @@ pub fn amend_consequence(repo: &Repository, cancel: &impl Cancel) -> Result<Cons
     };
     Ok(Consequence::Amend {
         commit,
-        subject: subject(repo, &commit)?,
         published,
-        reflog: reflog(repo, branch.map(|branch| &branch.name))?,
+        reflog: reflog(git, repo, branch.map(|branch| &branch.name), cancel)?,
     })
 }
 
@@ -136,32 +151,18 @@ fn reaches(
     }
 }
 
-/// `commit`'s subject as the history draws it: the summary of its message, in the characters
-/// git shows.
-fn subject(repo: &Repository, commit: &Oid) -> Result<String, Error> {
-    let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
-        id: commit.to_string(),
-        source,
-    };
-    let found = repo
-        .inner()
-        .find_commit(object_id(commit)?)
-        .map_err(|source| read(Box::new(source)))?;
-    let decoded = found.decode().map_err(|source| read(Box::new(source)))?;
-    let encoding = CommitEncoding::of_commit(&found, &decoded);
-    Ok(encoding.text(&decoded.message().summary()))
-}
-
 /// Whether git will log the amend in a reflog Show Lost Commits reads (module docs): `HEAD`'s
 /// and, on a branch, the branch's.
-fn reflog(repo: &Repository, branch: Option<&RefName>) -> Result<Reflog, Error> {
-    let config = repo.inner().config_snapshot();
-    let setting = last_value(config.plumbing(), "core", None, "logAllRefUpdates");
-    let logs_by_default = match setting {
+fn reflog(
+    git: &GitBinary,
+    repo: &Repository,
+    branch: Option<&RefName>,
+    cancel: &impl Cancel,
+) -> Result<Reflog, Error> {
+    let logs_by_default = match crate::reads::log_all_ref_updates(git, repo, cancel)? {
         None => repo.workdir().is_some(),
-        Some(Some(value)) if value.eq_ignore_ascii_case(b"always") => true,
-        Some(value) => parse_bool(value.as_ref().map(|value| value.as_bytes()))
-            .ok_or_else(|| invalid("core.logAllRefUpdates", value))?,
+        Some(LogRefUpdates::Normal | LogRefUpdates::Always) => true,
+        Some(LogRefUpdates::None) => false,
     };
     let head_log = repo.git_dir().join("logs").join("HEAD");
     let branch_log = branch.map(|branch| {

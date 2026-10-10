@@ -74,6 +74,23 @@ STEP 2  Implement.
            the dialog, and the Git Error state keeps the token the engine hands
            back (`Error::AmendNotMade`, which the local lane lets go today) — the
            three wirings phase 13's systems docs state as not yet asked.
+        7. The token-free amend's window reported (the user's ratification of
+           2026-10-10, option B; PRD R1.5, C35) — the engine half: after an
+           amend run at the press (`ops::amend_unconfirmed`) is made, read
+           again, after the reap, whether a remote has the replaced commit
+           (the same `reaches` walk the cost read used) and whether git keeps
+           a reflog for it (`reads::log_all_ref_updates` and the log file), and
+           return the answer as data on `AmendAnswer::Amended`, beside
+           `replaced` — e.g. a `Publication` and a `Reflog` read after the run,
+           or `Consequence::Amend` re-read whole, so `needs_confirming()` says
+           whether it would now have needed confirming. It reports and does not
+           prevent: nothing is undone, no dialog opens, no token is asked. The
+           lane carries it on the write's ending for the activity entry, whose
+           wording is phase 20's. Tests, real git on the host and both floors:
+           a remote ref moved onto the replaced commit by a `pre-commit` hook
+           (standing in for a push while the hook runs) answers published; the
+           reflog turned off by the hook answers not written; an untouched
+           amend answers as its cost did.
         Tests: C13 (views), C14 (views: no dialog for a recoverable amend, the
         dialog exactly when a remote has HEAD or no reflog, the chord and the
         button the same, Cancel returning unchanged), C24 and C33 (views),
@@ -106,7 +123,8 @@ STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed
         findings go to the user.
-STEP 4  Acceptance: C13, C14, C24, C33 (views); C1 and C22 for the roster rows.
+STEP 4  Acceptance: C13, C14, C24, C33 (views); C35's engine half; C1 and C22 for
+        the roster rows.
 STEP 5  Update state.md and progress.md; docs/systems/local-changes.md ("The
         commit box"); the root CLAUDE.md status paragraph, the seal invariant's
         confirmation-surface roster and the repo map rows. Save memory-worthy

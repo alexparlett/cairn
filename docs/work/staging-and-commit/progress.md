@@ -3,6 +3,16 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — the user's ratification after phase 13's QA
+
+The user answered "Those are fine" to the coordinator's recommendations: (1) the token hand-back
+as (a′) ratified; (2) R6.10 and C32 as amended ratified, the stripspace read's
+`--strip-comments` and `--comment-lines` accepted; (3) option B for the token-free amend's window
+— a post-run re-check of publication and the reflog, returned as data (phase 18, step 2.7), and
+reported in the activity entry (phase 20), never prevented. Written into the PRD (its opening,
+R1.1, R1.5, R6.10, C32 and a new C35), phase 18's and phase 20's docs; 2(b) is off state.md's
+open and teardown lists.
+
 ## 2026-10-10 — phase 13's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p13/adjudication.md`): FIX NOW 1, 2(a), 3, 5, 6, 7, 8, 11;

@@ -35,7 +35,14 @@ STEP 2  Implement.
            list of `$ git …` lines and their output, each ending in one form
            (exit code N, killed by signal N, cancelled). An amend's way back
            reads "Show in Lost Commits", turning the mode on and selecting the
-           commit (F4).
+           commit (F4). An amend run at the press whose engine answer (phase
+           18, step 2.7) says it would now have needed confirming says so in
+           its entry, once, beside its result line (the user's ratification of
+           2026-10-10, option B; PRD R1.5, C35): "Amended 3f2a1c9, which was
+           pushed to origin/main while the amend ran. Sharing the amended
+           commit needs a force push." where a remote has it, and that the
+           replaced commit can't be recovered where git kept no reflog. It
+           reports and does not prevent; no dialog opens.
         3. One store (review-code-app-ui.md H3 (b) and (c), M6): one bounded tail
            type — lines and bytes — used by the lane's hold, the commit box's
            output and each activity entry; the receipt protocol
@@ -88,7 +95,7 @@ STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed
         findings go to the user.
-STEP 4  Acceptance: C29; C21's window check re-run under a hook flood with the
+STEP 4  Acceptance: C29; C35's entry; C21's window check re-run under a hook flood with the
         popover open and closed (numbers in progress.md).
 STEP 5  Update state.md and progress.md; docs/systems/git-processes.md ("The
         activity popover"); the root CLAUDE.md status paragraph, repo map rows and

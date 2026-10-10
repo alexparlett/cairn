@@ -34,7 +34,9 @@ the merge bar is now phase 21 (`phase-21-qa.md`, the doc the first merge bar ran
 (2026-10-10). Phase 12 of the rebuild (git's output read once) built in packet mode, full gate
 green, its QA fixes applied. Phase 13 (the commit engine asks git) built in packet mode, full gate
 green, every step built — the token hand-back as (a′) and the stripspace parity fix by the
-coordinator's decisions of 2026-10-10; see "Phase 13" below. QA is the coordinator's.**
+coordinator's decisions of 2026-10-10; see "Phase 13" below. QA is the coordinator's. The user
+ratified the coordinator's three recommendations after phase 13's QA (2026-10-10, "Those are
+fine"): see "Resolved after phase 13's QA" below.**
 
 ## The redesign (2026-10-10)
 
@@ -78,6 +80,24 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Resolved after phase 13's QA (2026-10-10)
+
+The user answered "Those are fine" to the coordinator's three recommendations; the PRD records
+each ("The coordinator's recommendations after phase 13's QA, answered 2026-10-10"):
+
+- ~~**The token hand-back as (a′)**~~ — **ratified (1)**: the token comes back when the amend was
+  not made (`HEAD` still the confirmed commit after the reap) and git failed; never on a refusal
+  or a cancel; git's index refresh and tree objects written before a hook are its bookkeeping,
+  outside the `Consequence` (R1.1).
+- ~~**R6.10 / C32 as amended**~~ — **ratified (2)**: the pre-fill is what git's editor leaves under
+  `commit.cleanup` and `core.commentChar`; the stripspace read's options `--strip-comments` and
+  `--comment-lines` accepted (R6.10, C32).
+- ~~**2(b), the token-free amend's window**~~ — **decided (3), option B**: after an amend run at
+  the press, the engine re-reads publication of the replaced commit and the reflog setting and
+  returns it as data beside the replaced `Oid` (phase 18, step 2.7); where the amend would now
+  have needed confirming, the activity entry says so (phase 20) — reports, does not prevent
+  (R1.5, C35). Off the open and teardown lists.
 
 ## Phase 13 of the rebuild, the commit engine asks git (2026-10-10)
 
@@ -205,8 +225,7 @@ commented, not filed again.
   a measurement of whether an auto-gc after an amend under `gc.reflogExpireUnreachable=now`
   expires the replaced commit's reflog entry, so `Reflog::Written` would no longer mean findable.
   Also carried to teardown: `implementation-plan.md` still names the old guard
-  `the_porcelain_reads_are_the_three_named_queries` (item 12). With the user: 2(b), a
-  publication re-check after a token-free amend runs.
+  `the_porcelain_reads_are_the_three_named_queries` (item 12).
 - **From the PRD's "Not done"** (`docs/prd/staging-and-commit.md`): a backup before discard (L2);
   Fork's per-repository sign-off setting and the commit box showing author and signing;
   pre-filling an empty draft from `commit.template`; wrapping a paragraph at the ruler; a

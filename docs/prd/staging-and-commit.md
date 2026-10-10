@@ -59,6 +59,25 @@ answers, 2026-10-10":
    issue is filed at teardown); and Escape matched as a literal key is an allowed convention, its
    sites named (R7.2). These close the merge bar's F2 and F7.
 
+**The coordinator's recommendations after phase 13's QA, answered 2026-10-10.** The user answered
+"Those are fine"; each requirement below is amended in place, dated "the user's ratification,
+2026-10-10":
+
+1. The confirmed amend's token hand-back as (a′) is ratified (R1.1): the token comes back when
+   the amend was not made — after the reap `HEAD` is still the confirmed commit — and git failed;
+   a refusal or a cancel never returns it. git's index refresh and the unreferenced tree objects
+   it writes before a hook are its own bookkeeping, outside the `Consequence`.
+2. R6.10 and C32 as amended are ratified: the pre-fill is what git's editor leaves under
+   `commit.cleanup` and `core.commentChar`, and the stripspace read takes `--strip-comments` and
+   `--comment-lines`, which accepts that porcelain read's widened options.
+3. The token-free amend's window, option B (R1.5, C35): after an amend run at the press, the
+   engine reads again whether a remote has the replaced commit and whether git keeps a reflog;
+   where the amend would now have needed confirming — pushed while it ran, or no reflog — the
+   activity entry says so ("Amended 3f2a1c9, which was pushed to origin/main while the amend
+   ran. Sharing the amended commit needs a force push."). It reports and does not prevent. The
+   engine half (the re-check, returned as data beside the replaced commit's id) is phase 18's;
+   the entry's wording is phase 20's.
+
 **Three earlier decisions are superseded, because they rested on Fork claims Fork's own record
 contradicts** (the redesign; evidence `brief-local-changes-selection.md` headlines 1-2,
 `brief-commit-and-amend.md` §5.2, `fork-observed-2026-10-10.md`):
@@ -128,6 +147,10 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   (`HEAD`, the remote ref that has it, the reflog fact); the skip's run re-checks the
   consequence. Built as `Error::AmendNotMade { failure, unspent }`, its `CONFIRMED_HOLDERS` row,
   and `the_engine_error_holds_a_token_only_as_an_unspent_amend`.)
+  (Ratified by the user on 2026-10-10, answering the coordinator's recommendations after phase
+  13's QA: the token comes back exactly when the amend was not made and git failed; a refusal or
+  a cancel never returns it; git's index refresh and the unreferenced tree objects it writes
+  before a hook are outside the `Consequence`.)
 - R1.2 A `Confirmed` carries a `Consequence`, an engine-computed `cairn-model`
   value naming what the operation will destroy — per operation: the paths, the
   lines per modified path and the bytes per untracked file (Fork's wording, L8),
@@ -167,6 +190,16 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   no remote has is recoverable from Show Lost Commits, asks nothing and takes no `Confirmed`
   (R6.4). `ops::amend` keeps the roster's row for the confirmed amend. Create Branch's Discard
   stays destructive, confirmed by its dialog's press — the user's decision of 2026-10-10.)
+  (Decided 2026-10-10, the user's ratification, 3 — option B for the token-free amend's window:
+  an amend run at the press decided it was recoverable when it read the cost, before git ran,
+  and a push from elsewhere while a hook runs, or the reflog turned off, can make it not so.
+  After such an amend is made, the engine reads again whether a remote has the replaced commit
+  (the same walk the cost read) and whether git keeps a reflog for it, and returns the answer
+  as data beside the replaced commit's id; where the amend would now have needed confirming, the
+  activity entry says so — "Amended 3f2a1c9, which was pushed to origin/main while the amend
+  ran. Sharing the amended commit needs a force push." — and where no reflog was kept, that the
+  replaced commit can't be recovered. It reports and does not prevent: nothing is undone and no
+  dialog opens. The engine half is built in phase 18, the entry's wording in phase 20; C35.)
 - R1.6 `ops::Performed` records the `Consequence`'s prompt for every destructive
   operation, as today's `Performed::destructive` records the token's text.
 
@@ -440,6 +473,10 @@ literally.
   The template git adds around the message in an editor session (the help lines, the status) is
   not the message's. C32's "exactly as `git stripspace --strip-comments` leaves it" reads as
   "exactly as git's editor leaves it".)
+  (Ratified by the user on 2026-10-10, answering the coordinator's recommendations after phase
+  13's QA: the pre-fill is what git's editor leaves under `commit.cleanup` and
+  `core.commentChar`, and the stripspace read takes `--strip-comments` and `--comment-lines` —
+  accepting that porcelain read's widened options.)
 - R6.11 The settings a commit and an amend depend on are git's answers (added 2026-10-10, the
   redesign's git-parity fixes, `review-code-engine.md` M4): `core.logAllRefUpdates`, for R6.4's
   reflog fact, and `i18n.commitEncoding`, for R6.1's refusal, are read with `git config` in
@@ -1044,7 +1081,8 @@ change dated.
 
 The single authoritative copy. `docs/work/staging-and-commit/qa-checklist.md`
 points here and does not restate them. C25-C34 were added, and the rows the redesign touches
-amended in place, on 2026-10-10 (`redesign-decisions-2026-10-10.md`).
+amended in place, on 2026-10-10 (`redesign-decisions-2026-10-10.md`); C35 was added the same day,
+the user's ratification after phase 13's QA.
 
 | # | Criterion | Pinned by |
 | --- | --- | --- |
@@ -1079,9 +1117,10 @@ amended in place, on 2026-10-10 (`redesign-decisions-2026-10-10.md`).
 | C29 | Fork's Activity Manager (added 2026-10-10, F3, F4, F7, F8, F9; R12.1): each row its name, Fork's result line, `HH:MM:SS UTC` and ⚠ on a failure; the header its name, one of running, succeeded, failed, cancelled, the time and the duration; a failed or cancelled entry's one sentence; the confirmed prompt whole and wrapped, only for an operation that ran; "Show in Lost Commits" turning the mode on and selecting the replaced commit; whole oldest entries evicted at the byte bound, an entry larger alone cut under "Earlier output not kept."; a fetch's progress in the status box with Fetch greyed while it runs; the popover's two lists still one viewport each | headless tests, the popover's viewport twin |
 | C30 | The leftover lock (added 2026-10-10, F5, F6, G; R12.4): the banner shows exactly while `<gitdir>/index.lock` exists, no `git` of Cairn's runs or waits and the file is older than about ten seconds, and goes when the file does, whoever removed it; a write that fails because git could not create `index.lock` is retried about a second later once or twice before it is reported, and its Git Error then carries `Remove index.lock…`; both routes open "Remove Stale Lock" (the user's answers, 2026-10-10, 4) with decision G's prompt, and the removal is followed by a refresh, never a retry of the write | worker tests against real `git`, headless tests |
 | C31 | git's output read once (added 2026-10-10; R4.10): stdout and stderr are split by one line type into whole lines, never inside a character — a multi-byte character straddling the stderr piece limit arrives whole (failing first on `process/pipes.rs` as it was) — each line scrubbed of a URL's userinfo before it is kept or cut, the tail dropping whole lines with a plain "older lines dropped"; no view draws git's text but through the scrubbed lines | engine tests in `cairn-git`, and a guard or type that no render file takes git's raw `String` |
-| C32 | git's answers, not Cairn's (added 2026-10-10, the four git-parity fixes; R6.10, R6.11, R11.3): a `MERGE_MSG` with `# Conflicts:`, a scissors line and `core.commentChar` set is shown and committed exactly as `git stripspace --strip-comments` leaves it; the stripspace read writes nothing and runs nothing, and its guard row (`"stripspace"` only in its `reads/` file, once, `--strip-comments` its one option) has a matcher self-test; `core.logAllRefUpdates` and `i18n.commitEncoding` are read as `git config` answers them, a linked worktree's `includeIf` included, with no gix configuration read left for either; a branch name is accepted or refused as `git branch` and `git checkout -b` take it — `@{-1}`, `@{`, `a..b`, a taken name, a folder clash — on the host's git and both floors | integration tests against real `git`, `git-floor`, the porcelain-read guard |
+| C32 | git's answers, not Cairn's (added 2026-10-10, the four git-parity fixes; R6.10, R6.11, R11.3): a `MERGE_MSG` with `# Conflicts:`, a scissors line and `core.commentChar` set is shown and committed exactly as `git stripspace --strip-comments` leaves it (ratified 2026-10-10 as R6.10 amends it: exactly as git's editor leaves it under `commit.cleanup` and `core.commentChar`, on the host's git and both floors); the stripspace read writes nothing and runs nothing, and its guard row (`"stripspace"` only in its `reads/` file, once, its options `--strip-comments` and `--comment-lines` alone — widened 2026-10-10, ratified by the user) has a matcher self-test; `core.logAllRefUpdates` and `i18n.commitEncoding` are read as `git config` answers them, a linked worktree's `includeIf` included, with no gix configuration read left for either; a branch name is accepted or refused as `git branch` and `git checkout -b` take it — `@{-1}`, `@{`, `a..b`, a taken name, a folder clash — on the host's git and both floors | integration tests against real `git`, `git-floor`, the porcelain-read guard |
 | C33 | A single cherry-pick or revert in progress is concluded by Commit (added 2026-10-10, C3; R6.9): the commit equals what `git commit -F` would make — the picked author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD` gone — with the box filled from the cleaned message; a sequence (`.git/sequencer`), a rebase and `git am` still refuse commit and amend before git runs, the box naming git's own command | integration tests in `cairn-git` against real `git`, headless tests |
 | C34 | Create Branch's Discard (added 2026-10-10, B1-B4 and the user's decision on its confirmation; R11.3): with Discard chosen, Create and Checkout or Return builds the `Confirmed` in the Create Branch dialog — on the confirmation-surface roster — and no second dialog opens; the argv is exactly `checkout -q --no-track -f -b <name> <oid> --`; staged, unstaged and untracked-in-the-way changes are gone afterwards as Fork's command leaves them; the re-check refuses, writing nothing, when `HEAD`, the commit or the name moved, and checks nothing else; ⚠ beside Discard; "Stash and reapply" greyed with "Comes with stashing."; the button reads "Create and Checkout"; the dialog stays open beneath a Git Error or "Couldn't …" dialog and Close returns to it as left; `checkout_discarding_consequence`'s prediction, its loss kinds and `reads::untracked_paths` and `reads::change_lines` are gone | integration tests against real `git`, stub-git argv tests, headless tests, the seal guard's rosters |
+| C35 | The token-free amend's window reported (added 2026-10-10, the user's ratification, 3; R1.5): an amend run at the press returns, beside the replaced commit's id, whether a remote has the replaced commit and whether git kept a reflog for it, read after git is reaped; a commit pushed to a remote, or the reflog turned off, while the amend's hook runs is reported in its activity entry ("Amended 3f2a1c9, which was pushed to origin/main while the amend ran. Sharing the amended commit needs a force push."), and an amend still recoverable reports nothing more; nothing is undone and no dialog opens | integration tests in `cairn-git` against real `git` (phase 18), headless tests of the entry (phase 20) |
 
 C21 is not automated, for the reason `history-graph`'s A7 was not: a timing
 assertion in CI is flaky and bound to a machine.

@@ -88,24 +88,30 @@ implied.
   on stdin so it is never on `argv` or in the command log, and no
   `--literal-pathspecs`, which git would export to every hook. No `--cleanup` is
   passed, so the user's `commit.cleanup` decides exactly as it does for their own
-  `git commit -F`; `--no-verify` is passed only from the hook failure's skip
-  (`ui.md`, "The commit box"); the author is git's own identity — the one the
+  `git commit -F`; `--no-verify` is passed only from the skip a failed commit or
+  amend offers (`ui.md`, "The commit box"); the author is git's own identity — the one the
   user's terminal would commit with, since the identity variables are inherited
   (`processes.md`, "The environment") — and git's own error is shown when it has
-  none. With a merge in progress the commit is the merge commit; during a rebase,
-  `git am`, a cherry-pick or a revert Cairn does not commit, since continuing one
-  is that operation's own — each read from the files git's own status reads,
-  the sequencer's included. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
-  since transcoding the message would need a dependency.
+  none. With a merge, a single cherry-pick or a single revert in progress the commit
+  concludes it, as `git commit` does; during a rebase, `git am` or a sequence of picks
+  or reverts Cairn does not commit, since continuing one is that operation's own — each
+  read from the files git's own status reads, the sequencer's included. A non-UTF-8
+  `i18n.commitEncoding`, as `git config` answers it, is refused with its reason, since
+  transcoding the message would need a dependency. An amend's cost is read when it is
+  pressed, in the job that runs it: one git logs and no remote has runs at once, being
+  recoverable; one a remote has, or git logs nowhere — `core.logAllRefUpdates` as `git
+  config` answers it — waits for the confirmation seal.
 - **Creating a branch**: `git branch -- <name> <oid>`, which also recovers a lost
   commit; checked out as it is created, `git checkout -q -b <name> <oid> --`, which
   carries the working tree's changes over or is refused by git, writing nothing,
-  where one would be overwritten; or, the user choosing to discard them, `git
-  checkout -q -f -b <name> <oid> --` — destructive, sealed behind a `Consequence`
-  naming every change and untracked file it loses, and the one write that discards
-  a staged change. The name is `-b`'s value, which git reads as the name whatever
-  it begins with, and the commit its full id, the `--` after it saying it is no
-  path. Spec: `docs/prd/staging-and-commit.md` R11.3.
+  where one would be overwritten; or, the user choosing to discard them, Fork's own
+  command, `git checkout -q --no-track -f -b <name> <oid> --` — destructive, the one
+  write that discards a staged change, and with it any untracked file in the way, as
+  git decides: its `Consequence` is a fixed sentence that predicts nothing, and its
+  re-check is that `HEAD`, the commit and the name are what they were. The name is
+  `-b`'s value, which git reads as the name whatever it begins with, and the commit
+  its full id, the `--` after it saying it is no path. Spec:
+  `docs/prd/staging-and-commit.md` R11.3.
 - **A stale lock**: no verb exists, so `Remove index.lock…` deletes exactly
   `<gitdir>/index.lock` through the filesystem, in `ops/`, once the lock is
   re-checked as the one whose age the user confirmed — the single mutation not
@@ -243,28 +249,25 @@ files, also compares the file's bytes and its executable bit as they are on disk
 the bytes hashed in process with no filter — a symlink as its target, as git stores
 one — so an edit git's form does not show, a line ending alone, or a `chmod` still
 refuses it (`docs/prd/staging-and-commit.md`
-R3.9). `git rev-parse
---git-path hooks` says where git looks for hooks, `core.hooksPath` included, so a
-failed commit offers to skip its hooks only where a `pre-commit` or `commit-msg`
-hook exists and is executable. Creating a branch asks three more. `git
-check-ref-format --branch <name>` says whether git takes a name for a new branch,
-and when it refuses one, why — the reason the dialog shows before anything runs,
-as the user's own `git branch` would give it (R11.3). And the discard that checks
-the branch out counts what it loses as the discard prompts count it: `git
-diff-index --cached --numstat -z <HEAD>` and `git diff-files --numstat -z`, each
-tracked path's changed lines staged and unstaged, by git's line diff and through
-the paths' clean filters (R11.3, R1.2); and `git ls-files --others
---exclude-standard -z`, every untracked file whatever `status.showUntrackedFiles`
-says, and a repository nested in the working tree as its directory, so the prompt
-names every untracked file the checkout overwrites or deletes (R11.3). None is
-argued from a measured disagreement with gix: each is a question only git can
-answer — git's form of a working-tree file through the user's filters, git's
-resolution of the hooks path, git's own rules for a branch's name, and git's count
-of the lines and its list of the untracked files a forced checkout of its own
-loses — so asking git is the only way to ask it. Those inside an operation run on
-the local lane and end with it rather than by a query's epoch; a branch name's
-check is a query of its own, superseded by the next name typed. Spec:
-`docs/prd/staging-and-commit.md` R3.9, R11.3.
+R3.9). Creating a branch asks one more: whether git takes a name for a new branch,
+exactly as `git branch` and `git checkout -b` take it — including a name in `@{-N}`'s
+form, which `git check-ref-format --branch` resolves to another branch's name — so the
+dialog refuses, before anything runs, exactly the names git would (R11.3). A commit asks two: `git stripspace
+--strip-comments`, given a merge's, cherry-pick's or revert's message on stdin, so
+the draft is what git's own editor would leave — its comment lines gone, git reading
+`core.commentChar` itself — and what is shown is what is committed (R6.10); and the
+settings the commit and an amend depend on, `core.logAllRefUpdates` and
+`i18n.commitEncoding`, through the same `git config` query fetch's refspec check
+makes, since gix's reading of a linked worktree's `includeIf`, the system file and
+trust is not git's (R6.11). None is argued from a measured disagreement with gix:
+each is a question only git can answer — git's form of a working-tree file through
+the user's filters, git's own rules for a branch's name, git's cleaning of a message
+and git's reading of its configuration — so asking git is the only way to ask it.
+Where hooks live is not asked at all: a failed commit always offers to skip them,
+since git finds hooks no file check sees. Those inside an operation run on the local
+lane and end with it rather than by a query's epoch; a branch name's check is a
+query of its own, superseded by the next name typed. Spec:
+`docs/prd/staging-and-commit.md` R3.9, R6.10, R6.11, R11.3.
 
 Each read git answers is a named function in `reads/` and runs under a read's
 environment — no optional locks, no askpass token. One a query asks is cancelled by
@@ -372,12 +375,15 @@ will destroy — the paths, the lines and bytes of each, the blob ids the loss w
 computed against, a commit's id, a lock file's path and age — from which the
 prompt is rendered, never typed beside it. The token is neither `Clone` nor `Copy`,
 so one confirmation buys one operation, and only the confirmation surfaces on a
-roster the guard holds construct it: the confirmation dialog, and the commit box,
-whose amend button's visible text is its prompt (`ui.md`). The destructive
-operations are a roster of the guard's too — discarding lines, discarding files,
-deleting untracked files, amending, and removing a stale `index.lock` — and an
-operation on it without the token, or a roster entry with no such operation,
-fails.
+roster the guard holds construct it: the confirmation dialog, and the Create Branch
+dialog, where choosing Discard and pressing Create and Checkout is the
+acknowledgement, as in Fork (`ui.md`). Destructive means what cannot be undone or
+what rewrites history someone else may have; what can be recovered asks nothing
+and takes no token. The destructive operations are a roster of the guard's too —
+discarding lines, discarding files, deleting untracked files, an amend a remote has
+or git keeps no reflog for, Create Branch's Discard, and removing a stale
+`index.lock` — and an operation on it without the token, or a roster entry with no
+such operation, fails.
 
 Immediately before it runs, each destructive operation re-reads the state its
 `Consequence` names and refuses, writing nothing, when anything moved: a file

@@ -180,49 +180,77 @@ fn reset_local_view(view: View) {
     cursor.set(None);
 }
 
-/// The path on `row` of `list`, in the lists Local Changes draws, becomes the path chosen and
-/// its diff is asked (R9.3). Choosing the path already chosen, asked as it is, asks nothing,
-/// unless its answer failed, when choosing it again is how to retry.
-pub fn choose_working(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
-    let (choice, query) = {
-        let local = view.local.state.peek();
-        let lists = crate::local_changes_state::drawn_changes(&local);
-        let Some(change) = lists.get(list, row) else {
-            return;
-        };
-        (
-            WorkingChoice {
-                list,
-                path: change.path.clone(),
-                lists: local.serial(),
-            },
-            working_query(
-                list,
-                &change,
-                lists.staged_against(),
-                *view.diff_settings.peek(),
-            ),
-        )
-    };
-    let mut diff = view.diff;
-    let asked = {
-        let state = diff.peek();
-        state.working_choice() == Some(&choice)
-            && state.working_query() == query.as_ref()
-            && !matches!(
-                state.working_shown(),
-                Some(crate::diff_state::WorkingShown::Failed(_))
-            )
-    };
-    if asked {
+/// The diff of the selection's primary in Local Changes, asked (R8.1, R9.3; rule 8): the
+/// path the diff shows is derived from the primary and the lists drawn, never chosen on its
+/// own. Asked through the working-tree query as its list says, at once while Local Changes is
+/// shown — as the view is shown otherwise, so a refresh in All Commits never takes the
+/// file-diff lane from the commit's file. Another primary asks its diff, the view's diff
+/// starting at its top; the same primary in other lists asks it again, its last diff drawn
+/// until the new one comes (the file may have changed under the same status); the same in the
+/// same lists asks nothing — unless `retry` and its answer failed, when a press of its row asks
+/// again; and nothing selected lets the diff go.
+pub fn show_primary(view: View, submit: Option<&dyn Fn(Request)>, retry: bool) {
+    if !local_changes_shown(view) {
         return;
     }
-    let requests = diff.write().choose_working(choice, query);
-    reset_local_view(view);
+    let wanted = {
+        let local = view.local.state.peek();
+        let lists = crate::local_changes_state::drawn_changes(&local);
+        local.selection().and_then(|selection| {
+            let list = selection.list();
+            let row = lists.row_of(list, selection.primary())?;
+            let change = lists.get(list, row)?;
+            Some((
+                WorkingChoice {
+                    list,
+                    path: change.path.clone(),
+                    lists: local.serial(),
+                },
+                working_query(
+                    list,
+                    &change,
+                    lists.staged_against(),
+                    *view.diff_settings.peek(),
+                ),
+            ))
+        })
+    };
+    let mut diff = view.diff;
+    let Some((choice, query)) = wanted else {
+        if diff.peek().working_choice().is_some() {
+            let requests = diff.write().let_go_of_working();
+            submit_all(requests, submit);
+        }
+        return;
+    };
+    let (same_path, same_lists) = {
+        let state = diff.peek();
+        let held = state.working_choice();
+        let same_path =
+            held.is_some_and(|held| held.list == choice.list && held.path == choice.path);
+        let same_lists = same_path
+            && held.is_some_and(|held| held.lists == choice.lists)
+            && state.working_query() == query.as_ref();
+        let failed = matches!(
+            state.working_shown(),
+            Some(crate::diff_state::WorkingShown::Failed(_))
+        );
+        (same_path, same_lists && !(retry && failed))
+    };
+    if same_lists {
+        return;
+    }
+    let requests = if same_path {
+        diff.write().refresh_working(choice.lists, query)
+    } else {
+        let requests = diff.write().choose_working(choice, query);
+        reset_local_view(view);
+        requests
+    };
     submit_all(requests, submit);
 }
 
-/// Load Diff for the path chosen in Local Changes (R6.8), keeping where its view is.
+/// Load Diff for the primary's diff in Local Changes (R6.8), keeping where its view is.
 pub fn load_working_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
     let mut diff = view.diff;
     let requests = diff.write().load_working_anyway();

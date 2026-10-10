@@ -233,12 +233,25 @@ fn right_click(test: &mut TestingRunner, text: &str) {
 /// The path selected now, as the view keeps it.
 fn selected(view: View) -> Vec<String> {
     view.local
-        .selection
+        .state
         .peek()
-        .paths()
-        .iter()
-        .map(|path| path.display().into_owned())
-        .collect()
+        .selection()
+        .map_or_else(Vec::new, |selection| {
+            selection
+                .paths()
+                .iter()
+                .map(|path| path.display().into_owned())
+                .collect()
+        })
+}
+
+/// The selection's primary, as the view keeps it.
+fn primary(view: View) -> Option<String> {
+    view.local
+        .state
+        .peek()
+        .selection()
+        .map(|selection| selection.primary().display().into_owned())
 }
 
 fn chosen(view: View) -> Option<String> {
@@ -938,15 +951,20 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
 fn a_discard_names_only_paths_the_lists_drawn_still_list() {
     let (mut test, view, submitted) = opened(several());
     press_row(&mut test, "a.rs", 0);
-    let mut selection = view.local.selection;
+    let mut local = view.local.state;
     let spanning = |paths: &[&str]| {
-        cairn_ui::ListSelection::spanning(
+        cairn_ui::LocalSelection::spanning(
             ChangeList::Unstaged,
+            RepoPath::from(paths[0]),
             RepoPath::from(paths[0]),
             paths.iter().map(|path| RepoPath::from(*path)),
         )
     };
-    test.run_in(|| selection.set(spanning(&["a.rs", "gone.rs", "ignored.txt"])));
+    test.run_in(|| {
+        local
+            .write()
+            .set_selection(Some(spanning(&["a.rs", "gone.rs", "ignored.txt"])))
+    });
     settle(&mut test);
     press_key(&mut test, NamedKey::Backspace);
     assert_eq!(
@@ -958,12 +976,14 @@ fn a_discard_names_only_paths_the_lists_drawn_still_list() {
     );
 }
 
-/// R8.1: the extending press toggles a path out as well as in — the selection made of the
-/// path chosen when none is made yet — and the path whose diff is shown, toggled out, gives
-/// way to another the selection holds, so the diff never shows a path the selection left.
-/// Caught by: a toggle that only adds, or a diff left on a path toggled out.
+/// R8.1, C25, observed `lc2`: the extending press toggles a path in without moving the primary
+/// — the diff stays on the file clicked first — and out; the primary toggled out moves to the
+/// nearest path still selected and its diff is asked, so the diff never shows a path the
+/// selection left; the last path toggled out leaves nothing selected and no diff. Caught by:
+/// the path toggled in made primary (the diff jumping to it), a toggle that only adds, or a
+/// diff left on a path toggled out.
 #[test]
-fn the_extending_press_toggles_out_and_the_diff_follows_the_selection() {
+fn the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first() {
     let (mut test, view, _) = opened(several());
     assert_eq!(
         chosen(view).as_deref(),
@@ -973,11 +993,21 @@ fn the_extending_press_toggles_out_and_the_diff_follows_the_selection() {
     hold(&mut test, view, Action::ExtendSelection);
     press_row(&mut test, "c.rs", 0);
     assert_eq!(selected(view), ["a.rs", "c.rs"]);
+    assert_eq!(
+        primary(view).as_deref(),
+        Some("a.rs"),
+        "the file clicked first"
+    );
+    assert_eq!(chosen(view).as_deref(), Some("a.rs"));
+    press_row(&mut test, "a.rs", 0);
+    assert_eq!(selected(view), ["c.rs"]);
+    assert_eq!(primary(view).as_deref(), Some("c.rs"));
     assert_eq!(chosen(view).as_deref(), Some("c.rs"));
     press_row(&mut test, "c.rs", 0);
     let_go(&mut test, view);
-    assert_eq!(selected(view), ["a.rs"]);
-    assert_eq!(chosen(view).as_deref(), Some("a.rs"));
+    assert_eq!(selected(view), Vec::<String>::new());
+    assert_eq!(primary(view), None);
+    assert_eq!(chosen(view), None, "a diff left for a path toggled out");
 }
 
 /// C24, R8.7, L25: a conflicted row stages whole — `git add`, which marks it resolved — by
@@ -1111,6 +1141,52 @@ fn filterable() -> Vec<StatusEntry> {
         changed("sx.rs", Some(StagedChange::Modified), None),
         changed("t.rs", Some(StagedChange::Modified), None),
     ]
+}
+
+/// Rule 8, C18, the QA brief ("no route acts on anything but the selection"): the Staged
+/// list's Unstage is greyed while the selection is Unstaged's, so it unstages nothing; a drag
+/// begun on a row the selection does not hold carries that row alone — the selection made of it
+/// as it drops, as a native list's drag does — and the selection then moves on by the rule;
+/// with Stage All's heading key held both headings act on their whole list, whatever is
+/// selected. Caught by: a greyed button that still acts, a drag that stages the selection it
+/// did not begin in, or a held heading acting on the selection.
+#[test]
+fn every_route_takes_the_selection_and_nothing_the_person_did_not_select() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs"]);
+    click(&mut test, cairn_ui::UNSTAGE_CAPTION);
+    assert_eq!(
+        writes(&submitted),
+        [],
+        "Unstage acted on Unstaged's selection"
+    );
+
+    let from = at(&test, "c.rs", 0);
+    let staged = at(&test, STAGED_CAPTION, 0);
+    let into = (staged.0 + 40., staged.1 + 40.);
+    test.press_cursor(from);
+    test.move_cursor((from.0, from.1 + 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+    assert_eq!(selected(view), ["d.rs"], "the row in c.rs's place");
+
+    choose_rows(&mut test, view, &["a.rs"]);
+    hold(&mut test, view, Action::StageOrUnstageAll);
+    click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
+    let_go(&mut test, view);
+    assert_eq!(
+        writes(&submitted)[1..],
+        [write("unstage all", &["new.rs", "old.rs", "s.rs", "u.rs"])]
+    );
+    assert_eq!(
+        selected(view),
+        ["a.rs"],
+        "Unstage All took Unstaged's selection"
+    );
 }
 
 /// Phase 07's QA item 7, R8.3: the selection moves to the row that takes the FIRST acted row's

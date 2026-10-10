@@ -260,6 +260,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 }
             }
             retire(replaced, worker);
+            // The selection moved by the rule as the lists were drawn (R8.3, L5): its primary's
+            // diff asked here, as the status arrives, never by a render effect.
+            if !worker.closing {
+                crate::diff_actions::show_primary(view, Some(worker.submit), false);
+            }
         }
         Update::FilteredLocalChanges {
             changes,
@@ -270,6 +275,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let requests = local.write().filtered(changes, &text, rows);
             for request in requests {
                 (worker.submit)(request);
+            }
+            // The filter pruned the selection to the rows it shows (L3): the primary's diff.
+            if !worker.closing {
+                crate::diff_actions::show_primary(view, Some(worker.submit), false);
             }
         }
         Update::RefreshFailed { what, message } => {

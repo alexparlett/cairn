@@ -14,8 +14,8 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, HeldKeys, Os};
 use cairn_ui::{
-    COPY_PATH_CAPTION, DETAIL_ROW_HEIGHT, DISCARD_CAPTION, ListIntent, ListSelection,
-    LocalChangesList, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
+    COPY_PATH_CAPTION, DETAIL_ROW_HEIGHT, DISCARD_CAPTION, ListIntent, LocalChangesList,
+    LocalSelection, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
     UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, UNSTAGED_CAPTION,
 };
 use freya::prelude::*;
@@ -31,8 +31,7 @@ struct Fixture {
     unstaged: State<ShownFiles>,
     staged: State<ShownFiles>,
     filter: State<String>,
-    chosen: State<Option<(ChangeList, usize)>>,
-    selection: State<ListSelection>,
+    selection: State<Option<LocalSelection>>,
     held: State<HeldKeys>,
 }
 
@@ -52,7 +51,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
         move || {
             let fixture = use_consume::<Fixture>();
             let (choosing, intending) = (hearing.clone(), hearing.clone());
-            let mut chosen = fixture.chosen;
+            let mut selection = fixture.selection;
+            let changes = fixture.changes;
             rect()
                 .expanded()
                 .child(
@@ -62,14 +62,16 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
                         fixture.staged,
                         fixture.filter,
                     )
-                    .chosen(*fixture.chosen.read())
                     .selection(fixture.selection)
                     .held(fixture.held)
                     .on_choose(move |pressed: (ChangeList, usize)| {
                         choosing
                             .borrow_mut()
                             .push(Heard::Chose(pressed.0, pressed.1));
-                        chosen.set(Some(pressed));
+                        // A press selects its row alone, as the window does.
+                        let (list, row) = pressed;
+                        let path = changes.peek().get(list, row).map(|c| c.path.clone());
+                        selection.set(path.map(|path| LocalSelection::of(list, path)));
                     })
                     .on_intent(move |intent: ListIntent| {
                         intending.borrow_mut().push(Heard::Intent(intent));
@@ -85,8 +87,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
                 unstaged: State::create(ShownFiles::All),
                 staged: State::create(ShownFiles::All),
                 filter: State::create(String::new()),
-                chosen: State::create(None),
-                selection: State::create(ListSelection::default()),
+                selection: State::create(None),
                 held: State::create(HeldKeys::default()),
             })
         },
@@ -301,10 +302,13 @@ fn a_double_press_stages_or_unstages_its_row() {
     );
 }
 
-/// R8.2: each list's button acts on its selection — dimmed with nothing selected — and, with
-/// the table's Stage All press held, reads Stage All or Unstage All and acts on the whole list;
-/// the double chevron over Unstaged is Stage All. Caught by: a button that takes focus or acts
-/// with nothing selected, a held press not heard, or the chevron missing.
+/// R8.2, C18, C27 (rule 8, L2): each list's button acts on the selection only while it is in
+/// that list — greyed with nothing selected and while the selection is in the other list — and,
+/// with the table's heading press held (Shift on Linux, ⌥ on macOS), both read Stage All and
+/// Unstage All, enabled whatever is selected, and act on the whole list; the double chevron is
+/// drawn in each heading, ⇊ Stage All in Unstaged and ⇈ Unstage All in Staged, with no key
+/// held. Caught by: a button that acts with nothing selected or on the other list's selection,
+/// a held press not heard, Unstage All reachable only with a key held, or a chevron missing.
 #[test]
 fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything() {
     let (mut test, fixture, log) = launch(lists());
@@ -316,12 +320,14 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
 
     let mut selection = fixture.selection;
     test.run_in(|| {
-        selection.set(ListSelection::of(
+        selection.set(Some(LocalSelection::of(
             ChangeList::Unstaged,
             RepoPath::from("b.rs"),
-        ))
+        )))
     });
     test.sync_and_update();
+    // Staged's Unstage is greyed while the selection is Unstaged's.
+    test.click_cursor(at(&test, UNSTAGE_CAPTION));
     test.click_cursor(at(&test, STAGE_CAPTION));
     test.sync_and_update();
     hold(&mut test, fixture, Action::StageOrUnstageAll);
@@ -331,13 +337,16 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
             && drawn.iter().any(|t| t == UNSTAGE_ALL_CAPTION),
         "the held press did not make the buttons Stage All and Unstage All: {drawn:?}"
     );
+    // Enabled whatever is selected: Unstage All though the selection is Unstaged's.
     test.click_cursor(at(&test, UNSTAGE_ALL_CAPTION));
     test.sync_and_update();
     let_go(&mut test, fixture);
-    // The double chevron, beside Unstaged's button.
-    let (x, y) = at(&test, STAGE_CAPTION);
-    test.click_cursor((x - 20., y));
-    test.sync_and_update();
+    // The double chevrons, beside each list's button, with no key held.
+    for caption in [STAGE_CAPTION, UNSTAGE_CAPTION] {
+        let (x, y) = at(&test, caption);
+        test.click_cursor((x - 20., y));
+        test.sync_and_update();
+    }
     use ChangeList::{Staged as S, Unstaged as U};
     assert_eq!(
         heard(&log),
@@ -345,8 +354,45 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
             Heard::Intent(ListIntent::Act(U, Action::StageOrUnstage)),
             Heard::Intent(ListIntent::Act(S, Action::StageOrUnstageAll)),
             Heard::Intent(ListIntent::Act(U, Action::StageOrUnstageAll)),
+            Heard::Intent(ListIntent::Act(S, Action::StageOrUnstageAll)),
         ]
     );
+}
+
+/// C27 (L2): on Linux, Alt held over the headings does nothing — they still read Stage and
+/// Unstage, and Alt was the key before the redesign, which window managers take with a click
+/// — while Shift makes both Stage All and Unstage All; on macOS ⌥ does. Caught by: the old key
+/// left in the table, or Shift not turning the headings.
+#[test]
+fn only_the_platforms_key_turns_the_headings_into_stage_all() {
+    let (mut test, fixture, _) = launch(lists());
+    let (turns, inert) = match Os::current() {
+        Os::Linux => (NamedKey::Shift, NamedKey::Alt),
+        Os::MacOs => (NamedKey::Alt, NamedKey::Shift),
+    };
+    let mut held = fixture.held;
+    for (key, expected) in [(inert, false), (turns, true)] {
+        test.run_in(|| {
+            held.set(HeldKeys::default());
+            held.write().heard(
+                &KeyboardEventData::new(Key::Named(key), Code::Unidentified, Modifiers::empty()),
+                true,
+            );
+        });
+        test.sync_and_update();
+        let drawn = texts(&test);
+        let reads = |caption: &str| drawn.iter().any(|t| t == caption);
+        assert_eq!(
+            (reads(STAGE_ALL_CAPTION), reads(UNSTAGE_ALL_CAPTION)),
+            (expected, expected),
+            "{key:?} held: {drawn:?}"
+        );
+        assert_eq!(
+            (reads(STAGE_CAPTION), reads(UNSTAGE_CAPTION)),
+            (!expected, !expected),
+            "{key:?} held: {drawn:?}"
+        );
+    }
 }
 
 /// R8.2, R7.6, C18: a press on a row dragged past the threshold and released over the other
@@ -627,9 +673,14 @@ fn a_right_click_outside_the_selection_chooses_its_row_before_the_menu_opens() {
     let (mut test, fixture, log) = launch(lists());
     let mut selection = fixture.selection;
     test.run_in(|| {
-        let two = ListSelection::default()
-            .toggled(ChangeList::Unstaged, RepoPath::from("b.rs"))
-            .toggled(ChangeList::Unstaged, RepoPath::from("c.rs"));
+        let two = LocalSelection::toggled(
+            Some(&LocalSelection::of(
+                ChangeList::Unstaged,
+                RepoPath::from("b.rs"),
+            )),
+            ChangeList::Unstaged,
+            RepoPath::from("c.rs"),
+        );
         selection.set(two);
     });
     test.sync_and_update();

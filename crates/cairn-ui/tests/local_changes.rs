@@ -10,7 +10,7 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::HeldKeys;
 use cairn_ui::{
-    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, ListSelection, LocalChangesList,
+    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList, LocalSelection,
     NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
 use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
@@ -29,9 +29,8 @@ struct Fixture {
     staged: State<ShownFiles>,
     filter: State<String>,
     shown_paths: State<Option<usize>>,
-    chosen: State<Option<(ChangeList, usize)>>,
     split: State<f32>,
-    selection: State<ListSelection>,
+    selection: State<Option<LocalSelection>>,
     held: State<HeldKeys>,
 }
 
@@ -44,7 +43,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
         move || {
             let fixture = use_consume::<Fixture>();
             let hearing = hearing.clone();
-            let mut chosen = fixture.chosen;
+            let mut selection = fixture.selection;
+            let changes = fixture.changes;
             rect()
                 .expanded()
                 .child(
@@ -56,12 +56,14 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                     )
                     .shown_paths(*fixture.shown_paths.read())
                     .split(fixture.split)
-                    .chosen(*fixture.chosen.read())
                     .selection(fixture.selection)
                     .held(fixture.held)
                     .on_choose(move |pressed: (ChangeList, usize)| {
                         hearing.borrow_mut().push(pressed);
-                        chosen.set(Some(pressed));
+                        // A press selects its row alone, as the window does.
+                        let (list, row) = pressed;
+                        let path = changes.peek().get(list, row).map(|c| c.path.clone());
+                        selection.set(path.map(|path| LocalSelection::of(list, path)));
                     }),
                 )
                 .into_element()
@@ -74,9 +76,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                 staged: State::create(ShownFiles::All),
                 filter: State::create(String::new()),
                 shown_paths: State::create(None),
-                chosen: State::create(None),
                 split: State::create(cairn_ui::LISTS_SPLIT),
-                selection: State::create(ListSelection::default()),
+                selection: State::create(None),
                 held: State::create(HeldKeys::default()),
             })
         },
@@ -614,14 +615,22 @@ fn a_status_of_50000_paths_all_selected_builds_one_viewport() {
     let mut selection = fixture.selection;
     let anchor = every[0].clone();
     test.run_in(|| {
-        selection.set(ListSelection::spanning(
+        selection.set(Some(LocalSelection::spanning(
             ChangeList::Unstaged,
+            anchor.clone(),
             anchor,
             every.iter().cloned(),
-        ))
+        )))
     });
     test.sync_and_update();
-    assert_eq!(fixture.selection.read().len(), PATHS);
+    assert_eq!(
+        fixture
+            .selection
+            .read()
+            .as_ref()
+            .map(|selection| selection.paths().len()),
+        Some(PATHS)
+    );
     let viewport = ((HEIGHT - 40. - 2. * LIST_HEADER_HEIGHT) / DETAIL_ROW_HEIGHT).ceil() as usize;
     let within = |test: &TestingRunner, place: &str| {
         let built = built(test).len();

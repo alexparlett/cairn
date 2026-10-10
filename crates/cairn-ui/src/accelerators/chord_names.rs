@@ -58,7 +58,7 @@ fn spelled(chord: Chord, platform: Os) -> Option<String> {
 fn key_name(trigger: Trigger, platform: Os) -> Option<String> {
     let mac = matches!(platform, Os::MacOs);
     Some(match trigger {
-        Trigger::Press => return None,
+        Trigger::Press | Trigger::HeadingPress => return None,
         Trigger::Named(named) => match named {
             NamedKey::Enter if mac => "Return".to_owned(),
             NamedKey::Backspace if mac => "⌫".to_owned(),

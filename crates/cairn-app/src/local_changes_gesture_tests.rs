@@ -622,8 +622,8 @@ fn several_paths_selected_draw_their_diffs_together() {
     );
 
     // One path pressed alone — another row, so no double press — nothing drawn together, its
-    // diff asked alone.
-    let before = asked(&submitted).len();
+    // diff the one drawn: a.rs, the file clicked first, was the primary throughout (observed
+    // `lc2`), so its answer is still the one kept.
     let list_row = test
         .find_many(|node, element| {
             Label::try_downcast(element)
@@ -641,9 +641,15 @@ fn several_paths_selected_draw_their_diffs_together() {
     settle(&mut test);
     assert!(view.diff.peek().together().is_none());
     let alone = asked(&submitted);
-    assert!(alone.len() > before, "the path pressed alone was not asked");
     assert_eq!(
         alone.last().map(crate::local_changes_tests::path_of),
+        Some("a.rs".to_owned())
+    );
+    assert_eq!(
+        view.diff
+            .peek()
+            .working_choice()
+            .map(|choice| choice.path.display().into_owned()),
         Some("a.rs".to_owned())
     );
 }

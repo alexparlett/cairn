@@ -449,10 +449,11 @@ fn a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross() {
     assert!(paragraphs(&test).iter().any(|t| t.contains("STAGED LINE")));
 }
 
-/// The QA brief: a refresh whose status no longer lists the path chosen draws no diff under no
-/// row — the first path is chosen in its place and asked — and a late answer for the path
-/// gone is not drawn; a refresh that still lists it asks it again, its diff drawn meanwhile.
-/// Caught by: the gone path's diff left drawn, or its late answer kept.
+/// The QA brief, C25: a refresh whose status no longer lists the primary draws no diff under no
+/// row — the row that took its place is selected and its diff asked — and a late answer for the
+/// path gone is not drawn; a refresh that still lists it asks it again, its diff drawn
+/// meanwhile. Caught by: the gone path's diff left drawn, its late answer kept, or the list's
+/// first row chosen in its place.
 #[test]
 fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
     let (mut test, view, submitted) = launch();
@@ -477,7 +478,7 @@ fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
         "the refresh blanked the diff of a path still listed"
     );
 
-    // Gone: the first path chosen in its place.
+    // Gone: the row that took its place selected, and asked.
     let mut without = every_kind();
     without.retain(|entry| entry.path().as_bytes() != b"new/one.rs");
     apply(&mut test, view, &submitted, status(without));
@@ -489,7 +490,11 @@ fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
     let first = asked(&submitted)
         .pop()
         .unwrap_or_else(|| panic!("nothing asked"));
-    assert_eq!(path_of(&first), "both.rs");
+    assert_eq!(
+        path_of(&first),
+        "new/two.rs",
+        "the row in new/one.rs's place"
+    );
     answer(&mut test, view, &submitted, &chosen, "ONE LINE");
     assert!(
         !paragraphs(&test).iter().any(|t| t.contains("ONE LINE")),
@@ -503,6 +508,65 @@ fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
         "{:?}",
         labels(&test)
     );
+}
+
+/// C25, R8.3 ("never from a render effect"): a status that takes the primary away moves the
+/// selection and asks the new primary's diff inside `session::apply` itself — the request is
+/// there before the window renders again, and with no render at all — as an outside commit
+/// does in Fork (observed `lc5`: f5 committed in a terminal, f6 selected). Caught by: the
+/// selection followed by an effect that runs only once the view renders (the request missing
+/// until a frame), or the list's first row chosen.
+#[test]
+fn a_refresh_moves_the_selection_and_asks_its_diff_without_a_render() {
+    let (mut test, view, submitted) = launch();
+    let five = |gone: &str| {
+        status(
+            ["f1.rs", "f2.rs", "f3.rs", "f4.rs", "f5.rs", "f6.rs"]
+                .into_iter()
+                .filter(|path| *path != gone)
+                .map(untracked)
+                .collect(),
+        )
+    };
+    apply(&mut test, view, &submitted, five(""));
+    open_local_changes(&mut test);
+    press_row(&mut test, "f5.rs", 0);
+    assert_eq!(
+        asked(&submitted).last().map(path_of).as_deref(),
+        Some("f5.rs")
+    );
+    let before = asked(&submitted).len();
+    let submit = {
+        let submitted = Rc::clone(&submitted);
+        move |request| submitted.borrow_mut().push(request)
+    };
+    // Applied as the worker's stream applies it, and nothing rendered after.
+    test.run_in(|| {
+        session::apply(
+            five("f5.rs"),
+            view,
+            &Worker {
+                submit: &submit,
+                refuse: &|_| {},
+                closing: false,
+            },
+        );
+    });
+    let now = asked(&submitted);
+    assert_eq!(
+        now.len(),
+        before + 1,
+        "the new primary's diff waited for a render"
+    );
+    assert_eq!(now.last().map(path_of).as_deref(), Some("f6.rs"));
+    let selected = test.run_in(|| {
+        view.local
+            .state
+            .peek()
+            .selection()
+            .map(|selection| selection.primary().display().into_owned())
+    });
+    assert_eq!(selected.as_deref(), Some("f6.rs"));
 }
 
 /// R9's filter: typing asks a worker with the window's own lists, shared; until the answer the
@@ -737,12 +801,14 @@ fn highlighted_rows(test: &TestingRunner) -> usize {
     .len()
 }
 
-/// Phase 09 QA's RR-note, the Changes tab's rule: a filter that hides the path chosen leaves it
-/// chosen — its diff drawn, no row highlighted — and a refresh asks it again; only a status
-/// that no longer lists it chooses another. Caught by: the path let go of, or another chosen,
-/// when the filter hides it; or the hidden path not asked again on a refresh.
+/// C25, L3 (superseding phase 09 QA's RR-note, the Changes tab's rule): a filter that hides
+/// the primary prunes the selection to the rows it shows — the row shown in its place selected,
+/// highlighted and its diff asked, the hidden path's diff no longer drawn — so nothing hidden
+/// is acted on; a refresh with the filter on keeps the shown path and asks it again. Caught by:
+/// a hidden path kept selected and drawn, or a refresh that moves the selection off a path
+/// still shown.
 #[test]
-fn a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn() {
+fn a_filter_hiding_the_primary_selects_the_row_shown_in_its_place() {
     let (mut test, view, submitted) = launch();
     apply(&mut test, view, &submitted, status(every_kind()));
     open_local_changes(&mut test);
@@ -794,20 +860,30 @@ fn a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn() {
         !labels(&test).contains(&"both.rs".to_owned()),
         "the filter left both.rs"
     );
-    assert_eq!(asked(&submitted).len(), before, "another path was chosen");
+    let moved = asked(&submitted);
+    assert_eq!(
+        moved.len(),
+        before + 1,
+        "the row shown in its place was not asked"
+    );
+    let shown = moved
+        .last()
+        .cloned()
+        .unwrap_or_else(|| unreachable!("asked"));
+    assert_eq!(path_of(&shown), "new/one.rs");
     assert!(
-        paragraphs(&test)
+        !paragraphs(&test)
             .iter()
             .any(|t| t.contains("UNSTAGED LINE")),
-        "the diff of the path chosen was let go of"
+        "the diff of a path the filter hides is drawn"
     );
     assert_eq!(
         highlighted_rows(&test),
-        0,
-        "a row is highlighted for a path not shown"
+        1,
+        "the row in its place is not highlighted"
     );
 
-    // A refresh, the filter on: the new lists' rows asked, then the hidden path asked again.
+    // A refresh, the filter on: the new lists' rows asked, then the path shown asked again.
     apply(&mut test, view, &submitted, status(every_kind()));
     let (lists, typed) = filter(&submitted);
     let rows = lists
@@ -825,12 +901,8 @@ fn a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn() {
     );
     assert_eq!(
         asked(&submitted).pop(),
-        Some(chosen),
-        "the hidden path was not asked again"
+        Some(shown),
+        "the path shown was not asked again"
     );
-    assert!(
-        paragraphs(&test)
-            .iter()
-            .any(|t| t.contains("UNSTAGED LINE"))
-    );
+    assert_eq!(highlighted_rows(&test), 1);
 }

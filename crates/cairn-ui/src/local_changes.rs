@@ -1,7 +1,7 @@
 //! Local Changes' left side (refs-and-status R9.1, R9.5): a filter field, then Unstaged above
 //! Staged behind a draggable splitter, each headed by its name and each one flat, virtualised
 //! list of paths with Fork's badges (`fork-refs-and-status-ui.md` section 6). The diff of the
-//! path chosen is the caller's, on the right.
+//! selection's primary is the caller's, on the right.
 //!
 //! **A row.** Its badge, then its path, a rename's or a copy's source before it. The badges are
 //! Fork's, told apart by their shape (the user's decision, 2026-10-07): `M` for a modified file
@@ -21,10 +21,13 @@
 //! routes to stage and unstage — the double press, the table's chords heard on a focused list
 //! (`Scope::LocalChanges`), a drag from one list dropped on the other (`ListDrag`, one drop
 //! zone per list, the target list scrolling at its edges), each list's Stage or Unstage
-//! button (Stage All or Unstage All with the table's press held) and the double chevron's
-//! Stage All, and the context menu (`local_changes_menu`); and the discard chord and menu
-//! item, on the unstaged side only. The selection it draws is the caller's
-//! ([`ListSelection`]), read by a binary search per row built.
+//! button — greyed while the selection is in the other list — and the context menu
+//! (`local_changes_menu`); Stage All and Unstage All by the heading's button with the table's
+//! heading press held (Shift on Linux, ⌥ on macOS: both buttons read Stage All and Unstage All
+//! while it is, enabled whatever is selected) and by the small double chevrons always drawn, ⇊
+//! in Unstaged and ⇈ in Staged (the redesign's L2); and the discard chord and menu item, on the
+//! unstaged side only. The selection it draws is the caller's ([`LocalSelection`]), read by a
+//! binary search per row built; ↑ and ↓ move from its primary.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
@@ -34,7 +37,7 @@ use crate::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
 use crate::commit_tab::DETAIL_ROW_HEIGHT;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::file_filter::ShownFiles;
-use crate::list_selection::ListSelection;
+use crate::list_selection::LocalSelection;
 use crate::local_changes_drag::ListDrag;
 use crate::local_changes_menu::{
     MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
@@ -139,8 +142,7 @@ pub struct LocalChangesList {
     shown_paths: Option<usize>,
     /// Unstaged's share of the two lists' height, in percent: the caller's to keep.
     split: Option<Writable<f32>>,
-    chosen: Option<(ChangeList, usize)>,
-    selection: Option<Readable<ListSelection>>,
+    selection: Option<Readable<Option<LocalSelection>>>,
     held: Option<Readable<HeldKeys>>,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
@@ -164,7 +166,6 @@ impl LocalChangesList {
             filter: filter.into(),
             shown_paths: None,
             split: None,
-            chosen: None,
             selection: None,
             held: None,
             on_choose: EventHandler::new(|_| {}),
@@ -191,22 +192,16 @@ impl LocalChangesList {
         self
     }
 
-    /// The path chosen, by its list and its row there: drawn highlighted, and where ↑ and ↓
-    /// move from in its list.
-    pub fn chosen(mut self, chosen: Option<(ChangeList, usize)>) -> Self {
-        self.chosen = chosen;
-        self
-    }
-
     /// A row was pressed, or reached with ↑ or ↓, by its list and its row there.
     pub fn on_choose(mut self, on_choose: impl Into<EventHandler<(ChangeList, usize)>>) -> Self {
         self.on_choose = on_choose.into();
         self
     }
 
-    /// The paths selected, drawn highlighted beside the path chosen; read by a binary search
-    /// per row built.
-    pub fn selection(mut self, selection: impl Into<Readable<ListSelection>>) -> Self {
+    /// The selection, drawn highlighted and read by a binary search per row built; ↑ and ↓
+    /// move from its primary, and each list's Stage or Unstage button is enabled only while it
+    /// is in that list.
+    pub fn selection(mut self, selection: impl Into<Readable<Option<LocalSelection>>>) -> Self {
         self.selection = Some(selection.into());
         self
     }
@@ -231,7 +226,6 @@ impl PartialEq for LocalChangesList {
             && self.unstaged == other.unstaged
             && self.staged == other.staged
             && self.shown_paths == other.shown_paths
-            && self.chosen == other.chosen
             && self.selection == other.selection
             && self.held == other.held
             && self.key == other.key
@@ -240,9 +234,7 @@ impl PartialEq for LocalChangesList {
 
 impl std::fmt::Debug for LocalChangesList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalChangesList")
-            .field("chosen", &self.chosen)
-            .finish_non_exhaustive()
+        f.debug_struct("LocalChangesList").finish_non_exhaustive()
     }
 }
 
@@ -290,9 +282,6 @@ impl Component for LocalChangesList {
             changes: self.changes.clone(),
             shown: shown.clone(),
             rows,
-            chosen: self
-                .chosen
-                .and_then(|(chosen, row)| (chosen == list).then_some(row)),
             selection: self.selection.clone(),
             held: self.held.clone(),
             drag,
@@ -371,8 +360,7 @@ struct ListSection {
     changes: Readable<LocalChanges>,
     shown: Readable<ShownFiles>,
     rows: usize,
-    chosen: Option<usize>,
-    selection: Option<Readable<ListSelection>>,
+    selection: Option<Readable<Option<LocalSelection>>>,
     held: Option<Readable<HeldKeys>>,
     drag: ListDrag,
     on_choose: EventHandler<(ChangeList, usize)>,
@@ -385,7 +373,6 @@ impl PartialEq for ListSection {
             && self.changes == other.changes
             && self.shown == other.shown
             && self.rows == other.rows
-            && self.chosen == other.chosen
             && self.selection == other.selection
             && self.held == other.held
             && self.drag == other.drag
@@ -399,8 +386,7 @@ struct ListData {
     changes: Readable<LocalChanges>,
     shown: Readable<ShownFiles>,
     rows: usize,
-    chosen: Option<usize>,
-    selection: Option<Readable<ListSelection>>,
+    selection: Option<Readable<Option<LocalSelection>>>,
     held: Option<Readable<HeldKeys>>,
     drag: ListDrag,
     /// Set by the second press of a double press, so its release chooses nothing.
@@ -412,10 +398,7 @@ struct ListData {
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
-        self.list == other.list
-            && self.rows == other.rows
-            && self.chosen == other.chosen
-            && self.list_id == other.list_id
+        self.list == other.list && self.rows == other.rows && self.list_id == other.list_id
     }
 }
 
@@ -424,8 +407,8 @@ fn press_of(held: Option<&Readable<HeldKeys>>) -> Option<Action> {
     held.and_then(|held| held.peek().press())
 }
 
-/// The caption of a list's button: Stage or Unstage, or — with the table's Stage All press
-/// held — Stage All or Unstage All (Fork's ⌥ over the button).
+/// The caption of a list's button: Stage or Unstage, or — with the table's heading press held,
+/// Shift on Linux and ⌥ on macOS — Stage All or Unstage All.
 fn button_caption(list: ChangeList, all: bool) -> &'static str {
     match (list, all) {
         (ChangeList::Unstaged, false) => STAGE_CAPTION,
@@ -493,7 +476,6 @@ impl Component for ListSection {
             changes: self.changes.clone(),
             shown: self.shown.clone(),
             rows: self.rows,
-            chosen: self.chosen,
             selection: self.selection.clone(),
             held: self.held.clone(),
             drag,
@@ -502,19 +484,21 @@ impl Component for ListSection {
             on_intent: self.on_intent.clone(),
             list_id,
         };
-        // The heading's button acts on the selection in this list — or, with the Stage All
-        // press held, on every row of it — and is dimmed when there is nothing to act on.
+        // The heading's button acts on the selection when it is in this list, and is greyed
+        // while it is in the other or there is none (rule 8); with the heading press held it
+        // is Stage All or Unstage All, enabled whatever is selected while the list shows a row
+        // (L2) — the rows shown, so with a filter on it takes those.
         let all = self
             .held
             .as_ref()
-            .is_some_and(|held| held.read().press() == Some(Action::StageOrUnstageAll));
-        let listed = self.changes.read().len(list) > 0;
-        // Something to act on: the selection in this list, or, with none made there, the path
-        // chosen — as the rows draw it.
-        let selected = match self.selection.as_ref().map(|selection| selection.read()) {
-            Some(selection) if selection.list() == Some(list) => !selection.is_empty(),
-            Some(_) | None => self.chosen.is_some(),
-        };
+            .is_some_and(|held| held.read().heading_press() == Some(Action::StageOrUnstageAll));
+        let listed = self.rows > 0;
+        let selected = self.selection.as_ref().is_some_and(|selection| {
+            selection
+                .read()
+                .as_ref()
+                .is_some_and(|selection| selection.list() == list)
+        });
         let caption = button_caption(list, all);
         let acting = self.on_intent.clone();
         let button = heading_control(
@@ -534,27 +518,26 @@ impl Component for ListSection {
                 acting.call(ListIntent::Act(list, action));
             },
         );
-        // Fork's double chevron over Unstaged: Stage All, kept deliberately small.
+        // The double chevron in each heading, kept deliberately small, as Fork keeps its own:
+        // ⇊ Stage All in Unstaged (Fork's), ⇈ Unstage All in Staged (the redesign's L2, where
+        // Fork for Windows shows Unstage All only while Shift is held).
         let staging_all = self.on_intent.clone();
-        let chevron = (list == ChangeList::Unstaged).then(|| {
-            TooltipContainer::new(Tooltip::new_text(STAGE_ALL_CAPTION)).child(heading_control(
-                Glyph::StageAll
-                    .draw(if listed {
-                        colours.text_primary
-                    } else {
-                        colours.disabled
-                    })
-                    .into(),
-                STAGE_ALL_CAPTION,
-                listed,
-                move || {
-                    staging_all.call(ListIntent::Act(
-                        ChangeList::Unstaged,
-                        Action::StageOrUnstageAll,
-                    ))
-                },
-            ))
-        });
+        let (glyph, all_caption) = match list {
+            ChangeList::Unstaged => (Glyph::StageAll, STAGE_ALL_CAPTION),
+            ChangeList::Staged => (Glyph::UnstageAll, UNSTAGE_ALL_CAPTION),
+        };
+        let chevron = TooltipContainer::new(Tooltip::new_text(all_caption)).child(heading_control(
+            glyph
+                .draw(if listed {
+                    colours.text_primary
+                } else {
+                    colours.disabled
+                })
+                .into(),
+            all_caption,
+            listed,
+            move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),
+        ));
         let dropping = self.on_intent.clone();
         rect()
             .expanded()
@@ -590,7 +573,7 @@ impl Component for ListSection {
                             .font_weight(FontWeight::BOLD)
                             .color(colours.text_secondary),
                     )
-                    .maybe_child(chevron)
+                    .child(chevron)
                     .child(button),
             )
             .child(
@@ -610,7 +593,7 @@ impl Component for ListSection {
                             // (`end_room`); a row past the list's own builds empty.
                             .length(crate::end_room::with_end_room(self.rows, DETAIL_ROW_HEIGHT))
                             .item_size(DETAIL_ROW_HEIGHT)
-                            // The arrows move the path chosen, not the viewport.
+                            // The arrows move the selection, not the viewport.
                             .scroll_with_arrows(false)
                             .expanded(),
                     ),
@@ -629,18 +612,18 @@ impl Component for ListSection {
 
 /// The keys of a focused list (R7.3): the table's stage, stage-all and discard chords on its
 /// selection (`Scope::LocalChanges`); Shift+↑/↓ extending the selection from its anchor
-/// (`Scope::LocalChangesLists`); ↑ and ↓ over the rows `data`'s list shows. Every other key,
-/// and every chord of the window or the detail pane, is left unhandled. Nothing chosen in the
-/// list yet: either arrow starts at its first row.
+/// (`Scope::LocalChangesLists`); ↑ and ↓ over the rows `data`'s list shows, from the
+/// selection's primary. Every other key, and every chord of the window or the detail pane, is
+/// left unhandled. No primary in the list: either arrow starts at its first row.
 fn keyboard(
     data: &ListData,
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
-    let (list, shown, changes, chosen, on_choose, on_intent) = (
+    let (list, shown, changes, selection, on_choose, on_intent) = (
         data.list,
         data.shown.clone(),
         data.changes.clone(),
-        data.chosen,
+        data.selection.clone(),
         data.on_choose.clone(),
         data.on_intent.clone(),
     );
@@ -661,7 +644,13 @@ fn keyboard(
         let Some(last) = rows.checked_sub(1) else {
             return;
         };
-        let at = chosen.and_then(|row| shown.row_of(row));
+        // The primary's row in this list, found by a search.
+        let primary = selection.as_ref().and_then(|selection| {
+            let selection = selection.peek();
+            let selection = selection.as_ref().filter(|s| s.list() == list)?;
+            changes.peek().row_of(list, selection.primary())
+        });
+        let at = primary.and_then(|row| shown.row_of(row));
         let drawn = match (extending, &e.key) {
             (Some(Action::ExtendSelectionDown), _) | (None, Key::Named(NamedKey::ArrowDown)) => {
                 at.map_or(0, |at| (at + 1).min(last))
@@ -707,12 +696,13 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         (change_row(&change), change.path.clone())
     };
     let list = data.list;
-    // Read, not peeked: the rows redraw when the selection changes. The path chosen is drawn
-    // selected only while nothing is selected in its list, so a path toggled out is drawn out.
-    let selected = match data.selection.as_ref().map(|selection| selection.read()) {
-        Some(selection) if selection.list() == Some(list) => selection.holds(list, &path),
-        Some(_) | None => data.chosen == Some(at),
-    };
+    // Read, not peeked: the rows redraw when the selection changes.
+    let selected = data.selection.as_ref().is_some_and(|selection| {
+        selection
+            .read()
+            .as_ref()
+            .is_some_and(|selection| selection.holds(list, &path))
+    });
     let highlight = get_theme_or_default().read().colors().surface_secondary;
     let (list_id, on_choose, on_intent) =
         (data.list_id, data.on_choose.clone(), data.on_intent.clone());
@@ -727,17 +717,24 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                 Some(MouseButton::Right) => {
                     // Fork's menu acts on the selection the row is in, or on the row alone,
                     // which becomes the selection.
-                    let in_selection = selection
-                        .as_ref()
-                        .is_some_and(|selection| selection.peek().holds(list, &menu_path));
+                    let in_selection = selection.as_ref().is_some_and(|selection| {
+                        selection
+                            .peek()
+                            .as_ref()
+                            .is_some_and(|selection| selection.holds(list, &menu_path))
+                    });
                     if !in_selection {
                         list_id.request_focus();
                         downing.1.call((list, at));
                     }
                     let refusal = {
                         let changes = changes.peek();
-                        match selection.as_ref().filter(|_| in_selection) {
-                            Some(selection) => no_discard(&changes, list, selection.peek().paths()),
+                        let held = selection
+                            .as_ref()
+                            .filter(|_| in_selection)
+                            .map(|selection| selection.peek());
+                        match held.as_ref().and_then(|held| held.as_ref()) {
+                            Some(selection) => no_discard(&changes, list, selection.paths()),
                             None => no_discard(&changes, list, [&menu_path]),
                         }
                     };

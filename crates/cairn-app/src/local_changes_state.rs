@@ -11,15 +11,23 @@
 //!
 //! **What is freed where.** Every status the window lets go of is handed to a worker
 //! (`Request::Retire`): one of tens of thousands of paths costs more than a frame to free. The
-//! lists drawn are numbered ([`LocalChangesState::serial`]), so the path chosen in them is found
-//! again — or another chosen — whenever they are replaced (`local_changes_pane`).
+//! lists drawn are numbered ([`LocalChangesState::serial`]), so the primary's diff is asked again
+//! whenever they are replaced (`diff_actions::show_primary`).
+//!
+//! **The selection is the state's, and the state's alone** (staging-and-commit R8.1, rule 8):
+//! one [`LocalSelection`], or none, moved by the one rule of `next_selection` whenever other
+//! lists are drawn or the filter's rows change — as the status and the filter's answers arrive,
+//! in `session::apply` — and after an action, with the paths it took leaving
+//! ([`LocalChangesState::acted`]). While the filter's first rows are on their way it is left as
+//! it was; nothing is acted on meanwhile, since an action takes only the rows shown.
 
 use std::sync::{Arc, LazyLock};
 
 use cairn_model::{ChangeList, LocalChanges, MatchedRows, WorkingTreeStatus};
-use cairn_ui::{ChangeCursor, ListSelection, ShownFiles};
+use cairn_ui::{ChangeCursor, LocalSelection, ShownFiles};
 use freya::prelude::*;
 
+use crate::next_selection::{Leaving, Rows, next_selection};
 use crate::worker::{Request, Retired};
 
 /// The list side's share of the view until its splitter is dragged, in percent: the Changes
@@ -40,8 +48,6 @@ pub struct LocalChangesView {
     pub scroll: ScrollController,
     /// The change previous or next change last moved to in the view's diff.
     pub cursor: State<Option<ChangeCursor>>,
-    /// The paths selected in one of the lists (staging-and-commit R8.1).
-    pub selection: State<ListSelection>,
     /// What the view's actions are waiting on and what it says of them (R8.4, R8.6).
     pub acting: State<crate::local_changes_actions::Acting>,
     /// A drag across the diff's lines, and the lines it selected (staging-and-commit R9.2):
@@ -62,7 +68,6 @@ impl LocalChangesView {
             lists_split: use_state(|| cairn_ui::LISTS_SPLIT),
             scroll: use_scroll_controller(ScrollConfig::default),
             cursor: use_state(|| None),
-            selection: use_state(ListSelection::default),
             acting: use_state(crate::local_changes_actions::Acting::default),
             lines: use_state(cairn_ui::LineDrag::default),
             commit: crate::commit_box_state::CommitBoxView::used(),
@@ -79,7 +84,6 @@ impl LocalChangesView {
             lists_split: State::create(cairn_ui::LISTS_SPLIT),
             scroll: ScrollController::new(0, 0, Vec::new()),
             cursor: State::create(None),
-            selection: State::create(ListSelection::default()),
             acting: State::create(crate::local_changes_actions::Acting::default()),
             lines: State::create(cairn_ui::LineDrag::default()),
             commit: crate::commit_box_state::CommitBoxView::created(),
@@ -97,6 +101,15 @@ struct Drawn {
     shown_paths: Option<usize>,
 }
 
+impl Drawn {
+    fn rows(&self) -> Rows<'_> {
+        Rows {
+            changes: &self.changes,
+            shown: [&self.shown[0], &self.shown[1]],
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct LocalChangesState {
     drawn: Option<Drawn>,
@@ -108,6 +121,8 @@ pub struct LocalChangesState {
     answered: String,
     /// Moves each time other lists are drawn.
     serial: u64,
+    /// What is selected in the lists drawn (R8.1): `None` only when nothing is.
+    selection: Option<LocalSelection>,
 }
 
 /// What [`drawn_changes`] hands back while nothing is drawn.
@@ -132,6 +147,11 @@ pub fn shown_paths(state: &LocalChangesState) -> Option<usize> {
     state.drawn.as_ref().and_then(|drawn| drawn.shown_paths)
 }
 
+/// The selection, as the list reads it to draw its rows.
+pub fn selection_of(state: &LocalChangesState) -> &Option<LocalSelection> {
+    &state.selection
+}
+
 /// The rows of `list` the filter leaves, as the list reads them.
 pub fn shown_rows(state: &LocalChangesState, list: ChangeList) -> &ShownFiles {
     state.drawn.as_ref().map_or(&NO_ROWS, |drawn| match list {
@@ -150,6 +170,64 @@ impl LocalChangesState {
         self.drawn.is_some()
     }
 
+    /// What is selected, if anything is.
+    pub fn selection(&self) -> Option<&LocalSelection> {
+        self.selection.as_ref()
+    }
+
+    /// `selection` is selected: a press in the lists.
+    pub fn set_selection(&mut self, selection: Option<LocalSelection>) {
+        if self.selection != selection {
+            self.selection = selection;
+        }
+    }
+
+    /// The lists drawn and the rows shown of each, as the rule reads them.
+    pub fn rows(&self) -> Option<Rows<'_>> {
+        self.drawn.as_ref().map(Drawn::rows)
+    }
+
+    /// An action took `leaving` out of the selection's list (R8.3, L5): the selection moved by
+    /// the rule at once, over the lists drawn — the next file's diff asked before the status
+    /// that shows the write arrives, whose turn of the rule then changes nothing.
+    pub fn acted(&mut self, leaving: &Leaving) {
+        if let Some(rows) = self.rows() {
+            let next = next_selection(self.selection.as_ref(), rows, rows, leaving);
+            self.set_selection(next);
+        }
+    }
+
+    /// The first row shown, selected when nothing is (R9.3: as the view opens).
+    pub fn select_first_if_none(&mut self) {
+        if self.selection.is_some() {
+            return;
+        }
+        let Some(rows) = self.rows() else {
+            return;
+        };
+        let empty = Rows {
+            changes: &NO_CHANGES,
+            shown: [&ShownFiles::All, &ShownFiles::All],
+        };
+        let first = next_selection(None, empty, rows, &Leaving::none());
+        self.selection = first;
+    }
+
+    /// The selection moved by the rule from the lists drawn to `after` (none leaving) — unless
+    /// `after`'s rows are on their way, when it is left as it is.
+    fn follow(&mut self, after: Rows<'_>) {
+        if *after.shown[0] == ShownFiles::Waiting {
+            return;
+        }
+        let empty = Rows {
+            changes: &NO_CHANGES,
+            shown: [&ShownFiles::All, &ShownFiles::All],
+        };
+        let before = self.rows().unwrap_or(empty);
+        let next = next_selection(self.selection.as_ref(), before, after, &Leaving::none());
+        self.set_selection(next);
+    }
+
     /// The lists drawn, shared: what Stage All and Unstage All hand the local lane to gather
     /// their paths from, so the UI thread never walks a list.
     pub fn drawn_shared(&self) -> Option<Arc<LocalChanges>> {
@@ -162,7 +240,7 @@ impl LocalChangesState {
         self.drawn.as_ref().map(|drawn| &drawn.changes)
     }
 
-    /// Moves each time other lists are drawn: what a path chosen in them was chosen against.
+    /// Moves each time other lists are drawn: what the primary's diff was asked against.
     pub fn serial(&self) -> u64 {
         self.serial
     }
@@ -172,6 +250,7 @@ impl LocalChangesState {
     }
 
     /// Whether what is drawn is the newest status, filtered by the text as it is.
+    #[cfg(test)]
     pub fn is_settled(&self) -> bool {
         self.pending.is_none() && self.drawn.is_some() && self.answered == self.text
     }
@@ -183,14 +262,18 @@ impl LocalChangesState {
             .or(self.drawn.as_ref().map(|drawn| &drawn.changes))
     }
 
-    /// `changes` drawn with `shown` rows, which show `shown_paths` distinct paths; what it
-    /// replaces handed back to be freed on a worker.
+    /// `changes` drawn with `shown` rows, which show `shown_paths` distinct paths, the selection
+    /// moved by the rule; what it replaces handed back to be freed on a worker.
     fn draw(
         &mut self,
         changes: Arc<LocalChanges>,
         shown: [ShownFiles; 2],
         shown_paths: Option<usize>,
     ) -> Vec<Request> {
+        self.follow(Rows {
+            changes: &changes,
+            shown: [&shown[0], &shown[1]],
+        });
         let replaced = self.drawn.replace(Drawn {
             changes,
             shown,
@@ -296,6 +379,12 @@ impl LocalChangesState {
         match self.pending.take() {
             Some(pending) => requests.extend(self.draw(pending, shown, Some(paths))),
             None => {
+                if let Some(changes) = self.drawn.as_ref().map(|drawn| Arc::clone(&drawn.changes)) {
+                    self.follow(Rows {
+                        changes: &changes,
+                        shown: [&shown[0], &shown[1]],
+                    });
+                }
                 if let Some(drawn) = &mut self.drawn {
                     drawn.shown = shown;
                     drawn.shown_paths = Some(paths);
@@ -340,7 +429,7 @@ mod tests {
 
     /// With no filter, each status is drawn as it arrives, the one it replaces freed on a
     /// worker, and the serial moves. Caught by: a replaced status dropped on the UI thread, or
-    /// the serial left (a chosen path never looked for again).
+    /// the serial left (the primary's diff never asked again).
     #[test]
     fn with_no_filter_a_status_is_drawn_as_it_arrives() {
         let mut state = LocalChangesState::default();

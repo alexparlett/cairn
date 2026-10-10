@@ -1,26 +1,28 @@
-//! The path chosen in Local Changes and its diff (refs-and-status R9.3, R9.4), kept apart from
-//! the commit's file so going back to All Commits finds the commit's as it was — but in the
-//! diff selection, since the three share the file-diff lane: whichever asks takes it, and the
-//! others are asked again when their view is shown.
+//! The diff of Local Changes' primary (refs-and-status R9.3, R9.4; staging-and-commit R8.1),
+//! kept apart from the commit's file so going back to All Commits finds the commit's as it was —
+//! but in the diff selection, since the three share the file-diff lane: whichever asks takes
+//! it, and the others are asked again when their view is shown.
 //!
-//! A path is chosen by its list and its name in the lists drawn, and asked as its list says:
-//! its staged diff from Staged, its unstaged or untracked diff from Unstaged. A conflicted path
-//! asks nothing — its notice stands in place of a diff (R9.4). An answer is kept only when it
-//! names exactly the query the path is asked as now: its path, its side and its options, so a
-//! path in both lists can never draw the other list's diff, and a path chosen before a refresh
-//! can never draw under a path chosen after it.
+//! **Derived, never chosen on its own** (rule 8): which path this is, and in which list, is the
+//! selection's primary (`LocalChangesState::selection`), and [`WorkingChoice`] is only the key of
+//! what was asked for it — written by `diff_actions::show_primary` alone, as the selection or
+//! the lists move. A path is asked as its list says: its staged diff from Staged, its unstaged
+//! or untracked diff from Unstaged. A conflicted path asks nothing — its notice stands in place
+//! of a diff (R9.4). An answer is kept only when it names exactly the query the path is asked
+//! as now: its path, its side and its options, so a path in both lists can never draw the
+//! other list's diff, and a primary before a refresh can never draw under the primary after it.
 //!
-//! When other lists are drawn the path is looked for again (`local_changes_pane`): still
-//! listed, it is asked again — the file may have changed under the same status — and its last
-//! diff stays drawn until the new one comes; gone, another path is chosen, so no diff is drawn
-//! under no row.
+//! When other lists are drawn and the primary is still listed, it is asked again — the file may
+//! have changed under the same status — and its last diff stays drawn until the new one comes;
+//! gone, the selection has moved to another path by its rule, so no diff is drawn under no row.
 
 use cairn_model::{ChangeList, RepoPath, ShownDiff};
 
 use super::{Answer, DiffState, retire};
 use crate::worker::{DiffOptions, FileQuery, Request};
 
-/// The path chosen: its list, its name, and the lists it was chosen in or last found in.
+/// What the diff was asked for: the primary's list and name, and the lists it was asked in or
+/// last asked again in — a key derived from the selection, not a choice of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkingChoice {
     pub list: ChangeList,

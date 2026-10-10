@@ -78,7 +78,8 @@ pub enum Action {
     /// in the Staged list or its diff (staging-and-commit R8.2, R9.2).
     StageOrUnstage,
     /// Stages every unstaged path, or unstages every staged one, by the list that has focus —
-    /// or, a press, by the list whose Stage or Unstage button is pressed with it held.
+    /// or, a heading press, by the list whose Stage or Unstage button is pressed with its key
+    /// held, which turns both headings' buttons into Stage All and Unstage All while it is.
     StageOrUnstageAll,
     /// Discards what is selected on the unstaged side, through the confirmation (R8.4).
     Discard,
@@ -205,6 +206,11 @@ enum Trigger {
     Physical(Code),
     /// A primary press of the pointer, as on a commit row.
     Press,
+    /// A primary press of the pointer on one of Local Changes' list headings' Stage or Unstage
+    /// buttons: told apart from a press on a row, so one held key means one thing on a row
+    /// and another on the heading — Shift a range on a row and, on Fork for Windows' heading,
+    /// Stage All (the redesign's L2).
+    HeadingPress,
 }
 
 /// One chord: the modifiers held, and what completes it.
@@ -303,11 +309,20 @@ pub fn chords(action: Action, platform: Os) -> Chords {
             ]),
             Os::MacOs => Chords::of([(bare, key(NamedKey::Enter)), (command, at(Code::KeyS))]),
         },
-        // ⌥⇧⌘S / Ctrl+Alt+Shift+S on a focused list or diff; and Fork's ⌥ held over a list's
-        // Stage or Unstage button, which makes it Stage All or Unstage All — a press.
+        // ⌥⇧⌘S / Ctrl+Alt+Shift+S on a focused list or diff; and the key held over a list's
+        // Stage or Unstage button that makes it Stage All or Unstage All — a heading press:
+        // Fork for Mac's ⌥, and Fork for Windows' Shift on Linux (TrackerWin #2429, #2466; the
+        // redesign's L2), which no window manager takes with a click, where Alt was taken by
+        // xfwm, openbox and Plasma 5 to move the window.
         Action::StageOrUnstageAll => Chords::of([
             (command | option | shift, at(Code::KeyS)),
-            (option, Trigger::Press),
+            (
+                match platform {
+                    Os::Linux => shift,
+                    Os::MacOs => option,
+                },
+                Trigger::HeadingPress,
+            ),
         ]),
         // ⌫ or ⇧⌘D on macOS; Backspace, Delete or Ctrl+Shift+D on Windows.
         Action::Discard => match platform {
@@ -365,14 +380,19 @@ impl Chord {
         let completed = match self.trigger {
             Trigger::Named(named) => *key == Key::Named(named),
             Trigger::Physical(physical) => code == physical,
-            Trigger::Press => false,
+            Trigger::Press | Trigger::HeadingPress => false,
         };
         completed && chord_modifiers(held) == self.held
     }
 
-    /// Whether a pointer press with `held` down is this chord.
+    /// Whether a pointer press on a row with `held` down is this chord.
     fn is_press(&self, held: Modifiers) -> bool {
         self.trigger == Trigger::Press && chord_modifiers(held) == self.held
+    }
+
+    /// Whether a pointer press on a list heading's button with `held` down is this chord.
+    fn is_heading_press(&self, held: Modifiers) -> bool {
+        self.trigger == Trigger::HeadingPress && chord_modifiers(held) == self.held
     }
 
     /// The key, the physical key and the modifiers a press of this chord sends; `None` for a
@@ -383,7 +403,7 @@ impl Chord {
         match self.trigger {
             Trigger::Named(named) => Some((Key::Named(named), Code::Unidentified, self.held)),
             Trigger::Physical(code) => Some((Key::Named(NamedKey::Unidentified), code, self.held)),
-            Trigger::Press => None,
+            Trigger::Press | Trigger::HeadingPress => None,
         }
     }
 
@@ -393,7 +413,7 @@ impl Chord {
     /// through the table rather than by spelling it.
     pub fn press_hold(&self) -> Option<(Key, Code, Modifiers)> {
         match self.trigger {
-            Trigger::Press => {
+            Trigger::Press | Trigger::HeadingPress => {
                 let own = [
                     (Modifiers::CONTROL, NamedKey::Control),
                     (Modifiers::META, NamedKey::Meta),
@@ -449,12 +469,23 @@ pub fn resolve_key_on(
     })
 }
 
-/// The action a pointer press is on `platform`, given the modifiers held when it landed.
+/// The action a pointer press on a row is on `platform`, given the modifiers held when it
+/// landed.
 pub fn resolve_press_on(platform: Os, held: Modifiers) -> Option<Action> {
     Action::ALL.into_iter().find(|action| {
         chords(*action, platform)
             .iter()
             .any(|chord| chord.is_press(held))
+    })
+}
+
+/// The action a pointer press on a list heading's button is on `platform`, given the
+/// modifiers held when it landed.
+pub fn resolve_heading_press_on(platform: Os, held: Modifiers) -> Option<Action> {
+    Action::ALL.into_iter().find(|action| {
+        chords(*action, platform)
+            .iter()
+            .any(|chord| chord.is_heading_press(held))
     })
 }
 
@@ -587,6 +618,17 @@ impl HeldKeys {
     pub fn press_on(&self, platform: Os) -> Option<Action> {
         resolve_press_on(platform, self.0)
     }
+
+    /// The action a primary press on a list heading's button is while these keys are held, on
+    /// this platform: what the headings read while it is held, Stage All and Unstage All.
+    pub fn heading_press(&self) -> Option<Action> {
+        self.heading_press_on(Os::current())
+    }
+
+    /// [`Self::heading_press`], on `platform`.
+    pub fn heading_press_on(&self, platform: Os) -> Option<Action> {
+        resolve_heading_press_on(platform, self.0)
+    }
 }
 
 #[cfg(test)]
@@ -703,25 +745,59 @@ mod tests {
                 assert_eq!(held.press_on(platform), None);
             }
         }
-        // ⌥ held over a list's Stage or Unstage button: Stage All or Unstage All (R8.2), on
-        // both platforms, and with nothing else held only.
-        for platform in PLATFORMS {
+        // The key held over a list heading's Stage or Unstage button makes it Stage All or
+        // Unstage All (R8.2, the redesign's L2) — Shift on Linux, as Fork for Windows, and ⌥ on
+        // macOS — with nothing else held only; and on a row the same Shift is still the range
+        // press, the heading and the row told apart by where the press lands.
+        for (platform, all) in [(Os::Linux, NamedKey::Shift), (Os::MacOs, NamedKey::Alt)] {
             let Some((key, code, modifiers)) = chords(Action::StageOrUnstageAll, platform)
                 .iter()
                 .find_map(|c| c.press_hold())
             else {
                 panic!("Stage All has no press on {platform:?}");
             };
+            assert_eq!(key, Key::Named(all), "{platform:?}");
             let mut held = HeldKeys::default();
+            assert_eq!(held.heading_press_on(platform), None);
             held.heard(&KeyboardEventData::new(key, code, modifiers), true);
-            assert_eq!(held.press_on(platform), Some(Action::StageOrUnstageAll));
-            held.heard(&key_of(NamedKey::Shift, Modifiers::ALT), true);
             assert_eq!(
+                held.heading_press_on(platform),
+                Some(Action::StageOrUnstageAll)
+            );
+            assert_ne!(
                 held.press_on(platform),
+                Some(Action::StageOrUnstageAll),
+                "a row's press is never Stage All"
+            );
+            held.heard(&key_of(NamedKey::Control, modifiers), true);
+            assert_eq!(
+                held.heading_press_on(platform),
                 None,
-                "⌥⇧ is no press of the table's"
+                "another key held as well is no press of the table's"
             );
         }
+        // On Linux, Alt held over the heading does nothing (it was the key before L2), and
+        // Shift on a row is the range press.
+        let mut held = HeldKeys::default();
+        held.heard(&key_of(NamedKey::Alt, Modifiers::empty()), true);
+        assert_eq!(
+            held.heading_press_on(Os::Linux),
+            None,
+            "Alt held is Stage All"
+        );
+        assert_eq!(held.press_on(Os::Linux), None);
+        let mut held = HeldKeys::default();
+        held.heard(&key_of(NamedKey::Shift, Modifiers::empty()), true);
+        assert_eq!(held.press_on(Os::Linux), Some(Action::SelectRange));
+        assert_eq!(
+            held.heading_press_on(Os::Linux),
+            Some(Action::StageOrUnstageAll)
+        );
+        assert_eq!(
+            held.heading_press_on(Os::MacOs),
+            None,
+            "⇧ is not macOS's key"
+        );
         assert_eq!(
             chords(Action::NextChange, Os::Linux)
                 .first()
@@ -762,6 +838,13 @@ mod tests {
         Chord {
             held,
             trigger: Trigger::Press,
+        }
+    }
+
+    fn heading(held: Modifiers) -> Chord {
+        Chord {
+            held,
+            trigger: Trigger::HeadingPress,
         }
     }
 
@@ -843,7 +926,13 @@ mod tests {
                 ),
                 (
                     Action::StageOrUnstageAll,
-                    vec![placed(command | alt | shift, Code::KeyS), pressed(alt)],
+                    vec![
+                        placed(command | alt | shift, Code::KeyS),
+                        heading(match platform {
+                            Os::Linux => shift,
+                            Os::MacOs => alt,
+                        }),
+                    ],
                     Scope::LocalChanges,
                 ),
                 (
@@ -933,6 +1022,9 @@ mod tests {
                                     "{action:?}'s chord {chord:?} on {platform:?} in {heard:?}"
                                 );
                             }
+                        }
+                        None if chord.trigger == Trigger::HeadingPress => {
+                            assert_eq!(resolve_heading_press_on(platform, chord.held), Some(action))
                         }
                         None => assert_eq!(resolve_press_on(platform, chord.held), Some(action)),
                     }

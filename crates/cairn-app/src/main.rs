@@ -30,6 +30,7 @@ mod local_changes_state;
 mod local_changes_tests;
 mod local_writes;
 mod lost_commits;
+mod next_selection;
 mod ref_find;
 mod refresh;
 mod refresh_state;

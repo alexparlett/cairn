@@ -52,7 +52,7 @@ pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
 mod list_selection;
-pub use list_selection::{ListSelection, nearest_remaining};
+pub use list_selection::{LocalSelection, nearest_remaining};
 mod local_changes;
 mod local_changes_drag;
 pub use local_changes_drag::DRAG_THRESHOLD;

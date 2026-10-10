@@ -1,21 +1,26 @@
 //! What Local Changes' lists and diff do when a person acts on them (staging-and-commit R8):
-//! the multi-selection, Fork's five routes to stage and unstage files, the discard on the
+//! the selection's presses, Fork's five routes to stage and unstage files, the discard on the
 //! unstaged side through the confirmation, and what the view says of each write it asked.
 //!
-//! **Which paths an action takes.** A list's action takes the paths selected in that list
-//! (`cairn_ui::ListSelection`) that the lists drawn still list — each found by a binary search,
-//! so a refresh that took a path away leaves it out — or, with nothing selected there, the path
-//! chosen; a whole-file action names each with a rename's source beside it
-//! (`LocalChanges::whole_file_paths`). Stage All and Unstage All take every row of the list,
-//! gathered on the local lane from the lists drawn, never here. A drop takes the selection the
-//! drag began in, or the path it began on alone; a double press, its row; a chord heard on the
-//! diff, the lines a drag across it selected, or with none the path the diff shows — or the
-//! paths drawn together. Every path is one `git status` listed: the window never asks
-//! a write, or a discard's consequence, for a path the lists drawn do not hold.
+//! **Every route acts on the selection, wherever focus is** (rule 8, R8.2): the one
+//! `cairn_ui::LocalSelection` the lists' state keeps. A chord on either list or on the diff,
+//! the heading's button (greyed while the selection is in the other list), the menu (a
+//! right-press outside the selection selects its row first, R7.4a), a double press (whose first
+//! press made its row the selection) and a drag (whose row, unselected, becomes the selection
+//! as it is dropped, as a native list's drag carries the row it began on) all take the
+//! selected paths the lists drawn still show — each found by a binary search, so a refresh that
+//! took a path away and a filter that hides one both leave it out — and nothing else; a chord
+//! on the diff takes the lines a drag across it selected first, when it selected any. A
+//! whole-file action names each path with a rename's source beside it
+//! (`LocalChanges::whole_file_paths`). Stage All and Unstage All take every row the list shows,
+//! gathered on the local lane from the lists drawn, never here. Every path is one `git status`
+//! listed: the window never asks a write, or a discard's consequence, for a path the lists
+//! drawn do not hold.
 //!
-//! **After a stage or an unstage** the selection moves to the nearest path left in the list it
-//! left, and its diff is asked (R8.3, `cairn_ui::nearest_remaining`): the row that slides into
-//! the first acted row's place, else the nearest above it.
+//! **After an action** the selection moves by the one rule (`next_selection`, R8.3, L5), the
+//! paths the action took leaving — the row that slides into the first acted row's place, else
+//! the nearest above it — and the new primary's diff is asked at once
+//! (`diff_actions::show_primary`); the status that shows the write then runs the same rule.
 //!
 //! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule,
 //! a conflicted path or a nested repository: a selection mixing them with paths that can be
@@ -49,15 +54,16 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::Action;
 use cairn_ui::{
-    GestureAct, GestureVerb, Left, LineDrag, ListIntent, ListSelection, ShownFiles, kept,
-    nearest_remaining, no_discard,
+    GestureAct, GestureVerb, Left, LineDrag, ListIntent, LocalSelection, ShownFiles, kept,
+    no_discard,
 };
 use freya::prelude::*;
 
 use crate::confirming::Confirming;
 use crate::diff_actions;
-use crate::local_changes_state::{LocalChangesState, drawn_changes, shown_rows};
+use crate::local_changes_state::{drawn_changes, shown_rows};
 use crate::local_writes::{self, LocalWrites};
+use crate::next_selection::Leaving;
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request, UnstageTarget, WriteEnding};
 
@@ -194,49 +200,57 @@ fn dialog_open(view: View) -> bool {
     crate::shortcuts::keys_inert(view)
 }
 
-/// The rows of `list` the selection names that `lists` still lists, in the lists' order of
-/// their search; or, with no selection made in `list`, the path chosen there. A selection a
-/// toggle emptied takes nothing: nothing is drawn selected.
-fn acted_rows(view: View, lists: &LocalChanges, list: ChangeList) -> Vec<usize> {
-    let selection = view.local.selection.peek();
-    let mut rows: Vec<usize> = if selection.list() == Some(list) {
-        selection
-            .paths()
-            .iter()
-            .filter_map(|path| lists.row_of(list, path))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    if selection.list() != Some(list) {
-        let diff = view.diff.peek();
-        rows.extend(
-            diff.working_choice()
-                .filter(|choice| choice.list == list)
-                .and_then(|choice| lists.row_of(list, &choice.path)),
-        );
-    }
+/// The rows of the selection's list it names that the lists drawn still show, sorted, with the
+/// list: what every route takes. Nothing while nothing is selected.
+fn selected_rows(view: View) -> Option<(ChangeList, Vec<usize>)> {
+    let local = view.local.state.peek();
+    let selection = local.selection()?;
+    let list = selection.list();
+    let lists = drawn_changes(&local);
+    let shown = shown_rows(&local, list);
+    let mut rows: Vec<usize> = selection
+        .paths()
+        .iter()
+        .filter_map(|path| lists.row_of(list, path))
+        .filter(|row| shown.row_of(*row).is_some())
+        .collect();
     rows.sort_unstable();
-    rows
+    Some((list, rows))
 }
 
-/// A plain press, or ↑ or ↓: the row alone is selected, and its diff asked.
+/// `selection` becomes what is selected, and its primary's diff is asked; `retry` asks a
+/// failed diff again.
+fn make_selection(
+    selection: Option<LocalSelection>,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+    retry: bool,
+) {
+    let mut local = view.local.state;
+    if local.peek().selection() != selection.as_ref() {
+        local.write().set_selection(selection);
+    }
+    diff_actions::show_primary(view, submit, retry);
+}
+
+/// The path on `row` of `list` in the lists drawn.
+fn path_on(view: View, list: ChangeList, row: usize) -> Option<RepoPath> {
+    let local = view.local.state.peek();
+    drawn_changes(&local)
+        .get(list, row)
+        .map(|change| change.path.clone())
+}
+
+/// A plain press, or ↑ or ↓: the row alone is selected, primary and anchor, and its diff
+/// asked — again, if it failed.
 pub fn choose(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     if dialog_open(view) {
         return;
     }
-    let path = {
-        let local = view.local.state.peek();
-        drawn_changes(&local)
-            .get(list, row)
-            .map(|change| change.path.clone())
-    };
-    let Some(path) = path else {
+    let Some(path) = path_on(view, list, row) else {
         return;
     };
-    let mut selection = view.local.selection;
-    selection.set(ListSelection::of(list, path));
-    diff_actions::choose_working(list, row, view, submit);
+    make_selection(Some(LocalSelection::of(list, path)), view, submit, true);
 }
 
 /// What a person did to the lists beyond choosing a row.
@@ -248,30 +262,34 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
     match intent {
         ListIntent::Toggle(list, row) => toggle(list, row, view, asking),
         ListIntent::Range(list, row) => range(list, row, view, asking),
+        // The first press of a double press made its row the selection, as a plain press does;
+        // the double press stages or unstages the selection.
         ListIntent::Double(list, row) => {
-            stage_or_unstage(list, Acted::Rows(vec![row]), view, asking);
+            choose(list, row, view, asking);
+            stage_or_unstage(view, asking);
         }
-        ListIntent::Act(list, action) => {
-            act(list, Acted::Selection, action, view, submit.as_ref());
-        }
+        ListIntent::Act(list, action) => act(Some(list), action, view, submit.as_ref()),
+        // A drag carries the selection when it began on a selected row, and otherwise the row
+        // it began on, which becomes the selection as it is dropped (F26).
         ListIntent::Drop { from, path } => {
-            let dragged = {
-                let selection = view.local.selection.peek();
-                if selection.holds(from, &path) {
-                    Acted::Selection
-                } else {
-                    Acted::Path(path)
-                }
-            };
-            stage_or_unstage(from, dragged, view, asking);
+            let held = view
+                .local
+                .state
+                .peek()
+                .selection()
+                .is_some_and(|selection| selection.holds(from, &path));
+            if !held {
+                make_selection(Some(LocalSelection::of(from, path)), view, asking, false);
+            }
+            stage_or_unstage(view, asking);
         }
-        ListIntent::CopyPaths(list) => copy_paths(list, view),
+        ListIntent::CopyPaths(_) => copy_paths(view),
     }
 }
 
 /// An action of the table heard on Local Changes' diff (R7.3): on the lines a drag across the
-/// diff selected (R9.2), or, with none selected, on the path the diff shows, whole, in the list
-/// it was chosen from — hovering is not selecting (Fork, Tracker #103).
+/// diff selected (R9.2), or, with none selected, on the selection, whole, wherever it is (rule
+/// 8) — hovering is not selecting (Fork, Tracker #103).
 pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
     if dialog_open(view) {
         return;
@@ -290,7 +308,13 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
         .selected(drawn)
         .map(|(file, selection)| (file, selection.clone()));
     if let Some((file, selection)) = selected {
-        let list = together.or_else(|| view.diff.peek().working_choice().map(|choice| choice.list));
+        let list = together.or_else(|| {
+            view.local
+                .state
+                .peek()
+                .selection()
+                .map(LocalSelection::list)
+        });
         let verb = match (action, list) {
             (Action::StageOrUnstage, Some(ChangeList::Unstaged)) => Some(GestureVerb::Stage),
             (Action::StageOrUnstage, Some(ChangeList::Staged)) => Some(GestureVerb::Unstage),
@@ -313,25 +337,22 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
         }
     }
     // The paths drawn together, whole — those read and drawn, never one still being read or
-    // one the line budget left unread (the user's decision, 2026-10-09).
+    // one the line budget left unread (the user's decision, 2026-10-09), each one the
+    // selection holds.
     if let Some(list) = together {
         let paths = view.diff.peek().together_read_paths();
-        act(list, Acted::Paths(paths), action, view, submit);
+        match action {
+            Action::StageOrUnstage => stage_or_unstage_paths(list, paths, view, now(submit)),
+            Action::Discard => discard_rows(list, rows_of(view, list, &paths), view, submit),
+            other => act(Some(list), other, view, submit),
+        }
         return;
     }
-    let Some((list, path)) = view
-        .diff
-        .peek()
-        .working_choice()
-        .map(|choice| (choice.list, choice.path.clone()))
-    else {
-        return;
-    };
-    act(list, Acted::Path(path), action, view, submit);
+    act(None, action, view, submit);
 }
 
 /// What the diff's staging gesture asked (R9): `verb` on the lines it names of the diff drawn,
-/// in the list the diff was chosen from — staged into the index from the unstaged diff,
+/// in the list of the primary whose diff it is — staged into the index from the unstaged diff,
 /// unstaged out of it from the staged one, or discarded from the working tree through the
 /// confirmation. The selection the gesture or the chord acted on goes.
 pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
@@ -342,8 +363,8 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
     if *lines.peek() != LineDrag::default() {
         lines.set(LineDrag::default());
     }
-    // The diff the act was over: one of the paths drawn together, by its place, or the path
-    // chosen — shared, since the lane applies exactly what was drawn — and only while it is
+    // The diff the act was over: one of the paths drawn together, by its place, or the
+    // primary's — shared, since the lane applies exactly what was drawn — and only while it is
     // still the answer the act was made under: a selection names that answer's lines, and
     // against a re-read's diff it would name others (phase 08 QA item 1).
     let drawn = {
@@ -354,7 +375,17 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
                 .filter(|_| diff.together_drawn() == Some(act.drawn))
                 .map(|shown| (list, shown.shared_diff())),
             None => {
-                let list = diff.working_choice().map(|choice| choice.list);
+                // The primary's list, the diff drawn being the primary's.
+                let list = diff
+                    .working_choice()
+                    .map(|choice| choice.list)
+                    .filter(|list| {
+                        view.local
+                            .state
+                            .peek()
+                            .selection()
+                            .is_some_and(|selection| selection.list() == *list)
+                    });
                 let shown = diff
                     .shown_working()
                     .filter(|_| act.file == 0 && diff.working_drawn() == act.drawn);
@@ -472,19 +503,9 @@ fn ask_discard_files(paths: Vec<RepoPath>, left: Option<String>, view: View, sub
         let submit = Rc::clone(&submit);
         let paths = paths.clone();
         Confirming::counting(DISCARD_TITLE, move |token| {
-            let next = {
-                let local = view.local.state.peek();
-                let lists = drawn_changes(&local);
-                let mut rows: Vec<usize> = paths
-                    .iter()
-                    .filter_map(|path| lists.row_of(ChangeList::Unstaged, path))
-                    .collect();
-                rows.sort_unstable();
-                next_after(&local, ChangeList::Unstaged, &rows)
-            };
             let asking = Some(submit.as_ref());
             ask(view, asking, LocalWrite::DiscardFiles(token));
-            move_to(ChangeList::Unstaged, next, view, asking);
+            moved_on(Leaving::of(paths.clone()), view, asking);
         })
         .leaving(left)
     };
@@ -492,41 +513,29 @@ fn ask_discard_files(paths: Vec<RepoPath>, left: Option<String>, view: View, sub
     submit(Request::DiscardConsequence { asked, paths });
 }
 
-/// Which rows an action takes.
-enum Acted {
-    /// The selection in the list, or the path chosen there.
-    Selection,
-    /// These rows of the list.
-    Rows(Vec<usize>),
-    /// This path alone, if the list lists it.
-    Path(RepoPath),
-    /// These paths, those the list lists.
-    Paths(Vec<RepoPath>),
-}
-
-impl Acted {
-    fn rows(self, view: View, lists: &LocalChanges, list: ChangeList) -> Vec<usize> {
-        match self {
-            Self::Selection => acted_rows(view, lists, list),
-            Self::Rows(rows) => rows,
-            Self::Path(path) => lists.row_of(list, &path).into_iter().collect(),
-            Self::Paths(paths) => {
-                let mut rows: Vec<usize> = paths
-                    .iter()
-                    .filter_map(|path| lists.row_of(list, path))
-                    .collect();
-                rows.sort_unstable();
-                rows
+/// `action` of the table — heard on a list, the heading, the menu or the diff — on the
+/// selection, wherever focus is (rule 8). Stage All and Unstage All take `list`, the list they
+/// were asked of, or the selection's when heard on the diff.
+fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Submit>) {
+    match action {
+        Action::StageOrUnstage => stage_or_unstage(view, now(submit)),
+        Action::StageOrUnstageAll => {
+            let list = list.or_else(|| {
+                view.local
+                    .state
+                    .peek()
+                    .selection()
+                    .map(LocalSelection::list)
+            });
+            if let Some(list) = list {
+                everything(list, view, now(submit));
             }
         }
-    }
-}
-
-fn act(list: ChangeList, acted: Acted, action: Action, view: View, submit: Option<&Submit>) {
-    match action {
-        Action::StageOrUnstage => stage_or_unstage(list, acted, view, now(submit)),
-        Action::StageOrUnstageAll => everything(list, view, now(submit)),
-        Action::Discard => discard(list, acted, view, submit),
+        Action::Discard => {
+            if let Some((list, rows)) = selected_rows(view) {
+                discard_rows(list, rows, view, submit);
+            }
+        }
         // No other action is heard on Local Changes' lists or diff (R7.3).
         Action::PreviousChange
         | Action::NextChange
@@ -548,6 +557,18 @@ fn act(list: ChangeList, acted: Acted, action: Action, view: View, submit: Optio
     }
 }
 
+/// The rows of `list` that list `paths`, sorted.
+fn rows_of(view: View, list: ChangeList, paths: &[RepoPath]) -> Vec<usize> {
+    let local = view.local.state.peek();
+    let lists = drawn_changes(&local);
+    let mut rows: Vec<usize> = paths
+        .iter()
+        .filter_map(|path| lists.row_of(list, path))
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
 /// Asks `write`, kept as queued.
 fn ask(view: View, submit: Option<&dyn Fn(Request)>, write: LocalWrite) {
     let Some(submit) = submit else {
@@ -557,19 +578,43 @@ fn ask(view: View, submit: Option<&dyn Fn(Request)>, write: LocalWrite) {
     local_writes::ask(&mut writes.write(), submit, write);
 }
 
-/// Stages (from Unstaged) or unstages (from Staged) the rows `acted` names, whole — a
-/// conflicted path by `git add`, which marks it resolved (R8.7) — and moves the selection on.
-fn stage_or_unstage(list: ChangeList, acted: Acted, view: View, submit: Option<&dyn Fn(Request)>) {
-    let (paths, next, to) = {
+/// Stages (from Unstaged) or unstages (from Staged) the selection, whole — a conflicted path
+/// by `git add`, which marks it resolved (R8.7) — and moves the selection on.
+fn stage_or_unstage(view: View, submit: Option<&dyn Fn(Request)>) {
+    if let Some((list, rows)) = selected_rows(view) {
+        stage_or_unstage_rows(list, rows, view, submit);
+    }
+}
+
+/// [`stage_or_unstage`] of `paths` of `list`: the paths drawn together.
+fn stage_or_unstage_paths(
+    list: ChangeList,
+    paths: Vec<RepoPath>,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+) {
+    let rows = rows_of(view, list, &paths);
+    stage_or_unstage_rows(list, rows, view, submit);
+}
+
+fn stage_or_unstage_rows(
+    list: ChangeList,
+    rows: Vec<usize>,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let (paths, leaving, to) = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
-        let rows = acted.rows(view, lists, list);
-        if rows.is_empty() {
-            return;
-        }
         (
             lists.whole_file_paths(list, rows.iter().copied()),
-            next_after(&local, list, &rows),
+            Leaving::of(
+                rows.iter()
+                    .filter_map(|row| lists.get(list, *row).map(|change| change.path.clone())),
+            ),
             unstage_target(lists),
         )
     };
@@ -578,7 +623,15 @@ fn stage_or_unstage(list: ChangeList, acted: Acted, view: View, submit: Option<&
         ChangeList::Staged => LocalWrite::UnstageFiles { paths, to },
     };
     ask(view, submit, write);
-    move_to(list, next, view, submit);
+    moved_on(leaving, view, submit);
+}
+
+/// The selection moved on by the rule once `leaving` leaves its list (R8.3, L5), and the new
+/// primary's diff asked at once.
+fn moved_on(leaving: Leaving, view: View, submit: Option<&dyn Fn(Request)>) {
+    let mut local = view.local.state;
+    local.write().acted(&leaving);
+    diff_actions::show_primary(view, submit, false);
 }
 
 /// Stage All (from Unstaged) or Unstage All (from Staged): every row of the list — or, with a
@@ -609,8 +662,9 @@ fn everything(list: ChangeList, view: View, submit: Option<&dyn Fn(Request)>) {
         }
     };
     ask(view, submit, write);
-    let mut selection = view.local.selection;
-    selection.set(ListSelection::default());
+    // Every row the list shows leaves it: a selection there goes, and nothing is selected
+    // until the person selects again, as Fork leaves it once the last file is staged.
+    moved_on(Leaving::every(list), view, submit);
 }
 
 /// What a whole-file unstage from the lists drawn puts an entry back to (R3.4, R6.3): `HEAD`'s,
@@ -625,106 +679,19 @@ pub fn unstage_target(lists: &LocalChanges) -> UnstageTarget {
     }
 }
 
-/// The row of `list` the selection moves to once `acted` — rows of the lists drawn, sorted —
-/// leave it (R8.3): the nearest left in the order the list shows, through the filter.
-fn next_after(local: &LocalChangesState, list: ChangeList, acted: &[usize]) -> Option<usize> {
-    let lists = drawn_changes(local);
-    let shown: &ShownFiles = shown_rows(local, list);
-    let len = shown.len(lists.len(list));
-    let first = acted
-        .iter()
-        .filter_map(|row| shown.row_of(*row))
-        .min()
-        .unwrap_or(0);
-    let drawn = nearest_remaining(len, first, |drawn| {
-        shown
-            .file_at(drawn)
-            .is_some_and(|row| acted.binary_search(&row).is_ok())
-    })?;
-    shown.file_at(drawn)
-}
-
-/// The selection moved to `next` of `list` and its diff asked — or, with nothing left there,
-/// let go of, as Fork leaves the diff blank once the last file is staged.
-fn move_to(list: ChangeList, next: Option<usize>, view: View, submit: Option<&dyn Fn(Request)>) {
-    match next {
-        Some(row) => {
-            let path = {
-                let local = view.local.state.peek();
-                drawn_changes(&local)
-                    .get(list, row)
-                    .map(|change| change.path.clone())
-            };
-            if let Some(path) = path {
-                let mut selection = view.local.selection;
-                selection.set(ListSelection::of(list, path));
-                diff_actions::choose_working(list, row, view, submit);
-            }
-        }
-        None => {
-            let mut selection = view.local.selection;
-            selection.set(ListSelection::default());
-        }
-    }
-}
-
-/// A ⌘- or Ctrl-press: the row toggled in or out of the selection of its list — a selection
-/// made of the path chosen when none is made yet — and, toggled in, its diff asked.
+/// A ⌘- or Ctrl-press: the row toggled in or out of the selection of its list — toggled in
+/// with the primary left the file clicked first (observed `lc2`), toggled out with the primary
+/// moved to the nearest path still selected — and the primary's diff asked.
 fn toggle(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
-    let (path, chosen) = {
-        let local = view.local.state.peek();
-        let Some(path) = drawn_changes(&local)
-            .get(list, row)
-            .map(|change| change.path.clone())
-        else {
-            return;
-        };
-        let chosen = view
-            .diff
-            .peek()
-            .working_choice()
-            .filter(|choice| choice.list == list)
-            .map(|choice| choice.path.clone());
-        (path, chosen)
+    let Some(path) = path_on(view, list, row) else {
+        return;
     };
-    let mut selection = view.local.selection;
-    let base = {
-        let held = selection.peek();
-        match (held.list() == Some(list), chosen) {
-            (false, Some(chosen)) => ListSelection::of(list, chosen),
-            (true, _) | (false, None) => held.clone(),
-        }
-    };
-    let toggled = base.toggled(list, path.clone());
-    let added = toggled.holds(list, &path);
-    // Toggled in, its diff is shown; the path shown toggled out, another the selection holds.
-    let shown = if added {
-        Some(row)
-    } else if chosen_is(view, list, &path) {
-        let local = view.local.state.peek();
-        toggled
-            .paths()
-            .first()
-            .and_then(|other| drawn_changes(&local).row_of(list, other))
-    } else {
-        None
-    };
-    selection.set(toggled);
-    if let Some(row) = shown {
-        diff_actions::choose_working(list, row, view, submit);
-    }
+    let toggled = LocalSelection::toggled(view.local.state.peek().selection(), list, path);
+    make_selection(toggled, view, submit, false);
 }
 
-/// Whether the path the diff shows is `path`, chosen from `list`.
-fn chosen_is(view: View, list: ChangeList, path: &RepoPath) -> bool {
-    view.diff
-        .peek()
-        .working_choice()
-        .is_some_and(|choice| choice.list == list && choice.path == *path)
-}
-
-/// A Shift-press or Shift+↑/↓: every row the list shows from the selection's anchor — or the
-/// path chosen — to `row`, and `row`'s diff asked.
+/// A Shift-press or Shift+↑/↓: every row the list shows from the selection's anchor to `row`,
+/// `row` the primary; with no anchor in the list — nothing selected there — `row` alone.
 fn range(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     let spanned = {
         let local = view.local.state.peek();
@@ -733,18 +700,10 @@ fn range(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Reques
         let Some(path) = lists.get(list, row).map(|change| change.path.clone()) else {
             return;
         };
-        let selection = view.local.selection.peek();
-        let anchor = selection
-            .anchor()
-            .filter(|_| selection.list() == Some(list))
-            .cloned()
-            .or_else(|| {
-                view.diff
-                    .peek()
-                    .working_choice()
-                    .filter(|choice| choice.list == list)
-                    .map(|choice| choice.path.clone())
-            });
+        let anchor = local
+            .selection()
+            .filter(|selection| selection.list() == list)
+            .map(|selection| selection.anchor().clone());
         let ends = anchor.as_ref().and_then(|anchor| {
             let from = shown.row_of(lists.row_of(list, anchor)?)?;
             Some((from, shown.row_of(row)?))
@@ -752,36 +711,34 @@ fn range(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Reques
         match (anchor, ends) {
             (Some(anchor), Some((from, to))) => {
                 let (low, high) = (from.min(to), from.max(to));
-                ListSelection::spanning(
+                LocalSelection::spanning(
                     list,
                     anchor,
+                    path,
                     (low..=high).filter_map(|drawn| {
                         let at = shown.file_at(drawn)?;
                         lists.get(list, at).map(|change| change.path.clone())
                     }),
                 )
             }
-            (Some(_) | None, _) => ListSelection::of(list, path),
+            (Some(_) | None, _) => LocalSelection::of(list, path),
         }
     };
-    let mut selection = view.local.selection;
-    selection.set(spanned);
-    diff_actions::choose_working(list, row, view, submit);
+    make_selection(Some(spanned), view, submit, false);
 }
 
-/// A discard of the rows `acted` names (R8.4, the redesign's D1 and the user's decision of
+/// A discard of `rows` of `list` (R8.4, the redesign's D1 and the user's decision of
 /// 2026-10-10 on phase 15's Q6): nothing asked — the chord doing nothing, as Fork's does — on
 /// the staged side or where every row is a submodule, a conflict or a nested repository;
 /// otherwise the rows that can be discarded asked, its confirmation opened at once with one
 /// line saying what the rest leave.
-fn discard(list: ChangeList, acted: Acted, view: View, submit: Option<&Submit>) {
+fn discard_rows(list: ChangeList, rows: Vec<usize>, view: View, submit: Option<&Submit>) {
+    if rows.is_empty() {
+        return;
+    }
     let (paths, left) = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
-        let rows = acted.rows(view, lists, list);
-        if rows.is_empty() {
-            return;
-        }
         let named: Vec<&RepoPath> = rows
             .iter()
             .filter_map(|row| lists.get(list, *row).map(|change| change.path))
@@ -810,13 +767,15 @@ fn discard(list: ChangeList, acted: Acted, view: View, submit: Option<&Submit>) 
     ask_discard_files(paths, left, view, submit);
 }
 
-/// Copy Path: the paths the selection names in `list`, one per line, to the clipboard.
-fn copy_paths(list: ChangeList, view: View) {
+/// Copy Path: the paths selected, one per line, to the clipboard.
+fn copy_paths(view: View) {
+    let Some((list, rows)) = selected_rows(view) else {
+        return;
+    };
     let text = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
-        acted_rows(view, lists, list)
-            .into_iter()
+        rows.into_iter()
             .filter_map(|row| {
                 lists
                     .get(list, row)

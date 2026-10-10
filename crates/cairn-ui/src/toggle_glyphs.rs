@@ -42,6 +42,10 @@ pub(crate) enum Glyph {
     /// Fork's Stage All in Local Changes' Unstaged heading: a double chevron pointing down,
     /// into Staged (staging-and-commit R8.2).
     StageAll,
+    /// Unstage All in Local Changes' Staged heading: a double chevron pointing up, into
+    /// Unstaged — always drawn, where Fork for Windows shows it only while Shift is held (the
+    /// redesign's L2, a deviation named in `docs/design/ui.md`).
+    UnstageAll,
 }
 
 impl Glyph {
@@ -60,6 +64,7 @@ impl Glyph {
                 .into(),
             Self::Open => chevron(colour, Pointing::Down).into(),
             Self::StageAll => doubled(colour, Pointing::Down).into(),
+            Self::UnstageAll => doubled(colour, Pointing::Up).into(),
             Self::IgnoreWhitespace => rect()
                 .width(Size::px(12.))
                 .height(Size::px(5.))

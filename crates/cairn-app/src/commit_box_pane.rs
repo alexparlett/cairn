@@ -244,6 +244,7 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
         let mut local = view.local.state;
         let requests = local.write().status_arrived(status);
         submit_all(requests, submit);
+        crate::diff_actions::show_primary(view, submit, false);
     }
 }
 
@@ -487,6 +488,7 @@ pub fn amend_arrived(
     for request in requests {
         submit(request);
     }
+    crate::diff_actions::show_primary(view, Some(submit), false);
 }
 
 /// A status arrived while Amend is ticked: what an amend would replace is asked over it, rather

@@ -540,6 +540,14 @@ amend's staged list with `HEAD` at a remote tip).
   residual as status's
   (`in_a_partial_clone_amends_staged_list_fails_rather_than_fetching`,
   `crates/cairn-git/tests/status.rs`).
+- Create Branch's Discard deletes an untracked nested repository — a folder holding its own
+  `.git` — at a path the commit holds a file at, its history with it, silently, as Fork's
+  Discard does: git's forced checkout removes it and exits 0, and nothing refuses it or names
+  it first. The user knowingly accepted Fork's behaviour here (2026-10-10, phase 14's QA DO#1;
+  PRD R11.3); pinned by git's own result on the host and both floors
+  (`an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`), so a
+  change of mind — refusing such a repository, or naming it — is a visible decision, filed to
+  revisit at teardown.
 - A commit or amend left running by a second close can still die of `SIGPIPE` at a
   line its hook writes.
 - A hook owned by another user counts when the group's or others' execute bit is

@@ -435,6 +435,55 @@ fn a_submodules_change_survives_the_discard_and_a_conflict_is_discarded() {
     assert_eq!(repo.rev("HEAD"), base);
 }
 
+/// The user's decision of 2026-10-10 on phase 14's QA (DO#1), Fork's behaviour knowingly
+/// accepted: an untracked nested repository — a folder holding its own `.git` — at a path the
+/// commit holds a file at is deleted, its history with it, silently, exactly as Fork's Discard
+/// deletes it; no refusal and no extra line. This asserts git's own result (exit 0, the folder
+/// and its `.git` gone, the commit's file in its place), so changing it — refusing such a
+/// repository, or naming it — is a visible decision (state.md's teardown list: "revisit").
+/// Caught by: a refusal added before git runs, or git on this version keeping the repository.
+#[test]
+fn an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it() {
+    let repo = Repo::new("nested-in-the-way");
+    repo.write("a.txt", b"a\n");
+    repo.write("vendor", b"the commit's file\n");
+    let holds_a_file = repo.commit("vendor is a file");
+    repo.git(&["rm", "-q", "vendor"]);
+    repo.commit("vendor removed");
+    let inner = Repo::borrowed(&repo.path().join("vendor"));
+    ok(std::fs::create_dir_all(inner.path()), "making vendor/");
+    inner.git(&["init", "--quiet", "--initial-branch=main", "."]);
+    inner.write("inner.txt", b"history only here\n");
+    let inner_commit = inner.commit("the nested repository's own history");
+    assert_eq!(inner.rev("HEAD"), inner_commit);
+    assert_eq!(
+        status(&repo),
+        "?? vendor/\n",
+        "an untracked nested repository"
+    );
+
+    let consequence = discarding(&repo, "topic", holds_a_file);
+    ok(
+        ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(consequence), None),
+        "the discarding checkout over a nested repository",
+    );
+    assert_eq!(repo.rev("HEAD"), holds_a_file);
+    let vendor = repo.path().join("vendor");
+    assert!(
+        vendor.is_file(),
+        "the commit's file stands where the repository was"
+    );
+    assert_eq!(
+        std::fs::read(&vendor).unwrap_or_default(),
+        b"the commit's file\n"
+    );
+    assert!(
+        !repo.path().join("vendor/.git").exists(),
+        "the nested repository's history is gone"
+    );
+    assert_eq!(status(&repo), "", "nothing left behind");
+}
+
 /// The user's decision of 2026-10-10: an operation in progress is refused before git runs,
 /// since git's forced checkout would abandon it without a word — at the confirmation, and again
 /// at the run when one began after it. Nothing is written and no `git checkout` runs: the merge

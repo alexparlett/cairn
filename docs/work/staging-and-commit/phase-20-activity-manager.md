@@ -43,6 +43,12 @@ STEP 2  Implement.
            commit needs a force push." where a remote has it, and that the
            replaced commit can't be recovered where git kept no reflog. It
            reports and does not prevent; no dialog opens.
+           Create Branch's Discard, whose prompt is never drawn (its dialog's
+           press is the confirmation), quotes no prompt under "Confirmed:": its
+           entry describes what happened instead, rendered from its
+           Consequence — "Discarded local changes and any untracked files in
+           the way, then checked out 'topic' at a1b2c3d." (the user's decision
+           of 2026-10-10 on phase 14's open item 11; PRD R12.1).
         3. One store (review-code-app-ui.md H3 (b) and (c), M6): one bounded tail
            type — lines and bytes — used by the lane's hold, the commit box's
            output and each activity entry; the receipt protocol

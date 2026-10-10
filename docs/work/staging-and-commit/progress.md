@@ -3,6 +3,16 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — the user's decisions on phase 14's open items
+
+Recorded before phase 15 (packet mode): DO#1 — Create Branch's Discard deletes an untracked
+nested repository in the way, with its history, silently, as Fork's does (PRD R11.3; residual in
+`docs/systems/staging.md`; `an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`
+on 2.56.0, 2.30.9 and 2.32.7; git-floor's `diff_engine` floor 217); "revisit" on state.md's
+teardown list. 11 — its activity entry describes what happened rather than quoting a prompt never
+drawn (PRD R12.1, phase 20's doc). 16b — "An am session is in progress. Finish or abort it first."
+(`cairn_ui::discard_refusal`, PRD R11.3). 16a (the sentence) is phase 15's frame.
+
 ## 2026-10-10 — phase 14's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p14/adjudication.md`): FIX NOW 1, 2, 3, 4, 6, 8, 9, 10; CARRY

@@ -97,7 +97,9 @@ pub fn name_refusal(name: &str, why: &NameRefusal) -> String {
 
 /// Why Discard is refused while git is in the middle of an operation, which its forced
 /// checkout would abandon (the user's decision of 2026-10-10): "A merge is in progress. Finish
-/// or abort it first."
+/// or abort it first." `git am` is named in git's own word for it, a session ("An am session is
+/// in progress.", the user's decision of 2026-10-10 on phase 14's QA), as git's own status
+/// says "You are in the middle of an am session."
 pub fn discard_refusal(operation: &OperationInProgress) -> String {
     let named = match operation {
         OperationInProgress::Merge => "A merge",
@@ -106,7 +108,7 @@ pub fn discard_refusal(operation: &OperationInProgress) -> String {
         }
         OperationInProgress::Revert { .. } | OperationInProgress::RevertSequence => "A revert",
         OperationInProgress::Rebase => "A rebase",
-        OperationInProgress::ApplyingPatches => "git am",
+        OperationInProgress::ApplyingPatches => "An am session",
     };
     format!("{named} is in progress. Finish or abort it first.")
 }

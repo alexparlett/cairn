@@ -576,7 +576,7 @@ fn refusals_are_worded_by_the_view() {
         ),
         (
             OperationInProgress::ApplyingPatches,
-            "git am is in progress. Finish or abort it first.",
+            "An am session is in progress. Finish or abort it first.",
         ),
     ] {
         assert_eq!(discard_refusal(&operation), said);

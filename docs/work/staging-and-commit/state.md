@@ -142,6 +142,17 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   Carried: 5b to phase 15; 7, 13, 16c-e to phase 19. Filed at teardown: 14, 15. With the user: DO#1
   (an untracked nested repository deleted by `--force`), 11 (the log quoting a prompt never
   shown), 16a (the sentence), 16b (the operation nouns). Dismissed: 5a, 12.
+- **The user's decisions on phase 14's open items (2026-10-10)**: DO#1 — match Fork: an
+  untracked nested repository at a path the commit holds a file at is deleted with its history,
+  silently; recorded in the PRD (R11.3), a residual in `docs/systems/staging.md`, pinned by git's
+  own result on the host and both floors
+  (`an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`), and
+  "revisit" on the teardown list. 11 — the activity entry for Create Branch with Discard
+  describes what happened ("Discarded local changes and any untracked files in the way, then
+  checked out 'topic' at a1b2c3d.") rather than quoting a prompt never drawn; in the PRD (R12.1)
+  and phase 20's doc, built there. 16b — the in-progress refusal names am as git does: "An am
+  session is in progress. Finish or abort it first." (`cairn_ui::discard_refusal`, pinned by
+  `refusals_are_worded_by_the_view`; PRD R11.3).
 
 ## Phase 14's stopping rule, decided (2026-10-10)
 
@@ -307,6 +318,11 @@ commented, not filed again.
   `crates/cairn-model/src/consequence.rs` to be on the seal guard's `CONSEQUENCE_TYPES`, nor
   fails a stale roster name, so a future part type would go unsealed silently — a guard change
   with its own self-test (item 15, pre-existing).
+- **From the user's decisions on phase 14's open items** (2026-10-10, file as an issue): revisit:
+  refuse or name an untracked nested repository in Create Branch's Discard — git's forced
+  checkout deletes one at a path the commit holds a file at, with its history, silently, as
+  Fork's Discard does; matched to Fork for now, pinned by
+  `an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`.
 - **From the PRD's "Not done"** (`docs/prd/staging-and-commit.md`): a backup before discard (L2);
   Fork's per-repository sign-off setting and the commit box showing author and signing;
   pre-filling an empty draft from `commit.template`; wrapping a paragraph at the ruler; a

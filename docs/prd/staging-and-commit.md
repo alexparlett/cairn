@@ -860,6 +860,17 @@ literally.
     and `HEAD`, which both verbs refuse; so `--branch` stays the oracle, a name holding `@{` is
     refused before git is asked (decision F), and a real-git test on the host and both floors
     pins every case. The refusal is still typed and worded by the view.
+  - (Decided 2026-10-10, the user's decisions on phase 14's open items:) an untracked nested
+    repository — a folder holding its own `.git` — at a path the target commit holds a file at
+    is deleted by the forced checkout with its history, silently, exactly as Fork's Discard
+    deletes it: no refusal and no extra line. The user knowingly accepts Fork's behaviour here
+    for now; it is stated as a residual in `docs/systems/staging.md` and pinned by git's own
+    result (exit 0, the repository gone) on the host's git and both floors
+    (`an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`), so a
+    change of mind is a visible decision, and "refuse or name an untracked nested repository in
+    Create Branch's Discard" is filed to revisit at teardown. And the refusal names `git am` in
+    git's own word for it: "An am session is in progress. Finish or abort it first."
+    (`cairn_ui::discard_refusal`), the other operations as above.
 - R11.4 The toggle is a reopen of the history like any other (refs-and-status
   R10), cancellable and off the UI thread.
 
@@ -912,6 +923,12 @@ literally.
   Background tabs are not drawn (the user's to confirm, `state.md`). (Decided 2026-10-10, the
   user's answers, 5: Cairn has no background operations yet; the tabs are filed as an issue at
   teardown.)
+  (Decided 2026-10-10, the user's decisions on phase 14's open items, 2:) Create Branch's
+  Discard, whose prompt is never drawn (the press is its confirmation, R11.3), is not quoted
+  under "Confirmed:" in its entry. The entry describes what happened instead — "Discarded local
+  changes and any untracked files in the way, then checked out 'topic' at a1b2c3d." — rendered
+  from its `Consequence` as the rest are; every other confirmed operation keeps its prompt
+  (F3). Built in phase 20.
 - R12.2 Credentials in a URL (`scheme://user:secret@host`) are removed from every
   stderr line before it is drawn (#46, for display).
 - R12.3 Nothing about the log persists past the window (L14). It closes #41.

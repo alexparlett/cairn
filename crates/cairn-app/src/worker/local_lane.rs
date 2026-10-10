@@ -786,6 +786,27 @@ impl WriteEnding {
                 command: Some(format!("git {arguments}")),
                 output: stderr,
             },
+            // Made, and then git failed (phase 13's QA item #1): a failure that says so, git's
+            // command and words kept for the dialog. How the window words it is phase 19's.
+            Error::MadeButGitFailed { failure, .. } => match *failure {
+                Error::GitFailed {
+                    arguments,
+                    stderr,
+                    present_locks,
+                    ..
+                } => Self::Failed {
+                    message,
+                    locks: present_locks,
+                    command: Some(format!("git {arguments}")),
+                    output: stderr,
+                },
+                _ => Self::Failed {
+                    message,
+                    locks: Vec::new(),
+                    command: None,
+                    output: ScrubbedLines::new(),
+                },
+            },
             Error::DiscardIncomplete {
                 performed, kept, ..
             } => {
@@ -1811,6 +1832,27 @@ mod tests {
                 assert_eq!(*locks, [lock]);
             }
             other => panic!("a write Cairn lost hold of ended {other:?}"),
+        }
+        let landed = Error::MadeButGitFailed {
+            verb: "committed",
+            failure: Box::new(Error::GitFailed {
+                arguments: "commit -q -F -".to_owned(),
+                status: std::os::unix::process::ExitStatusExt::from_raw(128 << 8),
+                stderr: cairn_model::ScrubbedLines::scrubbing("fatal: unable to write new_index"),
+                present_locks: Vec::new(),
+            }),
+        };
+        match WriteEnding::of(Err(landed), &Ok(())).0 {
+            WriteEnding::Failed {
+                message, command, ..
+            } => {
+                assert!(
+                    message.starts_with("git committed, but then failed"),
+                    "{message}"
+                );
+                assert_eq!(command.as_deref(), Some("git commit -q -F -"));
+            }
+            other => panic!("a commit made and then failed ended {other:?}"),
         }
         let amend = cairn_model::Consequence::Amend {
             commit: Oid::from_bytes(&[0xab; 20]).unwrap(),

@@ -25,7 +25,11 @@ use super::{git, ok};
 /// The `git` the engine commits with: this process's `PATH`, an empty home, the C locale and
 /// `extra`.
 fn committer_with(extra: &[(&str, &str)]) -> GitBinary {
-    let path = std::env::var_os("PATH");
+    committer_on(std::env::var_os("PATH"), extra)
+}
+
+/// [`committer_with`] with `path` for its `PATH`.
+fn committer_on(path: Option<std::ffi::OsString>, extra: &[(&str, &str)]) -> GitBinary {
     let extra: Vec<(String, String)> = extra
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -1669,8 +1673,8 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
 /// but `HEAD` is still the confirmed commit — so the error hands the token back unspent, the
 /// same consequence; the skip amends with it, `--no-verify`, asking nothing again, and its run
 /// re-checks it. A refusal before git ran hands none back (another error, no token in it).
-/// Caught by: a token kept by the failed run (the skip would have to confirm again), or one
-/// handed back from a run that moved `HEAD`.
+/// Caught by: a token kept by the failed run (the skip would have to confirm again); one handed
+/// back from a run that moved `HEAD` is `a_failed_amend_whose_head_moved_hands_no_token_back`'s.
 #[test]
 fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
     let repo = identified("r11-token-back");
@@ -1731,6 +1735,43 @@ fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
         amend_with(&repo, stale, "x"),
         Err(Error::AmendChangedSinceConfirmed)
     ));
+}
+
+/// Phase 13's QA item #3, the token hand-back's `HEAD` condition: a `pre-commit` hook that
+/// moves `HEAD` — a commit of its own made with `commit-tree` and `update-ref` — and then fails
+/// the confirmed amend. git refused before amending, but `HEAD` is no longer the confirmed
+/// commit, so the error is git's failure and no token comes back. Caught by: a token handed back
+/// from a run that moved `HEAD` (the hand-back's `HEAD` check dropped), which a skip would spend
+/// on a commit nobody confirmed.
+#[test]
+fn a_failed_amend_whose_head_moved_hands_no_token_back() {
+    let repo = identified("q3-head-moved");
+    repo.write("a.txt", b"a\n");
+    repo.commit("one");
+    repo.write("a.txt", b"b\n");
+    repo.commit("two");
+    repo.write("a.txt", b"c\n");
+    repo.git(&["add", "a.txt"]);
+    hook(
+        &repo,
+        ".git/hooks",
+        "pre-commit",
+        "git update-ref HEAD \"$(git commit-tree 'HEAD^{tree}' -p HEAD -m moved)\"\nexit 1\n",
+        0o755,
+    );
+    let confirmed = Confirmed::by_user(ok(consequence(&repo), "the consequence"));
+    match amend_with(&repo, confirmed, "two, amended") {
+        Err(Error::GitFailed { .. }) => {}
+        Err(Error::AmendNotMade { .. }) => {
+            panic!("a token came back from a run that moved HEAD")
+        }
+        other => panic!("the failed amend ended {other:?}"),
+    }
+    assert_eq!(
+        repo.git(&["log", "--format=%s"]),
+        "moved\ntwo\none\n",
+        "HEAD is not the hook's commit"
+    );
 }
 
 // --- R4.7 and phase 12's QA item #10: made is read from HEAD ---
@@ -1840,6 +1881,138 @@ fn a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so() {
             }
         }
     }
+}
+
+/// Runs `run` with a watch that cancels nothing and keeps nothing.
+fn watching<R>(run: impl FnOnce(CommitWatch<'_>) -> R) -> R {
+    let cancel = CancelSignal::new();
+    let mut running = |_| {};
+    let mut output = |_: &cairn_model::ScrubbedLines| {};
+    run(CommitWatch {
+        cancel: &cancel,
+        running: &mut running,
+        output: &mut output,
+    })
+}
+
+/// A `git` in front of the real one — the first on this process's `PATH` — that runs it and
+/// then, for a `commit` the real one made, exits 128: git's own `die` after the ref update, as
+/// `builtin/commit.c`'s "repository has been updated, but unable to write new_index file" does.
+/// Answers the binary the engine commits with, and the wrapper's directory, removed by the
+/// caller.
+fn failing_after_commit(name: &str) -> (GitBinary, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("no git on PATH"));
+    let directory = std::env::temp_dir().join(format!(
+        "cairn-failing-after-commit-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
+    let wrapper = directory.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n'{}' \"$@\"\nstatus=$?\nfor argument in \"$@\"; do\n  \
+             if [ \"$argument\" = commit ] && [ $status -eq 0 ]; then\n    \
+             echo 'fatal: repository has been updated, but unable to write new_index file' >&2\n    \
+             exit 128\n  fi\ndone\nexit $status\n",
+            real.display()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut path = std::ffi::OsString::from(directory.as_os_str());
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap_or_default());
+    (committer_on(Some(path), &[]), directory)
+}
+
+/// Phase 13's QA item #1 (R4.7, "Made is read from `HEAD`"): git made the commit — `HEAD` moved
+/// to it — and then exited non-zero. A commit, an amend at the press and a confirmed amend are
+/// each reported made-but-failed, never plain git's failure, and the confirmed amend hands no
+/// token back (the amend landed: the token is spent). Caught by: `HEAD` read only on git's
+/// success, so a landed commit is reported failed and its draft offered again.
+#[test]
+fn a_commit_git_made_then_failed_after_is_reported_made() {
+    let (git, wrapper) = failing_after_commit("made");
+    let repo = identified("q1-made-then-failed");
+    repo.write("a.txt", b"a\n");
+    repo.commit("one");
+    repo.write("a.txt", b"b\n");
+    repo.git(&["add", "a.txt"]);
+    let before = repo.rev("HEAD");
+    let committed = watching(|watch| {
+        ops::commit(&git, &engine(&repo), "two", Hooks::Run, None, watch).map(|_| ())
+    });
+    assert!(
+        matches!(&committed, Err(Error::MadeButGitFailed { verb: "committed", failure })
+            if matches!(&**failure, Error::GitFailed { stderr, .. } if stderr.contains("unable to write"))),
+        "{committed:?}"
+    );
+    assert_ne!(repo.rev("HEAD"), before, "the commit was not made");
+
+    repo.write("a.txt", b"c\n");
+    repo.git(&["add", "a.txt"]);
+    let pressed = watching(|watch| {
+        ops::amend_unconfirmed(
+            &git,
+            &engine(&repo),
+            "two, amended",
+            Hooks::Run,
+            None,
+            watch,
+        )
+        .map(|_| ())
+    });
+    assert!(
+        matches!(
+            &pressed,
+            Err(Error::MadeButGitFailed {
+                verb: "amended",
+                ..
+            })
+        ),
+        "{pressed:?}"
+    );
+    assert_eq!(repo.git(&["log", "--format=%s"]), "two, amended\none\n");
+
+    repo.write("a.txt", b"d\n");
+    repo.git(&["add", "a.txt"]);
+    let confirmed = Confirmed::by_user(ok(consequence(&repo), "the consequence"));
+    let outcome = watching(|watch| {
+        ops::amend(
+            &git,
+            &engine(&repo),
+            confirmed,
+            "two, amended again",
+            Hooks::Run,
+            None,
+            watch,
+        )
+        .map(|_| ())
+    });
+    assert!(
+        matches!(
+            &outcome,
+            Err(Error::MadeButGitFailed {
+                verb: "amended",
+                ..
+            })
+        ),
+        "a landed confirmed amend: {outcome:?}"
+    );
+    assert_eq!(
+        repo.git(&["log", "--format=%s"]),
+        "two, amended again\none\n"
+    );
+    let _ = std::fs::remove_dir_all(wrapper);
 }
 
 /// Phase 12's QA item #10, beside "HEAD moved in between": git exits 0, but `HEAD` is not the

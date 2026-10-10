@@ -2761,7 +2761,7 @@ fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 /// The `git stripspace` fourth of [`porcelain_read_violations`]: the exact literal
 /// `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`] alone, exactly once;
 /// every literal there that starts with `-` is one of [`STRIPSPACE_OPTIONS`], each of which it
-/// passes.
+/// passes — checked per file, not per call: which call passes which option is not read.
 fn stripspace_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = Vec::new();
     let mut verbs = 0usize;
@@ -3013,8 +3013,9 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 /// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
 /// in query form, built once, by the config read (the user's decisions of 2026-10-04 and
 /// 2026-10-10), `git stash show`, built once, by the stash read (the user's decision of
-/// 2026-10-07), and `git stripspace` with `--strip-comments`, `--comment-lines` or no option,
-/// built once, by the stripspace read (the user's decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
+/// 2026-10-07), and `git stripspace` with `--strip-comments`, `--comment-lines` or no option —
+/// the options checked per file, not per call — built once, by the stripspace read (the user's
+/// decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
 /// diff` against the working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git
 /// config` with a setter writes the configuration, and every `git stash` subcommand but
 /// `show` and `list` writes a stash, the working tree or a branch, so a second `"diff"`,

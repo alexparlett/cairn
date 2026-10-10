@@ -47,8 +47,17 @@
 //! is read again: a commit is made when `HEAD` is a commit whose first parent is the `HEAD` it
 //! ran on (none, on an unborn branch), an amend when `HEAD`'s parents are the replaced commit's.
 //! git's exit 0 with `HEAD` anything else is [`Error::CommitUnconfirmed`] — something else moved
-//! `HEAD` while it ran; and a commit or amend the user cancelled that git had already made is
-//! reported made, one it had not is [`Error::GitCancelled`].
+//! `HEAD` while it ran, and for an amend, git may have amended whatever `HEAD` had become; a
+//! commit or amend the user cancelled that git had already made is reported made, one it had not
+//! is [`Error::GitCancelled`]; and one git made and then failed after — a `die` past the ref
+//! update — is [`Error::MadeButGitFailed`], made, with git's words.
+//!
+//! **The token-free amend's window.** [`amend_unconfirmed`] decides the amend is recoverable from
+//! what it reads at the press, and git then runs the hooks before it updates the ref: in that
+//! window a push of `HEAD`, or a checkout, from a terminal changes what git amends or whether a
+//! remote has it, and the amend is reported made all the same. The replaced commit stays in the
+//! reflog git writes, so Show Lost Commits still finds it; no check after the run says the
+//! commit was published meanwhile (stated in `docs/systems/staging.md`, "Residuals").
 //!
 //! **While it runs** a commit is the one write that can be cancelled (R4.3): once git is
 //! running, [`CommitWatch::running`] is handed a [`CommitCancel`], which ends git's process
@@ -428,6 +437,15 @@ fn run(
         },
         // Cancelled after git had made it: made. One that cannot be read is cancelled.
         Err(Error::GitCancelled { .. }) if made.holds(repo, false) == Some(true) => Ok(()),
+        // Made, and then git failed (a `die` after the ref update): made, git's words kept. Read
+        // as after a cancel — `HEAD` unmoved is not made — so a failed amend whose `HEAD` is
+        // still the replaced commit stays git's failure, and hands its token back.
+        Err(failure @ Error::GitFailed { .. }) if made.holds(repo, false) == Some(true) => {
+            Err(Error::MadeButGitFailed {
+                verb,
+                failure: Box::new(failure),
+            })
+        }
         Err(other) => Err(other),
     }
 }

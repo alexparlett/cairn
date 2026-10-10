@@ -437,13 +437,32 @@ pub enum Error {
         unspent: Box<Confirmed>,
     },
 
+    /// git made the commit or the amend — `HEAD` read after the reap is the commit it made — and
+    /// then exited non-zero: a `die` after the ref update, such as "repository has been updated,
+    /// but unable to write new_index file" (phase 13's QA item #1, R4.7). It was made, the
+    /// refresh after it draws it, and `failure` is git's, for the window to show its words. A
+    /// confirmed amend's token is spent: nothing is handed back. How the window words it is
+    /// staging-and-commit phase 19's.
+    #[error("git {verb}, but then failed: {failure}")]
+    MadeButGitFailed {
+        verb: &'static str,
+        failure: Box<Error>,
+    },
+
     /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a
     /// commit whose parent is the `HEAD` it ran on, or for an amend, whose parents are the
     /// replaced commit's (the carried item #10 of phase 12's QA). Something else moved `HEAD`
-    /// while it ran; what is there now is what the refresh after it draws.
+    /// while it ran — for an amend, git may have amended whatever `HEAD` had become (the
+    /// token-free amend's window, `crate::ops::amend_unconfirmed`); what is there now is what
+    /// the refresh after it draws.
     #[error(
         "git said it {verb}, but HEAD is not the commit it made: something else moved HEAD \
-         while it ran"
+         while it ran{}",
+        if *verb == "amended" {
+            ", and git may have amended what HEAD had become"
+        } else {
+            ""
+        }
     )]
     CommitUnconfirmed { verb: &'static str },
 
@@ -825,6 +844,19 @@ mod tests {
         let text = locked.to_string();
         assert!(text.contains("lock files are present"), "{text}");
         assert!(text.ends_with("/r/.git/index.lock"), "{text}");
+    }
+
+    /// Phase 13's QA item #2(a): an amend reported unconfirmed says git may have amended what
+    /// `HEAD` had become, the token-free amend's window. Caught by: the commit's words reused.
+    #[test]
+    fn an_unconfirmed_amend_says_git_may_have_amended_what_head_became() {
+        let amended = Error::CommitUnconfirmed { verb: "amended" }.to_string();
+        assert!(
+            amended.ends_with("and git may have amended what HEAD had become"),
+            "{amended}"
+        );
+        let committed = Error::CommitUnconfirmed { verb: "committed" }.to_string();
+        assert!(committed.ends_with("while it ran"), "{committed}");
     }
 
     /// R12.2: an error's text as the application draws it carries no URL's userinfo, whatever

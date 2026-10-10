@@ -59,7 +59,21 @@ STEP 2  Implement.
            applied over it, so session.rs's status fork goes. The amend's cost
            is never read on a status (rule 3): Request::Amending carries the
            staged list's read alone, or is renamed for it, and StopAmending's
-           epoch bump in Request::Write goes with the cost read.
+           epoch bump in Request::Write goes with the cost read. (Carried from
+           phase 13's QA item 9: until this lands, `ops/amend.rs`'s module doc —
+           "read when Amend is pressed … never on a refresh" — is not yet true of
+           its caller; it is once this does.)
+        6. Before the press is wired (carried from phase 13's QA item 4):
+           `AmendAnswer::Amended` carries the replaced commit's `Oid` as a field
+           (`AmendAnswer::Amended { performed, replaced }`), with an ops test in
+           the same commit (an ops/ change), and the lane reports the replaced
+           commit for the way back from the answer, never from the request
+           (`LocalWrite::replaces` is `None` for `AmendAtPress` today); the
+           popover's "Show in Lost Commits" stays phase 20's. Then the press
+           asks `LocalWrite::AmendAtPress`, `WriteEnding::NeedsConfirming` opens
+           the dialog, and the Git Error state keeps the token the engine hands
+           back (`Error::AmendNotMade`, which the local lane lets go today) — the
+           three wirings phase 13's systems docs state as not yet asked.
         Tests: C13 (views), C14 (views: no dialog for a recoverable amend, the
         dialog exactly when a remote has HEAD or no reflog, the chord and the
         button the same, Cancel returning unchanged), C24 and C33 (views),

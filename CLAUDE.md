@@ -126,7 +126,8 @@ each patch checked against the index and the file before it applies, and the two
 lines, and whole files with untracked ones deleted — sealed behind a confirmation the engine
 computes and re-checks; and commit and amend through `git commit -F -`, the message byte for
 byte as git's own `-F` stores it, the commit made read from `HEAD` after git is reaped — a
-cancelled commit git had made reported made — and a merge, a single cherry-pick or a single
+cancelled commit git had made reported made, and one git made and then failed after reported
+made with git's words — and a merge, a single cherry-pick or a single
 revert concluded by it; an amend's cost read when it is pressed, in the job that runs it, an
 amend git logs and no remote has run at once with no token (`ops::amend_unconfirmed`) and any
 other answered for the dialog and run under its token (`ops::amend`), its `Consequence` naming

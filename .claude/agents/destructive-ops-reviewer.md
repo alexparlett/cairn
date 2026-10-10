@@ -99,7 +99,7 @@ WARNING tier:
    the repository — refs, objects, the index, the working tree, config — is
    built with `GitBinary::write_invocation`, and every function in
    `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
-   nothing else — with three accepted exceptions. The first (the user's decision of
+   nothing else — with four accepted exceptions. The first (the user's decision of
    2026-10-03): `git diff --no-index -- /dev/null <path>`, built only by
    `reads::working_tree_patch` for the side asked about as untracked, with
    `<path>` a work-tree-relative path (no absolute, `.` or `..` component;
@@ -190,6 +190,28 @@ WARNING tier:
    but the lane's `perform`. On any diff that adds or changes a type holding a
    `LocalWrite`, or a place that keeps one (a queue, a retry, a pending field),
    check it. Evidence: quote the field and where it is let go of.
+
+13. **A token-free path that replaces or drops a commit.** The roster seal sees
+   only functions that name `Confirmed`, so a path that rewrites history without
+   one — today `ops::amend_unconfirmed`, an amend git logs and no remote has
+   (staging-and-commit R1.5, R6.4) — is this check's. On any diff that touches
+   such a path, `Consequence::needs_confirming` or `ops::amend_consequence`:
+   (a) the path runs git only after reading the `Consequence` in the same call
+   and only when `needs_confirming()` is false, answering the `Consequence`
+   without running git otherwise — no git invocation precedes the read, and no
+   branch runs git on a consequence that needs confirming; (b)
+   `needs_confirming` for an amend still means
+   `published != Publication::Unpublished || reflog == Reflog::NotWritten`,
+   and every other `Consequence` variant still answers `true`; (c) the window
+   between the read and git's ref update — the cost read, then the hooks, then
+   the update, during which a push or a checkout from a terminal can publish or
+   move what git amends — stays stated as a residual in
+   `docs/systems/staging.md` and in `Error::CommitUnconfirmed`'s amend text, and
+   no new path widens it (a second read, a wait, a retry) without saying so; and
+   (d) a confirmed amend's token comes back (`Error::AmendNotMade`) only on
+   git's failure with `HEAD` read unmoved, never on a refusal, a cancel or a run
+   that made the amend (`Error::MadeButGitFailed`). Evidence: quote the read,
+   the predicate and the line that runs git.
 
 Distinguish what the diff CHANGED from what it inherited: pre-existing debt next
 to the change is a note, not a blocking finding. If a check here duplicates a

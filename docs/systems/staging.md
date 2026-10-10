@@ -308,8 +308,13 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   (`a_commit_git_says_it_made_with_head_elsewhere_is_unconfirmed`, beside "HEAD moved in
   between", `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`); an
   amend that makes the very object it replaced — one second, the same tree and message — is
-  made (`an_amend_that_makes_the_same_commit_is_made`). Where `HEAD` cannot be read, git's
-  exit decides.
+  made (`an_amend_that_makes_the_same_commit_is_made`). One git made and then failed after —
+  a `die` past the ref update, such as "repository has been updated, but unable to write
+  new_index file" — is `Error::MadeButGitFailed`, made, git's words kept, and a confirmed
+  amend's token is spent with it (`a_commit_git_made_then_failed_after_is_reported_made`, git
+  wrapped to exit 128 after its success, on the host and both floors); after a failure `HEAD`
+  is read as after a cancel, an amend's `HEAD` unmoved not made. Where `HEAD` cannot be read,
+  git's exit decides.
 - **What it invalidates:** the refs, the index (a hook may stage) and the objects.
 
 **The operation in progress** (R6.9, L25) is `Repository::operation_in_progress`
@@ -436,8 +441,8 @@ unspent, `Error::AmendNotMade { failure, unspent }` (R1.1's option (a), as (a′
 refresh and the tree objects it writes before a hook runs are its own bookkeeping, outside
 what the consequence names, and the skip's run re-checks it; a refusal before git ran or a
 cancel hands none back (`a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends`).
-The local lane lets it go for now: the window's skip builds a new token from the same
-consequence (`AmendSkip`) until phase 18's Git Error state keeps this one.
+The local lane lets the returned token go, and the window's skip builds a new token from the
+same consequence (`AmendSkip`).
 
 **What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
 `c999cef531e`, 13 remote-tracking refs, release build, warm; the
@@ -492,6 +497,15 @@ amend's staged list with `HEAD` at a remote tip).
   hook's own globbed pathspec matches literally (R3). A commit is not run with it.
 - Between an amend's re-check and git's run is the same window; `git commit
   --amend` amends whatever `HEAD` is when it runs.
+- An amend at the press without a token (`ops::amend_unconfirmed`) has the window too, and
+  there it decides whether the amend was recoverable: the cost is read, then git runs the
+  `pre-commit` and `commit-msg` hooks, then updates the ref. A push of `HEAD`, or a checkout,
+  from a terminal while a slow hook runs publishes the commit being replaced, or moves what
+  git amends, and Cairn still reports "amended <short>" with no token taken. The replaced
+  commit stays in the reflog git writes, so Show Lost Commits finds it; where `HEAD` was moved,
+  the amend reads `Error::CommitUnconfirmed`, whose text says git may have amended what `HEAD`
+  had become. No check after the run asks whether a remote came to hold the replaced commit
+  meanwhile (the user's to decide, phase 13's QA item 2(b)).
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
   does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the

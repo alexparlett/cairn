@@ -443,7 +443,7 @@ keeps no reflog): that amend reads "Amend Last Commit…" and, by button or chor
 confirmation dialog first, titled "Amend Commit", its words the consequence's fixed sentences and
 its button, "Amend", the one that builds the token. The engine's amend at the press
 (`LocalWrite::AmendAtPress`, `docs/systems/git-processes.md`), which runs a recoverable amend
-with no token at all, is what phase 18's box asks instead. Whichever builds it, the engine re-checks the token's consequence before git runs, and
+with no token at all, is not asked by the box: nothing in the window asks it. Whichever builds it, the engine re-checks the token's consequence before git runs, and
 refuses an amend whose `HEAD` moved or was pushed since. A commit made — or an amend — clears the
 draft only where it still holds the message the commit took, so a draft typed while it ran is
 kept; an amend unticks Amend.

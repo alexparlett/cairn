@@ -34,6 +34,12 @@ STEP 2  Implement.
            people apart from its command, output and locks; the engine's
            "; nothing was written" tails and the lock Display suffixes stop
            being UI text; the view adds "Nothing was changed." once to a refusal.
+           Carried from phase 13's QA: the wording of `Error::MadeButGitFailed`
+           ("git committed, but then failed: …", a commit or amend git made and
+           then exited non-zero after the ref update; the lane ends it `Failed`
+           with git's command and words) and of `Error::CommitUnconfirmed`
+           (including a `post-commit` hook that commits, item 10) is plain
+           engine text today, and this phase gives each its sentence and home.
         2. Progress (R14.1, F1, F9): the status box shows a spinner and the
            running operation's name once it has run 250 ms (a timer on the
            toolkit's executor, as the commit box's elapsed time is — never a

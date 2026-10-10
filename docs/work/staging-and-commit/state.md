@@ -199,6 +199,14 @@ Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carrie
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
 
+- **From phase 13's QA** (file as issues): a `post-commit` hook that makes a commit leaves a made
+  commit reported `CommitUnconfirmed` (its child's first parent is Cairn's commit) — robust only by
+  reading `HEAD`'s reflog for git's own `commit:` entry, which needs the reflog on (item 10); and
+  a measurement of whether an auto-gc after an amend under `gc.reflogExpireUnreachable=now`
+  expires the replaced commit's reflog entry, so `Reflog::Written` would no longer mean findable.
+  Also carried to teardown: `implementation-plan.md` still names the old guard
+  `the_porcelain_reads_are_the_three_named_queries` (item 12). With the user: 2(b), a
+  publication re-check after a token-free amend runs.
 - **From the PRD's "Not done"** (`docs/prd/staging-and-commit.md`): a backup before discard (L2);
   Fork's per-repository sign-off setting and the commit box showing author and signing;
   pre-filling an empty draft from `commit.template`; wrapping a paragraph at the ruler; a

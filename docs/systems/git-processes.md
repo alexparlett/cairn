@@ -104,10 +104,13 @@ crates/cairn-git/src/
                     for the content query, one file or a whole comparison (docs/systems/diff.md)
     attributes.rs   diff_attributes — `git check-attr --stdin -z diff`, whether a path's diff
                     driver names its own algorithm (docs/systems/diff.md)
-    config.rs       fetch_settings, commit_encoding, log_all_ref_updates — `git config
-                    --includes --null` in query form, what a fetch of a remote will read, for
-                    fetch's refspec check (docs/systems/credentials.md), and what a commit and
-                    an amend will (docs/systems/staging.md)
+    config.rs       fetch_settings, commit_encoding, log_all_ref_updates, commit_cleanup,
+                    comment_char_is_auto — `git config --includes --null` in query form, what a
+                    fetch of a remote will read, for fetch's refspec check
+                    (docs/systems/credentials.md); and what a commit and an amend will:
+                    `i18n.commitEncoding`, `core.logAllRefUpdates`, `commit.cleanup` and
+                    whether `core.commentChar` (or, from git 2.45, `core.commentString`) is
+                    `auto` (docs/systems/staging.md)
     status.rs       status — `git status --porcelain=v2 -z`, the working tree's status, read
                     again with `--untracked-files=all` where the first answer collapsed an
                     untracked directory (docs/systems/status.md)
@@ -1461,7 +1464,8 @@ which is a length of time, is waited out.
   it and no remote has `HEAD`, ending `Done` with no prompt, or runs no git and ends
   `NeedsConfirming` with the `Consequence` for the dialog, whose token then asks
   `LocalWrite::Amend` (`amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog`).
-  Phase 18's commit box asks it as Amend is pressed.
+  Nothing in the window asks it yet: the commit box's Amend confirms in place or by the
+  dialog and asks `LocalWrite::Amend`.
 - **What the commit box reads, in the lane's order** (staging-and-commit R6.7, R6.9,
   R6.10, R6.3, R6.4, R10). `Request::CommitReads` — asked as the box is shown and as each
   refresh's refs arrive — is a job of the lane's (`LocalJob::CommitReads`), read after

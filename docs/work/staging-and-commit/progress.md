@@ -3,6 +3,26 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 13's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p13/adjudication.md`): FIX NOW 1, 2(a), 3, 5, 6, 7, 8, 11;
+CARRY 4 and 9 (phase 18), 12 (teardown); FILE 10 and the gc note (state.md's list); USER 2(b).
+Dismissed by the adjudication: 13, 14, 15, 16.
+
+- **#1** test first: `a_commit_git_made_then_failed_after_is_reported_made`, git wrapped to exit
+  128 after its success, failed on the code (`GitFailed`), then passed with
+  `Error::MadeButGitFailed { verb, failure }` (read as after a cancel); a confirmed amend's token is
+  spent. The lane ends it `Failed` with git's command and words; its wording carried to phase 19.
+- **#2(a)** stated in `staging.md`'s residuals and `ops/commit.rs`'s module doc; `CommitUnconfirmed`
+  for an amend now says git may have amended what `HEAD` had become
+  (`an_unconfirmed_amend_says_git_may_have_amended_what_head_became`).
+- **#3** `a_failed_amend_whose_head_moved_hands_no_token_back`; M3 (the hand-back's `HEAD` check
+  replaced by `true`) fails it on 2.56.0, 2.30.9 and 2.32.7, and is restored.
+- **#5, #6** destructive-ops-reviewer's check 13 (token-free paths, the predicate, the window, the
+  hand-back) and "four accepted exceptions".
+- **#7, #8, #11** docs; the three systems sentences naming phase 18 restated as current fact, the
+  intent moved into phase-18-commit-box.md's step 6.
+
 ## 2026-10-10 — phase 13, the coordinator's decisions applied (packet mode)
 
 - **Token hand-back (a′)**: built as ruled — `Error::AmendNotMade { failure, unspent }`, git's

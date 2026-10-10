@@ -129,6 +129,19 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
 - **Carried**: the Git Error's wording for a refusal found while running ("Couldn't Create
   branch '<name>'", phase 19 — until then the Git Error carries the engine's sentence); the
   commit box stays on `CONFIRMATION_SURFACES` until phase 18 takes it off.
+- **QA (2026-10-10), fixed** (`qa-p14/adjudication.md`): #1 the name key pinned
+  (`an_older_names_discard_answer_never_builds_the_token`); #2 `discard_confirmed` takes the token
+  only while Discard is chosen and its consequence is the one for the name shown
+  (`a_token_for_another_name_or_choice_is_let_go_of`); #3 `create` and `discard_confirmed` ask
+  nothing under a create's Git Error (`nothing_is_asked_while_a_creates_git_error_is_up`); #4 the
+  in-progress check last before git runs, the residual race stated in `staging.md`
+  (`an_operation_begun_during_the_recheck_is_refused_before_git_runs`); #6 the reviewer's check 3
+  and CLAUDE.md's residual fitted to B2; #8 `is_up` under the Git Error alone and #9 `cancel`'s
+  early return pinned (`the_windows_keys_are_inert_while_create_branch_is_up`,
+  `a_cancel_under_the_git_error_leaves_the_dialog_as_it_was`); #10 the `--no-track` claims.
+  Carried: 5b to phase 15; 7, 13, 16c-e to phase 19. Filed at teardown: 14, 15. With the user: DO#1
+  (an untracked nested repository deleted by `--force`), 11 (the log quoting a prompt never
+  shown), 16a (the sentence), 16b (the operation nouns). Dismissed: 5a, 12.
 
 ## Phase 14's stopping rule, decided (2026-10-10)
 
@@ -287,6 +300,13 @@ commented, not filed again.
   expires the replaced commit's reflog entry, so `Reflog::Written` would no longer mean findable.
   Also carried to teardown: `implementation-plan.md` still names the old guard
   `the_porcelain_reads_are_the_three_named_queries` (item 12).
+- **From phase 14's QA** (file as issues): `ops/checkout.rs`'s `head_commit` maps any
+  `head_id()` error to `None` (unborn), so an unreadable `HEAD` at the consequence and at the
+  re-check passes as unchanged — git itself fails on it, so nothing is lost; tell unborn from
+  unreadable by gix's head kind (item 14). And nothing requires every `pub` type of
+  `crates/cairn-model/src/consequence.rs` to be on the seal guard's `CONSEQUENCE_TYPES`, nor
+  fails a stale roster name, so a future part type would go unsealed silently — a guard change
+  with its own self-test (item 15, pre-existing).
 - **From the PRD's "Not done"** (`docs/prd/staging-and-commit.md`): a backup before discard (L2);
   Fork's per-repository sign-off setting and the commit box showing author and signing;
   pre-filling an empty draft from `commit.template`; wrapping a paragraph at the ruler; a

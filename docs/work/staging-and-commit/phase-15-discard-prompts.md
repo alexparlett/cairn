@@ -73,6 +73,13 @@ STEP 2  Implement.
         unbounded list renders without virtualization (Show files); the UI
         thread never waits (the count stays on the local lane).
 
+        Carried from phase 14's QA (5b): one frame for every prompt, Create
+        Branch's Discard's included — its `Consequence::CheckoutDiscarding`
+        prompt ends "You can't undo this action." where R1.2's frame ends
+        "You can't undo this.", as every prompt of 245acc0 does; it is never
+        drawn (B2), only quoted in the activity log, but it takes the same
+        frame. (Its body sentence is with the user, phase 14's QA item 16a.)
+
         Out of scope: where a discard's failure or refusal is shown (19).
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md

@@ -3,6 +3,30 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-10 — phase 14's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p14/adjudication.md`): FIX NOW 1, 2, 3, 4, 6, 8, 9, 10; CARRY
+5b (phase 15), 7, 13, 16c-e (phase 19); FILE 14, 15 (state.md's list); USER DO#1, 11, 16a, 16b.
+Dismissed by the adjudication: 5a (the ⚠ is drawn and pinned), 12 (no write can be asked ahead
+of Discard's ask while the dialog is up).
+
+- **#1** pinned: `an_older_names_discard_answer_never_builds_the_token`; the mutation dropping
+  `discarding_for`'s name filter fails it. The optional belt (clearing `discarding` on a new
+  ask) left out, so the test keeps pinning the filter.
+- **#2, #3** test first: `a_token_for_another_name_or_choice_is_let_go_of` and
+  `nothing_is_asked_while_a_creates_git_error_is_up` failed on the code (a token for another
+  name spent; a discard asked under the Git Error), then passed with `discard_confirmed`'s
+  re-check and both handlers' Git Error guard.
+- **#4** test first: `an_operation_begun_during_the_recheck_is_refused_before_git_runs` (a stub
+  `git` writing `MERGE_HEAD` when asked `check-ref-format`, then the real git) failed — the
+  forced checkout ran and removed the merge — then passed with the check moved last.
+- **#8, #9**: `the_windows_keys_are_inert_while_create_branch_is_up` gained the Git Error alone
+  (the dialog cancelled while its write ran; the write's own read-again counted out), and
+  `a_cancel_under_the_git_error_leaves_the_dialog_as_it_was`; the mutations `is_up` without the
+  error and `cancel` without its early return each fail one.
+- **#6, #10** docs: the reviewer's check 3 and CLAUDE.md's residual for B2; the `--no-track`
+  claims moved onto the literal argv.
+
 ## 2026-10-10 — phase 14 built, Create Branch as Fork runs it (packet mode)
 
 What shipped is state.md's "Phase 14". Notes for the record:

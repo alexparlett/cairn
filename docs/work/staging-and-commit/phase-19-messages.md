@@ -100,6 +100,29 @@ STEP 2  Implement.
         unchanged, the stat reads); destructive operations take Confirmed (the
         removal's); no credential value is drawn.
 
+        Carried from phase 14's QA (2026-10-10):
+        - Item 7: Escape is heard in document order and a popup consumes it,
+          so a commit's Git Error opened beneath Create Branch (New Branch is
+          not inert while a commit's hook runs, and the commit can then fail)
+          takes Escape before the visible dialog. The one Modal state replaces
+          the stacking; its tests name this case: a commit's Git Error beneath
+          Create Branch, where Escape closes the top one.
+        - Item 13: after `CheckoutChangedSinceConfirmed` the kept consequence
+          still holds the old `HEAD`, so every re-press is refused again until
+          the name or the radio changes; on a Stale ending re-ask Discard's
+          consequence (`ask_discard`) or clear `discarding`.
+        - Item 16c: `name_refusal`'s templates ("Branch <name> already exists",
+          "'<branch>' exists; cannot create 'refs/heads/<name>'") are modelled
+          on git, whose own words are "a branch named '<name>' already exists"
+          and "cannot lock ref …: '<branch>' exists; cannot create …": quote git
+          or Fork verbatim, or put the words to the user.
+        - Item 16d: `CheckoutRefused::Failed(error.to_string())` draws raw engine
+          text in the refusal row; give it its one sentence ("Couldn't <name>").
+        - Item 16e: Create Branch's interim Git Error for a Stale ending (the
+          engine's sentence, empty command) goes with the mapping above.
+        (Item 16b, `discard_refusal`'s operation nouns and "git am is in
+        progress." starting lowercase, is with the user; build their answer.)
+
         Out of scope: the popover's contents (20).
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md

@@ -4,7 +4,6 @@
 //! answers — the commit or the pair, the file, the options — so the window keeps an answer
 //! only for the selection it names (PRD R4.4).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use cairn_model::ShownDiff;
@@ -578,71 +577,44 @@ pub enum Update {
     /// `complete` says the history has no more to give.
     /// One page of rows, its text, authors, lane changes and snapshots beside them, for the
     /// window to append to its history (`cairn_model::History::append`).
-    Rows {
-        rows: RowsPage,
-        complete: bool,
-    },
+    Rows { rows: RowsPage, complete: bool },
     /// `message` is display text, already rendered from the engine's error.
-    Failed {
-        message: String,
-    },
+    Failed { message: String },
     /// A worker died. Tied to no request, so never filtered out by epoch.
-    WorkerLost {
-        message: String,
-    },
+    WorkerLost { message: String },
     /// The repository is open: `name` is what the title bar calls it — the last component of
     /// its working tree, or of its git directory when it is bare, as Fork names a
     /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
     /// Sent once, first, tied to no request.
-    Opened {
-        name: String,
-    },
+    Opened { name: String },
     /// The default remote first, when there is one.
-    Remotes {
-        remotes: Vec<RemoteSummary>,
-    },
+    Remotes { remotes: Vec<RemoteSummary> },
     /// `diff.context` as the user's `git diff` reads it, raised to one: once asked, and again
     /// each time the configuration moves under the diff thread. Not sent when the
     /// configuration holds a value git refuses: every diff then fails saying so, as the
     /// user's own `git diff` does.
-    ConfiguredContext {
-        context: Context,
-    },
+    ConfiguredContext { context: Context },
     /// git is running; a `CancelFetch` from here on has something to kill.
-    FetchStarted {
-        remote: String,
-    },
+    FetchStarted { remote: String },
     /// The redraws of git's own progress meter one read of its stderr completed, for the one
     /// fetch in flight: whole lines, scrubbed by the engine as it split them (R4.10, R12.2).
-    FetchProgress {
-        lines: ScrubbedLines,
-    },
+    FetchProgress { lines: ScrubbedLines },
     /// The fetch ended. Whether it moved a ref is the refresh's to find out, which the
     /// window asks for on every ending, since a fetch that failed or was killed may have
     /// moved some refs before it stopped (refs-and-status R10.1).
-    FetchFinished {
-        remote: String,
-    },
-    /// `stranded_locks` is every `*.lock` found under the git directory once
-    /// git was gone — a lock this cancel stranded, one from an earlier crash,
-    /// or one a git in a terminal holds right now, which the engine cannot
-    /// tell apart; usually none, since the cancel is `SIGTERM` first and git
-    /// cleans up on that.
-    FetchCancelled {
-        remote: String,
-        stranded_locks: Vec<PathBuf>,
-    },
+    FetchFinished { remote: String },
+    /// The fetch was cancelled: nothing is opened for it (staging-and-commit R14.5).
+    FetchCancelled { remote: String },
+    /// The fetch failed: the Git Error dialog's command, output and sentence (R14.3).
     FetchFailed {
         remote: String,
-        message: String,
+        failure: super::local_lane::Failure,
     },
     /// A fetch of `remote` was not started because one is already in flight;
     /// `reason` says which, as display text. Nothing else about the fetch in
-    /// flight changes.
-    FetchRefused {
-        remote: String,
-        reason: String,
-    },
+    /// flight changes. The window draws nothing for it: Fetch is greyed while a fetch runs
+    /// (staging-and-commit F9), so only a second press racing the first's start reaches it.
+    FetchRefused { remote: String, reason: String },
     /// git or ssh is asking, through the helper: `text` is the prompt as
     /// given, `id` is what the answer must name, and `asking` is the operation
     /// whose askpass token the helper presented — the remote a fetch is of, or a
@@ -665,20 +637,13 @@ pub enum Update {
     },
     /// Each local branch's distance from its upstream, for the snapshot the same refresh
     /// read, in that snapshot's order (R2).
-    AheadBehind {
-        counts: Vec<(RefName, AheadBehind)>,
-    },
+    AheadBehind { counts: Vec<(RefName, AheadBehind)> },
     /// The working tree's status as `git status` lists it (R3), laid out on the refresh
     /// thread as Local Changes' two lists (R9.1), so the window only keeps it.
-    Status {
-        changes: Arc<LocalChanges>,
-    },
+    Status { changes: Arc<LocalChanges> },
     /// One of a refresh's reads failed: `message` is display text. The answer kept before
     /// stays as it was.
-    RefreshFailed {
-        what: Refreshed,
-        message: String,
-    },
+    RefreshFailed { what: Refreshed, message: String },
     /// The sidebar's rows for `refs`, the snapshot they index, with `text` the filter they
     /// were laid out for. Superseded by the next ask, so the one read is the latest asked.
     FilteredRefs {
@@ -695,9 +660,7 @@ pub enum Update {
     },
     /// A local write has started (staging-and-commit R4.2): the writes asked before it have
     /// ended, and it is no longer queued.
-    WriteStarted {
-        id: OperationId,
-    },
+    WriteStarted { id: OperationId },
     /// The lines a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
     /// stderr's alike, as they arrived (staging-and-commit R6.5): one read of a pipe's, or what
     /// the lane held while the window was behind (`output_flow`) — whole lines, scrubbed by the
@@ -722,18 +685,15 @@ pub enum Update {
     },
     /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
     /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
-    /// their arguments and output scrubbed of a URL's userinfo by the engine (R12.2) — and
-    /// whether its ending
-    /// names the repository's `<gitdir>/index.lock`: `Remove index.lock…`'s offer (R12.4), whose
-    /// cost is read when it is pressed (the user's decision H, 2026-10-09).
+    /// their arguments and output scrubbed of a URL's userinfo by the engine (R12.2).
     OperationRan {
         by: RanBy,
         commands: Vec<CommandRecord>,
-        lock_named: bool,
     },
     /// What removing the stale `index.lock` would destroy, asked under `asked` as `Remove
-    /// index.lock…` was pressed — or why it cannot be removed now (display text: no lock, not a
-    /// file, a `git` of Cairn's running).
+    /// index.lock…` was pressed — or why it cannot be removed now, in one sentence for the
+    /// "Couldn't Remove index.lock" dialog (no lock any more, not a file, a `git` of Cairn's
+    /// running).
     LockConsequence {
         asked: OperationId,
         outcome: Result<Consequence, String>,
@@ -765,25 +725,17 @@ pub enum Update {
         status: Arc<LocalChanges>,
         read: Box<AmendRead>,
     },
-    /// The lock files under the git directories as the repository opened — one a write left
-    /// when a close gave up on it among them (staging-and-commit R4.9) — listed by the local
-    /// lane before it runs any write, and sent only when there are some.
-    LocksAtOpen {
-        locks: Vec<PathBuf>,
-        /// The repository's own `<gitdir>/index.lock` is among them: the activity popover's
-        /// entry for them offers its removal (the user's decision H, 2026-10-09).
-        index_lock: bool,
+    /// When `<gitdir>/index.lock` was last changed, if it is there — read by a `stat` on the
+    /// refresh thread on every refresh (staging-and-commit R12.4, F6): the leftover lock's
+    /// state, whose banner the window draws while it is old enough and no git of Cairn's runs.
+    IndexLock {
+        changed: Option<std::time::SystemTime>,
     },
     /// The repository's command log, oldest first, as far back as it keeps.
-    CommandLog {
-        records: Vec<CommandRecord>,
-    },
+    CommandLog { records: Vec<CommandRecord> },
     /// What `of` changed (R2.1, R2.2): its files, the commit's details when one commit was
     /// named, and how the rename search went.
-    Changes {
-        of: Comparison,
-        changes: ChangeSet,
-    },
+    Changes { of: Comparison, changes: ChangeSet },
     /// One file's diff as `query` asked for it, prepared for the views on the worker that
     /// answered it (both rows' indexes, the widest line; phase 07) so the window only keeps
     /// it; `None` where the working tree's `git diff` of the path prints nothing (a clean
@@ -811,10 +763,7 @@ pub enum Update {
     /// A diff query failed: `query` is what was asked, so the window shows the failure
     /// only for the selection it names, and `message` is display text. A query that was
     /// superseded is not a failure and sends nothing.
-    DiffFailed {
-        query: DiffQuery,
-        message: String,
-    },
+    DiffFailed { query: DiffQuery, message: String },
     /// An answer whose query was superseded before the window read it — a change set, a
     /// file's prepared diff (up to 64 MiB, both layouts), Expand All's batch — handed back
     /// unread rather than dropped where the epoch filter sees it, which is the UI thread's
@@ -870,7 +819,7 @@ impl Update {
             | Self::BranchName { .. }
             | Self::CheckoutConsequence { .. }
             | Self::CommitReads(_)
-            | Self::LocksAtOpen { .. }
+            | Self::IndexLock { .. }
             | Self::CommandLog { .. }
             | Self::FilteredFiles { .. }
             | Self::DiffFailed { .. } => None,

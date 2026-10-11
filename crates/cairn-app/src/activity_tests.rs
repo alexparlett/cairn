@@ -1,8 +1,9 @@
 //! The activity popover in the window, headless (staging-and-commit R12, C20's popover half):
 //! the status box opens it over the session's operations; each draws its name, its `git` and
-//! what that said with no token in it; `Remove index.lock…` appears exactly where the lane
-//! offered it and asks the removal through the confirmation; an amend's way back finds the
-//! replaced commit in Show Lost Commits. Updates are applied through `session::apply`, as the
+//! what that said with no token in it; an amend's way back finds the replaced commit in Show
+//! Lost Commits. And the leftover lock (C30): its banner exactly while the stat finds the lock and
+//! no git of Cairn's runs or waits, `Remove index.lock…` in a write's Git Error where git could
+//! not create it, both opening "Remove Stale Lock" over the consequence read at the press. Updates are applied through `session::apply`, as the
 //! worker's stream applies them.
 
 use std::path::PathBuf;
@@ -13,11 +14,11 @@ use cairn_model::{
     UnstagedChange,
 };
 use cairn_ui::{
-    ACTIVITY_TITLE, CANCEL_CAPTION, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
-    SHOW_REPLACED_CAPTION,
+    ACTIVITY_TITLE, CANCEL_CAPTION, CLOSE_CAPTION, GIT_ERROR_TITLE, LOCK_BANNER_TEXT, MainView,
+    NO_ACTIVITY, REMOVE_LOCK_CAPTION, SHOW_REPLACED_CAPTION,
 };
 
-use crate::activity::{GIT_RUNNING_NOTE, LOCKS_AT_OPEN_NAME, REMOVE_LOCK_TITLE};
+use crate::leftover_lock::REMOVE_LOCK_TITLE;
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
@@ -111,16 +112,21 @@ fn index_lock() -> Consequence {
 }
 
 fn failed_on_the_lock() -> WriteEnding {
-    WriteEnding::Failed {
-        message: "git add failed: fatal: Unable to create index.lock".to_owned(),
-        locks: vec![PathBuf::from("/home/ada/engine/.git/index.lock")],
+    WriteEnding::Failed(crate::worker::Failure {
+        said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
         command: Some("git add".to_owned()),
         output: ScrubbedLines::scrubbing("fatal: Unable to create index.lock"),
-    }
+        locks: vec![PathBuf::from("/home/ada/engine/.git/index.lock")],
+        index_lock: true,
+    })
 }
 
-/// Opens the popover by pressing the status box: the repository's name in the title bar.
+/// Opens the popover by pressing the status box: the repository's name in the title bar —
+/// once every ending's dialog over the window is closed, as the one modal state asks.
 fn open(test: &mut TestingRunner) {
+    while drawn(test, GIT_ERROR_TITLE) || labels(test).iter().any(|l| l.starts_with("Couldn't")) {
+        click_lowest(test, CLOSE_CAPTION);
+    }
     click(test, "engine");
 }
 
@@ -155,7 +161,6 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
                 "hint: https://ada:ghp_TOKEN@example.com/r refused",
                 1,
             )],
-            lock_named: false,
         },
     );
     apply(
@@ -164,16 +169,21 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
         &submitted,
         Update::WriteEnded {
             id,
-            ending: WriteEnding::Failed {
-                message: "git add failed: https://example.com/r refused".to_owned(),
-                locks: Vec::new(),
+            ending: WriteEnding::Failed(crate::worker::Failure {
+                said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
                 command: Some("git add".to_owned()),
                 output: ScrubbedLines::scrubbing("https://ada:ghp_TOKEN@example.com/r refused"),
-            },
+                locks: Vec::new(),
+                index_lock: false,
+            }),
             read_again: crate::worker::ReadAgain::Status,
             unspent: crate::worker::Unspent::none(),
         },
     );
+    // Its Git Error first (R14.3): the popover opens once it is closed — one modal state.
+    assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
+    assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered with no lock");
+    click_lowest(&mut test, CLOSE_CAPTION);
     open(&mut test);
     for text in [
         "Stage 1 file",
@@ -191,11 +201,11 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered with no lock");
 }
 
-/// The press of `Remove index.lock…` on `test`'s newest entry: the consequence asked of the local
-/// lane, under the number the request carries.
+/// The press of `Remove index.lock…` at `at`: the consequence asked of the local lane, under the
+/// number the request carries.
 fn press_remove_lock(test: &mut TestingRunner, submitted: &Submitted) -> OperationId {
     submitted.borrow_mut().clear();
-    click(test, REMOVE_LOCK_CAPTION);
+    click_lowest(test, REMOVE_LOCK_CAPTION);
     let asked: Vec<OperationId> = submitted
         .borrow()
         .iter()
@@ -222,109 +232,71 @@ fn removals(submitted: &Submitted) -> Vec<String> {
         .collect()
 }
 
-/// R12.4 and C20, with the user's decisions G and H of 2026-10-09: `Remove index.lock…` is
-/// offered on an ending that names the lock; while a `git` of Cairn's runs it is drawn
-/// unpressable, saying why, rather than vanishing; pressed, it asks the local lane what the
-/// removal would cost NOW, and only that answer opens the "Remove Stale Lock" confirmation, whose
-/// button asks the removal with the token built from it; a refusal at the press is said beside
-/// the button, which stays. Caught by: an offer lost because a `git` ran as the write ended, a
-/// consequence read once at the ending (a stale age), the removal asked without its
-/// confirmation, or a refusal that says nothing.
+/// C30, the Git Error's route (R12.4, F5, G; Fork observed `lk2`, `lk3`): a write git refused for
+/// the lock opens its Git Error with `Remove index.lock…` beside Close; pressed, it closes the
+/// dialog and asks the local lane what the removal would cost NOW; only that press's answer opens
+/// "Remove Stale Lock" over decision G's prompt, whose button asks the removal with the token
+/// built from it — never the failed write again; a refusal at the press is "Couldn't Remove
+/// index.lock" with its sentence. Caught by: the removal offered on a failure git did not have
+/// for the lock, asked without its confirmation, an older press's answer opening it, the write
+/// run again, or a refusal that says nothing.
 #[test]
-fn remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_confirmation() {
+fn a_write_refused_for_the_lock_offers_its_removal_through_the_confirmation() {
     let (mut test, view, submitted) = launch();
     let write = LocalWrite::StageFiles {
         paths: vec!["a.rs".into()],
     };
     let stranded = started(&mut test, view, &submitted, &write);
-    for update in [
-        Update::OperationRan {
-            by: RanBy::Write(stranded),
-            commands: vec![record(&["add"], "fatal: Unable to create index.lock", 128)],
-            lock_named: true,
-        },
+    apply(
+        &mut test,
+        view,
+        &submitted,
         Update::WriteEnded {
             id: stranded,
             ending: failed_on_the_lock(),
             read_again: crate::worker::ReadAgain::Status,
             unspent: crate::worker::Unspent::none(),
         },
-    ] {
-        apply(&mut test, view, &submitted, update);
-    }
-
-    // A git of Cairn's running: drawn, saying why, and its press asks nothing.
-    let running = started(&mut test, view, &submitted, &write);
-    open(&mut test);
-    click_lowest(&mut test, "Stage 1 file");
-    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
-    assert!(drawn(&test, GIT_RUNNING_NOTE), "{:?}", labels(&test));
-    submitted.borrow_mut().clear();
-    click(&mut test, REMOVE_LOCK_CAPTION);
-    assert!(
-        !submitted
-            .borrow()
-            .iter()
-            .any(|request| matches!(request, Request::LockConsequence { .. })),
-        "asked while a git ran: {:?}",
-        submitted.borrow()
     );
-    test.press_key(Key::Named(NamedKey::Escape));
-    settle(&mut test);
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        Update::WriteEnded {
-            id: running,
-            ending: WriteEnding::Done(Done {
-                description: "staged".to_owned(),
-                acknowledged: None,
-                locks_before: Vec::new(),
-                locks_after: Vec::new(),
-                replaced: None,
-                cost_after: None,
-            }),
-            read_again: crate::worker::ReadAgain::Status,
-            unspent: crate::worker::Unspent::none(),
-        },
-    );
+    assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
+    assert!(drawn(&test, "fatal: Unable to create index.lock"));
 
-    // Nothing running: pressable. The older entry, selected, offers nothing.
-    open(&mut test);
-    click_lowest(&mut test, "Stage 1 file");
-    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
-    assert!(!drawn(&test, GIT_RUNNING_NOTE), "{:?}", labels(&test));
-    click(&mut test, "Stage 1 file");
-    assert!(
-        !drawn(&test, REMOVE_LOCK_CAPTION),
-        "the newer entry offered it"
-    );
-    test.press_key(Key::Named(NamedKey::Escape));
-    settle(&mut test);
-
-    // Refused at the press: said beside the button, which stays; no confirmation.
-    open(&mut test);
-    click_lowest(&mut test, "Stage 1 file");
+    // Refused at the press: "Couldn't Remove index.lock", no confirmation.
     let asked = press_remove_lock(&mut test, &submitted);
-    let refusal = "index.lock is no longer there".to_owned();
+    assert!(!drawn(&test, GIT_ERROR_TITLE), "the Git Error stayed");
     apply(
         &mut test,
         view,
         &submitted,
         Update::LockConsequence {
             asked,
-            outcome: Err(refusal.clone()),
+            outcome: Err("There is no index.lock any more.".to_owned()),
         },
     );
-    assert!(drawn(&test, &refusal), "{:?}", labels(&test));
-    assert!(drawn(&test, REMOVE_LOCK_CAPTION));
-    assert!(!drawn(&test, REMOVE_LOCK_TITLE), "{:?}", labels(&test));
+    assert!(
+        drawn(&test, "Couldn't Remove index.lock"),
+        "{:?}",
+        labels(&test)
+    );
+    assert!(drawn(
+        &test,
+        "There is no index.lock any more. Nothing was changed."
+    ));
+    assert!(!drawn(&test, REMOVE_LOCK_TITLE));
+    click_lowest(&mut test, CLOSE_CAPTION);
 
-    // Read at the press: the confirmation opens over that answer, and only its button asks.
+    // The banner's route, the lock old and nothing running: read at the press, the confirmation
+    // opens over that answer alone, and only its button asks.
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::IndexLock {
+            changed: Some(SystemTime::now() - Duration::from_secs(3_600)),
+        },
+    );
+    assert!(drawn(&test, LOCK_BANNER_TEXT), "{:?}", labels(&test));
     let asked = press_remove_lock(&mut test, &submitted);
-    assert!(!drawn(&test, &refusal), "the old refusal stayed");
-    // An answer to an older press is let go of.
     apply(
         &mut test,
         view,
@@ -357,57 +329,94 @@ fn remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_conf
     click_lowest(&mut test, &index_lock().action());
     assert_eq!(removals(&submitted), [prompt]);
     assert!(
+        !submitted.borrow().iter().any(|request| matches!(
+            request,
+            Request::Write {
+                write: LocalWrite::StageFiles { .. },
+                ..
+            }
+        )),
+        "the failed write was asked again"
+    );
+    assert!(
         !drawn(&test, CANCEL_CAPTION),
         "the confirmation stayed open"
     );
 }
 
-/// The user's decision H of 2026-10-09: a lock found as the repository opened is an entry of its
-/// own, naming each lock, with `Remove index.lock…` where the repository's own index lock is
-/// among them; a lock file that is not the index's is named and offers nothing. Caught by: a lock
-/// at open said only under the lists, or an offer for a lock Cairn would not remove.
+/// C30, the banner (R12.4, F6): drawn exactly while the stat finds `<gitdir>/index.lock`, no git
+/// of Cairn's runs or waits and the lock is older than about ten seconds; gone when a stat finds
+/// it gone, whoever removed it. Caught by: a banner over Cairn's own write, over a fresh lock, or
+/// one left after the file went.
 #[test]
-fn a_lock_found_at_open_is_an_entry_offering_its_removal() {
+fn the_leftover_lock_banner_shows_exactly_while_it_should() {
     let (mut test, view, submitted) = launch();
+    let old = SystemTime::now() - Duration::from_secs(60);
+    assert!(!drawn(&test, LOCK_BANNER_TEXT), "a banner with no stat");
     apply(
         &mut test,
         view,
         &submitted,
-        Update::LocksAtOpen {
-            locks: vec![PathBuf::from("/home/ada/engine/.git/HEAD.lock")],
-            index_lock: false,
+        Update::IndexLock {
+            changed: Some(SystemTime::now()),
         },
     );
-    open(&mut test);
-    assert!(drawn(&test, LOCKS_AT_OPEN_NAME), "{:?}", labels(&test));
-    assert!(drawn(&test, "/home/ada/engine/.git/HEAD.lock"));
-    assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered for HEAD.lock");
-    test.press_key(Key::Named(NamedKey::Escape));
+    assert!(!drawn(&test, LOCK_BANNER_TEXT), "a lock seconds old");
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::IndexLock { changed: Some(old) },
+    );
+    assert!(drawn(&test, LOCK_BANNER_TEXT), "{:?}", labels(&test));
+
+    // A write of Cairn's running or queued: no banner, its lock may be that git's.
+    let write = LocalWrite::StageFiles {
+        paths: vec!["a.rs".into()],
+    };
+    let running = started(&mut test, view, &submitted, &write);
+    assert!(
+        !drawn(&test, LOCK_BANNER_TEXT),
+        "drawn while Cairn's git ran"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: running,
+            ending: WriteEnding::Done(Done {
+                description: "staged".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
+            }),
+            read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    assert!(drawn(&test, LOCK_BANNER_TEXT), "{:?}", labels(&test));
+    let queued = OperationId::next();
+    let mut writes = view.writes;
+    test.run_in(|| writes.write().asked(queued, &write));
+    settle(&mut test);
+    assert!(
+        !drawn(&test, LOCK_BANNER_TEXT),
+        "drawn while a write waited"
+    );
+    test.run_in(|| writes.write().ended(queued));
     settle(&mut test);
 
+    // Removed by anyone: the next stat takes it down.
     apply(
         &mut test,
         view,
         &submitted,
-        Update::LocksAtOpen {
-            locks: vec![PathBuf::from("/home/ada/engine/.git/index.lock")],
-            index_lock: true,
-        },
+        Update::IndexLock { changed: None },
     );
-    open(&mut test);
-    assert!(drawn(&test, "/home/ada/engine/.git/index.lock"));
-    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
-    let asked = press_remove_lock(&mut test, &submitted);
-    apply(
-        &mut test,
-        view,
-        &submitted,
-        Update::LockConsequence {
-            asked,
-            outcome: Ok(index_lock()),
-        },
-    );
-    assert!(drawn(&test, REMOVE_LOCK_TITLE), "{:?}", labels(&test));
+    assert!(!drawn(&test, LOCK_BANNER_TEXT), "left after the file went");
 }
 
 /// The user's decision N of 2026-10-09: a write refused before it started keeps its own name.
@@ -432,12 +441,22 @@ fn a_write_refused_before_it_started_keeps_its_name() {
         Update::WriteEnded {
             id,
             ending: WriteEnding::NotRun {
-                message: "Not run: the repository was closing.".to_owned(),
+                said: "The repository was closing.".to_owned(),
             },
             read_again: crate::worker::ReadAgain::Status,
             unspent: crate::worker::Unspent::none(),
         },
     );
+    // R14.3: closing is a refusal found while it waited — "Couldn't <its name>".
+    assert!(
+        drawn(&test, "Couldn't Stage 2 files"),
+        "{:?}",
+        labels(&test)
+    );
+    assert!(drawn(
+        &test,
+        "The repository was closing. Nothing was changed."
+    ));
     open(&mut test);
     assert!(drawn(&test, "Stage 2 files"), "{:?}", labels(&test));
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
@@ -484,10 +503,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         &submitted,
         Update::WriteEnded {
             id: killed,
-            ending: WriteEnding::Cancelled {
-                message: "git commit -q --amend -F - was cancelled".to_owned(),
-                locks: Vec::new(),
-            },
+            ending: WriteEnding::Cancelled { locks: Vec::new() },
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },
@@ -505,13 +521,14 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         &submitted,
         Update::WriteEnded {
             id: failed,
-            ending: WriteEnding::Failed {
-                message: "git checkout failed: fatal: a branch named 'topic' already exists"
+            ending: WriteEnding::Failed(crate::worker::Failure {
+                said: "git checkout failed: fatal: a branch named 'topic' already exists"
                     .to_owned(),
-                locks: Vec::new(),
                 command: Some("git checkout -q -f -b topic".to_owned()),
                 output: ScrubbedLines::scrubbing("fatal: a branch named 'topic' already exists"),
-            },
+                locks: Vec::new(),
+                index_lock: false,
+            }),
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },
@@ -531,7 +548,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         Update::WriteEnded {
             id,
             ending: WriteEnding::NotRun {
-                message: "Not run: the repository was closing.".to_owned(),
+                said: "Not run: the repository was closing.".to_owned(),
             },
             read_again: crate::worker::ReadAgain::Status,
             unspent: crate::worker::Unspent::none(),
@@ -584,9 +601,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
     test.run_in(|| {
         activity.write().write_started(&Asked {
             id,
-            what: "amend".to_owned(),
             name: "Amend".to_owned(),
-            awaited: "the amend to finish",
             cancellable: true,
             prompt: None,
         });

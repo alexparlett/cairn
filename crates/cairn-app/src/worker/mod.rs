@@ -7,6 +7,7 @@ mod diff_lane;
 #[cfg(test)]
 mod diff_tests;
 mod discovery;
+mod ending_words;
 mod epoch;
 mod expand_all;
 #[cfg(test)]
@@ -39,10 +40,14 @@ pub use askpass::{PromptId, Reply};
 pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, next_update};
 pub use discovery::Discovery;
 #[cfg(test)]
+pub(crate) use ending_words::{GIT_FAILED, checkout_refused_in, commit_refused_in};
+#[cfg(test)]
 pub(crate) use expand_all::EXPAND_ALL_LINES;
 #[cfg(test)]
 pub use local_lane::Done;
-pub use local_lane::{LocalWrite, OperationId, ReadAgain, Unspent, UnstageTarget, WriteEnding};
+pub use local_lane::{
+    Failure, LocalWrite, OperationId, ReadAgain, Unspent, UnstageTarget, WriteEnding,
+};
 pub use output_flow::OutputReceipt;
 #[cfg(test)]
 pub use pool::Updates;

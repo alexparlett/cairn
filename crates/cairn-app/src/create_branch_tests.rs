@@ -110,7 +110,7 @@ fn writes(submitted: &Submitted) -> Vec<(OperationId, String)> {
         .borrow()
         .iter()
         .filter_map(|request| match request {
-            Request::Write { id, write } => Some((*id, write.what())),
+            Request::Write { id, write } => Some((*id, write.name())),
             _ => None,
         })
         .collect()
@@ -448,9 +448,10 @@ fn the_new_branch_chord_opens_create_branch_at_head() {
     );
 }
 
-/// The user's decision D (2026-10-09): while the name's check waits behind a running write on
-/// the local lane, the dialog names that write beside its buttons by a plain noun ("Waiting for
-/// the commit to finish…"), and says nothing more once
+/// The user's decision D (2026-10-09), worded by R14.1 and R14.2 (rule 5, one name per
+/// operation): while the name's check waits behind a running write on the local lane, the
+/// dialog names that write beside its buttons by its one name ("Waiting for Commit…"), and says
+/// nothing more once
 /// the answer for the text shown arrives, or while no write runs. Caught by: the wait left
 /// unsaid, another write named, or the line kept after the answer.
 #[test]
@@ -482,29 +483,29 @@ fn a_name_check_waiting_behind_a_write_says_which_write() {
     settle(&mut test);
     assert_eq!(
         waiting(&test),
-        vec!["Waiting for the branch to be created…".to_owned()]
+        vec!["Waiting for Create branch 'first'…".to_owned()]
     );
-    // Each write named by a plain noun, as the user's mockup read (decision D).
+    // Each write named by its one name (R14.2).
     for (write, line) in [
         (
             LocalWrite::Commit {
                 message: "m".to_owned(),
                 skip_hooks: false,
             },
-            "Waiting for the commit to finish…",
+            "Waiting for Commit…",
         ),
         (
             LocalWrite::StageFiles {
                 paths: vec![RepoPath::from("a.rs")],
             },
-            "Waiting for staging to finish…",
+            "Waiting for Stage 1 file…",
         ),
         (
             LocalWrite::CreateBranchAndCheckout {
                 name: "x".to_owned(),
                 at: oid(0xab),
             },
-            "Waiting for the checkout to finish…",
+            "Waiting for Create branch 'x'…",
         ),
     ] {
         let next = OperationId::next();
@@ -760,15 +761,16 @@ fn an_operation_in_progress_refuses_discard_in_the_dialog() {
 fn failed(id: OperationId) -> Update {
     Update::WriteEnded {
         id,
-        ending: WriteEnding::Failed {
-            message: "git failed".to_owned(),
-            locks: Vec::new(),
+        ending: WriteEnding::Failed(crate::worker::Failure {
+            said: "git failed".to_owned(),
             command: Some("git --literal-pathspecs checkout -q -b topic abab --".to_owned()),
             output: cairn_model::ScrubbedLines::scrubbing(
                 "error: Your local changes to the following files would be overwritten by \
                  checkout:\n",
             ),
-        },
+            locks: Vec::new(),
+            index_lock: false,
+        }),
         read_again: crate::worker::ReadAgain::Everything,
         unspent: crate::worker::Unspent::none(),
     }
@@ -952,7 +954,8 @@ fn nothing_is_asked_while_a_creates_git_error_is_up() {
         1,
         "a discard asked under the Git Error"
     );
-    click(&mut test, DONT_CHANGE_CAPTION);
+    // The dialog beneath, kept but not drawn (one modal state): its choice made by its handler.
+    test.run_in(|| crate::create_branch::local_chosen(view, cairn_ui::LocalChoice::Keep, None));
     test.run_in(|| crate::create_branch::create(view, Some(&submit)));
     settle(&mut test);
     assert_eq!(
@@ -987,8 +990,8 @@ fn a_cancel_under_the_git_error_leaves_the_dialog_as_it_was() {
     assert!(drawn(&test, LOCAL_CHANGES_LABEL), "its choices were lost");
 }
 
-/// R11.3 and C34: a create that fails opens Fork's Git Error dialog over git's words, OVER the
-/// dialog, which stays open beneath it as it was left — its name, its box and its choice — so
+/// R11.3, C34 and R14.8: a create that fails opens Fork's Git Error dialog over git's words, OVER
+/// the dialog, which is kept beneath it as it was left (and not drawn, the one modal state) — its name, its box and its choice — so
 /// Close returns to it; Escape closes the Git Error alone. Caught by: a failure shown nowhere,
 /// the dialog closed under it, its state reset, or Escape closing both.
 #[test]
@@ -1023,9 +1026,14 @@ fn a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was() {
         &test,
         "error: Your local changes to the following files would be overwritten by checkout:"
     ));
+    // Kept beneath, not drawn: the one modal state draws the Git Error alone (R14.8).
     assert!(
-        drawn(&test, CREATE_BRANCH_TITLE),
+        test.run_in(|| view.branch.state.peek().is_up()),
         "the dialog closed under the error"
+    );
+    assert!(
+        !drawn(&test, CREATE_BRANCH_TITLE),
+        "drawn beside the Git Error"
     );
     click(&mut test, cairn_ui::CLOSE_CAPTION);
     assert!(!drawn(&test, GIT_ERROR_TITLE));

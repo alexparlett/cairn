@@ -689,7 +689,8 @@ fn a_prompt_reaches_the_window_as_a_value_and_its_answer_reaches_git() {
         matches!(u, Update::FetchFailed { .. } | Update::FetchFinished { .. })
     });
     match seen.last() {
-        Some(Update::FetchFailed { message, .. }) => {
+        Some(Update::FetchFailed { failure, .. }) => {
+            let message = format!("{} {}", failure.said, failure.output.text());
             assert!(
                 !message.contains(&password),
                 "the failure carries the password: {message}"
@@ -781,18 +782,13 @@ fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
 
 /// PRD R4.3: cancelling kills git while it waits on the prompt; the outcome
 /// says cancelled, the dialog's refusal afterwards is harmless, and the
-/// worker goes on serving. Issue #19: the outcome also names the lock file
-/// left under the git directory — one planted here, since a git ended at a
-/// prompt holds none of its own — so the window can say so.
+/// worker goes on serving. A cancel opens nothing (staging-and-commit R14.5): the
+/// outcome names the remote alone, whatever lock a git left.
 #[test]
 fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     let remote = Demanding::new();
     let fixture = with_origin("cairn-cancelled-fetch", &remote.url());
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let stale = fixture.path.join(".git/refs/remotes/origin/stale.lock");
-    std::fs::create_dir_all(stale.parent().unwrap_or(&stale)).unwrap_or_else(|e| panic!("{e}"));
-    std::fs::write(&stale, b"").unwrap_or_else(|e| panic!("{e}"));
-    let stale = std::fs::canonicalize(&stale).unwrap_or(stale);
     let (handle, mut updates, answer) = boundary(&fixture.path, &home.path, &runtime);
 
     handle.submit(Request::Fetch {
@@ -819,21 +815,10 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
         "the cancel took {:?}: git did not act on SIGTERM",
         started.elapsed()
     );
-    let stranded = match seen.last() {
-        Some(Update::FetchCancelled {
-            remote,
-            stranded_locks,
-        }) if remote == "origin" => stranded_locks.clone(),
-        other => panic!("expected a cancel of origin, got {other:?}"),
-    };
-    let stranded: Vec<PathBuf> = stranded
-        .into_iter()
-        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
-        .collect();
-    assert_eq!(
-        stranded,
-        [stale],
-        "the cancel did not report the lock file under the git directory"
+    assert!(
+        matches!(seen.last(), Some(Update::FetchCancelled { remote }) if remote == "origin"),
+        "expected a cancel of origin, got {:?}",
+        seen.last()
     );
     // What closing the dialog does; the helper it frees belongs to a git that is gone.
     answer(Reply::Refuse { prompt: id });
@@ -978,9 +963,10 @@ fn a_failure_with_no_channel_names_why_nothing_could_ask() {
         matches!(u, Update::FetchFailed { .. } | Update::FetchFinished { .. })
     });
     match seen.last() {
-        Some(Update::FetchFailed { message, .. }) => assert!(
-            message.contains("XDG_RUNTIME_DIR"),
-            "the failure does not say why nothing could ask: {message}"
+        Some(Update::FetchFailed { failure, .. }) => assert!(
+            failure.said.contains("XDG_RUNTIME_DIR"),
+            "the failure does not say why nothing could ask: {}",
+            failure.said
         ),
         other => panic!("expected the fetch to fail closed, got {other:?}"),
     }

@@ -219,44 +219,38 @@ pub(super) fn serve_network_lane(
                 });
                 control.clear();
                 drop(authorised);
-                let locks: &[std::path::PathBuf] = match &outcome {
-                    Err(Error::GitCancelled { stranded_locks, .. })
-                    | Err(Error::GitUnwatched { stranded_locks, .. }) => stranded_locks,
-                    Err(Error::GitFailed { present_locks, .. }) => present_locks,
-                    Ok(_) | Err(_) => &[],
-                };
-                let lock_named = super::local_lane::names_index_lock(&repo, locks);
                 outbox.send(
                     None,
                     Update::OperationRan {
                         by: super::request::RanBy::Fetch,
                         commands: super::local_lane::ran_since(&repo, mark),
-                        lock_named,
                     },
                 );
-                outbox.send(None, fetch_outcome(remote, outcome.map(|_| ()), prompting));
+                let lock = repo.git_dir().join("index.lock");
+                outbox.send(
+                    None,
+                    fetch_outcome(remote, outcome.map(|_| ()), prompting, &lock),
+                );
             }
         }
     }
 }
 
-/// The update for how a fetch ended. A failure while no prompt could have been
-/// answered says so, since git's own message ("terminal prompts disabled") does
-/// not say why nothing answered.
+/// The update for how a fetch ended: a cancel quietly (R14.5), a failure as the Git Error dialog
+/// draws one (R14.3) — saying, where no prompt could have been answered, why, since git's own
+/// message ("terminal prompts disabled") does not.
 fn fetch_outcome(
     remote: String,
     outcome: Result<(), Error>,
     prompting: &Result<(), String>,
+    lock: &std::path::Path,
 ) -> Update {
     match outcome {
         Ok(()) => Update::FetchFinished { remote },
-        Err(Error::GitCancelled { stranded_locks, .. }) => Update::FetchCancelled {
-            remote,
-            stranded_locks,
-        },
+        Err(Error::GitCancelled { .. }) => Update::FetchCancelled { remote },
         Err(error) => Update::FetchFailed {
             remote,
-            message: super::local_lane::message_of(&error, prompting),
+            failure: super::local_lane::Failure::of(&error, prompting, lock),
         },
     }
 }
@@ -265,11 +259,17 @@ fn fetch_outcome(
 mod tests {
     use super::*;
 
+    fn lock() -> std::path::PathBuf {
+        std::path::PathBuf::from("/r/.git/index.lock")
+    }
+
+    /// R14.5: a fetch that succeeds or is cancelled opens nothing — the update carries the remote
+    /// alone. Caught by: a cancel carrying what the window would draw.
     #[test]
     fn every_outcome_names_how_the_fetch_ended() {
         let origin = || "origin".to_owned();
         assert_eq!(
-            fetch_outcome(origin(), Ok(()), &Ok(())),
+            fetch_outcome(origin(), Ok(()), &Ok(()), &lock()),
             Update::FetchFinished { remote: origin() }
         );
         assert_eq!(
@@ -277,36 +277,38 @@ mod tests {
                 origin(),
                 Err(Error::GitCancelled {
                     arguments: "fetch origin".to_owned(),
-                    stranded_locks: Vec::new(),
+                    stranded_locks: vec!["/r/.git/packed-refs.lock".into()],
                 }),
-                &Ok(())
+                &Ok(()),
+                &lock()
             ),
-            Update::FetchCancelled {
-                remote: origin(),
-                stranded_locks: Vec::new(),
-            }
+            Update::FetchCancelled { remote: origin() }
         );
     }
 
-    /// Caught by: dropping the paths on the way to the window, which is the only place
-    /// the user can hear about them.
+    /// R14.3: a fetch git failed carries its command and output for the Git Error dialog, and
+    /// Fork's sentence. Caught by: the engine's text in their place.
     #[test]
-    fn a_cancelled_fetch_carries_the_lock_files_it_stranded() {
-        let lock = std::path::PathBuf::from("/r/.git/refs/remotes/origin/main.lock");
+    fn a_failed_fetch_carries_gits_command_and_words() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let failed = Error::GitFailed {
+            arguments: "fetch --progress origin".to_owned(),
+            status: std::process::ExitStatus::from_raw(128 << 8),
+            stderr: cairn_model::ScrubbedLines::scrubbing("fatal: Authentication failed"),
+            present_locks: Vec::new(),
+        };
+        let Update::FetchFailed { failure, .. } =
+            fetch_outcome("origin".to_owned(), Err(failed), &Ok(()), &lock())
+        else {
+            panic!("not a failure");
+        };
         assert_eq!(
-            fetch_outcome(
-                "origin".to_owned(),
-                Err(Error::GitCancelled {
-                    arguments: "fetch origin".to_owned(),
-                    stranded_locks: vec![lock.clone()],
-                }),
-                &Ok(())
-            ),
-            Update::FetchCancelled {
-                remote: "origin".to_owned(),
-                stranded_locks: vec![lock],
-            }
+            failure.command.as_deref(),
+            Some("git fetch --progress origin")
         );
+        assert_eq!(failure.output.text(), "fatal: Authentication failed");
+        assert_eq!(failure.said, crate::worker::GIT_FAILED);
+        assert!(!failure.index_lock);
     }
 
     /// Caught by: dropping the reason, which leaves the user with git's "terminal
@@ -319,10 +321,11 @@ mod tests {
                 source: std::io::Error::other("boom"),
             })
         };
-        match fetch_outcome("origin".to_owned(), failure(), &Ok(())) {
-            Update::FetchFailed { message, .. } => {
-                assert!(message.contains("boom"));
-                assert!(!message.contains("could not have asked"));
+        match fetch_outcome("origin".to_owned(), failure(), &Ok(()), &lock()) {
+            Update::FetchFailed { failure, .. } => {
+                assert!(failure.said.contains("boom"));
+                assert!(!failure.said.contains("could not have asked"));
+                assert_eq!(failure.command, None);
             }
             other => panic!("{other:?}"),
         }
@@ -330,10 +333,15 @@ mod tests {
             "origin".to_owned(),
             failure(),
             &Err("the askpass helper is not at /x".to_owned()),
+            &lock(),
         ) {
-            Update::FetchFailed { message, .. } => {
-                assert!(message.contains("boom"), "{message}");
-                assert!(message.contains("helper is not at /x"), "{message}");
+            Update::FetchFailed { failure, .. } => {
+                assert!(failure.said.contains("boom"), "{}", failure.said);
+                assert!(
+                    failure.said.contains("helper is not at /x"),
+                    "{}",
+                    failure.said
+                );
             }
             other => panic!("{other:?}"),
         }

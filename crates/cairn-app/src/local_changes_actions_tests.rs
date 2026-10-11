@@ -797,13 +797,13 @@ fn a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered() {
     prompt.set(Some(PromptView {
         id: PromptId::for_tests(4),
         text: "Enter passphrase for key '/k': ".to_owned(),
-        asking: Some("Staging 1 file".to_owned()),
+        asking: Some("Stage 1 file".to_owned()),
     }));
     settle(&mut test);
     assert!(
         labels(&test)
             .iter()
-            .any(|t| t == "Staging 1 file is asking for a credential"),
+            .any(|t| t == "Stage 1 file is asking for a credential"),
         "{:?}",
         labels(&test)
     );
@@ -858,20 +858,21 @@ fn local_changes_diff_is_always_exact_and_leaves_the_setting_alone() {
     assert_eq!(asked(&submitted).len(), 1, "a disabled toggle asked again");
 }
 
-/// R8.6, R3.7: what the writes asked from the view are doing is drawn under its lists — queued,
-/// running with how many wait behind it — and a stale patch's ending names its path; one that
-/// was done says nothing more. Caught by: a queued or running write not drawn, or a stale
-/// ending drawn as nothing.
+/// C28 (R14.3, R14.5, R14.6; R8.6 superseded): nothing is drawn under the lists for a write —
+/// queued or running, it is the status box's — a stale patch's ending opens "Couldn't <name>"
+/// naming its path once, with "Nothing was changed." once and no Error Details, and a write
+/// done says nothing at all. Caught by: a line under the lists, a stale ending drawn as
+/// nothing, or the tail said twice.
 #[test]
-fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
+fn a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog() {
     let (mut test, view, submitted) = opened(several());
     choose_rows(&mut test, view, &["a.rs", "b.rs"]);
     press_chord(&mut test, Action::StageOrUnstage);
     assert!(
-        labels(&test)
+        !labels(&test)
             .iter()
-            .any(|t| t == "Staging 2 files (queued)"),
-        "{:?}",
+            .any(|t| t.contains("Stag") && t.contains("2 files")),
+        "a queued write drawn under the lists: {:?}",
         labels(&test)
     );
     let id = submitted
@@ -884,8 +885,10 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
         .unwrap_or_else(|| panic!("no write asked"));
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
     assert!(
-        labels(&test).iter().any(|t| t == "Staging 2 files…"),
-        "{:?}",
+        !labels(&test)
+            .iter()
+            .any(|t| t.contains("Stag") && t.contains("2 files")),
+        "a running write drawn under the lists: {:?}",
         labels(&test)
     );
     apply(
@@ -896,19 +899,29 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
             id,
             ending: WriteEnding::Stale {
                 path: "b.rs".to_owned(),
-                message: "b.rs changed since it was read".to_owned(),
+                said: "b.rs changed after its diff was read.".to_owned(),
             },
             read_again: ReadAgain::Status,
             unspent: crate::worker::Unspent::none(),
         },
     );
+    let shown = labels(&test);
     assert!(
-        labels(&test)
-            .iter()
-            .any(|t| t.starts_with("Staging 2 files: nothing was written") && t.contains("b.rs")),
-        "{:?}",
-        labels(&test)
+        shown.iter().any(|t| t == "Couldn't Stage 2 files"),
+        "{shown:?}"
     );
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "b.rs changed after its diff was read. Nothing was changed."),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|t| t == cairn_ui::ERROR_DETAILS),
+        "{shown:?}"
+    );
+    click(&mut test, cairn_ui::CLOSE_CAPTION);
+    assert!(!labels(&test).iter().any(|t| t.starts_with("Couldn't")));
     // The next write, done, leaves nothing said.
     press_row(&mut test, "c.rs", 0);
     press_chord(&mut test, Action::StageOrUnstage);
@@ -941,8 +954,10 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
         },
     );
     assert!(
-        !labels(&test).iter().any(|t| t.starts_with("Staging")),
-        "{:?}",
+        !labels(&test)
+            .iter()
+            .any(|t| t.starts_with("Couldn't") || t == cairn_ui::GIT_ERROR_TITLE),
+        "a success opened a dialog: {:?}",
         labels(&test)
     );
 }
@@ -1061,6 +1076,10 @@ fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
     test.sync_and_update();
     test.release_cursor(into);
     settle(&mut test);
+    // The headless runner's presses come with no time between them: a press on s.rs straight
+    // after the drop's release would be read as the second of a double press, which stages its
+    // row (C18's double-press route). A press on another row first keeps the routes apart.
+    press_row(&mut test, "b.rs", 0);
     choose_rows(&mut test, view, &["s.rs", "u.rs"]);
     click(&mut test, cairn_ui::UNSTAGE_CAPTION);
     choose_rows(&mut test, view, &["s.rs", "u.rs"]);

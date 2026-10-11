@@ -21,11 +21,14 @@
 //! drawn — the window reads status again after every write, and that read shows it. While a
 //! commit runs no read starts here at all, ahead/behind included (R4.6): the commit's ending
 //! reads everything again. Both are the lane's state ([`LaneState`]).
+//!
+//! Each status job first stats `<gitdir>/index.lock` (`ops::index_lock_changed`) and sends what
+//! it found (`Update::IndexLock`): the leftover lock's state (staging-and-commit R12.4).
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use cairn_git::ops::GitBinary;
+use cairn_git::ops::{self, GitBinary};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{LocalChanges, RefsSnapshot};
 
@@ -121,6 +124,16 @@ fn status(repo: &Repository, epoch: Epoch, serving: &Refreshing<'_>) {
     if !serving.epochs.is_current(epoch) {
         return;
     }
+    // The leftover lock, a state of the repository (R12.4, F6): one `stat` of
+    // `<gitdir>/index.lock` on every refresh — on open, on focus, after each write and on
+    // Refresh — whether or not a write keeps the status back, so the banner goes when the file
+    // does, whoever removed it. It writes nothing and runs no git.
+    serving.outbox.send(
+        None,
+        Update::IndexLock {
+            changed: ops::index_lock_changed(repo),
+        },
+    );
     // A commit running: kept back, and its ending reads everything again (R4.6).
     if serving.lane.defer_refresh() {
         return;

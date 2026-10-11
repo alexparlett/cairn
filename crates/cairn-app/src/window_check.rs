@@ -107,7 +107,7 @@ fn kind(update: &Update) -> &'static str {
         Update::CommitReads(_) => "commit box reads",
         Update::Amending { .. } => "amend read",
         Update::Failed { .. }
-        | Update::LocksAtOpen { .. }
+        | Update::IndexLock { .. }
         | Update::LockConsequence { .. }
         | Update::WriteOutput { .. }
         | Update::OperationRan { .. }
@@ -406,7 +406,8 @@ fn launch(path: &str) -> Harness {
                 fetch: State::create(FetchStatus::Idle),
                 prompt: State::create(None),
                 remotes: State::create(Vec::<RemoteSummary>::new()),
-                refused: State::create(None),
+                endings: State::create(Default::default()),
+                lock: State::create(Default::default()),
                 diff: State::create(DiffState::default()),
                 history_scroll: ScrollController::new(0, 0, Vec::new()),
                 history_cursor: State::create(0),

@@ -1,28 +1,23 @@
 //! The local writes as the window keeps them (staging-and-commit R4): each asked, queued
-//! until it starts, running until it ends, and how the last one ended; the lock files last
-//! listed; and whether the window is waiting on one to close (R4.9).
+//! until it starts, running until it ends, and how the last one ended; and whether the window is
+//! waiting on one to close (R4.9).
 //!
 //! On the UI thread, so nothing here waits: a write is asked by a submit and its news arrives
 //! as updates (`session::apply`).
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::time::Instant;
 
-use crate::worker::{LocalWrite, OperationId, Request, WriteEnding};
+use crate::worker::{LocalWrite, OperationId, Request};
 
-/// What a wait calls a write the window did not see asked.
-const UNKNOWN_WRITE: &str = "another write to finish";
-
-/// A write the window asked for: its id, and what it is called while it waits and runs.
+/// A write the window asked for: its id and its one name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asked {
     pub id: OperationId,
-    pub what: String,
-    /// What the activity popover calls it, in Fork's imperative form (`LocalWrite::name`).
+    /// Its one name (`LocalWrite::name`, R14.2, rule 5), in Fork's imperative form: the status
+    /// box, a wait ("Waiting for Commit…"), the closing line, the "Couldn't <name>" dialog and
+    /// the activity popover all say this.
     pub name: String,
-    /// What a wait behind it waits for: "the commit to finish", "the branch to be created"
-    /// (`LocalWrite::awaited`).
-    pub awaited: &'static str,
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
     pub cancellable: bool,
     /// The prompt a destructive write's confirmation recorded, copied as it was asked
@@ -35,9 +30,7 @@ impl Asked {
     fn unknown(id: OperationId) -> Self {
         Self {
             id,
-            what: "a write".to_owned(),
             name: "A write".to_owned(),
-            awaited: UNKNOWN_WRITE,
             cancellable: false,
             prompt: None,
         }
@@ -47,14 +40,12 @@ impl Asked {
 /// The local writes of this session, as the window draws them.
 #[derive(Debug, Default)]
 pub struct LocalWrites {
-    /// Asked and not started, in the order asked: what the window draws as queued (R4.2).
+    /// Asked and not started, in the order asked: what the status box counts as waiting (R4.2,
+    /// R14.1).
     queued: VecDeque<Asked>,
-    running: Option<Asked>,
-    /// The latest write to end, and how.
-    last: Option<(Asked, WriteEnding)>,
-    /// The lock files last listed: as the repository opened, then around each write's ending
-    /// (R3.8, R4.9) — a finding the window names, never acts on.
-    locks: Vec<PathBuf>,
+    /// The write running, and when the window heard it start: the status box shows it once it
+    /// has run 250 ms (F1).
+    running: Option<(Asked, Instant)>,
     /// The window asked to close while a write ran: it says which it is waiting for.
     closing: bool,
 }
@@ -64,9 +55,7 @@ impl LocalWrites {
     pub fn asked(&mut self, id: OperationId, write: &LocalWrite) {
         self.queued.push_back(Asked {
             id,
-            what: write.what(),
             name: write.name(),
-            awaited: write.awaited(),
             cancellable: write.is_cancellable(),
             prompt: write.prompt(),
         });
@@ -78,27 +67,19 @@ impl LocalWrites {
         let asked = at
             .and_then(|at| self.queued.remove(at))
             .unwrap_or_else(|| Asked::unknown(id));
-        self.running = Some(asked);
+        self.running = Some((asked, Instant::now()));
     }
 
-    /// `id` has ended, as `ending` says; the lock files it names are the ones now listed.
-    pub fn ended(&mut self, id: OperationId, ending: WriteEnding) {
-        let asked = match self.running.take_if(|running| running.id == id) {
-            Some(asked) => asked,
-            // Never started: not run, as the repository was closing.
-            None => {
-                let at = self.queued.iter().position(|asked| asked.id == id);
-                at.and_then(|at| self.queued.remove(at))
-                    .unwrap_or_else(|| Asked::unknown(id))
-            }
-        };
-        self.locks = ending.locks().to_vec();
-        self.last = Some((asked, ending));
-    }
-
-    /// The lock files present as the repository opened.
-    pub fn locks_at_open(&mut self, locks: Vec<PathBuf>) {
-        self.locks = locks;
+    /// `id` has ended — run, or never started as the repository closed: it leaves the queue or
+    /// stops running. Its ending's home is the window's (`crate::ending_dialog`), not this.
+    pub fn ended(&mut self, id: OperationId) {
+        if self
+            .running
+            .take_if(|(running, _)| running.id == id)
+            .is_none()
+        {
+            self.queued.retain(|asked| asked.id != id);
+        }
     }
 
     /// The window has asked to close.
@@ -109,11 +90,21 @@ impl LocalWrites {
     /// The write running, if any: the commit box draws its commit running, and cancels only it
     /// (R4.3, R10.4).
     pub fn running(&self) -> Option<&Asked> {
-        self.running.as_ref()
+        self.running.as_ref().map(|(asked, _)| asked)
+    }
+
+    /// When the window heard the write running start.
+    pub fn running_since(&self) -> Option<Instant> {
+        self.running.as_ref().map(|(_, since)| *since)
     }
 
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Whether a write runs or waits to: the leftover lock's banner waits on both (F6).
+    pub fn is_busy(&self) -> bool {
+        self.running.is_some() || !self.queued.is_empty()
     }
 
     /// The writes asked and not yet started, in the order they will run.
@@ -121,18 +112,9 @@ impl LocalWrites {
         self.queued.iter()
     }
 
-    /// The latest write to end, and how.
-    pub fn last(&self) -> Option<&(Asked, WriteEnding)> {
-        self.last.as_ref()
-    }
-
-    pub fn locks(&self) -> &[PathBuf] {
-        &self.locks
-    }
-
     /// The write the window is waiting on to close, if it asked to and one runs.
     pub fn closing_on(&self) -> Option<&Asked> {
-        self.running.as_ref().filter(|_| self.closing)
+        self.running().filter(|_| self.closing)
     }
 }
 
@@ -157,12 +139,11 @@ mod tests {
         }
     }
 
-    /// R4.2: writes asked are drawn queued in the order asked until each starts, one runs at
-    /// a time, and the last ending is kept with the locks it names. Caught by: a write that
-    /// leaves the queue out of order, stays queued once running, or an ending that loses its
-    /// locks.
+    /// R4.2: writes asked are kept queued in the order asked until each starts, one runs at
+    /// a time, each by its one name, and an ending takes it off. Caught by: a write that leaves
+    /// the queue out of order, stays queued once running, or a name other than the write's.
     #[test]
-    fn writes_are_queued_in_order_until_each_starts_and_end_with_their_locks() {
+    fn writes_are_queued_in_order_until_each_starts() {
         let asked = RefCell::new(Vec::new());
         let submit = |request: Request| asked.borrow_mut().push(request);
         let mut writes = LocalWrites::default();
@@ -181,46 +162,27 @@ mod tests {
             "not queued in the order asked"
         );
         assert!(!writes.is_running());
+        assert!(writes.is_busy(), "writes waiting are busy");
 
         writes.started(ids[0]);
         assert_eq!(
-            writes.running().map(|asked| asked.what.as_str()),
-            Some("staging 1 file")
+            writes.running().map(|asked| asked.name.as_str()),
+            Some("Stage 1 file")
         );
+        assert!(writes.running_since().is_some());
         assert_eq!(
             writes.queued().map(|asked| asked.id).collect::<Vec<_>>(),
             ids[1..],
             "a running write is still drawn queued"
         );
-        let lock = PathBuf::from("/r/.git/index.lock");
-        writes.ended(
-            ids[0],
-            WriteEnding::Failed {
-                message: "index.lock exists".to_owned(),
-                locks: vec![lock.clone()],
-                command: None,
-                output: cairn_model::ScrubbedLines::new(),
-            },
-        );
+        writes.ended(ids[0]);
         assert!(!writes.is_running());
-        assert_eq!(writes.locks(), [lock]);
-        assert_eq!(writes.last().map(|(asked, _)| asked.id), Some(ids[0]));
 
         // A write ended before it started — not run, the repository closing — leaves the queue.
-        writes.ended(
-            ids[2],
-            WriteEnding::NotRun {
-                message: "closing".to_owned(),
-            },
-        );
+        writes.ended(ids[2]);
         assert_eq!(
             writes.queued().map(|asked| asked.id).collect::<Vec<_>>(),
             [ids[1]]
-        );
-        assert_eq!(
-            writes.locks(),
-            [] as [PathBuf; 0],
-            "the locks were not listed again"
         );
     }
 
@@ -239,15 +201,10 @@ mod tests {
         );
         writes.closing();
         assert_eq!(
-            writes.closing_on().map(|asked| asked.what.as_str()),
-            Some("staging 1 file")
+            writes.closing_on().map(|asked| asked.name.as_str()),
+            Some("Stage 1 file")
         );
-        writes.ended(
-            id,
-            WriteEnding::Refused {
-                message: "x".to_owned(),
-            },
-        );
+        writes.ended(id);
         assert_eq!(
             writes.closing_on(),
             None,

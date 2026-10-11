@@ -86,6 +86,10 @@ pub struct GitError {
     pub skip: bool,
     /// The commit that failed, for the skip to ask again.
     pub failed: AskedCommit,
+    /// The dialog's sentence: Fork's, or that git made the commit and then failed (R14.3).
+    pub sentence: String,
+    /// git could not create `index.lock`: `Remove index.lock…` beside Close (R12.4).
+    pub index_lock: bool,
     /// A confirmed amend's token git's failure handed back unspent (R1.1's option (a), the
     /// user's answer of 2026-10-10): kept until the skip spends it or Close lets it go, so the
     /// skip amends without asking again. `None` for every other failure.
@@ -348,12 +352,11 @@ impl CommitBox {
     pub fn failed(
         &mut self,
         failed: AskedCommit,
-        command: String,
-        kept: &ScrubbedLines,
+        failure: &crate::worker::Failure,
         unspent: Option<Confirmed>,
     ) {
         let lines = if self.output.is_empty() {
-            shown_lines(kept)
+            shown_lines(&failure.output)
         } else {
             self.output.lines()
         };
@@ -361,10 +364,12 @@ impl CommitBox {
         let serial = self.next_serial();
         self.error = Some(GitError {
             serial,
-            command,
+            command: failure.command.clone().unwrap_or_default(),
             lines: Rc::new(lines),
             skip: !failed.skip_hooks,
             failed,
+            sentence: failure.said.clone(),
+            index_lock: failure.index_lock,
             unspent,
         });
     }
@@ -592,8 +597,13 @@ mod tests {
         assert_eq!(failed, Some(asked(false)));
         state.failed(
             asked(false),
-            "git commit -q -F -".to_owned(),
-            &ScrubbedLines::scrubbing("kept"),
+            &crate::worker::Failure {
+                said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
+                command: Some("git commit -q -F -".to_owned()),
+                output: ScrubbedLines::scrubbing("kept"),
+                locks: Vec::new(),
+                index_lock: false,
+            },
             None,
         );
         let error = state.error();
@@ -608,8 +618,13 @@ mod tests {
         );
         state.failed(
             asked(false),
-            "git commit -q -F -".to_owned(),
-            &ScrubbedLines::scrubbing("a\nb"),
+            &crate::worker::Failure {
+                said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
+                command: Some("git commit -q -F -".to_owned()),
+                output: ScrubbedLines::scrubbing("a\nb"),
+                locks: Vec::new(),
+                index_lock: false,
+            },
             None,
         );
         let error = state.error();
@@ -620,8 +635,13 @@ mod tests {
         );
         state.failed(
             asked(true),
-            "git commit -q --no-verify -F -".to_owned(),
-            &ScrubbedLines::scrubbing("x"),
+            &crate::worker::Failure {
+                said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
+                command: Some("git commit -q --no-verify -F -".to_owned()),
+                output: ScrubbedLines::scrubbing("x"),
+                locks: Vec::new(),
+                index_lock: false,
+            },
             None,
         );
         assert_eq!(state.error().map(|error| error.skip), Some(false));

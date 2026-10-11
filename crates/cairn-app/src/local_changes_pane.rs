@@ -222,17 +222,9 @@ impl Component for LocalChangesPane {
         .on_intent(move |intent: ListIntent| {
             local_changes_actions::intent(intent, view, intending.clone());
         });
-        let said = local_changes_actions::acting_line(&view.writes.read());
-        let list = rect()
-            .expanded()
-            .content(Content::Flex)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.))
-                    .child(list),
-            )
-            .maybe_child(said.map(|(line, failed)| acting(line, failed)));
+        // Nothing is drawn under the lists (R14.6): a write's progress is the status box's, its
+        // ending its dialog's.
+        let list = rect().expanded().child(list);
 
         let mut width = view.local.list_width;
         // Peeked: the share only matters when the split is laid out anew.
@@ -311,29 +303,6 @@ fn quieten(view: View) {
     if lines.peek().says_cleared() {
         lines.set(LineDrag::default());
     }
-}
-
-/// One line under the lists: what the writes asked from here are doing, or why the last did
-/// not do what was asked (R8.6).
-fn acting(line: String, failed: bool) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
-    rect()
-        .width(Size::fill())
-        .padding(Gaps::new(4., 8., 4., 8.))
-        .background(colours.surface_tertiary)
-        .child(
-            label()
-                .text(line)
-                .max_lines(3)
-                .text_overflow(TextOverflow::Ellipsis)
-                .font_size(12.)
-                .color(if failed {
-                    colours.error
-                } else {
-                    colours.text_secondary
-                }),
-        )
-        .into()
 }
 
 /// One line over the lists: why the last status read failed, the lists before it still drawn.

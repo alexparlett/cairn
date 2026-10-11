@@ -16,9 +16,11 @@ mod create_branch_tests;
 mod detail_pane;
 mod diff_actions;
 mod diff_state;
+mod ending_dialog;
 mod fetch_state;
 mod file_filter;
 mod history_state;
+mod leftover_lock;
 mod local_changes_actions;
 #[cfg(test)]
 mod local_changes_actions_tests;
@@ -30,6 +32,7 @@ mod local_changes_state;
 mod local_changes_tests;
 mod local_writes;
 mod lost_commits;
+mod modal;
 mod next_selection;
 mod ref_find;
 mod refresh;
@@ -99,7 +102,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let fetch = use_state(|| FetchStatus::Idle);
     let prompt = use_state(|| None::<PromptView>);
     let remotes = use_state(Vec::<RemoteSummary>::new);
-    let refused = use_state(|| None);
+    let endings = use_state(crate::ending_dialog::Endings::default);
+    let lock = use_state(crate::leftover_lock::LeftoverLock::default);
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
     let history_cursor = use_state(|| 0usize);
@@ -142,7 +146,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         fetch,
         prompt,
         remotes,
-        refused,
+        endings,
+        lock,
         diff,
         history_scroll,
         history_cursor,

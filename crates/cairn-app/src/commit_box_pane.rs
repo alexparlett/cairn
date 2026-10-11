@@ -88,7 +88,7 @@ fn busy_of(asked: &AskedCommit, state: &crate::commit_box_state::CommitBox, view
             .next()
     });
     match ahead {
-        Some(ahead) => Busy::Waiting(format!("Waiting for {}…", ahead.awaited)),
+        Some(ahead) => Busy::Waiting(format!("Waiting for {}…", ahead.name)),
         None => Busy::Running {
             verb,
             started: None,
@@ -454,10 +454,10 @@ pub fn write_ended(
     unspent: &mut Unspent,
     view: View,
     submit: &dyn Fn(Request),
-) {
+) -> bool {
     let mut state = view.local.commit.state;
     let Some(asked) = state.write().ended(id) else {
-        return;
+        return false;
     };
     match ending {
         WriteEnding::Done(_) => {
@@ -478,31 +478,32 @@ pub fn write_ended(
                     submit(request);
                 }
             }
+            false
         }
-        WriteEnding::Failed {
-            command: Some(command),
-            output,
-            ..
-        } => {
-            let command = command.clone();
-            state.write().failed(asked, command, output, unspent.take());
+        // git's failure: the box's own Git Error, whose skip runs this commit again (R10.5).
+        WriteEnding::Failed(failure) if failure.command.is_some() => {
+            state.write().failed(asked, failure, unspent.take());
+            true
         }
         WriteEnding::NeedsConfirming { consequence } => {
             state.write().needs_confirming(consequence.clone(), asked);
+            true
         }
-        WriteEnding::Failed { command: None, .. }
+        // A refusal, a stale amend, a failure beneath git: "Couldn't <name>", the window's
+        // endings' (R14.3); a cancel nothing (R14.5).
+        WriteEnding::Failed(_)
         | WriteEnding::Stale { .. }
         | WriteEnding::Refused { .. }
         | WriteEnding::Cancelled { .. }
         | WriteEnding::Incomplete { .. }
-        | WriteEnding::NotRun { .. } => {}
+        | WriteEnding::NotRun { .. } => false,
     }
 }
 
 /// The Git Error dialog, while one is open (R10.5): its skip asks the failed commit or amend
 /// again with its hooks skipped; Close lets it go, and with it any token it kept.
 pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
-    let (serial, command, lines, skip) = {
+    let (serial, command, lines, skip, sentence, index_lock) = {
         let state = view.local.commit.state.read();
         let error = state.error()?;
         (
@@ -510,14 +511,24 @@ pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elem
             error.command.clone(),
             error.lines.clone(),
             error.skip,
+            error.sentence.clone(),
+            error.index_lock,
         )
     };
+    let unlocking = submit.clone();
     let dialog = GitErrorDialog::new(serial, command, lines)
+        .sentence(sentence)
         .key(DiffKey::U64(serial))
         .skip(skip)
+        .remove_lock(index_lock)
         .on_close(move |()| {
             let mut state = view.local.commit.state;
             let _ = state.write().close_error();
+        })
+        .on_remove_lock(move |()| {
+            let mut state = view.local.commit.state;
+            let _ = state.write().close_error();
+            crate::leftover_lock::ask(view, unlocking.as_deref());
         })
         .on_skip(move |()| skip_hooks(view, submit.clone()));
     Some(dialog.into())

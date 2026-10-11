@@ -18,15 +18,17 @@
 //!   that `Consequence` — `LocalWrite::CreateBranchDiscarding`, no second dialog. An operation in
 //!   progress is said in the dialog's refusal row (`cairn_ui::discard_refusal`), the button
 //!   disabled.
-//! - **The dialog stays open** while its write is asked, and closes when it is done. A failure
-//!   — git refusing, or a discard whose `HEAD`, commit or name moved since the press — opens
-//!   Fork's Git Error dialog over it with its words, the dialog beneath kept as it was left, so
-//!   Close returns to it. While either is up the window's keys are inert.
+//! - **The dialog stays open** while its write is asked, and closes when it is done. git's
+//!   failure opens Fork's Git Error over it, and a refusal found while it ran — a discard whose
+//!   `HEAD`, commit or name moved since the press — "Couldn't Create branch '<name>'" with its one
+//!   sentence (`crate::ending_dialog`, R14.3); the dialog beneath is kept as it was left, drawn
+//!   again once that is closed (the one modal state, `crate::modal`). A stale Discard asks its
+//!   consequence again, so the next press confirms what is there now (phase 14's QA item 13).
 
 use std::rc::Rc;
 
 use cairn_model::{BranchName, Confirmed, Consequence, HeadState, Oid, Ref, RowContent};
-use cairn_ui::{CreateBranchDialog, GitErrorDialog, LocalChoice};
+use cairn_ui::{CreateBranchDialog, LocalChoice};
 use freya::prelude::*;
 
 use crate::local_writes::{self, LocalWrites};
@@ -68,8 +70,6 @@ pub struct CreateBranchState {
     checkout: bool,
     /// The write asked by the last press, while it has not ended.
     asked: Option<OperationId>,
-    /// A failure to draw in the Git Error dialog, over the dialog when it is still open.
-    error: Option<BranchError>,
     next_serial: u64,
 }
 
@@ -90,24 +90,10 @@ struct Opened {
     writing: Option<OperationId>,
 }
 
-/// What the Git Error dialog draws for a create that failed.
-#[derive(Debug, Clone)]
-pub struct BranchError {
-    pub serial: u64,
-    pub command: String,
-    pub lines: Rc<Vec<String>>,
-}
-
 impl CreateBranchState {
-    /// The failure the Git Error dialog draws.
-    pub fn error(&self) -> Option<&BranchError> {
-        self.error.as_ref()
-    }
-
-    /// Whether the dialog, or a create's Git Error dialog, is up: the window's keys are inert
-    /// (R11.3, C28).
+    /// Whether the dialog is up: the window's keys are inert (R11.3, C28).
     pub fn is_up(&self) -> bool {
-        self.open.is_some() || self.error.is_some()
+        self.open.is_some()
     }
 
     fn serial(&mut self) -> u64 {
@@ -322,7 +308,7 @@ fn waiting(opened: &Opened, typed: &str, writes: &LocalWrites) -> Option<String>
     writes
         .running()
         .or_else(|| writes.queued().next())
-        .map(|asked| format!("Waiting for {}…", asked.awaited))
+        .map(|asked| format!("Waiting for {}…", asked.name))
 }
 
 /// The dialog's button, or Return in its field, with Discard not chosen: the create asked, the
@@ -333,11 +319,12 @@ pub fn create(view: View, submit: Option<&dyn Fn(Request)>) {
     };
     let typed = view.branch.name.peek().clone();
     let write = {
-        let state = view.branch.state.peek();
-        // Nothing is asked while a create's Git Error is over the dialog (phase 14's QA, RS#1).
-        if state.error.is_some() {
+        // Nothing is asked while a dialog is over this one (phase 14's QA, RS#1): the one modal
+        // state must name Create Branch.
+        if !on_top(view) {
             return;
         }
+        let state = view.branch.state.peek();
         let Some(opened) = state.open.as_ref() else {
             return;
         };
@@ -373,7 +360,7 @@ pub fn discard_confirmed(view: View, token: Confirmed, submit: Option<&dyn Fn(Re
     let typed = view.branch.name.peek().clone();
     let takes = {
         let state = view.branch.state.peek();
-        state.error.is_none()
+        on_top(view)
             && state.open.as_ref().is_some_and(|opened| {
                 opened.writing.is_none()
                     && discards(view, &state, opened)
@@ -414,66 +401,52 @@ pub fn local_chosen(view: View, choice: LocalChoice, submit: Option<&dyn Fn(Requ
     ask_discard(view, submit);
 }
 
-/// Cancel, Escape or a press outside: the dialog closes — but not while a create's Git Error
-/// dialog is over it, which the press or the key belongs to.
+/// Whether Create Branch is the dialog on top: what its handlers, built at its last render,
+/// check before they act.
+fn on_top(view: View) -> bool {
+    crate::modal::modal(view) == Some(crate::modal::Modal::CreateBranch)
+}
+
+/// Cancel, Escape or a press outside: the dialog closes — but not while a dialog is over it,
+/// which the press or the key belongs to.
 pub fn cancel(view: View) {
-    let mut state = view.branch.state;
-    if state.peek().error.is_some() {
+    if !on_top(view) {
         return;
     }
+    let mut state = view.branch.state;
     state.write().open = None;
 }
 
-/// A local write ended: when it is the dialog's, a success closes the dialog, and anything else
-/// opens the Git Error dialog over it with its words, the dialog left as it was.
-pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding) {
+/// A local write ended: when it is the dialog's, a success closes the dialog; anything else is
+/// the window's endings' to say over it (`crate::ending_dialog`), the dialog left as it was — and
+/// a Discard refused as stale asks its consequence again, so the next press confirms what is
+/// there now rather than being refused again (phase 14's QA item 13).
+pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding, submit: &dyn Fn(Request)) {
     let mut state = view.branch.state;
     if state.peek().asked != Some(id) {
         return;
     }
-    let mut state = state.write();
-    state.asked = None;
-    let ours = state
-        .open
-        .as_ref()
-        .is_some_and(|opened| opened.writing == Some(id));
-    if let Some(opened) = state.open.as_mut().filter(|_| ours) {
-        opened.writing = None;
-    }
-    let (command, lines) = match ending {
-        WriteEnding::Done(_) => {
-            if ours {
-                state.open = None;
+    let ours = {
+        let mut state = state.write();
+        state.asked = None;
+        let ours = state
+            .open
+            .as_ref()
+            .is_some_and(|opened| opened.writing == Some(id));
+        if let Some(opened) = state.open.as_mut().filter(|_| ours) {
+            opened.writing = None;
+            if matches!(ending, WriteEnding::Stale { .. }) {
+                opened.discarding = None;
             }
-            return;
         }
-        WriteEnding::Failed {
-            message,
-            command,
-            output,
-            ..
-        } => {
-            let lines = crate::shown_output::shown_lines(output);
-            let lines = if lines.is_empty() {
-                vec![message.clone()]
-            } else {
-                lines
-            };
-            (command.clone().unwrap_or_default(), lines)
+        if ours && matches!(ending, WriteEnding::Done(_)) {
+            state.open = None;
         }
-        WriteEnding::Stale { message, .. }
-        | WriteEnding::Refused { message }
-        | WriteEnding::Cancelled { message, .. }
-        | WriteEnding::Incomplete { message, .. }
-        | WriteEnding::NotRun { message } => (String::new(), vec![message.clone()]),
-        WriteEnding::NeedsConfirming { consequence } => (String::new(), vec![consequence.prompt()]),
+        ours
     };
-    let serial = state.serial();
-    state.error = Some(BranchError {
-        serial,
-        command,
-        lines: Rc::new(lines),
-    });
+    if ours && matches!(ending, WriteEnding::Stale { .. }) {
+        ask_discard(view, Some(submit));
+    }
 }
 
 /// The dialog, while it is open.
@@ -487,21 +460,6 @@ pub fn dialog(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element
             serial: opened.serial,
         }
         .into(),
-    )
-}
-
-/// A create's Git Error dialog, while its failure is shown — over the dialog when that is still
-/// open, which Close returns to as it was left.
-pub fn git_error(view: View) -> Option<Element> {
-    let error = view.branch.state.read().error().cloned()?;
-    Some(
-        GitErrorDialog::new(error.serial, error.command, error.lines)
-            .key(DiffKey::U64(error.serial))
-            .on_close(move |()| {
-                let mut state = view.branch.state;
-                state.write().error = None;
-            })
-            .into(),
     )
 }
 

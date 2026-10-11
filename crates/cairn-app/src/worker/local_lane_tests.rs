@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 use cairn_git::ops::{Askpass, GitBinary};
 use cairn_git::{CancelSignal, ContentOptions, Repository, WorkingTreeDiff};
 use cairn_model::{
-    Confirmed, FileDiff, RepoPath, Secret, Selection, StagedChange, StatusEntry, WorkingTreeStatus,
+    CommandExit, Confirmed, FileDiff, RepoPath, Secret, Selection, StagedChange, StatusEntry,
+    WorkingTreeStatus,
 };
 
 use super::Reply;
@@ -29,7 +30,9 @@ use super::fetch_tests::{
     Home, RuntimeDir, UnbornRepository, WAIT, built_helper, collect_until, next_by, with_origin,
 };
 use super::lifecycle_tests::StubGit;
-use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
+use super::local_lane::{
+    LOCK_RETRIES, LOCK_RETRY_AFTER, LocalWrite, OperationId, ReadAgain, WriteEnding,
+};
 use super::pool::{Replier, RepositoryHandle, Updates, open};
 use super::request::{CheckoutRefused, RanBy, Request, Update};
 use super::startup::Startup;
@@ -486,9 +489,9 @@ fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
             "write {at} reads more than status"
         );
         match (at, &ending) {
-            (2, WriteEnding::Stale { path, message }) => {
+            (2, WriteEnding::Stale { path, said }) => {
                 assert_eq!(path, "b");
-                assert!(message.contains("nothing was written"), "{message}");
+                assert_eq!(said, "b changed after its diff was read.");
             }
             (2, other) => panic!("the stale stage was not dropped: {other:?}"),
             (_, WriteEnding::Done(done)) => assert!(done.acknowledged.is_none()),
@@ -779,9 +782,7 @@ fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     handle.submit(Request::CancelWrite { id: first });
     let seen = until_ended(&mut updates, first);
     match ending_of(&seen, first) {
-        (WriteEnding::Cancelled { message, .. }, ReadAgain::Everything) => {
-            assert!(message.contains("cancelled"), "{message}");
-        }
+        (WriteEnding::Cancelled { .. }, ReadAgain::Everything) => {}
         other => panic!("the cancelled commit ended {other:?}"),
     }
     let next = until_pids(&stub, "commits", 2)[1];
@@ -934,15 +935,15 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
     let seen = until_ended(&mut updates, refused);
     match ending_of(&seen, refused) {
         (
-            WriteEnding::Failed {
-                message,
+            WriteEnding::Failed(crate::worker::Failure {
+                said: message,
                 command,
                 output,
                 ..
-            },
+            }),
             ReadAgain::Everything,
         ) => {
-            assert!(message.contains("lint failed"), "{message}");
+            assert_eq!(message, crate::worker::GIT_FAILED);
             // The Git Error dialog's command and git's own words (R10.5).
             assert_eq!(command.as_deref(), Some("git commit -q -F -"));
             assert!(output.contains("lint failed"), "{output}");
@@ -971,8 +972,8 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
     let again = ask(&handle, commit());
     let seen = until_ended(&mut updates, again);
     match ending_of(&seen, again).0 {
-        WriteEnding::Failed { message, .. } => {
-            assert!(message.contains("lint failed"), "{message}");
+        WriteEnding::Failed(crate::worker::Failure { output, .. }) => {
+            assert!(output.contains("lint failed"), "{output}");
         }
         other => panic!("the commit after the skip ended {other:?}"),
     }
@@ -984,56 +985,66 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
     drop(handle);
 }
 
-/// C11 and R4.9: a lock file left in the git directory — by a write a close gave up on, say
-/// — is named as the repository opens, and by the write that fails on it. Caught by: an open
-/// that lists nothing, or a failed write that drops the locks git failed on.
+/// C11, C30 and R4.9, R12.4, F5: a lock left in the git directory — by a write a close gave up
+/// on, say — is found by the stat every refresh makes, the open's first; a write git refuses for
+/// it is run again about a second later, twice, before it ends failed with the lock's removal
+/// offered; what that would cost is read at the press, and confirmed, the lane removes exactly
+/// that file; the next stat finds it gone, and the write then runs. Caught by: an open that does
+/// not stat, a write reported at its first refusal, a retry past two, or the removal of another
+/// file.
 #[test]
-fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails() {
+fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation() {
     let fixture = with_files("cairn-lane-lock-left", &["a"]);
     let lock = fixture.path.join(".git/index.lock");
     std::fs::write(&lock, "").unwrap_or_else(|error| panic!("{error}"));
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
-    match next_by(&mut updates, Instant::now() + WAIT, &[]) {
-        Some(Update::LocksAtOpen { locks, index_lock }) => {
-            assert_eq!(
-                locks
-                    .iter()
-                    .map(|path| path.ends_with(".git/index.lock"))
-                    .collect::<Vec<_>>(),
-                [true]
-            );
-            assert!(
-                index_lock,
-                "the repository's own index.lock not named as such"
-            );
-        }
-        other => panic!("{other:?}"),
-    }
+    handle.submit(Request::RefreshStatus);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::IndexLock { .. })
+    });
+    assert!(
+        matches!(seen.last(), Some(Update::IndexLock { changed: Some(_) })),
+        "{seen:?}"
+    );
+    let started = Instant::now();
     let id = ask(&handle, stage(&["a"]));
     let seen = until_ended(&mut updates, id);
+    assert!(
+        started.elapsed() >= LOCK_RETRY_AFTER * 2,
+        "reported before it was tried again: {:?}",
+        started.elapsed()
+    );
     match ending_of(&seen, id).0 {
-        WriteEnding::Failed { locks, .. } => assert!(
-            locks.iter().any(|path| path.ends_with(".git/index.lock")),
-            "{locks:?}"
-        ),
+        WriteEnding::Failed(failure) => {
+            assert!(failure.index_lock, "{failure:?}");
+            assert!(
+                failure
+                    .locks
+                    .iter()
+                    .any(|path| path.ends_with(".git/index.lock")),
+                "{failure:?}"
+            );
+        }
         other => panic!("a stage over index.lock ended {other:?}"),
     }
-    // R12.1 and R12.4: before its ending, what the write ran — its own `git add`, and nothing
-    // the refresh ran meanwhile — and that its ending names the lock, which offers its removal;
-    // what that would cost is read when the offer is pressed (the user's decision H), and
-    // confirmed, the lane removes exactly that file, and nothing else.
-    let ran = seen.iter().find_map(|update| match update {
-        Update::OperationRan {
-            by: RanBy::Write(ran),
-            commands,
-            lock_named,
-        } if *ran == id => Some((commands.clone(), *lock_named)),
-        _ => None,
-    });
-    let Some((commands, true)) = ran else {
-        panic!("no offer: {seen:?}");
-    };
+    // R12.1: what the write ran — its own `git add`, once and then twice again, and nothing the
+    // refresh ran meanwhile.
+    let commands = seen
+        .iter()
+        .find_map(|update| match update {
+            Update::OperationRan {
+                by: RanBy::Write(ran),
+                commands,
+            } if *ran == id => Some(commands.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no record: {seen:?}"));
+    assert_eq!(commands.len(), 1 + LOCK_RETRIES, "{commands:?}");
+    assert!(commands.iter().all(|command| {
+        command.arguments.iter().any(|argument| argument == "add")
+            && command.stderr.contains("index.lock")
+    }));
     let asked = OperationId::next();
     handle.submit(Request::LockConsequence { asked });
     let answered = collect_until(&mut updates, |update| {
@@ -1047,14 +1058,6 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
         panic!("the press read no consequence: {answered:?}");
     };
     assert_eq!(answered_for, asked);
-    assert_eq!(commands.len(), 1, "{commands:?}");
-    assert!(
-        commands[0]
-            .arguments
-            .iter()
-            .any(|argument| argument == "add")
-    );
-    assert!(commands[0].stderr.contains("index.lock"), "{commands:?}");
     let removed = ask(&handle, LocalWrite::RemoveLock(Confirmed::by_user(offered)));
     let seen = until_ended(&mut updates, removed);
     assert!(
@@ -1062,12 +1065,64 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
         "{seen:?}"
     );
     assert!(!lock.exists(), "the lock is still there");
+    handle.submit(Request::RefreshStatus);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::IndexLock { .. })
+    });
+    assert!(
+        matches!(seen.last(), Some(Update::IndexLock { changed: None })),
+        "{seen:?}"
+    );
     // And the stage now runs.
     let id = ask(&handle, stage(&["a"]));
     let seen = until_ended(&mut updates, id);
     assert!(
         matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
         "{seen:?}"
+    );
+    drop(handle);
+}
+
+/// F5 and the phase's stopping rule: a write git refused for a lock another program held, and let
+/// go of within the second, runs again and writes once — its first attempt wrote nothing, since
+/// the lock stood throughout it. Caught by: a write reported failed though the lock went, or
+/// one run past its success.
+#[test]
+fn a_write_refused_for_a_lock_let_go_of_runs_again_and_writes_once() {
+    let fixture = with_files("cairn-lane-lock-retried", &["a"]);
+    let lock = fixture.path.join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap_or_else(|error| panic!("{error}"));
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    let releasing = lock.clone();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(LOCK_RETRY_AFTER / 2);
+        std::fs::remove_file(&releasing).unwrap_or_else(|error| panic!("{error}"));
+    });
+    let id = ask(&handle, stage(&["a"]));
+    let seen = until_ended(&mut updates, id);
+    releaser
+        .join()
+        .unwrap_or_else(|_| panic!("the releaser panicked"));
+    assert!(
+        matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    let commands = seen
+        .iter()
+        .find_map(|update| match update {
+            Update::OperationRan {
+                by: RanBy::Write(ran),
+                commands,
+            } if *ran == id => Some(commands.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no record: {seen:?}"));
+    let exits: Vec<_> = commands.iter().map(|command| command.exit).collect();
+    assert_eq!(
+        exits,
+        [CommandExit::Code(128), CommandExit::Code(0)],
+        "{commands:?}"
     );
     drop(handle);
 }
@@ -1137,7 +1192,7 @@ fn a_prompt_a_stages_hook_raises_is_shown_and_answered() {
     let (handle, mut updates, reply) = real_boundary(&fixture.path, (&home, &runtime));
 
     let id = ask(&handle, stage(&["a"]));
-    let seen = answer_next_prompt(&mut updates, &reply, "correct horse", "Staging 1 file");
+    let seen = answer_next_prompt(&mut updates, &reply, "correct horse", "Stage 1 file");
     assert!(
         lane_news(&seen).contains(&Lane::Started(id)),
         "the prompt came before the write started: {seen:?}"
@@ -1450,10 +1505,10 @@ fn a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip() {
                 assert!(
                     matches!(
                         ending,
-                        WriteEnding::Failed {
+                        WriteEnding::Failed(crate::worker::Failure {
                             command: Some(_),
                             ..
-                        }
+                        })
                     ),
                     "{ending:?}"
                 );
@@ -2005,9 +2060,9 @@ fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits
     let seen = until_ended(&mut updates, taken);
     match ending_of(&seen, taken) {
         (
-            WriteEnding::Failed {
+            WriteEnding::Failed(crate::worker::Failure {
                 command, output, ..
-            },
+            }),
             ReadAgain::Everything,
         ) => {
             assert_eq!(

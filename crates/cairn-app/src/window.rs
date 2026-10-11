@@ -6,19 +6,20 @@ use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, W
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
-    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
-    current_branch,
+    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running, StatusBox,
+    Tracking, current_branch,
 };
 use freya::prelude::*;
 
 use crate::confirming::Confirming;
 use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
-use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
+use crate::fetch_state::{FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::local_changes_pane::LocalChangesPane;
 use crate::local_changes_state::LocalChangesView;
 use crate::local_writes::LocalWrites;
+use crate::modal::Modal;
 use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
 use crate::sidebar_pane::SidebarPane;
@@ -45,8 +46,12 @@ pub struct View {
     pub fetch: State<FetchStatus>,
     pub prompt: State<Option<PromptView>>,
     pub remotes: State<Vec<RemoteSummary>>,
-    /// A fetch the worker refused, until another is asked for.
-    pub refused: State<Option<FetchRefusal>>,
+    /// The endings' Git Error and "Couldn't <name>" dialogs waiting to be read, but the commit
+    /// box's (staging-and-commit R14.3, `crate::ending_dialog`).
+    pub endings: State<crate::ending_dialog::Endings>,
+    /// The leftover lock: what the last stat found of `<gitdir>/index.lock`, and its removal
+    /// asked (R12.4, `crate::leftover_lock`).
+    pub lock: State<crate::leftover_lock::LeftoverLock>,
     /// The diff selection and the answers kept for it.
     pub diff: State<DiffState>,
     /// The commit list's scroll, shared so a parent link can bring its row into view.
@@ -85,8 +90,8 @@ pub struct View {
     pub sidebar: SidebarView,
     /// Local Changes: its lists, its filter and its diff's scroll (refs-and-status R9).
     pub local: LocalChangesView,
-    /// The local writes: queued, running and ended, the lock files last listed, and whether
-    /// the window waits on one to close (staging-and-commit R4).
+    /// The local writes: queued, running and ended, and whether the window waits on one to
+    /// close (staging-and-commit R4).
     pub writes: State<LocalWrites>,
     /// A destructive operation's confirmation, while one is open: drawn over everything, the
     /// window's chords inert until it is answered (staging-and-commit R7.4).
@@ -108,7 +113,6 @@ impl std::fmt::Debug for View {
         f.debug_struct("View")
             .field("fetch", &*self.fetch.read())
             .field("prompt", &*self.prompt.read())
-            .field("refused", &*self.refused.read())
             .field("confirming", &*self.confirming.read())
             .finish_non_exhaustive()
     }
@@ -128,20 +132,14 @@ pub fn window(
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
     let confirming = view.confirming.read().clone();
-    // What the window says about the local writes: which it waits on to close (R4.9), and the
-    // lock files last listed (R3.8, R4.9).
-    let (closing_on, locks) = {
-        let writes = view.writes.read();
-        (
-            status_text::closing_line(&writes),
-            status_text::locks_line(writes.locks()),
-        )
-    };
-    let refused = view.refused.read().clone();
+    // The one banner about the window: which write it waits on to close (R4.9, R14.6).
+    let closing_on = status_text::closing_line(&view.writes.read());
     let hearing = submit.clone();
     let erring = submit.clone();
+    let ending = submit.clone();
     let branching = submit.clone();
     let popping = submit.clone();
+    let unlocking = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
     // window has it is never heard here, and a press after coming back must not be read as a
     // chord still held (the user's decision, 2026-10-04).
@@ -154,7 +152,7 @@ pub fn window(
     // Coming back to the window reads the refs and the working tree again (R10.1).
     crate::refresh::on_focus_gained(submit.clone());
     // `Remove index.lock…`'s answer, read at its press, opens its confirmation (R12.4).
-    crate::activity::use_lock_confirmation(view, submit.clone());
+    crate::leftover_lock::use_lock_confirmation(view, submit.clone());
     // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
     // scroll alone, and acting only while a find looks.
     let stopping = submit.clone();
@@ -186,8 +184,10 @@ pub fn window(
             Some(message) => notice(message, opened),
             None => history(view, lanes, submit.clone()),
         })
+        // A page that failed under rows already drawn: the list's own line, under it — about
+        // the history, not an operation (R14.6).
         .maybe(has_rows, |el| match &status {
-            Status::Failed(message) => el.child(banner(message.clone(), true)),
+            Status::Failed(message) => el.child(list_line(message.clone())),
             _ => el,
         });
 
@@ -225,26 +225,19 @@ pub fn window(
                 .child(status_box(
                     view.repository.read().clone(),
                     &view.refreshed.read(),
+                    running(view),
                 ))
                 .into(),
             &counted,
             &fetch,
             view.fetch,
-            view.refused,
             &view.remotes.read(),
             submit.clone(),
         ))
-        .maybe_child(status_text::fetch_line(&fetch).map(|line| {
-            let failed = matches!(fetch, FetchStatus::Failed { .. });
-            banner(line, failed)
-        }))
-        .maybe_child(
-            refused
-                .as_ref()
-                .map(|refusal| banner(status_text::refusal_line(refusal), false)),
-        )
-        .maybe_child(closing_on.map(|line| banner(line, false)))
-        .maybe_child(locks.map(|line| banner(line, false)))
+        // The two banners (R14.6): the leftover lock, about the repository, and closing, about
+        // the window.
+        .maybe_child(crate::leftover_lock::banner(view, unlocking))
+        .maybe_child(closing_on.map(banner))
         .child(beside(
             SidebarPane::new(view, submit.clone()).into(),
             match *view.sidebar.main.read() {
@@ -253,33 +246,25 @@ pub fn window(
             },
             view,
         ))
-        // A credential prompt stacks over an open confirmation by setting it aside: a write
-        // running behind the dialog asked for a secret and waits on it, and the confirmation's
-        // modal would keep every key from the prompt. The confirmation stays kept, unanswered,
-        // and is drawn again — focus on Cancel — once the prompt is answered or refused
-        // (phase 06's QA item 5).
-        // The activity popover (R12.1), under every dialog: `Remove index.lock…` opens its
-        // confirmation over it.
-        .maybe_child(crate::activity::popover(view, popping).filter(|_| prompt.is_none()))
-        // A commit's Git Error dialog (staging-and-commit R10.5): its skip may open the amend's
-        // confirmation in its place.
-        .maybe_child(crate::commit_box_pane::git_error(view, erring).filter(|_| prompt.is_none()))
-        // A create's Git Error dialog over Create Branch's dialog, which stays open beneath it
-        // as it was left, so Close returns to it (R11.3, C34). It paints one overlay above the
-        // dialog, and comes first in the tree so its Escape is heard first: Freya fires global
-        // key listeners in document order, and a popup's Escape consumes the key.
-        .maybe_child(
-            crate::create_branch::git_error(view)
-                .filter(|_| prompt.is_none())
-                .map(|error| rect().layer(Layer::Overlay).child(error).into_element()),
-        )
-        .maybe_child(crate::create_branch::dialog(view, branching).filter(|_| prompt.is_none()))
-        .maybe_child(
-            confirming
-                .filter(|_| prompt.is_none())
-                .map(|asking| confirmation(asking, view.confirming)),
-        )
-        .maybe_child(prompt.map(|prompt| dialog(prompt, view.prompt, answer)))
+        // One modal state (R14.8, `crate::modal`): the dialog on top, or the popover, is the
+        // only one drawn, so no key reaches one beneath it. A credential prompt sets an open
+        // confirmation aside — a write running behind it asked for a secret and waits on it —
+        // and the confirmation is drawn again, focus on Cancel, once the prompt is answered or
+        // refused (phase 06's QA item 5); a commit's Git Error is drawn over Create Branch,
+        // which is drawn again as it was left once it is closed (phase 14's QA item 7).
+        .maybe_child(match crate::modal::drawn(view) {
+            Some(Modal::Prompt) => prompt.map(|prompt| dialog(prompt, view.prompt, answer)),
+            Some(Modal::Confirmation) => {
+                confirming.map(|asking| confirmation(asking, view.confirming))
+            }
+            // A commit's Git Error dialog (R10.5): its skip may open the amend's confirmation in
+            // its place.
+            Some(Modal::CommitError) => crate::commit_box_pane::git_error(view, erring),
+            Some(Modal::Ending) => crate::ending_dialog::dialog(view, ending),
+            Some(Modal::CreateBranch) => crate::create_branch::dialog(view, branching),
+            Some(Modal::Popover) => crate::activity::popover(view, popping),
+            None => None,
+        })
         // Every context menu opens here, so none panics for want of a host (R7.5).
         .child(ContextMenuViewer::new())
         .into()
@@ -486,7 +471,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
 /// listed a change, the current branch and its distance from its upstream, from what the last
 /// refresh answered — each as old as the answer it is read from (a status may be one refresh
 /// behind, R10.3 as amended).
-fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
+fn status_box(name: Option<String>, refreshed: &RefreshState, running: Vec<Running>) -> StatusBox {
     let refs = refreshed.refs();
     let head = refs.map(|refs| refs.head.clone());
     let tracking = refs
@@ -506,7 +491,44 @@ fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
             false
         }
     };
-    StatusBox::new(name, head).dirty(dirty).tracking(tracking)
+    StatusBox::new(name, head)
+        .dirty(dirty)
+        .tracking(tracking)
+        .running(running)
+}
+
+/// What runs, for the status box (R14.1, F1, F9): the local write by its one name with the writes
+/// waiting behind it, and a fetch with git's latest progress line — each shown by the box once
+/// it has run 250 ms.
+fn running(view: View) -> Vec<Running> {
+    let writes = view.writes.read();
+    let write = writes
+        .running()
+        .zip(writes.running_since())
+        .map(|(asked, started)| Running {
+            serial: asked.id.number(),
+            name: asked.name.clone(),
+            started,
+            waiting: writes.queued().count(),
+            progress: None,
+        });
+    let fetch = view.fetch.read();
+    let progress = match &*fetch {
+        FetchStatus::Running { line, .. } => line.clone(),
+        _ => None,
+    };
+    let fetching = fetch
+        .is_in_flight()
+        .then(|| view.activity.read().fetch_running())
+        .flatten()
+        .map(|(serial, name, started)| Running {
+            serial: u64::MAX - serial,
+            name,
+            started,
+            waiting: 0,
+            progress,
+        });
+    write.into_iter().chain(fetching).collect()
 }
 
 fn title_bar(
@@ -514,7 +536,6 @@ fn title_bar(
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
-    refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Element {
@@ -539,47 +560,33 @@ fn title_bar(
                 .font_size(13.)
                 .color(get_theme_or_default().read().colors().text_placeholder),
         )
-        .maybe_child(fetch_button(fetch, fetch_state, refused, remotes, submit))
+        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
         .into()
 }
 
-/// "Fetch <remote>" for the default remote while nothing is in flight;
-/// "Cancel" while a fetch is; nothing when the repository has no remote to
-/// fetch. The press itself marks the fetch as starting, so a second press
-/// before the worker answers has no button to land on, and takes down an
-/// earlier refusal, which was about a press before this one.
+/// "Fetch <remote>" for the default remote, greyed while a fetch is in flight (F9), so a second
+/// fetch is never asked and the network lane's refusal never drawn; nothing when the repository
+/// has no remote to fetch. The press itself marks the fetch as starting, so a second press before
+/// the worker answers lands on a greyed button. A running fetch is cancelled from the activity
+/// popover, as in Fork.
 fn fetch_button(
     fetch: &FetchStatus,
     mut fetch_state: State<FetchStatus>,
-    mut refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Option<Element> {
     let submit = submit?;
-    if fetch.can_be_cancelled() {
-        return Some(
-            Button::new()
-                .compact()
-                .on_press(move |_| {
-                    // Said at once: the worker's answer is up to a grace period away.
-                    fetch_state.write().cancelling();
-                    submit(Request::CancelFetch);
-                })
-                .child("Cancel")
-                .into(),
-        );
-    }
-    if fetch.is_in_flight() {
-        // Cancelling: nothing to press until the worker says the process is gone.
-        return None;
-    }
     let remote = remotes.first()?.name.clone();
     let caption = format!("Fetch {remote}");
+    let in_flight = fetch.is_in_flight();
     Some(
         Button::new()
             .compact()
+            .enabled(!in_flight)
             .on_press(move |_| {
-                refused.set(None);
+                if fetch_state.peek().is_in_flight() {
+                    return;
+                }
                 fetch_state.write().starting(remote.clone());
                 submit(Request::Fetch {
                     remote: remote.clone(),
@@ -608,27 +615,38 @@ fn notice(message: impl Into<String>, path: &str) -> Element {
         .into()
 }
 
-/// One line across the window; `alarming` draws it in the error colour.
-fn banner(message: String, alarming: bool) -> Element {
+/// A banner across the window (R14.6): wrapped, never cut (rule 6).
+fn banner(message: String) -> Element {
     let colours = get_theme_or_default();
-    let colour = if alarming {
-        colours.read().colors().error
-    } else {
-        colours.read().colors().text_secondary
-    };
     rect()
         .width(Size::fill())
-        .height(Size::px(ROW_HEIGHT))
         .cross_align(Alignment::center())
-        .padding(Gaps::new(0., 12., 0., 12.))
+        .padding(Gaps::new(6., 12., 6., 12.))
         .background(colours.read().colors().surface_tertiary)
         .child(
             label()
                 .text(message)
-                .max_lines(1)
-                .text_overflow(TextOverflow::Ellipsis)
                 .font_size(13.)
-                .color(colour),
+                .width(Size::fill())
+                .color(colours.read().colors().text_secondary),
+        )
+        .into()
+}
+
+/// The history's own line under its rows: why a page failed to load.
+fn list_line(message: String) -> Element {
+    let colours = get_theme_or_default();
+    rect()
+        .width(Size::fill())
+        .min_height(Size::px(ROW_HEIGHT))
+        .cross_align(Alignment::center())
+        .padding(Gaps::new(0., 12., 0., 12.))
+        .child(
+            label()
+                .text(message)
+                .font_size(13.)
+                .width(Size::fill())
+                .color(colours.read().colors().error),
         )
         .into()
 }
@@ -651,7 +669,7 @@ pub(crate) mod tests {
 
     use crate::fetch_state::{FetchStatus, PromptView};
 
-    use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width};
+    use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width, running_text};
 
     use super::*;
     use crate::history_state;
@@ -788,7 +806,8 @@ pub(crate) mod tests {
                 name: "origin".to_owned(),
                 url: Some("https://git.example.com/ada/engine".to_owned()),
             }]),
-            refused: State::create(None),
+            endings: State::create(Default::default()),
+            lock: State::create(Default::default()),
             diff: State::create(DiffState::default()),
             history_scroll: ScrollController::new(0, 0, Vec::new()),
             history_cursor: State::create(0),
@@ -1499,14 +1518,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// Staging-and-commit R4.9, R5.1 and C11 drawn: a prompt raised while a local write runs is
-    /// titled by the write its token names; the first close asked while it runs says which
-    /// write the window waits on and that closing again leaves it unfinished (the user's
-    /// decision 12); and the lock files a write's ending or the open named are said, by path.
-    /// Caught by: a close that waits in silence, a prompt titled "git", or lock files dropped
-    /// between the state and the window.
+    /// Staging-and-commit R4.9, R5.1, R14.2 and C11 drawn: a prompt raised while a local write
+    /// runs is titled by the write's one name; the first close asked while it runs says, in one
+    /// banner, which write the window waits on and that closing again quits now (the user's
+    /// decision 12). Caught by: a close that waits in silence, a prompt titled "git", or the
+    /// write called anything but its one name.
     #[test]
-    fn the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found() {
+    fn the_window_names_the_write_it_waits_on_and_its_prompt() {
         let (mut test, view, _, _) = launch_with(
             (0..3).map(row).collect(),
             received(3, true),
@@ -1514,7 +1532,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id: crate::worker::PromptId::for_tests(2),
                 text: "Enter passphrase for key '/k': ".to_owned(),
-                asking: Some("Staging 1 file".to_owned()),
+                asking: Some("Stage 1 file".to_owned()),
             }),
         );
         let id = crate::worker::OperationId::for_tests(11);
@@ -1531,31 +1549,61 @@ pub(crate) mod tests {
         assert!(
             shown
                 .iter()
-                .any(|t| t == "Staging 1 file is asking for a credential"),
+                .any(|t| t == "Stage 1 file is asking for a credential"),
             "the dialog does not name the write: {shown:?}"
         );
         assert!(
-            !shown.iter().any(|t| t.starts_with("Finishing")),
+            !shown.iter().any(|t| t.starts_with("Closing after")),
             "waiting on a close nobody asked for: {shown:?}"
         );
 
         writes.write().closing();
-        writes
-            .write()
-            .locks_at_open(vec![std::path::PathBuf::from("/r/.git/index.lock")]);
         test.sync_and_update();
         let shown = texts(&test);
         assert!(
             shown
                 .iter()
-                .any(|t| t == "Finishing staging 1 file… Closing again leaves it unfinished."),
+                .any(|t| t == "Closing after Stage 1 file finishes. Close again to quit now."),
             "the close does not say which write it waits on: {shown:?}"
         );
-        assert!(
-            shown
-                .iter()
-                .any(|t| t.starts_with("Lock files remain") && t.ends_with("/r/.git/index.lock")),
-            "the lock found is not named: {shown:?}"
+    }
+
+    /// R14.1 (F1, F9): the status box is handed each operation running by its one name — the
+    /// write with the writes waiting behind it, the fetch with git's latest progress line — to
+    /// show once it has run 250 ms. Caught by: a write named otherwise, the waiting count left
+    /// out, or the fetch's progress dropped.
+    #[test]
+    fn the_status_box_is_handed_what_runs_by_its_one_name() {
+        let (test, view, _) = launch(Vec::new(), received(0, true));
+        let mut writes = view.writes;
+        let stage = |path: &str| crate::worker::LocalWrite::StageFiles {
+            paths: vec![cairn_model::RepoPath::from(path)],
+        };
+        let (one, two) = (
+            crate::worker::OperationId::for_tests(1),
+            crate::worker::OperationId::for_tests(2),
+        );
+        test.run_in(|| {
+            writes.write().asked(one, &stage("a"));
+            writes.write().asked(two, &stage("b"));
+            writes.write().started(one);
+        });
+        let mut fetch = view.fetch;
+        let mut activity = view.activity;
+        test.run_in(|| {
+            activity.write().fetch_started("origin");
+            fetch.write().started("origin".to_owned());
+            fetch
+                .write()
+                .progressed("Receiving objects: 40%".to_owned());
+        });
+        let shown: Vec<String> = test.run_in(|| running(view).iter().map(running_text).collect());
+        assert_eq!(
+            shown,
+            [
+                "Stage 1 file · 1 waiting",
+                "Fetch origin  Receiving objects: 40%"
+            ]
         );
     }
 
@@ -1677,147 +1725,45 @@ pub(crate) mod tests {
         assert_eq!(*view.prompt.read(), None);
     }
 
+    /// F9: Fetch fetches the default remote and is greyed while a fetch is in flight — from the
+    /// press, before the worker answers — so a second fetch is never asked and the network
+    /// lane's refusal never drawn; once it has ended, it fetches again. Caught by: a second
+    /// fetch asked while one runs, or a button that never comes back.
     #[test]
-    fn the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running() {
+    fn fetch_is_greyed_while_a_fetch_is_in_flight() {
         let (mut test, view, submitted) = launch(Vec::new(), received(0, true));
         click_label(&mut test, "Fetch origin");
-        assert_eq!(
-            submitted.borrow().as_slice(),
-            [Request::Fetch {
-                remote: "origin".to_owned()
-            }]
-        );
-
-        // The press itself takes the button away, before the worker answers.
+        let fetches = |submitted: &Submitted| {
+            submitted
+                .borrow()
+                .iter()
+                .filter(|request| matches!(request, Request::Fetch { .. }))
+                .count()
+        };
+        assert_eq!(fetches(&submitted), 1);
         assert_eq!(
             *view.fetch.read(),
             FetchStatus::Starting {
                 remote: "origin".to_owned()
             }
         );
-        assert!(
-            !texts(&test).iter().any(|t| t == "Fetch origin"),
-            "a second fetch could be asked for before the first was confirmed"
-        );
-
+        click_label(&mut test, "Fetch origin");
         let mut fetch = view.fetch;
         fetch.write().started("origin".to_owned());
-        fetch
-            .write()
-            .progressed("Receiving objects: 40%".to_owned());
         test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
-            "the progress is not shown: {shown:?}"
-        );
-        assert!(
-            !shown.iter().any(|t| t == "Fetch origin"),
-            "a second fetch was offered while one runs"
-        );
-        click_label(&mut test, "Cancel");
-        assert_eq!(submitted.borrow().last(), Some(&Request::CancelFetch));
-        // The press says so at once, and takes the button away: the worker may need the
-        // runner's whole grace period before it answers.
+        click_label(&mut test, "Fetch origin");
         assert_eq!(
-            *view.fetch.read(),
-            FetchStatus::Cancelling {
-                remote: "origin".to_owned()
-            }
-        );
-        test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown.iter().any(|t| t == "Cancelling fetch of origin…"),
-            "the cancel was not said: {shown:?}"
-        );
-        assert!(
-            !shown.iter().any(|t| t == "Cancel" || t == "Fetch origin"),
-            "a button was offered while the cancel is in progress: {shown:?}"
-        );
-    }
-
-    #[test]
-    fn a_failed_fetch_is_said_in_the_window_and_the_button_comes_back() {
-        let (test, _, _, _) = launch_with(
-            (0..3).map(row).collect(),
-            received(3, true),
-            FetchStatus::Failed {
-                remote: "origin".to_owned(),
-                message: "could not read Username for 'https://x': terminal prompts disabled"
-                    .to_owned(),
-            },
-            None,
-        );
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t.contains("Fetch of origin failed") && t.contains("could not read")),
-            "{shown:?}"
-        );
-        assert!(shown.iter().any(|t| t == "Fetch origin"), "{shown:?}");
-        assert!(
-            shown.iter().any(|t| t == "commit 0"),
-            "the rows were lost: {shown:?}"
-        );
-    }
-
-    /// PRD R7.2, G15's window half: a refused fetch is drawn as a reason, beside the fetch
-    /// in flight, which goes on showing; and the next press takes it down. Caught by: not
-    /// drawing the refusal, drawing it in place of the running fetch, or leaving it up
-    /// after the user has asked again.
-    #[test]
-    fn a_refused_fetch_is_drawn_with_its_reason_until_the_next_press() {
-        let (mut test, view, submitted, _) = launch_with(
-            (0..3).map(row).collect(),
-            received(3, true),
-            FetchStatus::Running {
-                remote: "origin".to_owned(),
-                line: Some("Receiving objects: 40%".to_owned()),
-            },
-            None,
-        );
-        let mut refused = view.refused;
-        refused.set(Some(FetchRefusal {
-            remote: "origin".to_owned(),
-            reason: "a fetch of origin is already running".to_owned(),
-        }));
-        test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetch of origin not started: a fetch of origin is already running"),
-            "the refusal is not drawn: {shown:?}"
-        );
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
-            "the refusal took the running fetch's place: {shown:?}"
+            fetches(&submitted),
+            1,
+            "a second fetch was asked while one ran"
         );
 
-        let mut fetch = view.fetch;
-        fetch.set(FetchStatus::Finished {
+        fetch.set(FetchStatus::Failed {
             remote: "origin".to_owned(),
         });
         test.sync_and_update();
         click_label(&mut test, "Fetch origin");
-        assert_eq!(*view.refused.read(), None, "the press left the refusal up");
-        assert!(
-            !texts(&test).iter().any(|t| t.contains("not started")),
-            "{:?}",
-            texts(&test)
-        );
-        assert_eq!(
-            submitted.borrow().last(),
-            Some(&Request::Fetch {
-                remote: "origin".to_owned()
-            })
-        );
+        assert_eq!(fetches(&submitted), 2, "Fetch did not come back");
     }
 
     /// The dialog's fallback for a prompt whose token named no operation: it still names what

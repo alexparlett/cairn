@@ -1,7 +1,5 @@
 //! View state for a fetch and the credential prompt it may raise.
 
-use std::path::PathBuf;
-
 use crate::worker::PromptId;
 
 /// The one fetch the window shows; a second is not offered while one is in flight.
@@ -27,16 +25,13 @@ pub enum FetchStatus {
     Finished {
         remote: String,
     },
-    /// `stranded_locks`: what the cancel left under the git directory, if
-    /// anything, for the banner to name.
+    /// Cancelled: nothing is said of it (staging-and-commit R14.5).
     Cancelled {
         remote: String,
-        stranded_locks: Vec<PathBuf>,
     },
-    /// `message` is display text, already rendered from the engine's error.
+    /// Failed: its Git Error dialog is the window's endings' (R14.3).
     Failed {
         remote: String,
-        message: String,
     },
 }
 
@@ -47,11 +42,6 @@ impl FetchStatus {
             self,
             Self::Starting { .. } | Self::Running { .. } | Self::Cancelling { .. }
         )
-    }
-
-    /// In flight and not yet asked to stop: what the Cancel button is for.
-    pub fn can_be_cancelled(&self) -> bool {
-        matches!(self, Self::Starting { .. } | Self::Running { .. })
     }
 
     /// The window asked; set on the press, before the worker answers.
@@ -85,17 +75,6 @@ impl FetchStatus {
     }
 }
 
-/// A fetch the worker would not start, because one was already in flight
-/// (PRD R7.2): drawn until another fetch is asked for, beside whatever the
-/// fetch in flight is showing, which the refusal leaves as it was.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FetchRefusal {
-    /// The remote the refused fetch was for.
-    pub remote: String,
-    /// Why, as display text: which fetch is in flight, and how far it has got.
-    pub reason: String,
-}
-
 /// A prompt the window is showing, until it is answered or withdrawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptView {
@@ -120,7 +99,6 @@ mod tests {
         assert_eq!(status, FetchStatus::Idle, "nothing to cancel was cancelled");
 
         status.starting("origin".to_owned());
-        assert!(status.can_be_cancelled());
         status.cancelling();
         assert_eq!(
             status,
@@ -132,7 +110,6 @@ mod tests {
             status.is_in_flight(),
             "a cancelling fetch is still in flight"
         );
-        assert!(!status.can_be_cancelled(), "a second cancel was offered");
 
         status.started("origin".to_owned());
         assert_eq!(
@@ -197,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_fetch_in_flight_can_be_cancelled() {
+    fn only_a_fetch_starting_running_or_cancelling_is_in_flight() {
         for done in [
             FetchStatus::Idle,
             FetchStatus::Finished {
@@ -205,15 +182,12 @@ mod tests {
             },
             FetchStatus::Cancelled {
                 remote: "origin".to_owned(),
-                stranded_locks: Vec::new(),
             },
             FetchStatus::Failed {
                 remote: "origin".to_owned(),
-                message: "no".to_owned(),
             },
         ] {
             assert!(!done.is_in_flight(), "{done:?}");
-            assert!(!done.can_be_cancelled(), "{done:?}");
         }
     }
 }

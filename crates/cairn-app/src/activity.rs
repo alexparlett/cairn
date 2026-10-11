@@ -1,8 +1,9 @@
 //! The activity popover as the window keeps it (staging-and-commit R12): one entry per
 //! operation of the session — every local write and every fetch — newest first, bounded, with
-//! its name, when it started, how long it took, how it ended, the prompt it confirmed, each
-//! `git` it ran with its stderr, the way back where there is one, and `Remove index.lock…`
-//! where R12.4 offers it. Nothing of it outlives the window (R12.3, L14).
+//! its name, when it started, how long it took, how it ended — one of four status words, R14.2 —
+//! the prompt it confirmed, each `git` it ran with its stderr, and the way back where there is
+//! one. Nothing of it outlives the window (R12.3, L14). (`Remove index.lock…` left it in phase
+//! 19: the leftover lock is a state of the repository, `crate::leftover_lock`.)
 //!
 //! Fed by `session::apply` from the updates the lanes send: a write's start, its output as it
 //! streams (R10.4: a hook's lines while it runs), what it ran (`Update::OperationRan`, the
@@ -24,15 +25,14 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
-use cairn_model::{CommandExit, CommandRecord, Consequence, Oid, ScrubbedLines};
-use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover, LockOffer};
+use cairn_model::{CommandExit, CommandRecord, Oid, ScrubbedLines};
+use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover};
 use freya::prelude::*;
 
-use crate::confirming::Confirming;
 use crate::local_writes::Asked;
 use crate::shown_output::{shown_lines, spoken_lines};
 use crate::window::View;
-use crate::worker::{LocalWrite, Request};
+use crate::worker::Request;
 use crate::worker::{OperationId, WriteEnding};
 
 /// The most operations the popover keeps: the newest, the oldest let go of first.
@@ -49,33 +49,20 @@ pub enum ActivityKey {
     Write(OperationId),
     /// The `n`th fetch of the session.
     Fetch(u64),
-    /// The lock files found as the repository opened (the user's decision H, 2026-10-09).
-    Opened,
 }
-
-/// What the entry for the lock files found as the repository opened is called (the user's
-/// decision H, 2026-10-09).
-pub const LOCKS_AT_OPEN_NAME: &str = "Lock files found as the repository opened";
-/// Said beside `Remove index.lock…` while a `git` of Cairn's runs, which it waits on (the
-/// user's decision H): the engine's own words for the refusal it would meet.
-pub const GIT_RUNNING_NOTE: &str = "Cairn is running git in this repository";
 /// Said in place of an operation's lines once the byte bound let them go (the user's decision
 /// M, 2026-10-09).
 pub const LINES_LET_GO: &str = "Its output was let go to make room for newer operations.";
 
-/// How an operation stands, in the popover's words.
+/// How an operation stands, in one of the four status words (rule 5, R14.2): running,
+/// succeeded, failed, cancelled — a refusal and a partly done discard among the failures, its
+/// sentence saying which.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Running,
     Succeeded,
     Failed(String),
-    /// Nothing was written: refused, stale, or never started.
-    NotRun(String),
-    /// A discard of files that did not take every file.
-    PartlyDone(String),
     Cancelled,
-    /// Found as the repository opened: lock files a write left behind.
-    Found,
 }
 
 impl Outcome {
@@ -85,19 +72,14 @@ impl Outcome {
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed(_) => "failed",
-            Self::NotRun(_) => "not run",
-            Self::PartlyDone(_) => "partly done",
             Self::Cancelled => "cancelled",
-            Self::Found => "found",
         }
     }
 
     fn message(&self) -> Option<String> {
         match self {
-            Self::Failed(message) | Self::NotRun(message) | Self::PartlyDone(message) => {
-                Some(message.clone())
-            }
-            Self::Running | Self::Succeeded | Self::Cancelled | Self::Found => None,
+            Self::Failed(message) => Some(message.clone()),
+            Self::Running | Self::Succeeded | Self::Cancelled => None,
         }
     }
 }
@@ -115,11 +97,6 @@ pub struct Activity {
     /// The commit an amend replaced: offered as the way back once the amend succeeded.
     replaces: Option<Oid>,
     pub cancellable: bool,
-    /// Its ending, or the repository's open, named the stale `index.lock`: `Remove index.lock…`
-    /// is offered, its cost read when pressed (the user's decision H, 2026-10-09).
-    lock_named: bool,
-    /// Why the last press of `Remove index.lock…` could not go ahead.
-    lock_note: Option<String>,
     /// The byte bound let go of its lines: it says so in their place (the user's decision M).
     let_go: bool,
     /// Its `git` commands and what they said, once they are over.
@@ -144,8 +121,6 @@ impl Activity {
             prompt: None,
             replaces,
             cancellable,
-            lock_named: false,
-            lock_note: None,
             let_go: false,
             commands: VecDeque::new(),
             streamed: VecDeque::new(),
@@ -251,12 +226,6 @@ pub struct ActivityLog {
     entries: VecDeque<Activity>,
     /// The status box's laid-out left edge and bottom, which the popover hangs from.
     anchor: Option<(f32, f32)>,
-    /// `Remove index.lock…` pressed: its ask, and the entry it was pressed on.
-    lock_asked: Option<(OperationId, ActivityKey)>,
-    /// The removal asked from it, whose success takes the offer from every entry.
-    removing: Option<OperationId>,
-    /// What the removal would cost, read at the press and not yet put in front of the person.
-    lock_ready: Option<Consequence>,
     /// The bytes every entry's lines hold together.
     bytes: usize,
     fetches: u64,
@@ -299,66 +268,16 @@ impl ActivityLog {
         self.anchor = Some(anchor);
     }
 
-    /// `Remove index.lock…` pressed on `key`'s entry: asked under `asked`.
-    pub fn lock_asked(&mut self, asked: OperationId, key: ActivityKey) {
-        self.lock_asked = Some((asked, key));
-        if let Some(entry) = self.find(key) {
-            entry.lock_note = None;
-        }
-    }
-
-    /// What the lock's removal would cost, read at the press asked under `asked`: kept for the
-    /// confirmation (`use_lock_confirmation`) — or, refused, why, said beside the button. An
-    /// answer to an older press is let go of.
-    pub fn lock_answered(&mut self, asked: OperationId, outcome: Result<Consequence, String>) {
-        let key = match self.lock_asked {
-            Some((pressed, key)) if pressed == asked => key,
-            _ => return,
-        };
-        self.lock_asked = None;
-        match outcome {
-            Ok(consequence) => self.lock_ready = Some(consequence),
-            Err(why) => {
-                if let Some(entry) = self.find(key) {
-                    entry.lock_note = Some(why);
-                }
+    /// Lets go of `key`'s entry and the bytes its lines hold.
+    fn forget(&mut self, key: ActivityKey) {
+        if let Some(at) = self.entries.iter().position(|entry| entry.key == key) {
+            if let Some(entry) = self.entries.remove(at) {
+                self.bytes -= entry.bytes;
+            }
+            if self.selected == Some(key) {
+                self.selected = None;
             }
         }
-    }
-
-    pub fn has_lock_ready(&self) -> bool {
-        self.lock_ready.is_some()
-    }
-
-    pub fn take_lock_ready(&mut self) -> Option<Consequence> {
-        self.lock_ready.take()
-    }
-
-    /// The removal of the stale lock was asked under `id`.
-    pub fn removal_asked(&mut self, id: OperationId) {
-        self.removing = Some(id);
-    }
-
-    /// The lock files found as the repository opened: an entry of their own, each named, and
-    /// — when the repository's own `index.lock` is among them — its removal offered.
-    pub fn locks_at_open(&mut self, locks: &[std::path::PathBuf], index_lock: bool) {
-        let mut entry = Activity::new(
-            ActivityKey::Opened,
-            LOCKS_AT_OPEN_NAME.to_owned(),
-            None,
-            false,
-        );
-        entry.outcome = Outcome::Found;
-        entry.lock_named = index_lock;
-        let lines: VecDeque<ActivityLine> = locks
-            .iter()
-            .map(|lock| ActivityLine::Output(cut_line(lock.display().to_string())))
-            .collect();
-        entry.bytes = lines.iter().map(line_bytes).sum();
-        entry.commands = lines;
-        self.bytes += entry.bytes;
-        self.push(entry);
-        self.bound();
     }
 
     /// Every entry, newest first.
@@ -442,8 +361,8 @@ impl ActivityLog {
         self.bound();
     }
 
-    /// What an operation ran, and `Remove index.lock…`'s offer.
-    pub fn ran(&mut self, key: ActivityKey, commands: &[CommandRecord], lock_named: bool) {
+    /// What an operation ran.
+    pub fn ran(&mut self, key: ActivityKey, commands: &[CommandRecord]) {
         let Some(entry) = self.find(key) else {
             return;
         };
@@ -454,7 +373,6 @@ impl ActivityLog {
         }
         entry.bytes = kept.iter().map(line_bytes).sum();
         entry.commands = kept;
-        entry.lock_named = lock_named;
         entry.changed();
         let added = entry.bytes;
         self.bytes = self.bytes + added - freed;
@@ -468,18 +386,16 @@ impl ActivityLog {
     /// carries the prompt back.
     pub fn write_ended(&mut self, id: OperationId, ending: &WriteEnding, asked: Option<&Asked>) {
         let key = ActivityKey::Write(id);
+        // An amend at the press that must be confirmed ran nothing: no entry; the amend
+        // confirmed is an operation of its own.
+        if matches!(ending, WriteEnding::NeedsConfirming { .. }) {
+            self.forget(key);
+            return;
+        }
         if self.find(key).is_none() {
             // Never started: not run, as the repository was closing — named as it was asked.
             let name = asked.map_or_else(|| "A write".to_owned(), |asked| asked.name.clone());
             self.push(Activity::new(key, name, None, false));
-        }
-        // The stale lock removed: no entry offers its removal any more.
-        if self.removing == Some(id) && matches!(ending, WriteEnding::Done(_)) {
-            self.removing = None;
-            for entry in &mut self.entries {
-                entry.lock_named = false;
-                entry.lock_note = None;
-            }
         }
         let Some(entry) = self.find(key) else {
             return;
@@ -491,20 +407,15 @@ impl ActivityLog {
                 entry.replaces = done.replaced;
                 (Outcome::Succeeded, done.acknowledged.clone())
             }
-            WriteEnding::Incomplete { done, message, .. } => (
-                Outcome::PartlyDone(message.clone()),
-                done.acknowledged.clone(),
-            ),
-            WriteEnding::Stale { message, .. }
-            | WriteEnding::Refused { message }
-            | WriteEnding::NotRun { message } => (Outcome::NotRun(message.clone()), None),
-            WriteEnding::Failed { message, .. } => (Outcome::Failed(message.clone()), None),
-            WriteEnding::Cancelled { .. } => (Outcome::Cancelled, None),
-            // An amend at the press that must be confirmed: nothing ran, for the reason its
-            // confirmation will say.
-            WriteEnding::NeedsConfirming { consequence } => {
-                (Outcome::NotRun(consequence.prompt()), None)
+            WriteEnding::Incomplete { done, said, .. } => {
+                (Outcome::Failed(said.clone()), done.acknowledged.clone())
             }
+            WriteEnding::Stale { said, .. }
+            | WriteEnding::Refused { said }
+            | WriteEnding::NotRun { said } => (Outcome::Failed(said.clone()), None),
+            WriteEnding::Failed(failure) => (Outcome::Failed(failure.said.clone()), None),
+            WriteEnding::Cancelled { .. } => (Outcome::Cancelled, None),
+            WriteEnding::NeedsConfirming { .. } => return,
         };
         entry.prompt = acknowledged.or_else(|| asked.and_then(|asked| asked.prompt.clone()));
         entry.end(outcome);
@@ -527,6 +438,17 @@ impl ActivityLog {
         self.fetching.map(ActivityKey::Fetch)
     }
 
+    /// The fetch running, for the status box (R14.1, F9): its number, its one name and when it
+    /// started.
+    pub fn fetch_running(&self) -> Option<(u64, String, Instant)> {
+        let n = self.fetching?;
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.key == ActivityKey::Fetch(n))
+            .map(|entry| (n, entry.name.clone(), entry.clock))
+    }
+
     /// The fetch of `remote` has ended — one that never started (refused before git ran) is
     /// an entry of its own.
     pub fn fetch_ended(&mut self, remote: &str, outcome: Outcome) {
@@ -546,7 +468,7 @@ impl ActivityLog {
 
     /// What the window's popover draws: every entry, newest first, and the place of the one
     /// selected — the newest when none is.
-    pub fn shown(&self, git_running: bool) -> (Rc<Vec<ActivityEntry>>, usize) {
+    pub fn shown(&self) -> (Rc<Vec<ActivityEntry>>, usize) {
         let selected = self
             .selected
             .and_then(|key| self.newest_first().position(|entry| entry.key == key))
@@ -562,7 +484,7 @@ impl ActivityLog {
                 } else {
                     Rc::clone(&none)
                 };
-                entry_of(activity, lines, git_running)
+                entry_of(activity, lines)
             })
             .collect();
         (Rc::new(entries), selected)
@@ -652,7 +574,7 @@ pub fn took_text(took: Duration) -> String {
     }
 }
 
-fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>, git_running: bool) -> ActivityEntry {
+fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>) -> ActivityEntry {
     ActivityEntry {
         name: activity.name.clone(),
         status: activity.outcome.status().to_owned(),
@@ -661,45 +583,26 @@ fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>, git_running: bool
         message: activity.outcome.message(),
         prompt: activity.prompt.clone(),
         replaced: activity.replaced(),
-        // Offered while the lock is named, and while a git of Cairn's runs still drawn, saying
-        // why it cannot be pressed (the user's decision H).
-        lock: activity.lock_named.then(|| {
-            if git_running {
-                LockOffer::Blocked(GIT_RUNNING_NOTE.to_owned())
-            } else {
-                LockOffer::Ready {
-                    note: activity.lock_note.clone(),
-                }
-            }
-        }),
         cancellable: activity.cancellable,
         lines,
     }
 }
 
-/// What a confirmation of `Remove index.lock…` is titled: decision G's, in Title Case (the user's
-/// answers of 2026-10-10, 4).
-pub const REMOVE_LOCK_TITLE: &str = "Remove Stale Lock";
-
 /// The popover, while it is open (R12.1): drawn over the window, its operations from the log.
 /// A cancel asks the write's or the fetch's cancel; the way back finds the replaced commit in
-/// Show Lost Commits; `Remove index.lock…` opens the confirmation, whose token asks the local
-/// lane for the removal.
+/// Show Lost Commits.
 pub fn popover(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
-    // A git of Cairn's the window knows runs: a write, or a fetch.
-    let git_running = view.writes.read().is_running() || view.fetch.read().is_in_flight();
     let (entries, selected, anchor) = {
         let log = view.activity.read();
         if !log.is_open() {
             return None;
         }
-        let (entries, selected) = log.shown(git_running);
+        let (entries, selected) = log.shown();
         (entries, selected, log.anchor())
     };
     let mut activity = view.activity;
     let cancelling = submit.clone();
-    let returning = submit.clone();
-    let removing = submit;
+    let returning = submit;
     Some(
         ActivityPopover::new(entries, selected)
             .anchor(anchor)
@@ -721,7 +624,7 @@ pub fn popover(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elemen
                         fetch.write().cancelling();
                         submit(Request::CancelFetch);
                     }
-                    Some(ActivityKey::Opened) | None => {}
+                    None => {}
                 }
             })
             .on_replaced(move |commit: Oid| {
@@ -729,60 +632,12 @@ pub fn popover(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elemen
                 activity.write().close();
                 show_replaced(commit, view, returning.as_deref());
             })
-            // What the removal would cost is read now, at the press, on the local lane (the
-            // user's decision H); its answer opens the confirmation (`lock_answered`).
-            .on_remove_lock(move |place: usize| {
-                let Some(submit) = removing.as_deref() else {
-                    return;
-                };
-                let mut activity = view.activity;
-                let key = activity.peek().key_at(place);
-                if let Some(key) = key {
-                    let asked = OperationId::next();
-                    activity.write().lock_asked(asked, key);
-                    submit(Request::LockConsequence { asked });
-                }
-            })
             .on_close(move |()| {
                 let mut activity = view.activity;
                 activity.write().close();
             })
             .into(),
     )
-}
-
-/// The answer to a press of `Remove index.lock…`, put in front of the person (the user's
-/// decision H, 2026-10-09): the confirmation opens over what the engine read at the press, its
-/// token asking the local lane for the removal. Run by the window, which holds the submitter
-/// the token's ask needs; a refusal was said beside the button as it arrived.
-pub fn use_lock_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
-    use_side_effect(move || {
-        if !view.activity.read().has_lock_ready() {
-            return;
-        }
-        let mut activity = view.activity;
-        let Some(consequence) = activity.write().take_lock_ready() else {
-            return;
-        };
-        let Some(submit) = submit.clone() else {
-            return;
-        };
-        let mut confirming = view.confirming;
-        confirming.set(Some(Confirming::new(
-            REMOVE_LOCK_TITLE,
-            consequence,
-            move |token| {
-                let mut writes = view.writes;
-                let id = crate::local_writes::ask(
-                    &mut writes.write(),
-                    &*submit,
-                    LocalWrite::RemoveLock(token),
-                );
-                let mut activity = view.activity;
-                activity.write().removal_asked(id);
-            },
-        )));
-    });
 }
 
 /// The way back from an amend (R12.1): Show Lost Commits turned on, if it is not, and the
@@ -803,11 +658,13 @@ mod tests {
     use crate::worker::Done;
 
     fn asked(id: OperationId, what: &str) -> Asked {
+        let mut letters = what.chars();
+        let name = letters.next().map_or_else(String::new, |first| {
+            first.to_uppercase().chain(letters).collect()
+        });
         Asked {
             id,
-            what: what.to_owned(),
-            name: crate::status_text::capitalised(what),
-            awaited: "the commit to finish",
+            name,
             cancellable: true,
             prompt: None,
         }
@@ -864,7 +721,7 @@ mod tests {
             ActivityKey::Write(amend),
             &said(&["hook: \u{1b}[31mok\u{1b}[0m"]),
         );
-        let (entries, selected) = log.shown(false);
+        let (entries, selected) = log.shown();
         assert_eq!(selected, 0);
         assert_eq!(entries[0].name, "Amend");
         assert_eq!(entries[0].status, "running");
@@ -880,7 +737,6 @@ mod tests {
                 "hook: ok",
                 CommandExit::Code(0),
             )],
-            false,
         );
         // The way back is what the run answered it replaced (phase 18): an amend at the press
         // names no commit as it is asked.
@@ -892,7 +748,7 @@ mod tests {
             other => other,
         };
         log.write_ended(amend, &amended, None);
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         assert_eq!(
             entries
                 .iter()
@@ -923,15 +779,16 @@ mod tests {
         log.write_started(&asked(failed, "amend"));
         log.write_ended(
             failed,
-            &WriteEnding::Failed {
-                message: "git commit failed".to_owned(),
-                locks: Vec::new(),
+            &WriteEnding::Failed(crate::worker::Failure {
+                said: "git commit failed".to_owned(),
                 command: None,
                 output: ScrubbedLines::new(),
-            },
+                locks: Vec::new(),
+                index_lock: false,
+            }),
             None,
         );
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         assert_eq!(entries[0].status, "failed");
         assert_eq!(entries[0].message.as_deref(), Some("git commit failed"));
         assert_eq!(entries[0].replaced, None);
@@ -959,7 +816,7 @@ mod tests {
             .map(|n| format!("line {n}"))
             .collect();
         log.output(ActivityKey::Write(id), &said(&lines));
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
         assert_eq!(
             entries[0].lines.last(),
@@ -1001,7 +858,6 @@ mod tests {
                     &wide[..200].join("\n"),
                     CommandExit::Code(1),
                 )],
-                false,
             );
             log.write_ended(id, &done(None), None);
             assert!(
@@ -1034,7 +890,7 @@ mod tests {
             log.output(ActivityKey::Write(id), &said(&[&line]));
         }
         assert!(log.bytes <= ACTIVITY_BYTES, "{}", log.bytes);
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         let lines = &entries[0].lines;
         assert!(lines.len() > 1_000, "{} lines kept", lines.len());
         assert!(
@@ -1059,7 +915,7 @@ mod tests {
             log.newest_first()
                 .all(|entry| entry.drawn.borrow().is_none())
         );
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
         assert!(
             entries[1].lines.is_empty(),
@@ -1069,7 +925,7 @@ mod tests {
             .newest_first()
             .next()
             .and_then(|entry| entry.drawn.borrow().clone());
-        let (again, _) = log.shown(false);
+        let (again, _) = log.shown();
         assert!(
             built.is_some_and(|built| Rc::ptr_eq(&built, &again[0].lines)),
             "the lines were built again with nothing changed"
@@ -1086,7 +942,7 @@ mod tests {
         log.write_started(&asked(id, "commit"));
         let long = format!("x{}", "é".repeat(128 * 1024));
         log.output(ActivityKey::Write(id), &said(&[&long]));
-        let (entries, _) = log.shown(false);
+        let (entries, _) = log.shown();
         let Some(ActivityLine::Output(kept)) = entries[0].lines.first() else {
             panic!("{:?}", entries[0].lines);
         };
@@ -1098,14 +954,13 @@ mod tests {
         assert_eq!(cut_line("short".to_owned()), "short");
     }
 
-    /// R12.4's offer is kept with what the operation ran — pressable while no `git` of Cairn's
-    /// runs and drawn saying why while one does (the user's decision H) — and a command that did
-    /// not exit cleanly says how it ended.
+    /// A command that did not exit cleanly says how it ended, and the times read as the popover
+    /// draws them.
     #[test]
-    fn the_lock_offer_and_an_unclean_exit_are_kept() {
+    fn an_unclean_exit_is_kept() {
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "staging 1 file"));
+        log.write_started(&asked(id, "Stage 1 file"));
         log.ran(
             ActivityKey::Write(id),
             &[record(
@@ -1113,15 +968,8 @@ mod tests {
                 "fatal: Unable to create index.lock",
                 CommandExit::Code(128),
             )],
-            true,
         );
-        let (entries, _) = log.shown(false);
-        assert_eq!(entries[0].lock, Some(LockOffer::Ready { note: None }));
-        let (entries, _) = log.shown(true);
-        assert_eq!(
-            entries[0].lock,
-            Some(LockOffer::Blocked(GIT_RUNNING_NOTE.to_owned()))
-        );
+        let (entries, _) = log.shown();
         assert_eq!(
             entries[0].lines.last(),
             Some(&ActivityLine::Output("(exit status 128)".to_owned()))
@@ -1135,97 +983,53 @@ mod tests {
         );
     }
 
-    fn stale_lock() -> Consequence {
-        Consequence::RemoveLock {
-            path: PathBuf::from("/r/.git/index.lock"),
-            modified: SystemTime::UNIX_EPOCH,
-            read_at: SystemTime::UNIX_EPOCH,
-            bytes: 0,
-            device: 1,
-            inode: 2,
-        }
-    }
-
-    /// The user's decision H: the removal's consequence is read at the press, and only the
-    /// answer to the latest press is kept — for the confirmation, or, refused, said beside the
-    /// button until the next press; a removal that succeeded takes the offer from every entry,
-    /// and one that failed leaves it. Caught by: an older press's answer opening a confirmation,
-    /// a refusal that says nothing, or an offer left on a lock that is gone.
+    /// Rule 5 (R14.2): every ending is one of four status words — a refusal, a stale patch, a
+    /// write never run and a partly done discard all "failed", with their sentence — and an amend
+    /// asking to be confirmed, which ran nothing, leaves no entry. Caught by: "not run", "partly
+    /// done" or "found" drawn, or a pending amend drawn as an operation.
     #[test]
-    fn the_lock_offer_answers_its_latest_press_and_goes_once_the_lock_is_removed() {
+    fn every_ending_is_one_of_four_words() {
         let mut log = ActivityLog::default();
-        log.locks_at_open(&[PathBuf::from("/r/.git/index.lock")], true);
-        let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "staging 1 file"));
-        log.ran(ActivityKey::Write(id), &[], true);
-        let (older, newer) = (OperationId::for_tests(10), OperationId::for_tests(11));
-        log.lock_asked(older, ActivityKey::Write(id));
-        log.lock_asked(newer, ActivityKey::Write(id));
-        log.lock_answered(older, Ok(stale_lock()));
-        assert!(!log.has_lock_ready(), "an older press's answer was kept");
-        log.lock_answered(newer, Err("index.lock is no longer there".to_owned()));
-        assert!(!log.has_lock_ready());
-        let (entries, _) = log.shown(false);
-        assert_eq!(
-            entries[0].lock,
-            Some(LockOffer::Ready {
-                note: Some("index.lock is no longer there".to_owned())
-            })
-        );
-        let again = OperationId::for_tests(12);
-        log.lock_asked(again, ActivityKey::Write(id));
-        let (entries, _) = log.shown(false);
-        assert_eq!(entries[0].lock, Some(LockOffer::Ready { note: None }));
-        log.lock_answered(again, Ok(stale_lock()));
-        assert_eq!(log.take_lock_ready(), Some(stale_lock()));
-        assert!(!log.has_lock_ready());
-
-        // The removal fails: offered still. It succeeds: offered nowhere.
-        let removal = OperationId::for_tests(20);
-        log.removal_asked(removal);
-        log.write_started(&asked(removal, "removing the stale lock"));
+        let refused = OperationId::for_tests(1);
+        log.write_started(&asked(refused, "Stage 1 file"));
         log.write_ended(
-            removal,
+            refused,
             &WriteEnding::Refused {
-                message: "a git of Cairn's is running".to_owned(),
+                said: "Nothing is selected.".to_owned(),
+            },
+            None,
+        );
+        let (entries, _) = log.shown();
+        assert_eq!(entries[0].status, "failed");
+        assert_eq!(entries[0].message.as_deref(), Some("Nothing is selected."));
+        let pending = OperationId::for_tests(2);
+        log.write_started(&asked(pending, "Amend"));
+        log.write_ended(
+            pending,
+            &WriteEnding::NeedsConfirming {
+                consequence: cairn_model::Consequence::RemoveLock {
+                    path: PathBuf::from("/r/.git/index.lock"),
+                    modified: SystemTime::UNIX_EPOCH,
+                    read_at: SystemTime::UNIX_EPOCH,
+                    bytes: 0,
+                    device: 0,
+                    inode: 0,
+                },
             },
             None,
         );
         assert_eq!(
-            log.shown(false)
-                .0
-                .iter()
-                .filter(|e| e.lock.is_some())
-                .count(),
-            2
+            log.len(),
+            1,
+            "an amend asking to be confirmed left an entry"
         );
-        let removal = OperationId::for_tests(21);
-        log.removal_asked(removal);
-        log.write_started(&asked(removal, "removing the stale lock"));
-        log.write_ended(removal, &done(None), None);
-        assert!(log.shown(false).0.iter().all(|entry| entry.lock.is_none()));
-    }
-
-    /// The user's decision H: the locks found as the repository opened are an entry of their
-    /// own, found rather than run, each lock a line, the offer only where the index's is among
-    /// them.
-    #[test]
-    fn the_locks_found_at_open_are_an_entry_of_their_own() {
-        let mut log = ActivityLog::default();
-        log.locks_at_open(&[PathBuf::from("/r/.git/HEAD.lock")], false);
-        let (entries, _) = log.shown(false);
-        assert_eq!(entries[0].name, LOCKS_AT_OPEN_NAME);
-        assert_eq!(entries[0].status, "found");
-        assert_eq!(entries[0].lock, None);
-        assert_eq!(
-            *entries[0].lines,
-            [ActivityLine::Output("/r/.git/HEAD.lock".to_owned())]
-        );
-        log.locks_at_open(&[PathBuf::from("/r/.git/index.lock")], true);
-        assert_eq!(
-            log.shown(false).0[0].lock,
-            Some(LockOffer::Ready { note: None })
-        );
+        for entry in log.shown().0.iter() {
+            assert!(
+                ["running", "succeeded", "failed", "cancelled"].contains(&entry.status.as_str()),
+                "{}",
+                entry.status
+            );
+        }
     }
 
     /// The user's decision L: each argument of a `$ git …` line is written as a POSIX shell
@@ -1299,7 +1103,6 @@ mod tests {
                 "a hook said this",
                 CommandExit::Code(1),
             )],
-            false,
         );
         log.write_ended(old, &done(None), None);
         let new = OperationId::for_tests(3);

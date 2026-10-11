@@ -115,6 +115,8 @@ pub(super) struct Answered {
     pub(super) refs: Vec<bool>,
     pub(super) ahead_behind: usize,
     pub(super) status: usize,
+    /// The leftover lock's stats, one before each status read (R12.4).
+    pub(super) lock_stats: usize,
     /// Every other update seen meanwhile.
     pub(super) others: Vec<Update>,
 }
@@ -125,6 +127,7 @@ impl Answered {
             Update::Refs { reopen, .. } => self.refs.push(reopen),
             Update::AheadBehind { .. } => self.ahead_behind += 1,
             Update::Status { .. } => self.status += 1,
+            Update::IndexLock { .. } => self.lock_stats += 1,
             other => self.others.push(other),
         }
     }

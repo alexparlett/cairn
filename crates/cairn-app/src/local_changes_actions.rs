@@ -1,6 +1,6 @@
 //! What Local Changes' lists and diff do when a person acts on them (staging-and-commit R8):
 //! the selection's presses, Fork's five routes to stage and unstage files, the discard on the
-//! unstaged side through the confirmation, and what the view says of each write it asked.
+//! unstaged side through the confirmation.
 //!
 //! **Every route acts on the selection, wherever focus is** (rule 8, R8.2): the one
 //! `cairn_ui::LocalSelection` the lists' state keeps. A chord on either list or on the diff,
@@ -22,6 +22,10 @@
 //! the nearest above it — and the new primary's diff is asked at once
 //! (`diff_actions::show_primary`); the status that shows the write then runs the same rule.
 //!
+//! **Nothing is said under the lists** (R14.6): a write running or queued shows in the status
+//! box, and its ending, when it is not a success or a cancel, in its dialog
+//! (`crate::ending_dialog`).
+//!
 //! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule,
 //! a conflicted path or a nested repository: a selection mixing them with paths that can be
 //! discarded asks for those alone, and the confirmation says in one line what is left
@@ -42,8 +46,8 @@
 //! discard deletes it, and is confirmed as the files' route confirms it (phase 03's
 //! `Refusal::WholeFileOnly`).
 //!
-//! On the UI thread: an action asks and returns. While a confirmation or a credential prompt
-//! is open, nothing here acts.
+//! On the UI thread: an action asks and returns. While any dialog or the popover is open — the
+//! one modal state (`crate::modal`) — nothing here acts.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -62,10 +66,10 @@ use freya::prelude::*;
 use crate::confirming::Confirming;
 use crate::diff_actions;
 use crate::local_changes_state::{drawn_changes, shown_rows};
-use crate::local_writes::{self, LocalWrites};
+use crate::local_writes;
 use crate::next_selection::Leaving;
 use crate::window::View;
-use crate::worker::{LocalWrite, OperationId, Request, UnstageTarget, WriteEnding};
+use crate::worker::{LocalWrite, OperationId, Request, UnstageTarget};
 
 /// The confirmation's title, in Title Case (the redesign's D3), where Fork for Windows writes
 /// "Discard changes"; a refusal while counting is titled "Couldn't Discard Changes" from it.
@@ -137,69 +141,6 @@ pub fn consequence_arrived(view: View, asked: OperationId, outcome: Result<Conse
     }
 }
 
-/// What the view says under its lists (R8.6), and whether it is a failure: the write running
-/// and those queued behind it, or how the last write ended when it did not do what was asked —
-/// a stale patch naming its path. `None` when there is nothing to say. A discard being counted
-/// says so in its own dialog, opened at the press, never here (R7.4).
-pub fn acting_line(writes: &LocalWrites) -> Option<(String, bool)> {
-    let queued = writes.queued().count();
-    if let Some(running) = writes.running() {
-        let behind = match queued {
-            0 => String::new(),
-            1 => " (1 more queued)".to_owned(),
-            more => format!(" ({more} more queued)"),
-        };
-        return Some((
-            format!(
-                "{}…{behind}",
-                crate::status_text::capitalised(&running.what)
-            ),
-            false,
-        ));
-    }
-    if let Some(first) = writes.queued().next() {
-        return Some((
-            format!("{} (queued)", crate::status_text::capitalised(&first.what)),
-            false,
-        ));
-    }
-    let (asked, ending) = writes.last()?;
-    let what = crate::status_text::capitalised(&asked.what);
-    match ending {
-        WriteEnding::Done(_) => None,
-        WriteEnding::Stale { message, .. } => {
-            Some((format!("{what}: nothing was written. {message}"), true))
-        }
-        WriteEnding::Refused { message } | WriteEnding::NotRun { message } => {
-            Some((format!("{what}: nothing was written. {message}"), true))
-        }
-        WriteEnding::Failed { message, .. } => Some((
-            format!(
-                "{what} failed: {}",
-                crate::status_text::why_it_failed(message)
-            ),
-            true,
-        )),
-        // A cancel opens nothing and says nothing here (R4.7, rule 5); an amend waiting for its
-        // confirmation is the dialog's to say.
-        WriteEnding::Cancelled { .. } | WriteEnding::NeedsConfirming { .. } => None,
-        WriteEnding::Incomplete { kept, message, .. } => Some((
-            format!(
-                "{what} did not take every file — {} kept as they were: {message}",
-                kept.join(", ")
-            ),
-            true,
-        )),
-    }
-}
-
-/// Whether a dialog owns the keys and the pointer: a confirmation, a credential prompt or the
-/// Git Error dialog. The window's chords are inert then (`shortcuts::act`), and so is
-/// everything here.
-fn dialog_open(view: View) -> bool {
-    crate::shortcuts::keys_inert(view)
-}
-
 /// The rows of the selection's list it names that the lists drawn still show, sorted, with the
 /// list: what every route takes. Nothing while nothing is selected.
 fn selected_rows(view: View) -> Option<(ChangeList, Vec<usize>)> {
@@ -242,7 +183,7 @@ fn path_on(view: View, list: ChangeList, row: usize) -> Option<RepoPath> {
 /// A plain press, or ↑ or ↓: the row alone is selected, primary and anchor, and its diff
 /// asked — again, if it failed.
 pub fn choose(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
-    if dialog_open(view) {
+    if crate::shortcuts::keys_inert(view) {
         return;
     }
     let Some(path) = path_on(view, list, row) else {
@@ -253,7 +194,7 @@ pub fn choose(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(R
 
 /// What a person did to the lists beyond choosing a row.
 pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>>) {
-    if dialog_open(view) {
+    if crate::shortcuts::keys_inert(view) {
         return;
     }
     let asking = submit.as_deref();
@@ -292,7 +233,7 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
 /// (observed `lc3`): the stage chord from the diff is ⌘S or Ctrl+S, which stages the whole
 /// selection (`lc4`).
 pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
-    if dialog_open(view) {
+    if crate::shortcuts::keys_inert(view) {
         return;
     }
     let content = view
@@ -336,7 +277,7 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
 /// unstaged out of it from the staged one, or discarded from the working tree through the
 /// confirmation. The selection the gesture or the chord acted on goes.
 pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
-    if dialog_open(view) {
+    if crate::shortcuts::keys_inert(view) {
         return;
     }
     let mut lines = view.local.lines;
@@ -741,7 +682,6 @@ fn copy_paths(view: View) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::Done;
 
     /// R7.4, R8.4: an answer is for the confirmation opened for the discard asked last, and
     /// one for an earlier ask is dropped; letting go of the ask drops its answer too. Caught by:
@@ -760,54 +700,5 @@ mod tests {
         acting.discard_asked(first, 13);
         acting.forget_discard();
         assert_eq!(acting.answered(first), None);
-    }
-
-    /// R8.6: the line under the lists says the write running and how many are queued behind
-    /// it, and a write that did not do what was asked —
-    /// naming a stale patch's path — and nothing for a write that was done. Caught by: a
-    /// queued write not drawn, or a stale ending drawn as success.
-    #[test]
-    fn the_line_says_what_runs_waits_and_failed() {
-        let mut writes = LocalWrites::default();
-        assert_eq!(acting_line(&writes), None);
-        let stage = |path: &str| LocalWrite::StageFiles {
-            paths: vec![RepoPath::from(path)],
-        };
-        let (one, two) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        writes.asked(one, &stage("a"));
-        writes.asked(two, &stage("b"));
-        assert_eq!(
-            acting_line(&writes),
-            Some(("Staging 1 file (queued)".to_owned(), false))
-        );
-        writes.started(one);
-        assert_eq!(
-            acting_line(&writes),
-            Some(("Staging 1 file… (1 more queued)".to_owned(), false))
-        );
-        writes.ended(
-            one,
-            WriteEnding::Done(Done {
-                description: "staged 1 file".to_owned(),
-                acknowledged: None,
-                locks_before: Vec::new(),
-                locks_after: Vec::new(),
-                replaced: None,
-                cost_after: None,
-            }),
-        );
-        writes.started(two);
-        writes.ended(
-            two,
-            WriteEnding::Stale {
-                path: "src/b.rs".to_owned(),
-                message: "src/b.rs changed since it was read".to_owned(),
-            },
-        );
-        let Some((line, failed)) = acting_line(&writes) else {
-            panic!("a stale write said nothing");
-        };
-        assert!(failed);
-        assert!(line.contains("src/b.rs"), "{line}");
     }
 }

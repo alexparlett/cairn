@@ -28,15 +28,12 @@ pub fn of_header(pressed: HeaderAction) -> Action {
     }
 }
 
-/// Whether the window's chords and the views' keys do nothing now: while a credential prompt,
-/// a confirmation, a Git Error dialog, or Create Branch is up (R11.3, C28), and while the
-/// activity popover is open, which Escape alone closes (the user's decision I, 2026-10-09).
+/// Whether the window's chords and the views' keys do nothing now: while any dialog — a
+/// credential prompt, a confirmation, a Git Error or "Couldn't <name>", Create Branch — or the
+/// activity popover, which Escape alone closes, is open (R14.8, C28): the one modal state
+/// decides it (`crate::modal`).
 pub fn keys_inert(view: View) -> bool {
-    view.prompt.peek().is_some()
-        || view.confirming.peek().is_some()
-        || view.local.commit.state.peek().error().is_some()
-        || view.branch.state.peek().is_up()
-        || view.activity.peek().is_open()
+    crate::modal::modal(view).is_some()
 }
 
 /// Does `action` to `view`, asking through `submit` what it must — nothing while a

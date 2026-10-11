@@ -38,13 +38,20 @@
 //! marks the lane closing, which runs nothing more it is sent, and waits for the write
 //! running to end before it ends what else `git` runs. The window says which write it is
 //! waiting for, and a second close after `CLOSE_PATIENCE` closes it anyway; a lock the write
-//! leaves then is listed as the repository next opens (`Update::LocksAtOpen`).
+//! leaves then is found by the leftover lock's `stat` as the repository next opens (R12.4).
+//!
+//! A write git refused because it could not create `<gitdir>/index.lock` — the lock there when
+//! the attempt began, and the same file still there after — is run again about a second later,
+//! at most [`LOCK_RETRIES`] times, before its ending goes out (F5): while that file stood no git
+//! could change the index, so the attempt wrote nothing and running it again cannot write
+//! twice. The wait is a sleep on this thread, in slices that end it for a close.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use cairn_askpass::Channel;
 use cairn_git::ops::{
@@ -77,6 +84,11 @@ impl OperationId {
     #[cfg(test)]
     pub fn for_tests(n: u64) -> Self {
         Self(n)
+    }
+
+    /// Its number: what keys the status box's line for it.
+    pub fn number(self) -> u64 {
+        self.0
     }
 }
 
@@ -176,61 +188,9 @@ pub enum LocalWrite {
 #[cfg(test)]
 impl Clone for LocalWrite {
     fn clone(&self) -> Self {
-        match self {
-            Self::StageLines { diff, selection } => Self::StageLines {
-                diff: diff.clone(),
-                selection: selection.clone(),
-            },
-            Self::UnstageLines { diff, selection } => Self::UnstageLines {
-                diff: diff.clone(),
-                selection: selection.clone(),
-            },
-            Self::StageFiles { paths } => Self::StageFiles {
-                paths: paths.clone(),
-            },
-            Self::UnstageFiles { paths, to } => Self::UnstageFiles {
-                paths: paths.clone(),
-                to: to.clone(),
-            },
-            Self::StageAll { changes, shown } => Self::StageAll {
-                changes: Arc::clone(changes),
-                shown: shown.clone(),
-            },
-            Self::UnstageAll { changes, shown, to } => Self::UnstageAll {
-                changes: Arc::clone(changes),
-                shown: shown.clone(),
-                to: to.clone(),
-            },
-            Self::Commit {
-                message,
-                skip_hooks,
-            } => Self::Commit {
-                message: message.clone(),
-                skip_hooks: *skip_hooks,
-            },
-            Self::AmendAtPress {
-                message,
-                skip_hooks,
-            } => Self::AmendAtPress {
-                message: message.clone(),
-                skip_hooks: *skip_hooks,
-            },
-            Self::CreateBranch { name, at } => Self::CreateBranch {
-                name: name.clone(),
-                at: *at,
-            },
-            Self::CreateBranchAndCheckout { name, at } => Self::CreateBranchAndCheckout {
-                name: name.clone(),
-                at: *at,
-            },
-            Self::DiscardLines(_)
-            | Self::DiscardFiles(_)
-            | Self::Amend { .. }
-            | Self::CreateBranchDiscarding(_)
-            | Self::RemoveLock(_) => {
-                panic!("a destructive write's confirmation is spent once; a test may not copy it")
-            }
-        }
+        self.token_free_copy().unwrap_or_else(|| {
+            panic!("a destructive write's confirmation is spent once; a test may not copy it")
+        })
     }
 }
 
@@ -301,56 +261,13 @@ impl LocalWrite {
         }
     }
 
-    /// What the window calls it while it is queued or running, and as it waits on it to close
-    /// ("Finishing commit…", R4.9): a phrase that follows a verb.
-    pub fn what(&self) -> String {
-        let files = |count: usize| {
-            if count == 1 {
-                "1 file".to_owned()
-            } else {
-                format!("{count} files")
-            }
-        };
-        match self {
-            Self::StageLines { diff, .. } => format!("staging lines of {}", diff.file.new_path),
-            Self::UnstageLines { diff, .. } => {
-                format!("unstaging lines of {}", diff.file.new_path)
-            }
-            Self::StageFiles { paths } => format!("staging {}", files(paths.len())),
-            Self::UnstageFiles { paths, .. } => format!("unstaging {}", files(paths.len())),
-            Self::StageAll { changes, shown } => format!(
-                "staging {}",
-                files(
-                    shown
-                        .as_ref()
-                        .map_or(changes.len(ChangeList::Unstaged), Vec::len)
-                )
-            ),
-            Self::UnstageAll { changes, shown, .. } => format!(
-                "unstaging {}",
-                files(
-                    shown
-                        .as_ref()
-                        .map_or(changes.len(ChangeList::Staged), Vec::len)
-                )
-            ),
-            Self::DiscardLines(_) => "discarding lines".to_owned(),
-            Self::DiscardFiles(_) => "discarding files".to_owned(),
-            Self::Commit { .. } => "commit".to_owned(),
-            Self::Amend { .. } | Self::AmendAtPress { .. } => "amend".to_owned(),
-            Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
-                format!("creating branch {name}")
-            }
-            Self::CreateBranchDiscarding(_) => "creating a branch, discarding changes".to_owned(),
-            Self::RemoveLock(_) => "removing index.lock".to_owned(),
-        }
-    }
-
-    /// What the activity popover calls it, in Fork's imperative form as its Activity Manager
-    /// names an operation ("Fetch origin", "Create branch 'develop'"; `fork-staging-and-commit.md`
-    /// §7): "Stage 1 file", "Stage lines of a.rs", "Unstage 2 files", "Discard 3 files",
-    /// "Commit", "Amend", "Create branch 'topic'", "Remove index.lock". A destructive write's
-    /// is its confirmation's (`Consequence::name`).
+    /// Its one name (R14.2, rule 5), in Fork's imperative form as its Activity Manager names an
+    /// operation ("Fetch origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7):
+    /// "Stage 1 file", "Stage lines of a.rs", "Unstage 2 files", "Discard 3 files", "Commit",
+    /// "Amend", "Create branch 'topic'", "Remove index.lock". A destructive write's is its
+    /// confirmation's (`Consequence::name`). The only wording of the write: the status box, a
+    /// wait ("Waiting for Commit…"), the closing line, the "Couldn't <name>" dialog, the askpass
+    /// prompt's title and the activity popover all say this.
     pub fn name(&self) -> String {
         let files = |count: usize| {
             if count == 1 {
@@ -360,8 +277,16 @@ impl LocalWrite {
             }
         };
         match self {
-            Self::StageLines { diff, .. } => format!("Stage lines of {}", diff.file.new_path),
-            Self::UnstageLines { diff, .. } => format!("Unstage lines of {}", diff.file.new_path),
+            Self::StageLines { diff, .. } => {
+                format!(
+                    "Stage lines of {}",
+                    cairn_model::shown_path(&diff.file.new_path.to_string())
+                )
+            }
+            Self::UnstageLines { diff, .. } => format!(
+                "Unstage lines of {}",
+                cairn_model::shown_path(&diff.file.new_path.to_string())
+            ),
             Self::StageFiles { paths } => format!("Stage {}", files(paths.len())),
             Self::UnstageFiles { paths, .. } => format!("Unstage {}", files(paths.len())),
             Self::StageAll { changes, shown } => format!(
@@ -421,26 +346,88 @@ impl LocalWrite {
         }
     }
 
-    /// What a wait behind it waits for — "Waiting for the commit to finish…" (the user's
-    /// decision D, 2026-10-09), and "Waiting for the branch to be created…" (the user's decision
-    /// of 2026-10-09 on phase 11's popover): a plain noun, or a gerund where the write has none,
-    /// and what it is waited on to do.
-    pub fn awaited(&self) -> &'static str {
+    /// A copy of a write that carries no confirmation, to run again after git refused it for the
+    /// lock (F5); `None` for a destructive write, whose token is spent once — a confirmed amend
+    /// runs again only with the token its failure handed back.
+    fn token_free_copy(&self) -> Option<Self> {
+        Some(match self {
+            Self::StageLines { diff, selection } => Self::StageLines {
+                diff: Arc::clone(diff),
+                selection: selection.clone(),
+            },
+            Self::UnstageLines { diff, selection } => Self::UnstageLines {
+                diff: Arc::clone(diff),
+                selection: selection.clone(),
+            },
+            Self::StageFiles { paths } => Self::StageFiles {
+                paths: paths.clone(),
+            },
+            Self::UnstageFiles { paths, to } => Self::UnstageFiles {
+                paths: paths.clone(),
+                to: to.clone(),
+            },
+            Self::StageAll { changes, shown } => Self::StageAll {
+                changes: Arc::clone(changes),
+                shown: shown.clone(),
+            },
+            Self::UnstageAll { changes, shown, to } => Self::UnstageAll {
+                changes: Arc::clone(changes),
+                shown: shown.clone(),
+                to: to.clone(),
+            },
+            Self::Commit {
+                message,
+                skip_hooks,
+            } => Self::Commit {
+                message: message.clone(),
+                skip_hooks: *skip_hooks,
+            },
+            Self::AmendAtPress {
+                message,
+                skip_hooks,
+            } => Self::AmendAtPress {
+                message: message.clone(),
+                skip_hooks: *skip_hooks,
+            },
+            Self::CreateBranch { name, at } => Self::CreateBranch {
+                name: name.clone(),
+                at: *at,
+            },
+            Self::CreateBranchAndCheckout { name, at } => Self::CreateBranchAndCheckout {
+                name: name.clone(),
+                at: *at,
+            },
+            Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Amend { .. }
+            | Self::CreateBranchDiscarding(_)
+            | Self::RemoveLock(_) => return None,
+        })
+    }
+
+    /// A confirmed amend's message and hooks, to run again with the token its failure handed
+    /// back; `None` for every other write.
+    fn amend_words(&self) -> Option<(String, bool)> {
         match self {
-            Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => {
-                "staging to finish"
-            }
-            Self::UnstageLines { .. } | Self::UnstageFiles { .. } | Self::UnstageAll { .. } => {
-                "unstaging to finish"
-            }
-            Self::DiscardLines(_) | Self::DiscardFiles(_) => "the discard to finish",
-            Self::Commit { .. } => "the commit to finish",
-            Self::Amend { .. } | Self::AmendAtPress { .. } => "the amend to finish",
-            Self::CreateBranch { .. } => "the branch to be created",
-            Self::CreateBranchAndCheckout { .. } | Self::CreateBranchDiscarding(_) => {
-                "the checkout to finish"
-            }
-            Self::RemoveLock(_) => "the lock's removal to finish",
+            Self::Amend {
+                message,
+                skip_hooks,
+                ..
+            } => Some((message.clone(), *skip_hooks)),
+            Self::StageLines { .. }
+            | Self::UnstageLines { .. }
+            | Self::StageFiles { .. }
+            | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
+            | Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Commit { .. }
+            | Self::AmendAtPress { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. }
+            | Self::CreateBranchDiscarding(_)
+            | Self::RemoveLock(_) => None,
         }
     }
 
@@ -632,51 +619,126 @@ impl cairn_git::Cancel for BeforeRunning<'_> {
     }
 }
 
-/// How a write ended, as the window keeps it: what it did, or why it did nothing, or that it
-/// may have done part — with the lock files around it (R3.8, #44).
+/// How a write ended, as the window keeps it (R14): what it did, or why it did nothing — each a
+/// short sentence for people (`said`), worded on the lane from the engine's typed error
+/// (`ending_words`), apart from the command git ran, its output and the lock paths. The window
+/// gives each its one home: nothing for a success or a cancel, Fork's Git Error for git's
+/// failure, "Couldn't <name>" for the rest (R14.3, R14.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteEnding {
     /// It ran: what it did, the prompt it confirmed when it was destructive, and the lock
     /// files before and after it.
     Done(Done),
     /// Nothing was written, because what it was built from moved first — a patch the writes
-    /// ahead of it made stale, or a file edited since its discard was confirmed: dropped,
-    /// naming its path (R3.7, R1.4).
-    Stale { path: String, message: String },
+    /// ahead of it made stale, or a file edited since its discard was confirmed (R3.7, R1.4):
+    /// `path` is what moved, as the engine names it, and `said` the sentence naming it.
+    Stale { path: String, said: String },
     /// Nothing was written: refused before git ran (nothing selected, a conflicted path, a
     /// commit during a rebase, …).
-    Refused { message: String },
-    /// git ran and failed: its message, and the lock files present once it had — the one it
-    /// failed on among them, when that was it. When it was git that failed, `command` is what
-    /// ran (`git commit -q -F -`) and `output` git's words as the engine kept them — its
-    /// runner's whole lines, scrubbed as they were split, stdout's and stderr's in the order
-    /// they arrived (R4.10) — for the Git Error dialog (R10.5); both empty otherwise.
-    Failed {
-        message: String,
-        locks: Vec<PathBuf>,
-        command: Option<String>,
-        output: ScrubbedLines,
-    },
+    Refused { said: String },
+    /// It failed — git, with its command and output, or something beneath it.
+    Failed(Failure),
     /// Cancelled by the user (R4.7, rule 5 of the redesign): a commit or an amend git had not
     /// made — `HEAD` read after its `git` was reaped, or the cancel heard before git ran. One
     /// git had made ended [`WriteEnding::Done`]. With the lock files left.
-    Cancelled {
-        message: String,
-        locks: Vec<PathBuf>,
-    },
+    Cancelled { locks: Vec<PathBuf> },
     /// Nothing ran: an amend at the press that must be confirmed — a remote has `HEAD`, or git
     /// keeps no reflog (R6.4) — its `Consequence` answered for the confirmation dialog.
     NeedsConfirming { consequence: Consequence },
     /// A discard of files that did not take every file: what it did, the prompt it confirmed,
-    /// and the paths still as they were confirmed.
+    /// the paths still as they were confirmed, the sentence saying so, and git's failure when
+    /// one stopped it.
     Incomplete {
         done: Done,
         kept: Vec<String>,
-        message: String,
+        said: String,
+        failure: Option<Failure>,
     },
-    /// Not run: the repository was closing when its turn came, or a commit was cancelled
-    /// before its `git` started.
-    NotRun { message: String },
+    /// Not run: the repository was closing when its turn came.
+    NotRun { said: String },
+}
+
+/// A write, or a fetch, that failed (R14.3): git's failure — its command and output for the Git
+/// Error dialog's Error Details — or one beneath git, which has neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    /// The one sentence a person reads: Fork's own for git's failure ([`ending_words`]), or what
+    /// else went wrong.
+    pub said: String,
+    /// What ran (`git commit -q -F -`), when it was git that failed.
+    pub command: Option<String>,
+    /// git's words as the engine kept them — its runner's whole lines, scrubbed as they were
+    /// split, stdout's and stderr's in the order they arrived (R4.10); empty otherwise.
+    pub output: ScrubbedLines,
+    /// The lock files present once it had failed.
+    pub locks: Vec<PathBuf>,
+    /// git could not create `<gitdir>/index.lock` (F5): its Git Error offers `Remove
+    /// index.lock…` beside Close (R12.4, observed `lk2`).
+    pub index_lock: bool,
+}
+
+impl Failure {
+    /// A failure beneath git: a sentence alone.
+    fn said(said: String) -> Self {
+        Self {
+            said,
+            command: None,
+            output: ScrubbedLines::new(),
+            locks: Vec::new(),
+            index_lock: false,
+        }
+    }
+
+    /// `error` as a failure, `lock` the repository's `<gitdir>/index.lock`; where no prompt could
+    /// have been answered, why — a failure's own words ("terminal prompts disabled") do not say.
+    pub(super) fn of(error: &Error, prompting: &Result<(), String>, lock: &Path) -> Self {
+        let mut said = super::ending_words::sentence(error);
+        if let Err(why) = prompting {
+            said = format!(
+                "{said} Cairn could not have asked for a credential in this session: {why}."
+            );
+        }
+        let git = match error {
+            Error::MadeButGitFailed { failure, .. } | Error::AmendNotMade { failure, .. } => {
+                failure.as_ref()
+            }
+            other => other,
+        };
+        match git {
+            Error::GitFailed {
+                arguments,
+                stderr,
+                present_locks,
+                ..
+            } => Self {
+                said,
+                command: Some(format!("git {arguments}")),
+                output: stderr.clone(),
+                locks: present_locks.clone(),
+                index_lock: failed_on_lock(git, lock),
+            },
+            Error::GitUnwatched { stranded_locks, .. } => Self {
+                locks: stranded_locks.clone(),
+                ..Self::said(said)
+            },
+            _ => Self::said(said),
+        }
+    }
+}
+
+/// Whether `error` is git refusing because it could not create `lock`: the lock is among those
+/// present once git had failed, and git's words name it — its message in every language quotes
+/// the path, and no other failure of a write does.
+fn failed_on_lock(error: &Error, lock: &Path) -> bool {
+    match error {
+        Error::GitFailed {
+            stderr,
+            present_locks,
+            ..
+        } => present_locks.iter().any(|path| path == lock) && stderr.text().contains("index.lock"),
+        Error::AmendNotMade { failure, .. } => failed_on_lock(failure, lock),
+        _ => false,
+    }
 }
 
 /// A write that ran (`cairn_git::ops::Performed`, in the window's words).
@@ -764,24 +826,14 @@ impl fmt::Debug for Unspent {
 }
 
 impl WriteEnding {
-    /// The lock files this ending names: what the window says remain.
-    pub fn locks(&self) -> &[PathBuf] {
-        match self {
-            Self::Done(done) | Self::Incomplete { done, .. } => &done.locks_after,
-            Self::Failed { locks, .. } | Self::Cancelled { locks, .. } => locks,
-            Self::Stale { .. }
-            | Self::Refused { .. }
-            | Self::NotRun { .. }
-            | Self::NeedsConfirming { .. } => &[],
-        }
-    }
-
     /// How `outcome` ended, what it left stale when it ran (wholly or in part), and the token a
-    /// confirmed amend git refused before amending hands back. A failure while no prompt could
-    /// have been answered says so, as a fetch's does.
+    /// confirmed amend git refused before amending hands back; `lock` is the repository's
+    /// `<gitdir>/index.lock`, which a failure says it could not create. A failure while no prompt
+    /// could have been answered says so, as a fetch's does.
     fn of(
         outcome: Result<Ran, Error>,
         prompting: &Result<(), String>,
+        lock: &Path,
     ) -> (Self, Option<Invalidated>, Unspent) {
         let error = match outcome {
             Ok(Ran::Performed(performed)) => {
@@ -818,7 +870,7 @@ impl WriteEnding {
             // (a)): carried to the window's Git Error state for its skip, the ending git's
             // failure's.
             Err(Error::AmendNotMade { failure, unspent }) => {
-                let (ending, invalidated, _) = Self::of(Err(*failure), prompting);
+                let (ending, invalidated, _) = Self::of(Err(*failure), prompting, lock);
                 return (
                     ending,
                     invalidated,
@@ -829,96 +881,63 @@ impl WriteEnding {
             }
             Err(error) => error,
         };
-        // The engine's text of it, scrubbed there (R12.2): git's stderr is in the message, and a
-        // remote URL with a token in it is never drawn.
-        let message = message_of(&error, prompting);
-        let ending = match error {
-            Error::ChangedSinceRead { path } | Error::ChangedSinceConfirmed { path } => {
-                Self::Stale { path, message }
-            }
+        let said = || super::ending_words::sentence(&error);
+        let ending = match &error {
+            Error::ChangedSinceRead { path }
+            | Error::ChangedSinceConfirmed { path }
+            | Error::LockChangedSinceConfirmed { path } => Self::Stale {
+                path: path.clone(),
+                said: said(),
+            },
             Error::AmendChangedSinceConfirmed => Self::Stale {
                 path: "HEAD".to_owned(),
-                message,
+                said: said(),
+            },
+            // Create Branch's Discard re-checks `HEAD`, the commit and the name (R1.4).
+            Error::CheckoutChangedSinceConfirmed { what } => Self::Stale {
+                path: what.to_string(),
+                said: said(),
             },
             Error::Refused { .. }
             | Error::NoPaths
             | Error::CommitRefused { .. }
             | Error::CheckoutRefused { .. }
-            | Error::LockRefused { .. } => Self::Refused { message },
-            Error::LockChangedSinceConfirmed { path } => Self::Stale { path, message },
-            // Create Branch's Discard re-checks `HEAD`, the commit and the name (R1.4).
-            Error::CheckoutChangedSinceConfirmed { what } => Self::Stale {
-                path: what.to_string(),
-                message,
+            | Error::LockRefused { .. } => Self::Refused {
+                said: match prompting {
+                    Ok(()) => said(),
+                    Err(_) => Failure::of(&error, prompting, lock).said,
+                },
             },
-            Error::CommitCancelledBeforeRunning => Self::Cancelled {
-                message,
-                locks: Vec::new(),
-            },
+            Error::CommitCancelledBeforeRunning => Self::Cancelled { locks: Vec::new() },
             Error::GitCancelled { stranded_locks, .. } => Self::Cancelled {
-                message,
-                locks: stranded_locks,
-            },
-            // Cairn lost hold of its git (R4.7): a failure, which may have done its work in part.
-            Error::GitUnwatched { stranded_locks, .. } => Self::Failed {
-                message: format!(
-                    "{message}. The lists and history show anything it had already done."
-                ),
-                locks: stranded_locks,
-                command: None,
-                output: ScrubbedLines::new(),
-            },
-            Error::GitFailed {
-                arguments,
-                stderr,
-                present_locks,
-                ..
-            } => Self::Failed {
-                message,
-                locks: present_locks,
-                command: Some(format!("git {arguments}")),
-                output: stderr,
-            },
-            // Made, and then git failed (phase 13's QA item #1): a failure that says so, git's
-            // command and words kept for the dialog. How the window words it is phase 19's.
-            Error::MadeButGitFailed { failure, .. } => match *failure {
-                Error::GitFailed {
-                    arguments,
-                    stderr,
-                    present_locks,
-                    ..
-                } => Self::Failed {
-                    message,
-                    locks: present_locks,
-                    command: Some(format!("git {arguments}")),
-                    output: stderr,
-                },
-                _ => Self::Failed {
-                    message,
-                    locks: Vec::new(),
-                    command: None,
-                    output: ScrubbedLines::new(),
-                },
+                locks: stranded_locks.clone(),
             },
             Error::DiscardIncomplete {
-                performed, kept, ..
+                performed,
+                kept,
+                failure,
             } => {
+                let said = match kept.len() {
+                    0 => "Every file was discarded, but git failed afterwards.".to_owned(),
+                    1 => "1 file was left as it was; the rest were discarded.".to_owned(),
+                    n => format!("{n} files were left as they were; the rest were discarded."),
+                };
                 return (
                     Self::Incomplete {
-                        done: Done::of(&performed),
-                        kept,
-                        message,
+                        done: Done::of(performed),
+                        kept: kept.clone(),
+                        said,
+                        failure: failure
+                            .as_deref()
+                            .map(|failure| Failure::of(failure, prompting, lock)),
                     },
                     Some(performed.invalidated()),
                     Unspent::none(),
                 );
             }
-            _ => Self::Failed {
-                message,
-                locks: Vec::new(),
-                command: None,
-                output: ScrubbedLines::new(),
-            },
+            // git's failure, one beneath git, a commit made and then failed, one whose `HEAD`
+            // something else moved, Cairn losing hold of git (R4.7): each a failure, worded.
+            _ => Self::Failed(Failure::of(&error, prompting, lock)),
         };
         (ending, None, Unspent::none())
     }
@@ -1114,6 +1133,30 @@ impl LaneState {
         announce();
     }
 
+    /// Waits `after` before `id` runs again for the lock (F5) — a sleep on this, the lane's own
+    /// thread, in `slice`s — and lets go of the cancel its last attempt installed, so a cancel
+    /// that comes now is kept for the next attempt's checks; `false`, at once, once the
+    /// repository is closing, when the write is not run again.
+    fn wait_to_retry(&self, id: OperationId, after: Duration, slice: Duration) -> bool {
+        if let Some(running) = self
+            .lock()
+            .running
+            .as_mut()
+            .filter(|running| running.id == id)
+        {
+            running.cancel = None;
+        }
+        let mut waited = Duration::ZERO;
+        while waited < after {
+            if self.is_closing() {
+                return false;
+            }
+            std::thread::sleep(slice);
+            waited += slice;
+        }
+        !self.is_closing()
+    }
+
     /// The repository is closing: no write is started from now on.
     pub(super) fn close(&self) {
         self.lock().closing = true;
@@ -1157,21 +1200,11 @@ pub(super) struct Local<'a> {
     pub outbox: &'a Outbox,
 }
 
-/// The local lane's loop: until it is told to stop or every handle is gone. First, before
-/// any write it is sent, the lock files present as the repository opened — one a write left
-/// when a close gave up on it among them (R4.9) — so the window names them: a walk of every
-/// ref's directory, here rather than ahead of the repository's first answer, and stopped by a
-/// close.
+/// The local lane's loop: until it is told to stop or every handle is gone. A lock a write
+/// left when a close gave up on it (R4.9) is found by the leftover lock's `stat` on the next
+/// open's refresh (R12.4), not here.
 pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     let repo = shared.to_worker();
-    if let Some(locks) = shared.lock_files(&Closing(serving.lane))
-        && !locks.is_empty()
-    {
-        let index_lock = names_index_lock(&repo, &locks);
-        serving
-            .outbox
-            .send(None, Update::LocksAtOpen { locks, index_lock });
-    }
     let budget = Arc::new(AtomicUsize::new(0));
     while let Ok(job) = serving.jobs.recv() {
         match job {
@@ -1182,10 +1215,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     Update::WriteEnded {
                         id,
                         ending: WriteEnding::NotRun {
-                            message: format!(
-                                "{} was not started: the repository is closing",
-                                write.what()
-                            ),
+                            said: "The repository was closing.".to_owned(),
                         },
                         read_again: write.read_again(),
                         unspent: Unspent::none(),
@@ -1261,7 +1291,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     Ok(answer) => Ok(answer),
                     // Superseded by the next keystroke, or closing: nobody waits on it.
                     Err(Error::GitReadCancelled { .. }) => continue,
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => Err(super::ending_words::sentence(&error)),
                 };
                 serving
                     .outbox
@@ -1270,11 +1300,8 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
             LocalJob::LockConsequence { asked } => {
                 // Read now, at the press (the user's decision H): its age is current, and a git
                 // of Cairn's running is said rather than the offer lost.
-                let outcome = match ops::remove_lock_consequence(&repo) {
-                    Ok(consequence) => Ok(consequence),
-                    Err(Error::LockRefused { why }) => Err(why.to_string()),
-                    Err(error) => Err(error.to_string()),
-                };
+                let outcome = ops::remove_lock_consequence(&repo)
+                    .map_err(|error| super::ending_words::sentence(&error));
                 serving
                     .outbox
                     .send(None, Update::LockConsequence { asked, outcome });
@@ -1294,7 +1321,10 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     Err(Error::CheckoutRefused {
                         why: cairn_git::CheckoutRefusal::InProgress(operation),
                     }) => Err(CheckoutRefused::InProgress(operation)),
-                    Err(error) => Err(CheckoutRefused::Failed(error.to_string())),
+                    // One sentence, worded as every ending is (phase 14's QA item 16d).
+                    Err(error) => Err(CheckoutRefused::Failed(super::ending_words::sentence(
+                        &error,
+                    ))),
                 };
                 serving
                     .outbox
@@ -1396,48 +1426,17 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
 
 /// Why counting what a discard would lose refused, in one sentence for the "Couldn't Discard
 /// Changes" dialog, which adds "Nothing was changed." itself (R14.2; the user's decision of
-/// 2026-10-10 on phase 15's Q2): a file that moved while it was read says so — "src/a.rs changed
-/// while it was read." — and any other refusal is the engine's own words ([`Error::shown`]),
-/// their "; nothing was written" tail left to the dialog. Phase 19 gives every ending its
-/// sentence; this is the count's.
+/// 2026-10-10 on phase 15's Q2): worded as every ending is (`ending_words`), its path escaped —
+/// a file that moved while it was read says so.
 pub(super) fn refused_while_counting(error: &Error) -> String {
-    let sentence = match error {
-        Error::ChangedSinceRead { path } | Error::ContentReadsDisagree { path, .. } => {
-            format!("{path} changed while it was read")
+    match error {
+        Error::ChangedSinceRead { path } => {
+            format!(
+                "{} changed while it was read.",
+                cairn_model::shown_path(path)
+            )
         }
-        Error::Refused { path, why } => format!("{path}: {why}"),
-        Error::NoPaths => "No file was given".to_owned(),
-        // The engine's own words, which begin with its own word rather than a path.
-        _ => {
-            let shown = error.shown().to_string();
-            let words = shown
-                .strip_suffix("; nothing was written")
-                .or_else(|| shown.strip_suffix("; nothing was discarded"))
-                .unwrap_or(&shown);
-            let mut chars = words.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-                None => String::new(),
-            }
-        }
-    };
-    if sentence.ends_with('.') {
-        sentence
-    } else {
-        format!("{sentence}.")
-    }
-}
-
-/// `error`'s text as the window draws it — the engine's ([`Error::shown`], git's words in it
-/// scrubbed there, R12.2) — and, where no prompt could have been answered, why: a failure's own
-/// message ("terminal prompts disabled") does not say why nothing answered.
-pub(super) fn message_of(error: &Error, prompting: &Result<(), String>) -> String {
-    let shown = error.shown();
-    match prompting {
-        Ok(()) => shown.to_string(),
-        Err(why) => {
-            format!("{shown}. Cairn could not have asked for a credential in this session: {why}")
-        }
+        other => super::ending_words::sentence(other),
     }
 }
 
@@ -1445,13 +1444,6 @@ pub(super) fn message_of(error: &Error, prompting: &Result<(), String>) -> Strin
 /// and its output scrubbed of a URL's userinfo by the engine as it was recorded (R12.2, R4.10).
 pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<CommandRecord> {
     repo.commands_since(mark)
-}
-
-/// `Remove index.lock…`'s offer (R12.4): whether `locks` — an ending's, or the repository's
-/// as it opened — name `repo`'s own `index.lock`. What removing it would cost, and whether a git
-/// of Cairn's runs, is read when the offer is pressed (the user's decision H, 2026-10-09).
-pub(super) fn names_index_lock(repo: &Repository, locks: &[PathBuf]) -> bool {
-    locks.contains(&repo.git_dir().join("index.lock"))
 }
 
 /// The write's askpass operation, if one began, and what its ending says of prompting: the
@@ -1472,7 +1464,16 @@ fn no_token(why: &impl std::fmt::Display) -> String {
     format!("no askpass token could be made for this write ({why})")
 }
 
-/// Runs one write: announced, given its own askpass token, ended with what it did.
+/// How many times a write git refused for the lock is run again before its ending goes out
+/// (F5: "once or twice", as Fork retries, Tracker #1303).
+pub(super) const LOCK_RETRIES: usize = 2;
+/// How long the lane waits before running it again: about a second (F5).
+pub(super) const LOCK_RETRY_AFTER: Duration = Duration::from_secs(1);
+/// The slices the wait is slept in, so a close ends it within one.
+const LOCK_RETRY_SLICE: Duration = Duration::from_millis(50);
+
+/// Runs one write: announced, given its own askpass token, run again while git refuses it for a
+/// lock that stood from before the attempt began (F5, module docs), ended with what it did.
 fn run(
     repo: &Repository,
     id: OperationId,
@@ -1482,42 +1483,81 @@ fn run(
 ) {
     let commit = write.is_commit();
     let asked = write.read_again();
+    let lock = repo.git_dir().join("index.lock");
     // Where the command log stands: what this write runs on this thread from here is its own.
     let mark = repo.command_mark();
     serving.lane.begin(id, commit, || {
         serving.outbox.send(None, Update::WriteStarted { id })
     });
-    // One token for the whole write, retired before its ending goes out, so no helper of a
-    // git that is gone is accepted afterwards (L11).
-    // Named as the window names the write, so a prompt it raises is titled by it (R5.1).
+    // One token for the whole write, every attempt of it, retired before its ending goes out,
+    // so no helper of a git that is gone is accepted afterwards (L11).
+    // Named by the write's one name, so a prompt it raises is titled by it (R5.1, R14.2).
     // A token that could not be had is said in the ending, as a channel never opened is
     // (phase 04's QA item 11): a write that then fails for want of a prompt says why.
     let (authorised, prompting) = token_and_prompting(
         serving
             .channel
-            .map(|channel| channel.begin_for(crate::status_text::capitalised(&write.what()))),
+            .map(|channel| channel.begin_for(write.name())),
         serving.prompting,
     );
-    let outcome = write.perform(
-        serving.git,
-        repo,
-        authorised.as_ref().map(cairn_askpass::Operation::token),
-        &Watch {
-            lane: serving.lane,
-            id,
-            outbox: serving.outbox,
-            budget,
-        },
-    );
+    let watch = Watch {
+        lane: serving.lane,
+        id,
+        outbox: serving.outbox,
+        budget,
+    };
+    let mut write = write;
+    let mut retries = 0;
+    let outcome = loop {
+        let before = ops::index_lock_changed(repo);
+        let copy = write.token_free_copy();
+        let amend = write.amend_words();
+        let outcome = write.perform(
+            serving.git,
+            repo,
+            authorised.as_ref().map(cairn_askpass::Operation::token),
+            &watch,
+        );
+        // Run again only what git refused before writing: the lock stood from before this
+        // attempt began and is the same file now, so no git could have changed the index
+        // meanwhile (the phase's stopping rule).
+        let refused_for_the_lock = match &outcome {
+            Err(error) => failed_on_lock(error, &lock),
+            Ok(_) => false,
+        };
+        if retries == LOCK_RETRIES
+            || !refused_for_the_lock
+            || before.is_none()
+            || ops::index_lock_changed(repo) != before
+            || !serving
+                .lane
+                .wait_to_retry(id, LOCK_RETRY_AFTER, LOCK_RETRY_SLICE)
+        {
+            break outcome;
+        }
+        write = match (copy, amend, outcome) {
+            (Some(copy), _, _) => copy,
+            // A confirmed amend runs again with the token its failure handed back, unspent.
+            (None, Some((message, skip_hooks)), Err(Error::AmendNotMade { unspent, .. })) => {
+                LocalWrite::Amend {
+                    confirmed: *unspent,
+                    message,
+                    skip_hooks,
+                }
+            }
+            // A discard's token is spent by its attempt: it is not run again.
+            (_, _, outcome) => break outcome,
+        };
+        retries += 1;
+    };
     drop(authorised);
-    let (ending, invalidated, unspent) = WriteEnding::of(outcome, &prompting);
+    let (ending, invalidated, unspent) = WriteEnding::of(outcome, &prompting, &lock);
     let read_again = after(commit, asked, invalidated);
     serving.outbox.send(
         None,
         Update::OperationRan {
             by: RanBy::Write(id),
             commands: ran_since(repo, mark),
-            lock_named: names_index_lock(repo, ending.locks()),
         },
     );
     serving.lane.end(|| {
@@ -1563,7 +1603,7 @@ mod tests {
                 path: "dir".to_owned(),
                 why: cairn_git::Refusal::NotAFile
             }),
-            "dir: the path is not a file: a directory or a special file."
+            "dir is not a file."
         );
         assert_eq!(
             refused_while_counting(&Error::NoPaths),
@@ -1572,7 +1612,7 @@ mod tests {
         let other = refused_while_counting(&Error::ChangedSinceConfirmed {
             path: "a".to_owned(),
         });
-        assert_eq!(other, "A changed since you confirmed.");
+        assert_eq!(other, "a changed since you confirmed.");
         assert!(!other.contains("nothing was"), "{other}");
     }
 
@@ -1589,8 +1629,12 @@ mod tests {
         assert_eq!((began, fine), (Some(7), Ok(())));
         let (_, never) = token_and_prompting::<u8, &str>(None, &Err("no channel".to_owned()));
         assert_eq!(never, Err("no channel".to_owned()));
-        let (ending, _, _) = WriteEnding::of(Err(Error::NoPaths), &prompting);
-        let WriteEnding::Refused { message } = ending else {
+        let (ending, _, _) = WriteEnding::of(
+            Err(Error::NoPaths),
+            &prompting,
+            Path::new("/r/.git/index.lock"),
+        );
+        let WriteEnding::Refused { said: message } = ending else {
             panic!("{ending:?}");
         };
         assert!(
@@ -1650,39 +1694,38 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA (TC11): `Remove index.lock…` is offered only where the ending names the
-    /// stale `index.lock` — not for one naming only another lock, nor one naming none — though
-    /// the lock is there either way. Caught by: an offer made on the lock's presence alone.
+    /// F5 and R12.4: a write is refused "for the lock" — retried, and its Git Error offering the
+    /// lock's removal — only where git failed with `<gitdir>/index.lock` among the locks present
+    /// and its words name it: not for another lock present, not for a failure that does not name
+    /// it, and through a confirmed amend's hand-back. Caught by: an offer or a retry made on the
+    /// lock's presence alone, or on any lock.
     #[test]
-    fn the_lock_is_offered_only_where_the_ending_names_it() {
-        let dir = std::env::temp_dir().join(format!("cairn-lock-offer-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let program = cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
-            "/nonexistent/cairn-askpass",
-            None,
-        ))
-        .unwrap();
-        let status = std::process::Command::new(program.path())
-            .args(["init", "-q"])
-            .current_dir(&dir)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        let repo = SharedRepository::discover(&dir).unwrap().to_worker();
-        let index_lock = repo.git_dir().join("index.lock");
-        std::fs::write(&index_lock, b"").unwrap();
-        let head_lock = repo.git_dir().join("HEAD.lock");
-        assert!(
-            !names_index_lock(&repo, &[]),
-            "offered for an ending naming no lock"
-        );
-        assert!(
-            !names_index_lock(&repo, &[head_lock]),
-            "offered for an ending naming another lock"
-        );
-        assert!(names_index_lock(&repo, &[index_lock]));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn a_write_is_refused_for_the_lock_only_where_git_could_not_create_it() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let lock = Path::new("/r/.git/index.lock");
+        let failed = |stderr: &str, locks: &[&str]| Error::GitFailed {
+            arguments: "add -- a".to_owned(),
+            status: std::process::ExitStatus::from_raw(128 << 8),
+            stderr: ScrubbedLines::scrubbing(stderr),
+            present_locks: locks.iter().map(PathBuf::from).collect(),
+        };
+        let refused = "fatal: Unable to create '/r/.git/index.lock': File exists.";
+        assert!(failed_on_lock(
+            &failed(refused, &["/r/.git/index.lock"]),
+            lock
+        ));
+        assert!(!failed_on_lock(
+            &failed(refused, &["/r/.git/HEAD.lock"]),
+            lock
+        ));
+        assert!(!failed_on_lock(
+            &failed("fatal: pathspec did not match", &["/r/.git/index.lock"]),
+            lock
+        ));
+        assert!(!failed_on_lock(&Error::NoPaths, lock));
+        let failure = Failure::of(&failed(refused, &["/r/.git/index.lock"]), &Ok(()), lock);
+        assert!(failure.index_lock);
+        assert_eq!(failure.said, crate::worker::GIT_FAILED);
     }
 
     /// R12.2 and R4.10 at the lane: a failure's output is the engine's scrubbed lines, handed on
@@ -1700,13 +1743,17 @@ mod tests {
             stderr: output.clone(),
             present_locks: Vec::new(),
         };
-        let (ending, _, _) = WriteEnding::of(Err(failed), &Err("no channel".to_owned()));
-        let WriteEnding::Failed {
-            message,
+        let (ending, _, _) = WriteEnding::of(
+            Err(failed),
+            &Err("no channel".to_owned()),
+            Path::new("/r/.git/index.lock"),
+        );
+        let WriteEnding::Failed(Failure {
+            said: message,
             output: kept,
             command,
             ..
-        } = ending
+        }) = ending
         else {
             panic!("{ending:?}");
         };
@@ -1714,7 +1761,7 @@ mod tests {
         assert!(!kept.contains("TOKEN"), "{kept}");
         assert!(!message.contains("TOKEN"), "{message}");
         assert!(
-            message.ends_with("in this session: no channel"),
+            message.ends_with("in this session: no channel."),
             "{message}"
         );
         assert_eq!(command.as_deref(), Some("git commit -q -F -"));
@@ -1722,8 +1769,9 @@ mod tests {
             key: "remote.origin.url".to_owned(),
             value: "https://u:TOKEN@host/r".to_owned(),
         };
-        let (ending, _, _) = WriteEnding::of(Err(quoting), &Ok(()));
-        let WriteEnding::Failed { message, .. } = ending else {
+        let (ending, _, _) =
+            WriteEnding::of(Err(quoting), &Ok(()), Path::new("/r/.git/index.lock"));
+        let WriteEnding::Failed(Failure { said: message, .. }) = ending else {
             panic!("{ending:?}");
         };
         assert!(
@@ -1958,10 +2006,14 @@ mod tests {
                 path: "src/a.rs".to_owned(),
             }),
             &Ok(()),
+            Path::new("/r/.git/index.lock"),
         );
         assert_eq!(read, None);
         match stale {
-            WriteEnding::Stale { path, message } => {
+            WriteEnding::Stale {
+                path,
+                said: message,
+            } => {
                 assert_eq!(path, "src/a.rs");
                 assert!(message.contains("src/a.rs"), "{message}");
             }
@@ -1973,12 +2025,12 @@ mod tests {
                 stranded_locks: vec![lock.clone()],
             }),
             &Ok(()),
+            Path::new("/r/.git/index.lock"),
         );
         assert!(
             matches!(&cancelled, WriteEnding::Cancelled { locks, .. } if *locks == [lock.clone()]),
             "{cancelled:?}"
         );
-        assert_eq!(cancelled.locks(), std::slice::from_ref(&lock));
         let (lost, _, _) = WriteEnding::of(
             Err(Error::GitUnwatched {
                 arguments: "commit".to_owned(),
@@ -1986,9 +2038,14 @@ mod tests {
                 stranded_locks: vec![lock.clone()],
             }),
             &Ok(()),
+            Path::new("/r/.git/index.lock"),
         );
         match &lost {
-            WriteEnding::Failed { message, locks, .. } => {
+            WriteEnding::Failed(Failure {
+                said: message,
+                locks,
+                ..
+            }) => {
                 assert!(
                     message.ends_with("The lists and history show anything it had already done."),
                     "{message}"
@@ -2006,12 +2063,14 @@ mod tests {
                 present_locks: Vec::new(),
             }),
         };
-        match WriteEnding::of(Err(landed), &Ok(())).0 {
-            WriteEnding::Failed {
-                message, command, ..
-            } => {
+        match WriteEnding::of(Err(landed), &Ok(()), Path::new("/r/.git/index.lock")).0 {
+            WriteEnding::Failed(Failure {
+                said: message,
+                command,
+                ..
+            }) => {
                 assert!(
-                    message.starts_with("git committed, but then failed"),
+                    message.starts_with("The commit was made, but git failed afterwards."),
                     "{message}"
                 );
                 assert_eq!(command.as_deref(), Some("git commit -q -F -"));
@@ -2023,12 +2082,20 @@ mod tests {
             published: cairn_model::Publication::SomeRemote,
             reflog: cairn_model::Reflog::Written,
         };
-        let (asked, read, _) = WriteEnding::of(Ok(Ran::NeedsConfirming(amend.clone())), &Ok(()));
+        let (asked, read, _) = WriteEnding::of(
+            Ok(Ran::NeedsConfirming(amend.clone())),
+            &Ok(()),
+            Path::new("/r/.git/index.lock"),
+        );
         assert_eq!(asked, WriteEnding::NeedsConfirming { consequence: amend });
         assert_eq!(read, Some(Invalidated::NOTHING));
-        let (refused, _, _) = WriteEnding::of(Err(Error::NoPaths), &Err("no socket".to_owned()));
+        let (refused, _, _) = WriteEnding::of(
+            Err(Error::NoPaths),
+            &Err("no socket".to_owned()),
+            Path::new("/r/.git/index.lock"),
+        );
         match refused {
-            WriteEnding::Refused { message } => {
+            WriteEnding::Refused { said: message } => {
                 assert!(message.contains("no socket"), "{message}");
             }
             other => panic!("{other:?}"),
@@ -2038,19 +2105,28 @@ mod tests {
                 why: cairn_git::CommitRefusal::InProgress(cairn_model::OperationInProgress::Rebase),
             }),
             &Ok(()),
+            Path::new("/r/.git/index.lock"),
         );
         assert!(
-            matches!(&refused, WriteEnding::Refused { message } if message.contains("a rebase")),
+            matches!(&refused, WriteEnding::Refused { said } if said.contains("rebase is in progress")),
             "{refused:?}"
         );
-        let (moved, _, _) = WriteEnding::of(Err(Error::AmendChangedSinceConfirmed), &Ok(()));
+        let (moved, _, _) = WriteEnding::of(
+            Err(Error::AmendChangedSinceConfirmed),
+            &Ok(()),
+            Path::new("/r/.git/index.lock"),
+        );
         assert!(
             matches!(&moved, WriteEnding::Stale { path, .. } if path == "HEAD"),
             "{moved:?}"
         );
-        let (early, _, _) = WriteEnding::of(Err(Error::CommitCancelledBeforeRunning), &Ok(()));
+        let (early, _, _) = WriteEnding::of(
+            Err(Error::CommitCancelledBeforeRunning),
+            &Ok(()),
+            Path::new("/r/.git/index.lock"),
+        );
         assert!(
-            matches!(&early, WriteEnding::Cancelled { message, locks } if message.contains("before git ran") && locks.is_empty()),
+            matches!(&early, WriteEnding::Cancelled { locks } if locks.is_empty()),
             "a commit cancelled before git ran was not a cancel: {early:?}"
         );
         assert_eq!(

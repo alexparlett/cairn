@@ -525,12 +525,12 @@ fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
     until_the_stream_ends(&mut updates, CLOSE_BOUND);
 }
 
-/// Phase 11's QA (TC11), the fetch's half: a fetch that fails while a stale `index.lock` is
-/// there, no git of Cairn's running once it ends, offers its removal with what it ran; and none
-/// is offered for a fetch that ends with no lock named. Caught by: the network lane's offer
-/// never computed, or computed whatever its ending named.
+/// R12.4, F5: a fetch git refused offers the lock's removal in its Git Error only where git
+/// could not create `index.lock` — a fetch takes no index lock, so a stale one there is never
+/// offered from it; the leftover lock's banner is the repository's. Caught by: the offer made on
+/// the lock's presence alone.
 #[test]
-fn a_failed_fetch_naming_a_stale_index_lock_offers_its_removal() {
+fn a_failed_fetch_offers_no_removal_for_a_lock_it_did_not_fail_on() {
     for stale in [true, false] {
         let stub = StubGit::new("  echo 'fatal: refused' >&2\n  exit 128");
         let fixture = with_origin(
@@ -548,10 +548,10 @@ fn a_failed_fetch_naming_a_stale_index_lock_offers_its_removal() {
         });
         let seen = collect_until(&mut updates, |u| matches!(u, Update::FetchFailed { .. }));
         let offered = seen.iter().find_map(|update| match update {
-            Update::OperationRan { lock_named, .. } => Some(*lock_named),
+            Update::FetchFailed { failure, .. } => Some(failure.index_lock),
             _ => None,
         });
-        assert_eq!(offered, Some(stale), "stale={stale}: {seen:?}");
+        assert_eq!(offered, Some(false), "stale={stale}: {seen:?}");
         handle.submit(Request::Close);
         until_the_stream_ends(&mut updates, CLOSE_BOUND);
     }

@@ -569,17 +569,18 @@ fn a_detached_head_commits_under_one_line() {
 }
 
 /// A commit's failure as the local lane hands it on: git's output as the engine kept it, and the
-/// message the engine's text of the error (`Error::shown`), both scrubbed there.
+/// Fork's sentence.
 fn failed(id: OperationId, command: &str, output: &str) -> Update {
     let output = ScrubbedLines::scrubbing(output);
     Update::WriteEnded {
         id,
-        ending: WriteEnding::Failed {
-            message: format!("{command} failed (exit status: 1): {output}"),
-            locks: Vec::new(),
+        ending: WriteEnding::Failed(crate::worker::Failure {
+            said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
             command: Some(command.to_owned()),
             output,
-        },
+            locks: Vec::new(),
+            index_lock: false,
+        }),
         read_again: crate::worker::ReadAgain::Everything,
         unspent: crate::worker::Unspent::none(),
     }
@@ -770,6 +771,60 @@ fn every_failed_commit_offers_the_skip() {
     assert_eq!(draft(view).0, "No identity");
 }
 
+/// R14.8 and phase 14's QA item 7: one modal state — a commit's Git Error that arrives while
+/// Create Branch is up (New Branch is not inert while a commit's hook runs) is drawn over it,
+/// alone, so Escape closes the top one, the Git Error, and Create Branch is drawn again as it
+/// was left; a second Escape closes Create Branch. And the window's chords are inert under
+/// each. Caught by: the Git Error beneath the visible dialog taking Escape first, or both closed
+/// by one press.
+#[test]
+fn a_commits_git_error_beneath_create_branch_is_on_top_and_escape_closes_it_alone() {
+    let (mut test, view, submitted) = opened();
+    set(&mut test, view.local.commit.subject, "Hooked");
+    click(&mut test, "Commit 1 File");
+    let id = writes(&submitted)[0].0;
+    test.run_in(|| crate::create_branch::open(view, oid(0xab), "A commit".to_owned()));
+    settle(&mut test);
+    assert!(
+        drawn(&test, cairn_ui::CREATE_BRANCH_TITLE),
+        "{:?}",
+        labels(&test)
+    );
+    assert_eq!(
+        crate::modal::modal(view),
+        Some(crate::modal::Modal::CreateBranch)
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        failed(id, "git commit -q -F -", "lint failed"),
+    );
+    assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
+    assert!(
+        !drawn(&test, cairn_ui::CREATE_BRANCH_TITLE),
+        "Create Branch drawn beside the Git Error over it"
+    );
+    assert_eq!(
+        crate::modal::modal(view),
+        Some(crate::modal::Modal::CommitError)
+    );
+    assert!(crate::shortcuts::keys_inert(view));
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(!drawn(&test, GIT_ERROR_TITLE), "Escape left the Git Error");
+    assert!(
+        drawn(&test, cairn_ui::CREATE_BRANCH_TITLE),
+        "Escape closed Create Branch with the Git Error"
+    );
+    assert!(crate::shortcuts::keys_inert(view));
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(!drawn(&test, cairn_ui::CREATE_BRANCH_TITLE));
+    assert_eq!(crate::modal::modal(view), None);
+    assert!(!crate::shortcuts::keys_inert(view));
+}
+
 /// R10.4, C5 and R4.3: a commit asked behind a write that runs waits, its button's place saying
 /// what it waits for in the one form every queued write uses, with no Cancel; once it runs it
 /// reads "Committing 0:00" with its Cancel, which cancels it by its id and nothing else, and then
@@ -793,7 +848,7 @@ fn cancel_reaches_only_the_running_commit() {
     click(&mut test, "Commit 1 File");
     let commit = writes(&submitted)[1].0;
     assert!(
-        drawn(&test, "Waiting for staging to finish…"),
+        drawn(&test, "Waiting for Stage 1 file…"),
         "{:?}",
         labels(&test)
     );
@@ -831,10 +886,7 @@ fn cancel_reaches_only_the_running_commit() {
         &submitted,
         Update::WriteEnded {
             id: commit,
-            ending: WriteEnding::Cancelled {
-                message: "cancelled".to_owned(),
-                locks: Vec::new(),
-            },
+            ending: WriteEnding::Cancelled { locks: Vec::new() },
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },

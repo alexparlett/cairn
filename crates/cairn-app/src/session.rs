@@ -6,7 +6,7 @@ use std::sync::Arc;
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
-use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
+use crate::fetch_state::{FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
 use crate::worker::{PromptId, ReadAgain, Refreshed, Request, Retired, Update, expanded_diffs};
@@ -39,7 +39,6 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut fetch,
         mut prompt,
         mut remotes,
-        mut refused,
         mut diff,
         mut refreshed,
         mut repository,
@@ -69,14 +68,14 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
-        Update::LocksAtOpen { locks, index_lock } => {
-            // An entry of their own in the activity popover (the user's decision H).
-            activity.write().locks_at_open(&locks, index_lock);
-            writes.write().locks_at_open(locks);
+        // The leftover lock's stat, from every refresh (R12.4, F6).
+        Update::IndexLock { changed } => {
+            let mut lock = view.lock;
+            lock.write().stated(changed);
         }
         // What removing the stale lock would cost, read at the press (the user's decision H).
         Update::LockConsequence { asked, outcome } => {
-            activity.write().lock_answered(asked, outcome);
+            crate::leftover_lock::answered(view, asked, outcome);
         }
         // What a discard would lose, for the confirmation Local Changes opened at the press
         // (R7.4, R8.4): kept only for the discard asked last and only while that confirmation is
@@ -112,17 +111,13 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
         }
         // What an operation ran, for the activity popover (R12.1).
-        Update::OperationRan {
-            by,
-            commands,
-            lock_named,
-        } => {
+        Update::OperationRan { by, commands } => {
             let key = match by {
                 crate::worker::RanBy::Write(id) => Some(crate::activity::ActivityKey::Write(id)),
                 crate::worker::RanBy::Fetch => activity.peek().fetch_key(),
             };
             if let Some(key) = key {
-                activity.write().ran(key, &commands, lock_named);
+                activity.write().ran(key, &commands);
             }
         }
         Update::FetchFinished { remote } => {
@@ -135,30 +130,32 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Finished { remote });
             refresh_after_an_operation(worker);
         }
-        Update::FetchCancelled {
-            remote,
-            stranded_locks,
-        } => {
+        // A cancel opens nothing (R14.5).
+        Update::FetchCancelled { remote } => {
             activity
                 .write()
                 .fetch_ended(&remote, crate::activity::Outcome::Cancelled);
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
-            fetch.set(FetchStatus::Cancelled {
-                remote,
-                stranded_locks,
-            });
+            fetch.set(FetchStatus::Cancelled { remote });
             refresh_after_an_operation(worker);
         }
-        Update::FetchFailed { remote, message } => {
-            activity
-                .write()
-                .fetch_ended(&remote, crate::activity::Outcome::Failed(message.clone()));
+        // git's failure opens its Git Error, as every operation the person started does (R14.3).
+        Update::FetchFailed { remote, failure } => {
+            activity.write().fetch_ended(
+                &remote,
+                crate::activity::Outcome::Failed(failure.said.clone()),
+            );
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
-            fetch.set(FetchStatus::Failed { remote, message });
+            let mut endings = view.endings;
+            endings.write().push(crate::ending_dialog::of_failure(
+                &format!("Fetch {remote}"),
+                &failure,
+            ));
+            fetch.set(FetchStatus::Failed { remote });
             refresh_after_an_operation(worker);
         }
         Update::WriteStarted { id } => {
@@ -188,8 +185,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             } else {
                 worker.submit
             };
-            crate::commit_box_pane::write_ended(id, &ending, &mut unspent, view, asking);
-            crate::create_branch::write_ended(view, id, &ending);
+            let the_boxs =
+                crate::commit_box_pane::write_ended(id, &ending, &mut unspent, view, asking);
+            crate::create_branch::write_ended(view, id, &ending, asking);
             // A write that never started is named as it was asked (the user's decision N), and
             // a destructive one quotes the prompt it was asked with however it ended (R12.1).
             let asked = {
@@ -200,8 +198,20 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                     .find(|asked| asked.id == id)
                     .cloned()
             };
+            // Every ending to its one home (R14): the commit box's Git Error is its own; any
+            // other failure or refusal waits its turn in the endings' dialog, by the write's one
+            // name; a success or a cancel opens nothing.
+            if !the_boxs {
+                let name = asked
+                    .as_ref()
+                    .map_or_else(|| "A write".to_owned(), |asked| asked.name.clone());
+                if let Some(shown) = crate::ending_dialog::of_write(&name, &ending) {
+                    let mut endings = view.endings;
+                    endings.write().push(shown);
+                }
+            }
             activity.write().write_ended(id, &ending, asked.as_ref());
-            writes.write().ended(id, ending);
+            writes.write().ended(id);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
             }
@@ -290,10 +300,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = sidebar.write().rows_arrived(refs, rows);
             retire(replaced, worker);
         }
-        // Beside the fetch in flight, which it leaves as it was; the next press clears it.
-        Update::FetchRefused { remote, reason } => {
-            refused.set(Some(FetchRefusal { remote, reason }));
-        }
+        // Never drawn: Fetch is greyed while a fetch runs (F9), so only a second press racing
+        // the first's start reaches the lane's refusal, and the fetch in flight says the rest.
+        Update::FetchRefused { .. } => {}
         // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
         Update::CommandLog { .. } => {}
         // A fetch's, or a local write's — a hook, a signing key, an LFS filter (R5.1).
@@ -518,7 +527,8 @@ mod tests {
                         fetch: State::create(fetch),
                         prompt: State::create(None),
                         remotes: State::create(Vec::new()),
-                        refused: State::create(None),
+                        endings: State::create(Default::default()),
+                        lock: State::create(Default::default()),
                         diff: State::create(crate::diff_state::DiffState::default()),
                         filter_text: State::create(String::new()),
                         changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
@@ -878,11 +888,18 @@ mod tests {
             },
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
-                stranded_locks: Vec::new(),
             },
             Update::FetchFailed {
                 remote: "origin".to_owned(),
-                message: "some local refs could not be updated".to_owned(),
+                failure: crate::worker::Failure {
+                    said: cairn_ui::GIT_ERROR_TEXT.to_owned(),
+                    command: Some("git fetch --progress origin".to_owned()),
+                    output: cairn_model::ScrubbedLines::scrubbing(
+                        "error: some local refs could not be updated",
+                    ),
+                    locks: Vec::new(),
+                    index_lock: false,
+                },
             },
         ]
     }
@@ -943,27 +960,34 @@ mod tests {
         }
     }
 
-    /// Caught by: dropping the paths between the worker and the banner, which is the one
-    /// hop nothing else pins.
+    /// R14.3, R14.5: a fetch cancelled opens nothing, and one git failed opens its Git Error,
+    /// named for the fetch, with its command. Caught by: a cancel drawn, or a fetch's failure
+    /// said anywhere but its dialog.
     #[test]
-    fn a_cancelled_fetch_hands_the_lock_files_it_found_to_the_banner() {
-        let lock = std::path::PathBuf::from("/r/.git/refs/remotes/origin/main.lock");
+    fn a_cancelled_fetch_opens_nothing_and_a_failed_one_its_git_error() {
         let (test, view, asked) = launch(running());
-        applying(
-            &test,
-            view,
-            &asked,
-            Update::FetchCancelled {
-                remote: "origin".to_owned(),
-                stranded_locks: vec![lock.clone()],
-            },
-        );
+        let [_, cancelled, failed] = fetch_endings();
+        applying(&test, view, &asked, cancelled);
         assert_eq!(
             *view.fetch.read(),
             FetchStatus::Cancelled {
                 remote: "origin".to_owned(),
-                stranded_locks: vec![lock],
             }
+        );
+        assert!(view.endings.read().is_empty(), "a cancel opened a dialog");
+        let (test, view, asked) = launch(running());
+        applying(&test, view, &asked, failed);
+        let endings = view.endings.read();
+        let shown = endings.shown().cloned();
+        assert_eq!(
+            shown.as_ref().map(|shown| shown.title.as_str()),
+            Some(cairn_ui::GIT_ERROR_TITLE)
+        );
+        assert_eq!(
+            shown
+                .and_then(|shown| shown.details)
+                .map(|(command, _)| command),
+            Some("git fetch --progress origin".to_owned())
         );
     }
 
@@ -1018,7 +1042,7 @@ mod tests {
             Update::WriteEnded {
                 id,
                 ending: crate::worker::WriteEnding::Refused {
-                    message: "nothing selected".to_owned(),
+                    said: "nothing selected".to_owned(),
                 },
                 read_again,
                 unspent: crate::worker::Unspent::none(),
@@ -1103,30 +1127,22 @@ mod tests {
         }
     }
 
-    /// R4.9: the lock files present as the repository opened are kept for the window to name.
+    /// R12.4: the leftover lock's stat is kept for its banner, and a refused fetch — which the
+    /// greyed Fetch never asks — changes nothing. Caught by: the stat dropped between the worker
+    /// and the banner, or a refusal ending the fetch in flight.
     #[test]
-    fn the_locks_found_as_the_repository_opened_are_kept_for_the_window() {
-        let lock = std::path::PathBuf::from("/r/.git/index.lock");
-        let (test, view, asked) = launch(FetchStatus::Idle);
+    fn the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing() {
+        let (test, view, asked) = launch(running());
+        let changed = std::time::SystemTime::UNIX_EPOCH;
         applying(
             &test,
             view,
             &asked,
-            Update::LocksAtOpen {
-                locks: vec![lock.clone()],
-                index_lock: true,
+            Update::IndexLock {
+                changed: Some(changed),
             },
         );
-        assert_eq!(view.writes.read().locks(), [lock]);
-        assert!(asked.submitted.borrow().is_empty());
-    }
-
-    /// PRD R7.2, the hop between the worker and the window: a refusal lands in the view
-    /// for the banner, and the fetch in flight is left as it was. Caught by: dropping the
-    /// update, or letting it end or replace the fetch that is running.
-    #[test]
-    fn a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched() {
-        let (test, view, asked) = launch(running());
+        assert_eq!(view.lock.read().changed(), Some(changed));
         applying(
             &test,
             view,
@@ -1136,16 +1152,12 @@ mod tests {
                 reason: "a fetch of origin is already running".to_owned(),
             },
         );
-        assert_eq!(
-            *view.refused.read(),
-            Some(FetchRefusal {
-                remote: "origin".to_owned(),
-                reason: "a fetch of origin is already running".to_owned(),
-            })
-        );
         assert_eq!(*view.fetch.read(), running(), "the fetch in flight changed");
+        assert!(view.endings.read().is_empty());
         assert!(asked.submitted.borrow().is_empty());
         assert!(asked.refused.borrow().is_empty());
+        applying(&test, view, &asked, Update::IndexLock { changed: None });
+        assert_eq!(view.lock.read().changed(), None);
     }
 
     #[test]

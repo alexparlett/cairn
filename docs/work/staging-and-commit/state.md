@@ -45,7 +45,9 @@ stopping rule triggered; see "Phase 16" below. QA is the coordinator's. Phase 17
 diff) built in packet mode, full gate green, neither stopping rule triggered, nothing for the
 user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below. Phase 18 (the commit
 box rebuilt) built in packet mode, full gate green, its stopping rule not triggered; see "Phase 18"
-below. QA is the coordinator's.**
+below. QA is the coordinator's. Phase 19 (one home for each message) built in packet mode, its
+code steps 1-5 done, `gate.sh --fast` green; the full gate, step 5's docs and the carried items
+below are open; see "Phase 19" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -89,6 +91,50 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 19 of the rebuild, one home for each message (2026-10-11) — PARTLY DONE
+
+- **Built** (code, `gate.sh --fast` green; tip after `ae55496`): (1) one name — `LocalWrite::name`
+  alone (`what`, `awaited`, `Asked.what/awaited`, `UNKNOWN_WRITE`, `status_text::capitalised` gone);
+  `WriteEnding` carries `said` worded on the lane from the typed error (`worker/ending_words.rs`),
+  `Failed(Failure { said, command, output, locks, index_lock })`; engine tails gone;
+  `cairn_model::shown_path` escapes every path (#3, U1); MadeButGitFailed "The commit was made, but
+  git failed afterwards. The history shows it."; CommitUnconfirmed worded. (2) progress —
+  `cairn_ui::StatusBox::running`, spinner + name after 250 ms (`PROGRESS_AFTER`, a toolkit timer),
+  " · N waiting", a fetch's progress line; Fetch greyed in flight; fetch_line/refusal_line/locks_line
+  and the banners gone (the history page failure is the list's own line). (3) dialogs —
+  `crate::ending_dialog` (`Endings`, oldest first): Git Error, "Couldn't <name>" + "Nothing was
+  changed." once, a partly done discard's Show files; Create Branch's own error and the empty-command
+  mapping gone; a Stale Discard re-asks its consequence (item 13); `name_refusal`'s clash quotes git
+  (16c); `CheckoutRefused::Failed` worded (16d, 16e). (4) `crate::modal` — one modal on top, only it
+  drawn; `keys_inert` reads it; `dialog_open` gone; item 7 pinned by
+  `a_commits_git_error_beneath_create_branch_is_on_top_and_escape_closes_it_alone`. (5) the leftover
+  lock — the refresh thread stats `<gitdir>/index.lock` (`ops::index_lock_changed`,
+  `Update::IndexLock`), `crate::leftover_lock` banner (`cairn_ui::LockBanner`, ≥10 s, no write or
+  fetch busy), Remove index.lock… in the Git Error, "Remove Stale Lock" over the consequence read at
+  the press, never a retry of the write; the lane retries a write git refused for a lock that stood
+  throughout the attempt, `LOCK_RETRIES` = 2, `LOCK_RETRY_AFTER` = 1 s (a sleep on the lane in 50 ms
+  slices); closing line "Closing after <name> finishes. Close again to quit now.". The popover's lock
+  row, `ActivityKey::Opened`, `LocksAtOpen`, `lock_named`, `LockOffer`, Outcome's extra words gone.
+- **Pinned**: `a_path_shown_in_a_sentence_is_c_quoted_where_it_could_reshape_it`,
+  `the_leftover_lock_is_its_time_while_it_is_a_file_and_nothing_otherwise`,
+  `a_sentence_names_its_path_escaped_and_ends_once`, `every_ending_has_exactly_one_home`,
+  `the_workers_words_are_the_dialogs`, `a_write_refused_for_the_lock_offers_its_removal_through_the_confirmation`,
+  `the_leftover_lock_banner_shows_exactly_while_it_should`,
+  `a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation`,
+  `a_write_refused_for_a_lock_let_go_of_runs_again_and_writes_once`,
+  `a_write_is_refused_for_the_lock_only_where_git_could_not_create_it`,
+  `the_closing_line_names_the_write_by_its_one_name`, `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`,
+  `the_status_box_is_handed_what_runs_by_its_one_name`, `fetch_is_greyed_while_a_fetch_is_in_flight`.
+- **Open (carried)**: the full `scripts/gate.sh`; step 5's docs (`docs/systems/git-processes.md`,
+  `local-changes.md`, the root `CLAUDE.md` status paragraph, its UI-thread residuals — the status
+  box's and the lock banner's timers, `Request::LockConsequence` from the banner — and repo-map
+  rows for `ending_dialog.rs`, `leftover_lock.rs`, `modal.rs`, `worker/ending_words.rs`,
+  `cairn-ui/src/lock_banner.rs`); PRD R7.2's Escape site list unchanged (no new site); a discard's
+  write is not retried for the lock (its token is spent by the attempt — engine hand-back needed);
+  a cairn-ui headless test of the 250 ms delay. Decided here: the popover is not drawn while a
+  dialog is over it; an amend asking to be confirmed leaves no activity entry; a refusal, a stale
+  write, one never run and a partly done discard are "failed" in the popover.
 
 ## Phase 18 of the rebuild, the commit box (2026-10-11)
 

@@ -82,15 +82,21 @@ pub enum LocalChoice {
 }
 
 /// Why a name typed cannot be a new branch's, as the dialog says it beside its buttons: Fork's
-/// words for a name taken ("Branch test already exists"), decision F's for `@{`, and git's own
-/// for a name it refuses or a ref it cannot lock beside a branch.
+/// words for a name taken, verbatim ("Branch test already exists",
+/// `fork-create-branch-evidence.md`), decision F's for `@{`, and git's own, verbatim, for a name
+/// it refuses or a ref it cannot lock beside a branch ("cannot lock ref 'refs/heads/a/b':
+/// 'refs/heads/a' exists; cannot create 'refs/heads/a/b'", as `git branch` says it; phase 14's QA
+/// item 16c).
 pub fn name_refusal(name: &str, why: &NameRefusal) -> String {
     match why {
         NameRefusal::AtBrace => "A branch name can't contain '@{'".to_owned(),
         NameRefusal::Invalid { reason } => reason.clone(),
         NameRefusal::Taken => format!("Branch {name} already exists"),
         NameRefusal::InsideABranch { branch } | NameRefusal::HoldsABranch { branch } => {
-            format!("'{branch}' exists; cannot create 'refs/heads/{name}'")
+            format!(
+                "cannot lock ref 'refs/heads/{name}': '{branch}' exists; cannot create \
+                 'refs/heads/{name}'"
+            )
         }
     }
 }

@@ -1,10 +1,11 @@
 //! Headless tests for the activity popover (staging-and-commit R12.1): its operations and the
 //! selected one's lines are each drawn through a virtualizing view, so a session of many
 //! operations and a `git` that said a hundred thousand lines build one viewport of rows each;
-//! a press on an operation, its cancel, the way back and `Remove index.lock…` each report; it
-//! hangs from the status box inside the window (the user's decision A, 2026-10-09); the lock's
-//! removal stays drawn while it cannot be pressed, saying why (H); and a long confirmed prompt is
-//! cut to four lines, Show All making the whole of it reachable (K).
+//! a press on an operation, its cancel and the way back each report, and no entry offers
+//! `Remove index.lock…` any more (staging-and-commit phase 19: the leftover lock is the
+//! repository's banner); it hangs from the status box inside the window (the user's decision A,
+//! 2026-10-09); and a long confirmed prompt is cut to four lines, Show All making the whole of it
+//! reachable (K).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,8 +13,8 @@ use std::rc::Rc;
 use cairn_model::Oid;
 use cairn_ui::{
     ACTIVITY_TITLE, ActivityEntry, ActivityLine, ActivityPopover, CANCEL_OPERATION_CAPTION,
-    ENTRY_ROW_HEIGHT, LINE_ROW_HEIGHT, LockOffer, REMOVE_LOCK_CAPTION, SHOW_ALL_CAPTION,
-    SHOW_LESS_CAPTION, SHOW_REPLACED_CAPTION,
+    ENTRY_ROW_HEIGHT, LINE_ROW_HEIGHT, REMOVE_LOCK_CAPTION, SHOW_ALL_CAPTION, SHOW_LESS_CAPTION,
+    SHOW_REPLACED_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -52,7 +53,6 @@ fn entry(n: usize, lines: Rc<Vec<ActivityLine>>) -> ActivityEntry {
         message: None,
         prompt: None,
         replaced: None,
-        lock: None,
         cancellable: false,
         lines,
     }
@@ -63,7 +63,6 @@ struct Heard {
     selected: Rc<RefCell<Vec<usize>>>,
     cancelled: Rc<RefCell<Vec<usize>>>,
     replaced: Rc<RefCell<Vec<Oid>>>,
-    removed: Rc<RefCell<Vec<usize>>>,
     closed: Rc<RefCell<usize>>,
 }
 
@@ -87,7 +86,6 @@ fn launch_hung(
                     selected,
                     cancelled,
                     replaced,
-                    removed,
                     closed,
                 } = heard.clone();
                 rect().expanded().child(
@@ -96,7 +94,6 @@ fn launch_hung(
                         .on_select(move |at| selected.borrow_mut().push(at))
                         .on_cancel(move |at| cancelled.borrow_mut().push(at))
                         .on_replaced(move |commit| replaced.borrow_mut().push(commit))
-                        .on_remove_lock(move |at| removed.borrow_mut().push(at))
                         .on_close(move |()| *closed.borrow_mut() += 1),
                 )
             }
@@ -150,9 +147,8 @@ fn the_popover_builds_one_viewport_of_operations_and_of_lines() {
 }
 
 /// Each control reports what it is for: a press on an operation its place, a running one's
-/// cancel its place, the way back the replaced commit, `Remove index.lock…` its place;
-/// a press outside closes it, and neither the way back nor the removal is drawn where the entry
-/// has none. Caught by: a control wired to another's handler, or drawn whatever the entry says.
+/// cancel its place, the way back the replaced commit; a press outside closes it, the way back
+/// is drawn only where the entry has one, and `Remove index.lock…` nowhere (phase 19). Caught by: a control wired to another's handler, or drawn whatever the entry says.
 #[test]
 fn each_control_reports_what_it_is_for() {
     let replaced = Oid::from_bytes(&[0xcd; 20]).unwrap_or_else(|e| panic!("{e}"));
@@ -160,7 +156,6 @@ fn each_control_reports_what_it_is_for() {
     let entries = Rc::new(vec![
         ActivityEntry {
             replaced: Some(replaced),
-            lock: Some(LockOffer::Ready { note: None }),
             prompt: Some("Amend cdcdcdc?".to_owned()),
             ..entry(0, Rc::clone(&none))
         },
@@ -174,8 +169,12 @@ fn each_control_reports_what_it_is_for() {
     assert!(labels(&test).iter().any(|label| label == "Amend cdcdcdc?"));
     click(&mut test, SHOW_REPLACED_CAPTION);
     assert_eq!(*heard.replaced.borrow(), [replaced]);
-    click(&mut test, REMOVE_LOCK_CAPTION);
-    assert_eq!(*heard.removed.borrow(), [0]);
+    assert!(
+        !labels(&test)
+            .iter()
+            .any(|label| label == REMOVE_LOCK_CAPTION),
+        "the popover offers the lock's removal"
+    );
     click(&mut test, "Operation 1");
     assert_eq!(*heard.selected.borrow(), [1]);
     click(&mut test, CANCEL_OPERATION_CAPTION);
@@ -274,40 +273,6 @@ fn the_popover_hangs_from_the_status_box_inside_the_window() {
         rightmost <= 600.,
         "drawn to {rightmost} in a window 600 wide"
     );
-}
-
-/// The user's decision H (2026-10-09): `Remove index.lock…` stays drawn while a `git` of
-/// Cairn's runs, saying why, and its press reports nothing; offered, a refusal of the last press
-/// is said beside it and it can be pressed again. Caught by: an offer that vanishes while a git
-/// runs, or one pressable when it cannot go ahead.
-#[test]
-fn the_lock_removal_says_why_it_cannot_be_pressed() {
-    let none = Rc::new(Vec::new());
-    let (mut test, heard) = launch(Rc::new(vec![ActivityEntry {
-        lock: Some(LockOffer::Blocked("Cairn is running git".to_owned())),
-        ..entry(0, Rc::clone(&none))
-    }]));
-    assert!(
-        labels(&test)
-            .iter()
-            .any(|label| label == "Cairn is running git")
-    );
-    click(&mut test, REMOVE_LOCK_CAPTION);
-    assert!(heard.removed.borrow().is_empty(), "pressed while blocked");
-
-    let (mut test, heard) = launch(Rc::new(vec![ActivityEntry {
-        lock: Some(LockOffer::Ready {
-            note: Some("index.lock is no longer there".to_owned()),
-        }),
-        ..entry(0, none)
-    }]));
-    assert!(
-        labels(&test)
-            .iter()
-            .any(|label| label == "index.lock is no longer there")
-    );
-    click(&mut test, REMOVE_LOCK_CAPTION);
-    assert_eq!(*heard.removed.borrow(), [0]);
 }
 
 /// The user's decision K (2026-10-09): a confirmed prompt longer than four lines is cut to them,

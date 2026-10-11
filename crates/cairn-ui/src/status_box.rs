@@ -5,7 +5,16 @@
 //! gone. A detached `HEAD` names its short id, an unborn branch its name and that it has no
 //! commit yet, each in git's own words. The arrows are drawn in IBM Plex Mono, the typeface
 //! the application embeds, which carries them.
+//!
+//! It is also where progress shows (staging-and-commit R14.1, F1, F9): a spinner and the running
+//! operation's one name — a local write, " · N waiting" behind it while writes queue, and a fetch
+//! with git's latest progress line — each only once it has run [`PROGRESS_AFTER`], so a write
+//! that is over at once draws nothing. The wait is a task on the toolkit's executor
+//! (`async_io::Timer`), never a sleep.
 
+use std::time::{Duration, Instant};
+
+use async_io::Timer;
 use cairn_model::{AheadBehind, HeadState, RefName};
 use freya::prelude::*;
 
@@ -18,6 +27,41 @@ pub const NO_COMMITS_YET: &str = "no commits yet";
 pub const UPSTREAM_GONE: &str = "upstream gone";
 
 const FONT_SIZE: f32 = 13.0;
+/// How long an operation runs before the status box shows it (F1).
+pub const PROGRESS_AFTER: Duration = Duration::from_millis(250);
+
+/// An operation running, as the status box shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Running {
+    /// Which operation this is: another is another line, with its own wait.
+    pub serial: u64,
+    /// Its one name: "Commit", "Stage 2 files", "Fetch origin".
+    pub name: String,
+    pub started: Instant,
+    /// The writes queued behind it.
+    pub waiting: usize,
+    /// git's latest progress line, for a fetch.
+    pub progress: Option<String>,
+}
+
+/// What the status box says of `running`: "Commit · 1 waiting", "Fetch origin  Receiving
+/// objects: 40%".
+pub fn running_text(running: &Running) -> String {
+    let mut text = running.name.clone();
+    if running.waiting > 0 {
+        text.push_str(&format!(" · {} waiting", running.waiting));
+    }
+    if let Some(line) = &running.progress {
+        text.push_str("  ");
+        text.push_str(line);
+    }
+    text
+}
+
+/// Whether an operation that has run `elapsed` is shown yet (F1).
+pub fn progress_shown(elapsed: Duration) -> bool {
+    elapsed >= PROGRESS_AFTER
+}
 
 /// Where the current branch stands against its upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +109,7 @@ pub struct StatusBox {
     dirty: bool,
     head: Option<HeadState>,
     tracking: Tracking,
+    running: Vec<Running>,
     key: DiffKey,
 }
 
@@ -77,8 +122,15 @@ impl StatusBox {
             dirty: false,
             head,
             tracking: Tracking::Untold,
+            running: Vec::new(),
             key: DiffKey::None,
         }
+    }
+
+    /// The operations running: the local write, and a fetch.
+    pub fn running(mut self, running: Vec<Running>) -> Self {
+        self.running = running;
+        self
     }
 
     /// Whether the last status read listed any change.
@@ -150,10 +202,69 @@ impl ComponentOwned for StatusBox {
                     .color(primary)
             }))
             .maybe_child(tracked)
+            .children(
+                self.running
+                    .iter()
+                    .map(|running| {
+                        RunningLine {
+                            running: running.clone(),
+                            key: DiffKey::U64(running.serial),
+                        }
+                        .into_element()
+                    })
+                    .collect::<Vec<_>>(),
+            )
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
+    }
+}
+
+/// One operation running: nothing until it has run [`PROGRESS_AFTER`], then a spinner and its
+/// text.
+#[derive(PartialEq)]
+struct RunningLine {
+    running: Running,
+    key: DiffKey,
+}
+
+impl Component for RunningLine {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone()
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let started = self.running.started;
+        let mut shown = use_state(move || progress_shown(started.elapsed()));
+        // A task of this line's scope: it ends with the operation's line.
+        use_hook(move || {
+            if *shown.peek() {
+                return;
+            }
+            let left = PROGRESS_AFTER.saturating_sub(started.elapsed());
+            spawn(async move {
+                Timer::after(left).await;
+                shown.set(true);
+            });
+        });
+        if !*shown.read() {
+            return rect().into_element();
+        }
+        let secondary = get_theme_or_default().read().colors().text_secondary;
+        rect()
+            .horizontal()
+            .cross_align(Alignment::center())
+            .spacing(6.)
+            .child(CircularLoader::new().size(14.))
+            .child(
+                label()
+                    .text(running_text(&self.running))
+                    .max_lines(1)
+                    .font_size(FONT_SIZE)
+                    .color(secondary),
+            )
+            .into_element()
     }
 }
 

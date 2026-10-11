@@ -40,13 +40,15 @@ mod file_filter;
 mod git_error_dialog;
 pub use activity_popover::{
     ACTIVITY_TITLE, ActivityEntry, ActivityLine, ActivityPopover, CANCEL_OPERATION_CAPTION,
-    CONFIRMED_CAPTION, ENTRY_ROW_HEIGHT, LINE_ROW_HEIGHT, LockOffer, NO_ACTIVITY,
-    REMOVE_LOCK_CAPTION, SHOW_ALL_CAPTION, SHOW_LESS_CAPTION, SHOW_REPLACED_CAPTION,
+    CONFIRMED_CAPTION, ENTRY_ROW_HEIGHT, LINE_ROW_HEIGHT, NO_ACTIVITY, SHOW_ALL_CAPTION,
+    SHOW_LESS_CAPTION, SHOW_REPLACED_CAPTION,
 };
 pub use git_error_dialog::{
     CLOSE_CAPTION, ERROR_DETAILS, GIT_ERROR_TEXT, GIT_ERROR_TITLE, GitErrorDialog,
-    OUTPUT_ROW_HEIGHT,
+    OUTPUT_ROW_HEIGHT, REMOVE_LOCK_CAPTION, couldnt_title,
 };
+mod lock_banner;
+pub use lock_banner::{LOCK_BANNER_TEXT, LOCK_STALE_AFTER, LockBanner, lock_is_stale};
 mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
@@ -143,7 +145,7 @@ pub use staging_gesture::{
     mode_caption,
 };
 pub use status_box::{
-    NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
-    name_text,
+    NO_COMMITS_YET, PROGRESS_AFTER, Running, StatusBox, Tracking, UPSTREAM_GONE, counts_text,
+    current_branch, head_text, name_text, progress_shown, running_text,
 };
 pub use text_field::{text_field, text_field_in, text_field_recalling};

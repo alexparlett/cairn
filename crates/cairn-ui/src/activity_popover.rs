@@ -3,9 +3,10 @@
 //! its name, its status and when it started, with a cancel for a running one that can be
 //! cancelled — and on the right the one selected: its status and how long it took, what it
 //! said, the prompt it confirmed when it had one (Cairn's addition, L14), the way back where
-//! there is one — an amend's replaced commit, shown in Show Lost Commits — and `Remove
-//! index.lock…` where R12.4 offers it, then each `git` it ran as Fork prints it, `$ git ...`,
-//! with what it wrote to stderr.
+//! there is one — an amend's replaced commit, shown in Show Lost Commits — then each `git` it
+//! ran as Fork prints it, `$ git ...`, with what it wrote to stderr. (`Remove index.lock…` left
+//! it in staging-and-commit phase 19: the leftover lock is the repository's banner, and a
+//! write's Git Error, R12.4.)
 //!
 //! Both lists are virtualized — the operations and the selected one's lines, which are as long
 //! as git's output makes them — so neither builds more than a viewport of rows (R12.1). Every
@@ -14,9 +15,8 @@
 //! outside close it.
 //!
 //! The user's decisions of 2026-10-09 on it: it hangs from the status box, its left edge under
-//! the box's and an arrow pointing up at it, kept inside the window's width (A); `Remove
-//! index.lock…` stays drawn while it cannot be pressed — a `git` of Cairn's running — and says
-//! why beside it (H); the confirmed prompt is cut to four lines with "Show All", which moves it
+//! the box's and an arrow pointing up at it, kept inside the window's width (A); the confirmed
+//! prompt is cut to four lines with "Show All", which moves it
 //! whole into the scrolling list above the lines, to scroll with them, and "Show Less" (K).
 
 use std::rc::Rc;
@@ -30,8 +30,6 @@ use crate::diff_palette::DIFF_FONT_FAMILY;
 pub const ACTIVITY_TITLE: &str = "Activity";
 /// The way back from an amend: its replaced commit, in Show Lost Commits.
 pub const SHOW_REPLACED_CAPTION: &str = "Show Replaced Commit";
-/// R12.4's action, confirmed like every destructive operation.
-pub const REMOVE_LOCK_CAPTION: &str = "Remove index.lock…";
 /// The cancel beside a running operation that can be cancelled (Fork's ×).
 pub const CANCEL_OPERATION_CAPTION: &str = "×";
 /// What the popover says before any operation has run.
@@ -66,15 +64,6 @@ pub const LINE_ROW_HEIGHT: f32 = 16.;
 /// Where the popover hangs before the status box has been laid out: under the title bar.
 const TOP: f32 = 44.;
 
-/// `Remove index.lock…` as the entry offers it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LockOffer {
-    /// Pressable; `note` is why the last press could not go ahead, if it could not.
-    Ready { note: Option<String> },
-    /// Not pressable now, and why: a `git` of Cairn's is running in the repository.
-    Blocked(String),
-}
-
 /// One line of an operation's detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivityLine {
@@ -100,8 +89,6 @@ pub struct ActivityEntry {
     pub prompt: Option<String>,
     /// The commit an amend replaced, which Show Lost Commits draws (R12.1).
     pub replaced: Option<Oid>,
-    /// `Remove index.lock…`, where R12.4 offers it.
-    pub lock: Option<LockOffer>,
     /// A running operation that can be cancelled: a commit, an amend, a fetch.
     pub cancellable: bool,
     pub lines: Rc<Vec<ActivityLine>>,
@@ -114,7 +101,6 @@ pub struct ActivityPopover {
     on_select: EventHandler<usize>,
     on_cancel: EventHandler<usize>,
     on_replaced: EventHandler<Oid>,
-    on_remove_lock: EventHandler<usize>,
     on_close: EventHandler<()>,
     /// The status box's laid-out left edge and bottom, in the window: where it hangs from.
     anchor: Option<(f32, f32)>,
@@ -129,7 +115,6 @@ impl ActivityPopover {
             on_select: EventHandler::new(|_| {}),
             on_cancel: EventHandler::new(|_| {}),
             on_replaced: EventHandler::new(|_| {}),
-            on_remove_lock: EventHandler::new(|_| {}),
             on_close: EventHandler::new(|()| {}),
             anchor: None,
             key: DiffKey::None,
@@ -158,13 +143,6 @@ impl ActivityPopover {
     /// The way back pressed: the commit an amend replaced.
     pub fn on_replaced(mut self, on_replaced: impl Into<EventHandler<Oid>>) -> Self {
         self.on_replaced = on_replaced.into();
-        self
-    }
-
-    /// `Remove index.lock…` pressed, on the entry at this place: what it would cost is read
-    /// now, at the press.
-    pub fn on_remove_lock(mut self, on_remove: impl Into<EventHandler<usize>>) -> Self {
-        self.on_remove_lock = on_remove.into();
         self
     }
 
@@ -364,9 +342,7 @@ impl Component for ActivityPopover {
         let selected = self.selected;
         let right = self.entries.get(self.selected).map(|entry| {
             let on_replaced = self.on_replaced.clone();
-            let on_remove = self.on_remove_lock.clone();
             let replaced = entry.replaced;
-            let lock = entry.lock.clone();
             let shown_whole = *whole.read() == Some(selected) && entry.prompt.is_some();
             let whole_prompt = entry.prompt.clone().filter(|_| shown_whole);
             let rows = entry.lines.len() + usize::from(whole_prompt.is_some());
@@ -475,42 +451,11 @@ impl Component for ActivityPopover {
                                 .color(colours.text_primary)
                         }))
                 }))
-                .maybe_child((replaced.is_some() || lock.is_some()).then(|| {
-                    rect()
-                        .horizontal()
-                        .spacing(8.)
-                        .cross_align(Alignment::center())
-                        .maybe_child(replaced.map(|commit| {
-                            Button::new()
-                                .compact()
-                                .on_press(move |_| on_replaced.call(commit))
-                                .child(SHOW_REPLACED_CAPTION)
-                        }))
-                        .maybe_child(lock.clone().map(|offer| {
-                            let ready = matches!(offer, LockOffer::Ready { .. });
-                            Button::new()
-                                .compact()
-                                .enabled(ready)
-                                .on_press(move |_| {
-                                    if ready {
-                                        on_remove.call(selected);
-                                    }
-                                })
-                                .child(REMOVE_LOCK_CAPTION)
-                        }))
-                        .maybe_child(
-                            lock.and_then(|offer| match offer {
-                                LockOffer::Ready { note } => note,
-                                LockOffer::Blocked(why) => Some(why),
-                            })
-                            .map(|why| {
-                                label()
-                                    .text(why)
-                                    .max_lines(2)
-                                    .font_size(12.)
-                                    .color(colours.text_secondary)
-                            }),
-                        )
+                .maybe_child(replaced.map(|commit| {
+                    Button::new()
+                        .compact()
+                        .on_press(move |_| on_replaced.call(commit))
+                        .child(SHOW_REPLACED_CAPTION)
                 }))
                 .child(
                     rect()

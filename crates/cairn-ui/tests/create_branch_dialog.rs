@@ -538,7 +538,8 @@ fn refusals_are_worded_by_the_view() {
                 branch: "refs/heads/leaf".to_owned()
             }
         ),
-        "'refs/heads/leaf' exists; cannot create 'refs/heads/leaf/child'"
+        "cannot lock ref 'refs/heads/leaf/child': 'refs/heads/leaf' exists; cannot create \
+         'refs/heads/leaf/child'"
     );
     assert_eq!(
         name_refusal(
@@ -547,7 +548,8 @@ fn refusals_are_worded_by_the_view() {
                 branch: "refs/heads/folder/inner".to_owned()
             }
         ),
-        "'refs/heads/folder/inner' exists; cannot create 'refs/heads/folder'"
+        "cannot lock ref 'refs/heads/folder': 'refs/heads/folder/inner' exists; cannot create \
+         'refs/heads/folder'"
     );
     for (operation, said) in [
         (

@@ -507,6 +507,78 @@ mod tests {
         assert!(state.working_needs_asking());
     }
 
+    /// The commit's file `c.rs` of `of`, as the Changes tab asks it.
+    fn commits_file(of: Comparison) -> FileQuery {
+        FileQuery {
+            target: FileTarget::Committed {
+                of,
+                file: ChangedFile {
+                    status: ChangeStatus::Added,
+                    old_path: RepoPath::from("c.rs"),
+                    new_path: RepoPath::from("c.rs"),
+                    old_mode: None,
+                    new_mode: None,
+                    old_id: None,
+                    new_id: None,
+                },
+            },
+            options: DiffOptions::default(),
+        }
+    }
+
+    /// H1, phase 17's QA item 2: only the lane's holder lets go of it. The commit's file in
+    /// flight keeps the lane when Local Changes' path is let go of — the lists emptied — or
+    /// chosen as a conflict, which asks nothing; and the path in flight keeps it when the
+    /// commit's file's options move while the Commit tab is shown. Caught by: a let-go that
+    /// clears whoever holds the lane, so a holder still reading is asked again and supersedes
+    /// its own read.
+    #[test]
+    fn only_the_lanes_holder_lets_go_of_it() {
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap_or_else(|_| unreachable!()));
+        let mut state = DiffState::default();
+        state.select_changes(of);
+        let file = commits_file(of);
+        state.select_file(file.clone());
+        assert!(state.let_go_of_working().is_empty());
+        assert!(
+            state
+                .choose_working(choice(ChangeList::Unstaged, "clash.rs", 1), None)
+                .is_empty()
+        );
+        assert!(!state.file_needs_asking(), "the file lost a lane it held");
+        assert_eq!(
+            state.reask_file(),
+            None,
+            "the file was asked again over its own read"
+        );
+
+        let unstaged = query("a.rs", WorkingSide::Unstaged);
+        state.choose_working(
+            choice(ChangeList::Unstaged, "a.rs", 2),
+            Some(unstaged.clone()),
+        );
+        assert!(
+            state.file_needs_asking(),
+            "the path took no lane from the file"
+        );
+        let wider = DiffOptions {
+            context: Context::Lines(9),
+            ..DiffOptions::default()
+        };
+        // The file's options move, the path's do not; the Commit tab is shown.
+        let requests =
+            state.settings_changed(wider, wider, DiffOptions::default(), Asking::Expansion);
+        assert!(
+            !requests.iter().any(|r| matches!(r, Request::FileDiff(_))),
+            "{requests:?}"
+        );
+        assert!(
+            !state.working_needs_asking(),
+            "the path lost a lane it held"
+        );
+        assert_eq!(state.reask_working(), None);
+    }
+
     /// A setting moved while Local Changes is shown asks its path again at once, at the new
     /// options, and the commit's file when its tab is shown; moved elsewhere, the path is asked
     /// when Local Changes is shown. Caught by: the path never asked again (a diff at the old

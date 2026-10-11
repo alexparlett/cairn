@@ -81,7 +81,7 @@ pub use commit_box::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, AMEND_TITLE, Busy, CANCEL_COMMIT_CAPTION, CANCELLING,
     CommitBox, CommitButton, DESCRIPTION_PLACEHOLDER, DETACHED_LINE, RECENT_MESSAGES_CAPTION,
     RULER_COLUMN, SKIP_HOOKS_CAPTION, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER, SUBJECT_SOFT_LIMIT,
-    SubjectCount, commit_caption, elapsed_text, operation_line, subject_count,
+    SubjectCount, UNBORN_LINE, commit_caption, elapsed_text, operation_line, subject_count,
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,

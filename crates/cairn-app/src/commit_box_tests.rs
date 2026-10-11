@@ -975,8 +975,9 @@ fn during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it() {
     );
 }
 
-/// R10.1, R6.3 and C13: on an unborn branch Amend is disabled — ticking it asks nothing — and a
-/// first commit is offered. Caught by: an amend read asked with no `HEAD` to amend.
+/// R10.1, R6.3, C13 and rule 4: on an unborn branch Amend is greyed, its reason on the box's
+/// line — ticking it asks nothing — and a first commit is offered. Caught by: an amend read
+/// asked with no `HEAD` to amend, or Amend greyed without its reason.
 #[test]
 fn amend_is_disabled_on_an_unborn_branch() {
     let (mut test, view, submitted) = opened_with(
@@ -989,6 +990,11 @@ fn amend_is_disabled_on_an_unborn_branch() {
         0
     );
     assert!(!view.local.commit.state.peek().is_amending());
+    assert!(
+        drawn(&test, cairn_ui::UNBORN_LINE),
+        "Amend greyed with no reason: {:?}",
+        labels(&test)
+    );
     set(&mut test, view.local.commit.subject, "First");
     click(&mut test, "Commit 1 File");
     assert_eq!(writes(&submitted).len(), 1);

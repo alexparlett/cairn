@@ -60,6 +60,8 @@ pub const AMEND_BUTTON_CAPTION: &str = "Amend Last Commit";
 pub const AMEND_TITLE: &str = "Amend Commit";
 /// What the button's place says from a cancel until git is reaped (R10.4, R4.7).
 pub const CANCELLING: &str = "Cancelling…";
+/// The line on an unborn branch: Amend greyed, its reason beside it (rule 4, R10.1).
+pub const UNBORN_LINE: &str = "No commit yet, so Amend is unavailable.";
 /// The line on a detached `HEAD` (R10.8, C8): the commit is recoverable, so it asks nothing.
 pub const DETACHED_LINE: &str = "HEAD is detached: this commit will be on no branch.";
 /// The Git Error dialog's skip (R10.5), Fork's words.

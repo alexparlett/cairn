@@ -117,12 +117,14 @@ impl Component for CommitBoxPane {
         let amend_enabled = born && operation.is_none();
         // One line at most (R10.8, rule 6): the operation in progress; or, while Amend is ticked
         // and its staged list could not be read, that the lists show the status's own (R10.3);
-        // or a detached `HEAD`.
+        // or an unborn branch, where Amend is greyed; or a detached `HEAD`.
         let line = match (operation, local.amend_unread()) {
             (None, Some(why)) if state.is_amending() => Some(format!(
                 "Amend's staged list couldn't be read, so the lists show what is staged against \
                  HEAD: {why}"
             )),
+            // Amend greyed on an unborn branch, its reason beside it (rule 4).
+            (None, _) if head.is_some() && !born => Some(cairn_ui::UNBORN_LINE.to_owned()),
             (operation, _) => cairn_ui::operation_line(operation.as_ref(), detached),
         };
 

@@ -262,6 +262,8 @@ fn ask(
         message,
         skip_hooks,
     });
+    let mut output = view.local.commit.output;
+    output.write().asked(id);
 }
 
 /// The confirmation dialog over the window for an amend at the press that must be confirmed — a
@@ -435,12 +437,11 @@ pub fn write_started(id: OperationId, view: View) {
     state.write().started_now(id);
 }
 
-/// Lines of a write's output: kept when they are this box's commit's.
+/// Lines of a write's output: kept when they are this box's commit's, in a state no render
+/// reads (`CommitBoxView::output`), so they draw nothing again.
 pub fn write_output(id: OperationId, lines: &ScrubbedLines, view: View) {
-    let mut state = view.local.commit.state;
-    if state.peek().asked().is_some_and(|asked| asked.id == id) {
-        state.write().output_arrived(id, lines);
-    }
+    let mut output = view.local.commit.output;
+    output.write().arrived(id, lines);
 }
 
 /// A write ended: when it is this box's commit — made, the draft it took cleared and Amend
@@ -482,7 +483,11 @@ pub fn write_ended(
         }
         // git's failure: the box's own Git Error, whose skip runs this commit again (R10.5).
         WriteEnding::Failed(failure) if failure.command.is_some() => {
-            state.write().failed(asked, failure, unspent.take());
+            let mut output = view.local.commit.output;
+            let streamed = output.write().take();
+            state
+                .write()
+                .failed(asked, failure, unspent.take(), streamed);
             true
         }
         WriteEnding::NeedsConfirming { consequence } => {

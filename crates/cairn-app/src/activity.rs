@@ -27,8 +27,11 @@
 //! On the UI thread, each update costs what it carries, counted as lines go in and out; the
 //! open popover reads a snapshot (`ActivityLog::shown`), the selected entry's lines shared by
 //! a reference count. The popover is a child of the window ([`ActivityLayer`]) that alone reads
-//! the log, so a streamed line re-renders nothing while it is closed, and only it while open:
-//! the window's root reads whether it is open ([`ActivityView::open`]), never the log.
+//! the log, and the window's root reads whether it is open ([`ActivityView::open`]), never the
+//! log — so a commit's streamed line, which the commit box also keeps apart from the state the
+//! root reads (`commit_box_state::StreamedOutput`), re-renders nothing while the popover is
+//! closed, and only the popover while it is open. A fetch's progress does re-render the root,
+//! by design: the status box in the title bar draws its latest line (`FetchStatus`).
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -460,7 +463,10 @@ impl ActivityLog {
                 Outcome::Failed(failure.said.clone()),
                 failure.command.is_some(),
             ),
-            WriteEnding::Cancelled { .. } => (Outcome::Cancelled(WRITE_CANCELLED.to_owned()), true),
+            // A cancel heard before git ran ran nothing, and quotes no prompt (F3).
+            WriteEnding::Cancelled { ran, .. } => {
+                (Outcome::Cancelled(WRITE_CANCELLED.to_owned()), *ran)
+            }
             WriteEnding::NeedsConfirming { .. } => return,
         };
         entry.ran = ran;
@@ -887,17 +893,41 @@ mod tests {
     }
 
     /// F3 and the user's decision of 2026-10-10 on phase 14's item 11: the prompt an operation
-    /// confirmed is drawn whole only once it ran — git ran it, failed, was cancelled or
-    /// succeeded — never for one refused, stale or not run; and Create Branch's Discard quotes
-    /// none, saying once it succeeded what it did instead. Caught by: "Confirmed:" over an
-    /// operation that never happened, or the forced checkout's question quoted.
+    /// confirmed is drawn whole only once it ran — git ran it, failed, was cancelled while it
+    /// ran, partly did it, or succeeded — never for one refused, stale, not run or cancelled
+    /// before git ran (phase 20's QA items 7 and 8); and Create Branch's Discard quotes none,
+    /// saying once it succeeded what it did instead. Caught by: "Confirmed:" over an operation
+    /// that never happened, a partly done discard's prompt hidden, or the forced checkout's
+    /// question quoted.
     #[test]
     fn the_prompt_is_drawn_only_for_an_operation_that_ran() {
         let prompt = "Discard all changes in a.rs? You can't undo this.";
         let endings = [
             (WriteEnding::Done(done()), true),
             (failed("git failed.", Some("git restore")), true),
-            (WriteEnding::Cancelled { locks: Vec::new() }, true),
+            (
+                WriteEnding::Cancelled {
+                    locks: Vec::new(),
+                    ran: true,
+                },
+                true,
+            ),
+            (
+                WriteEnding::Cancelled {
+                    locks: Vec::new(),
+                    ran: false,
+                },
+                false,
+            ),
+            (
+                WriteEnding::Incomplete {
+                    done: done(),
+                    kept: vec!["b.rs".to_owned()],
+                    said: "b.rs was kept as it was.".to_owned(),
+                    failure: None,
+                },
+                true,
+            ),
             (failed("a.rs could not be read.", None), false),
             (
                 WriteEnding::Refused {
@@ -1070,13 +1100,23 @@ mod tests {
             .newest_first()
             .map(|entry| entry.name.as_str())
             .collect();
-        assert_eq!(names.first(), Some(&"Commit 11"));
-        assert_eq!(
-            names.last(),
-            Some(&"Fetch origin"),
-            "the running fetch was let go of"
+        // Exactly as many whole commits as fit under the bound, the newest of them, then the
+        // running fetch (phase 20's QA item 5).
+        let each: usize = wide.iter().map(String::len).sum();
+        let fit = LOG_BYTES / each;
+        assert!(
+            (1..12).contains(&fit),
+            "{fit} entries fit: the test's sizes are wrong"
         );
-        assert!(!names.contains(&"Commit 0"), "{names:?}");
+        let expected: Vec<String> = (12 - fit..12)
+            .rev()
+            .map(|n| format!("Commit {n}"))
+            .chain(std::iter::once("Fetch origin".to_owned()))
+            .collect();
+        assert_eq!(
+            names, expected,
+            "the entries kept are not the newest that fit"
+        );
         assert!(
             log.newest_first()
                 .filter(|entry| entry.key != ActivityKey::Fetch(1))
@@ -1234,7 +1274,10 @@ mod tests {
         log.write_started(&asked(cancelled, "Commit"));
         log.write_ended(
             cancelled,
-            &WriteEnding::Cancelled { locks: Vec::new() },
+            &WriteEnding::Cancelled {
+                locks: Vec::new(),
+                ran: true,
+            },
             None,
         );
         log.fetch_started("origin");

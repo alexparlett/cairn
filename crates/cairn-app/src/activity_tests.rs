@@ -504,7 +504,10 @@ fn a_destructive_write_quotes_its_prompt_only_once_it_ran() {
         &submitted,
         Update::WriteEnded {
             id: killed,
-            ending: WriteEnding::Cancelled { locks: Vec::new() },
+            ending: WriteEnding::Cancelled {
+                locks: Vec::new(),
+                ran: true,
+            },
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },
@@ -878,7 +881,10 @@ fn the_activity_manager_draws_forks_rows_and_header() {
         &submitted,
         Update::WriteEnded {
             id: cancelled,
-            ending: WriteEnding::Cancelled { locks: Vec::new() },
+            ending: WriteEnding::Cancelled {
+                locks: Vec::new(),
+                ran: true,
+            },
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },
@@ -994,21 +1000,41 @@ fn an_amend_pushed_while_it_ran_says_so_in_its_entry() {
     assert!(drawn(&test, SHOW_IN_LOST_COMMITS_CAPTION));
 }
 
-/// The merge bar's responsiveness 3: the window's root reads whether the popover is open, never
-/// the log, so a running write's streamed lines draw nothing again while it is closed — and,
-/// while it is open, only the popover, which shows them. Caught by: the root subscribed to the
-/// log (`is_open` read from it, or the fetch's entry read with `read`).
+/// The merge bar's responsiveness 3 and phase 20's QA item 4: the window's root reads whether
+/// the popover is open, never the log, and the commit box's streamed output is kept apart from
+/// the state the root reads, so the commit box's own commit streaming its hook's lines draws
+/// nothing again while the popover is closed — and, while it is open, only the popover, which
+/// shows them. Caught by: the root subscribed to the log (`is_open` read from it, or the
+/// fetch's entry read with `read`), or the commit's output written into the box's state.
 #[test]
 fn a_streamed_line_never_draws_the_window_again() {
     let (mut test, view, submitted, drawn_root) = launch_counted();
-    let id = started(
-        &mut test,
-        view,
-        &submitted,
-        &LocalWrite::Commit {
-            message: "m".to_owned(),
-            skip_hooks: false,
-        },
+    // The commit asked through the commit box, as its button asks it, so the box keeps its
+    // output for a Git Error.
+    let mut subject = view.local.commit.subject;
+    test.run_in(|| subject.set("A commit past a running hook".to_owned()));
+    let submit: std::rc::Rc<dyn Fn(Request)> = {
+        let submitted = std::rc::Rc::clone(&submitted);
+        std::rc::Rc::new(move |request| submitted.borrow_mut().push(request))
+    };
+    test.run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+    let id = submitted
+        .borrow()
+        .iter()
+        .find_map(|request| match request {
+            Request::Write { id, .. } => Some(*id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no commit asked: {:?}", submitted.borrow()));
+    apply(&mut test, view, &submitted, Update::WriteStarted { id });
+    assert!(
+        view.local
+            .commit
+            .state
+            .peek()
+            .asked()
+            .is_some_and(|asked| asked.id == id),
+        "the commit box did not ask the commit"
     );
     let before = drawn_root.get();
     for n in 0..20 {

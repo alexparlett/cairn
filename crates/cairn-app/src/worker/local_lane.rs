@@ -716,8 +716,10 @@ pub enum WriteEnding {
     Failed(Failure),
     /// Cancelled by the user (R4.7, rule 5 of the redesign): a commit or an amend git had not
     /// made — `HEAD` read after its `git` was reaped, or the cancel heard before git ran. One
-    /// git had made ended [`WriteEnding::Done`]. With the lock files left.
-    Cancelled { locks: Vec<PathBuf> },
+    /// git had made ended [`WriteEnding::Done`]. With the lock files left, and whether its git
+    /// had started — `false` for a cancel heard before git ran, which ran nothing (phase 20's QA
+    /// item 8: the activity entry then quotes no prompt).
+    Cancelled { locks: Vec<PathBuf>, ran: bool },
     /// Nothing ran: an amend at the press that must be confirmed — a remote has `HEAD`, or git
     /// keeps no reflog (R6.4) — its `Consequence` answered for the confirmation dialog.
     NeedsConfirming { consequence: Consequence },
@@ -984,9 +986,13 @@ impl WriteEnding {
                     Err(_) => Failure::of(&error, prompting, lock).said,
                 },
             },
-            Error::CommitCancelledBeforeRunning => Self::Cancelled { locks: Vec::new() },
+            Error::CommitCancelledBeforeRunning => Self::Cancelled {
+                locks: Vec::new(),
+                ran: false,
+            },
             Error::GitCancelled { stranded_locks, .. } => Self::Cancelled {
                 locks: stranded_locks.clone(),
+                ran: true,
             },
             Error::DiscardIncomplete {
                 performed,
@@ -1289,9 +1295,6 @@ pub(super) struct Local<'a> {
 /// open's refresh (R12.4), not here.
 pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     let repo = shared.to_worker();
-    // The writes' output on its way to the window (`output_tap`): one tap, the writes run one
-    // at a time.
-    let tap = OutputTap::new();
     while let Ok(job) = serving.jobs.recv() {
         match job {
             LocalJob::Stop => break,
@@ -1308,7 +1311,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     },
                 );
             }
-            LocalJob::Write { id, write } => run(&repo, id, *write, serving, &tap),
+            LocalJob::Write { id, write } => run(&repo, id, *write, serving),
             LocalJob::Consequence {
                 asked,
                 paths,
@@ -1560,13 +1563,7 @@ const LOCK_RETRY_SLICE: Duration = Duration::from_millis(50);
 
 /// Runs one write: announced, given its own askpass token, run again while git refuses it for a
 /// lock that stood from before the attempt began (F5, module docs), ended with what it did.
-fn run(
-    repo: &Repository,
-    id: OperationId,
-    write: LocalWrite,
-    serving: &Local<'_>,
-    tap: &OutputTap,
-) {
+fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_>) {
     let commit = write.is_commit();
     let asked = write.read_again();
     let lock = repo.git_dir().join("index.lock");
@@ -1586,11 +1583,14 @@ fn run(
             .map(|channel| channel.begin_for(write.name())),
         serving.prompting,
     );
+    // Its output on its way to the window (`output_tap`), in a tap of its own: a wake the
+    // window has not applied yet names this write, so a later write's lines never wait in it.
+    let tap = OutputTap::new();
     let watch = Watch {
         lane: serving.lane,
         id,
         outbox: serving.outbox,
-        tap,
+        tap: &tap,
     };
     let mut write = write;
     let mut retries = 0;
@@ -2145,7 +2145,7 @@ mod tests {
             Path::new("/r/.git/index.lock"),
         );
         assert!(
-            matches!(&cancelled, WriteEnding::Cancelled { locks, .. } if *locks == [lock.clone()]),
+            matches!(&cancelled, WriteEnding::Cancelled { locks, ran: true } if *locks == [lock.clone()]),
             "{cancelled:?}"
         );
         let (lost, _, _) = WriteEnding::of(
@@ -2243,7 +2243,7 @@ mod tests {
             Path::new("/r/.git/index.lock"),
         );
         assert!(
-            matches!(&early, WriteEnding::Cancelled { locks } if locks.is_empty()),
+            matches!(&early, WriteEnding::Cancelled { locks, ran: false } if locks.is_empty()),
             "a commit cancelled before git ran was not a cancel: {early:?}"
         );
         assert_eq!(

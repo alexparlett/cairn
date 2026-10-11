@@ -3,6 +3,46 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 20's QA fixes, part 1 (packet mode)
+
+The coordinator's adjudication (`qa-p20/adjudication.md`), the user having chosen to check Fork
+first-hand for the result lines (part 2 brings the table and item 1's direction; the table is
+unchanged here). Fixed, test first where it says so:
+
+- **2** One `OutputTap` per write, made as it starts (`local_lane::run`), in place of one per lane:
+  `a_writes_output_never_lands_under_the_write_before_it` (a commit and an amend at the press
+  whose `pre-commit` hooks print, run back to back with neither wake applied) failed first —
+  `[(OperationId(2), ["hook run 1", "hook run 2"])]`, the second write's line drained under the
+  first's id — and passes. The stated reason corrected in `output_tap.rs` and
+  `docs/systems/git-processes.md`: a wake not yet applied names its own write's tap.
+- **3** `OutputTap::hold` copies the read before taking the lock; the residual in `CLAUDE.md` and
+  `.claude/agents/responsiveness-reviewer.md` now says exactly what the lane holds it for. No test
+  (lock duration is the reviewer's).
+- **4** (a) `a_streamed_line_never_draws_the_window_again` asks its commit through the commit box
+  (`commit_box_pane::pressed`), so the box keeps its output; it failed first (root drawn 22 times
+  over 20 lines). (b) The commit box's output moved out of `CommitBox` into a state of its own,
+  `CommitBoxView::output: State<StreamedOutput>` (`asked`, `arrived`, `take`), written per line
+  and read only by `peek` as the Git Error opens (`CommitBox::failed` takes what streamed) — Freya's
+  `State::write` notifies only what `read` subscribed (`freya-core/src/lifecycle/state.rs`, caa46f8),
+  and no render reads it; the test passes. (c) `activity.rs`'s module doc says a fetch's progress
+  re-renders the root by design, for the status box's line.
+- **5** `whole_oldest_entries_go_at_the_bound_and_an_entry_alone_is_cut` asserts the exact entries
+  kept — the `LOG_BYTES / (400 × 2,005)` = 5 newest commits, Commit 11 to Commit 7, then the
+  running fetch — computed from the test's own sizes.
+- **6** The tail's and the tap's byte arms assert the exact count kept and the first item:
+  `OUTPUT_BYTES / line(0).len()` = 2 lines from `line(5)`, and `OUTPUT_BYTES / wide(0).len()` = 15
+  reads from `wide(25)`.
+- **7** The prompt table gains a partly done discard (`Incomplete`), ran.
+- **8** `WriteEnding::Cancelled { locks, ran }`: `ran` false only for
+  `Error::CommitCancelledBeforeRunning`; the activity entry quotes no prompt for it. The table has
+  both rows (cancelled while git ran: prompt; before: none); the lane's `of` test pins each `ran`.
+- **9, 10** Onto state.md's teardown list (file as issues).
+
+Held for part 2: item 1 (the lines' list opening at its oldest line). Dismissed by the adjudicator:
+11 (the open popover's copy-on-write is bounded by the tail and one wake in flight — the design),
+12 (`OutputTap`'s `Debug` takes the mutex only on a test path; it prints counts), 13 (a failed
+forced checkout draws git's own account, as the standing rule asks).
+
 ## 2026-10-11 — phase 20 built (packet mode; stopped at its stopping rule for the result lines)
 
 Steps 0-2 and 4-6 of `phase-20-activity-manager.md`; step 3's QA is the coordinator's.

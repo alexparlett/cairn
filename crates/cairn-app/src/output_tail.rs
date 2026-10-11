@@ -174,6 +174,10 @@ mod tests {
         }
         assert!(wide.bytes() <= OUTPUT_BYTES, "{}", wide.bytes());
         assert_eq!(wide.iter().next_back(), Some(&line(6)));
+        // Exactly as many as fit, the oldest of them first (phase 20's QA item 6).
+        let fit = OUTPUT_BYTES / line(0).len();
+        assert_eq!(wide.iter().count(), fit);
+        assert_eq!(wide.iter().next(), Some(&line(7 - fit)));
 
         // The newest alone over the bound is kept whole.
         let mut alone: OutputTail<ScrubbedLines> = OutputTail::default();

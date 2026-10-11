@@ -1243,8 +1243,11 @@ the prompt laid out above the lines' list (`the_popover_builds_one_viewport_of_o
 (`ActivityLog::shown`): the selected entry's lines shared by a reference count, copied only when
 a line arrives while a snapshot is held (`the_popover_reads_a_shared_snapshot`). The window's
 root reads whether the popover is open (`ActivityView::open`, a state of its own), never the
-log, so a streamed line draws nothing again while the popover is closed, and only the popover
-while it is open (`a_streamed_line_never_draws_the_window_again`).
+log, and the commit box keeps its commit's output apart from the state the root reads, so a
+commit's streamed line draws nothing again while the popover is closed, and only the popover
+while it is open (`a_streamed_line_never_draws_the_window_again`, a commit asked through the
+commit box). A fetch's progress draws the root again by design: the status box shows its latest
+line.
 
 **An operation's name** is Fork's imperative form, as its Activity Manager names one ("Fetch
 origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7), and the only wording of
@@ -1258,13 +1261,18 @@ asked under; "A write" is said only of one the window never asked.
 **Output on its way to the window** (phase 05's QA item 3, phase 12's QA #15 and #16): the
 runner hands a commit's stdout and stderr, and a fetch's stderr, on a read of a pipe at a time,
 as whole scrubbed lines (`Invocation::lines`). The lane never sends lines: it puts each read into
-its tap (`worker::OutputTap`, one per lane — the local lane's writes run one at a time, the
-network lane's fetch alone), a shared `OutputTail` of reads bounded by the one pair of bounds,
+a tap (`worker::OutputTap`) — one per write, made as the write starts, so a wake the window has
+not applied yet drains only its own write's lines, never the next write's under its id
+(`a_writes_output_never_lands_under_the_write_before_it`); the network lane keeps one for its
+fetch, which carries no id — a shared `OutputTail` of reads bounded by the one pair of bounds,
 whose oldest whole reads are popped, never moved; and it wakes the window with one update —
 `Update::WriteOutput { id, tap }` or `Update::FetchProgress { tap }` — only when no wake is on its
 way. Applying it, the window drains everything waiting (`OutputTap::drain`, on the UI thread:
-a swap under the tap's mutex, which the lane holds only for an append), latest kept, and hands
-it to the commit box's tail, the activity entry and the status box's progress line. However far
+a swap under the tap's mutex, which the lane holds only to push a read it copied before taking
+it and, past the bound, to pop whole oldest reads), latest kept, and hands it to the commit box's
+output (`commit_box_state::StreamedOutput`, a state of its own that no render reads, so a commit's
+streamed line draws nothing again — `a_streamed_line_never_draws_the_window_again`), the activity
+entry and the status box's progress line. However far
 behind the window falls, at most one wake per tap waits in the outbox; a read after a drain wakes
 it again, so nothing waits for git's next read; and every line of a write is drained before its
 ending, which the lane sends after. Pinned by `the_lines_of_one_read_are_handed_on_together`,

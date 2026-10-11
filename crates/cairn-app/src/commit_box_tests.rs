@@ -884,7 +884,10 @@ fn cancel_reaches_only_the_running_commit() {
         &submitted,
         Update::WriteEnded {
             id: commit,
-            ending: WriteEnding::Cancelled { locks: Vec::new() },
+            ending: WriteEnding::Cancelled {
+                locks: Vec::new(),
+                ran: true,
+            },
             read_again: crate::worker::ReadAgain::Everything,
             unspent: crate::worker::Unspent::none(),
         },

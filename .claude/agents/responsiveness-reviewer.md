@@ -38,8 +38,8 @@ close hook `Closing::requested`, in `closing.rs`, which calls it with
 calls `KillHandle::kill`; `worker::open` and the `Replier` closure it returns;
 `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic store) and
 `OutputTap::drain` (`worker/output_tap.rs`, a swap under the tap's mutex, which the lane
-holds only for an append, as the window applies an `Update::WriteOutput` or
-`Update::FetchProgress`); and `Discovery::start`, which `main` calls before
+holds only to push a read it copied before taking the lock and, past the bound, to pop whole
+oldest reads, as the window applies an `Update::WriteOutput` or `Update::FetchProgress`); and `Discovery::start`, which `main` calls before
 the window exists — are exempt from the guard's matcher by
 construction, so whether they block is a judgement you must actually make rather
 than assume from a green guard. So is the close's shape: that the hook only

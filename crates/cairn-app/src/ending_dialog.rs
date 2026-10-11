@@ -211,7 +211,13 @@ mod tests {
         let name = "Stage 2 files";
         assert_eq!(of_write(name, &WriteEnding::Done(done())), None);
         assert_eq!(
-            of_write(name, &WriteEnding::Cancelled { locks: Vec::new() }),
+            of_write(
+                name,
+                &WriteEnding::Cancelled {
+                    locks: Vec::new(),
+                    ran: true,
+                }
+            ),
             None
         );
 

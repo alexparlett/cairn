@@ -2261,3 +2261,59 @@ fn a_name_check_superseded_before_its_turn_runs_no_git() {
     );
     assert_eq!(pids(&stub, "checks").len(), 1, "a superseded check ran git");
 }
+
+/// Phase 20's QA item 2: each write's output waits in a tap of its own. Two writes whose hooks
+/// print run back to back while the window has not applied the first one's wake; the window
+/// then drains each wake in turn, giving what it drains to the write the wake names — and the
+/// first write's lines hold none of the second's. Caught by: one tap for the lane, whose pending
+/// wake swallows the next write's lines under the first write's id.
+#[test]
+fn a_writes_output_never_lands_under_the_write_before_it() {
+    let fixture = to_commit("cairn-lane-tap-per-write", &["a"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    hook(
+        &fixture.path,
+        "pre-commit",
+        "n=$(cat .git/hook-runs 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > .git/hook-runs\n\
+         echo \"hook run $n\" >&2\n",
+    );
+    let first = ask(&handle, commit());
+    let second = ask(
+        &handle,
+        LocalWrite::AmendAtPress {
+            message: "amended\n".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    // Neither wake applied until both writes have ended.
+    let seen = until_ended(&mut updates, second);
+    for id in [first, second] {
+        assert!(
+            matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+            "{seen:?}"
+        );
+    }
+    let mut drained: Vec<(OperationId, Vec<String>)> = Vec::new();
+    for update in &seen {
+        if let Update::WriteOutput { id, tap } = update {
+            let lines = tap
+                .drain()
+                .iter()
+                .flat_map(|read| read.lines().map(str::to_owned).collect::<Vec<_>>())
+                .collect();
+            drained.push((*id, lines));
+        }
+    }
+    let of = |write: OperationId| -> Vec<String> {
+        drained
+            .iter()
+            .filter(|(id, _)| *id == write)
+            .flat_map(|(_, lines)| lines.clone())
+            .collect()
+    };
+    assert_eq!(of(first), ["hook run 1"], "{drained:?}");
+    assert_eq!(of(second), ["hook run 2"], "{drained:?}");
+    drop(handle);
+}

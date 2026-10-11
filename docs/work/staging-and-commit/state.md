@@ -117,6 +117,11 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
 - **Stopping rule triggered — with the user**: no result line from Fork's observation or git's own
   output for unstage, discard, commit, amend, Create Branch without checkout, Remove index.lock,
   fetch, and any cancel; those rows draw the name alone (`ResultLines` `None`) pending sign-off.
+- **QA part 1 (2026-10-11)**: items 2-8 fixed (a tap per write; the read copied before the lock;
+  the commit box's output in `CommitBoxView::output`, read by no render; the bound's tests exact;
+  `WriteEnding::Cancelled { ran }`), 9 and 10 on the teardown list, 11-13 dismissed by the
+  adjudicator; item 1 and the result-line table wait for part 2 (the user is checking Fork
+  first-hand). Progress.md has each item's test.
 - **C21's window check**: every frame under 16.7 ms with a hook flooding, popover open and closed
   (worst 6.61 ms); numbers in progress.md. One run's commit median 87.2 ms against its 87 ms bar,
   the press-to-lists medians bimodal by a status read on this host, as at d1207eb — for the merge
@@ -753,6 +758,18 @@ Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carrie
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
 
+- **From phase 20's QA, item 9** (file as an issue): an amend whose after-read finds no reflog is
+  told "can't be recovered" yet still offered "Show in Lost Commits", whose press then falls to the
+  find's ordinary miss (`activity.rs`'s `way_back` offers `replaced` on every success;
+  `ops/amend.rs` reports `Reflog::NotWritten` only where logs are off and neither `HEAD`'s nor the
+  branch's log exists). A rare git state, so no special UI now; the way back could be withheld only
+  where the reflog was not written AND the commit is unpublished (a pushed one is found through
+  its remote-tracking ref).
+- **From phase 20's QA, item 10** (file as an issue; pre-existing): the commit box's Git Error tail
+  never learns that the lane cut lines — `session.rs` does not pass `drained.cut()` on to
+  `commit_box_state::StreamedOutput`, and `cairn_ui::GitErrorDialog` draws no "not kept" marker,
+  so a gap its own tail trims is unsaid too (the activity entry for the same write says "Earlier
+  output not kept."). Whether the dialog marks a cut is a Fork question.
 - **From phase 20's coordinator** (file as an issue): the process guards
   (`the_retired_runner_is_gone`, `every_git_invocation_disables_the_terminal_prompt`) read
   `crates/cairn-git/src/process/stub_git.rs` as production code although its parent declares it

@@ -25,12 +25,16 @@ use crate::output_tail::OutputTail;
 use crate::shown_output::{shown_lines, spoken_lines};
 use crate::worker::{CommitReads, OperationId};
 
-/// The window's handles on the box: the draft, bound to its fields, and the rest of its state.
+/// The window's handles on the box: the draft, bound to its fields, the rest of its state, and
+/// its commit's output as it streams — a state of its own, read only as the Git Error dialog is
+/// opened (`peek`), so a streamed line draws nothing again (phase 20's QA item 4): the window's
+/// root reads `state` for the dialog.
 #[derive(Clone, Copy, PartialEq)]
 pub struct CommitBoxView {
     pub subject: State<String>,
     pub description: State<String>,
     pub state: State<CommitBox>,
+    pub output: State<StreamedOutput>,
 }
 
 impl CommitBoxView {
@@ -40,6 +44,7 @@ impl CommitBoxView {
             subject: use_state(String::new),
             description: use_state(String::new),
             state: use_state(CommitBox::default),
+            output: use_state(StreamedOutput::default),
         }
     }
 
@@ -50,7 +55,38 @@ impl CommitBoxView {
             subject: State::create(String::new()),
             description: State::create(String::new()),
             state: State::create(CommitBox::default()),
+            output: State::create(StreamedOutput::default()),
         }
+    }
+}
+
+/// The box's commit's output as it streams (R10.5): its spoken lines, the latest kept in the one
+/// bounded tail, for the Git Error dialog its failure opens.
+#[derive(Debug, Default)]
+pub struct StreamedOutput {
+    /// The commit whose output it keeps.
+    of: Option<OperationId>,
+    lines: OutputTail<String>,
+}
+
+impl StreamedOutput {
+    /// The box asked `id`: its output is kept from here, the last commit's let go of.
+    pub fn asked(&mut self, id: OperationId) {
+        self.of = Some(id);
+        self.lines.clear();
+    }
+
+    /// A read of the write `id`'s output: its spoken lines kept when it is the box's commit.
+    pub fn arrived(&mut self, id: OperationId, lines: &ScrubbedLines) {
+        if self.of == Some(id) {
+            self.lines.extend(spoken_lines(lines));
+        }
+    }
+
+    /// What it kept, taken, for the Git Error dialog.
+    pub fn take(&mut self) -> OutputTail<String> {
+        self.of = None;
+        self.lines.take()
     }
 }
 
@@ -121,8 +157,6 @@ pub struct CommitBox {
     /// Cancel was pressed for the commit asked: "Cancelling…" until it ends.
     cancelling: bool,
     started: Option<Instant>,
-    /// Its commit's output as it arrives: the latest, in the one bounded tail (R10.5).
-    output: OutputTail<String>,
     error: Option<GitError>,
     /// An amend at the press that must be confirmed: its consequence and the amend pressed, until
     /// the box opens the confirmation dialog on it (R10.6).
@@ -254,7 +288,6 @@ impl CommitBox {
         self.asked = Some(asked);
         self.cancelling = false;
         self.started = None;
-        self.output.clear();
         self.error = None;
     }
 
@@ -269,13 +302,6 @@ impl CommitBox {
     pub fn started_now(&mut self, id: OperationId) {
         if self.asked.as_ref().is_some_and(|asked| asked.id == id) {
             self.started = Some(Instant::now());
-        }
-    }
-
-    /// A read of the write `id`'s output: its spoken lines kept when it is this box's commit.
-    pub fn output_arrived(&mut self, id: OperationId, lines: &ScrubbedLines) {
-        if self.asked.as_ref().is_some_and(|asked| asked.id == id) {
-            self.output.extend(spoken_lines(lines));
         }
     }
 
@@ -301,7 +327,7 @@ impl CommitBox {
     }
 
     /// A commit or amend failed with git's own failure: the Git Error dialog opens over its
-    /// output — what streamed, or else what the engine kept of it — the skip offered on every
+    /// output — what streamed (`streamed`), or else what the engine kept of it — the skip offered on every
     /// failure whose hooks were not already skipped (R10.5 as amended, C4), with the token a
     /// confirmed amend's failure handed back, which only the skip spends.
     pub fn failed(
@@ -309,13 +335,13 @@ impl CommitBox {
         failed: AskedCommit,
         failure: &crate::worker::Failure,
         unspent: Option<Confirmed>,
+        streamed: OutputTail<String>,
     ) {
-        let lines = if self.output.is_empty() {
+        let lines = if streamed.is_empty() {
             shown_lines(&failure.output)
         } else {
-            self.output.iter().cloned().collect()
+            streamed.iter().cloned().collect()
         };
-        self.output.clear();
         let serial = self.next_serial();
         self.error = Some(GitError {
             serial,
@@ -420,9 +446,11 @@ mod tests {
             skip_hooks: false,
         };
         let mut state = CommitBox::default();
+        let mut output = StreamedOutput::default();
         state.commit_asked(asked.clone());
+        output.asked(id);
         let lines: Vec<String> = (0..OUTPUT_LINES + 5).map(|n| format!("line {n}")).collect();
-        state.output_arrived(id, &ScrubbedLines::scrubbing(&lines.join("\n")));
+        output.arrived(id, &ScrubbedLines::scrubbing(&lines.join("\n")));
         state.ended(id);
         state.failed(
             asked,
@@ -434,6 +462,7 @@ mod tests {
                 index_lock: false,
             },
             None,
+            output.take(),
         );
         let shown = state.error().map(|error| error.lines.clone());
         let shown = shown.as_deref().map(Vec::as_slice).unwrap_or_default();
@@ -555,12 +584,14 @@ mod tests {
             skip_hooks,
         };
         let mut state = CommitBox::default();
+        let mut output = StreamedOutput::default();
         state.commit_asked(asked(false));
-        state.output_arrived(
+        output.asked(OperationId::for_tests(3));
+        output.arrived(
             OperationId::for_tests(3),
             &ScrubbedLines::scrubbing("\u{1b}[31mlint\u{1b}[0m failed"),
         );
-        state.output_arrived(
+        output.arrived(
             OperationId::for_tests(4),
             &ScrubbedLines::scrubbing("another write's line"),
         );
@@ -576,6 +607,7 @@ mod tests {
                 index_lock: false,
             },
             None,
+            output.take(),
         );
         let error = state.error();
         assert_eq!(
@@ -597,6 +629,7 @@ mod tests {
                 index_lock: false,
             },
             None,
+            output.take(),
         );
         let error = state.error();
         assert_eq!(error.map(|error| error.skip), Some(true));
@@ -614,6 +647,7 @@ mod tests {
                 index_lock: false,
             },
             None,
+            OutputTail::default(),
         );
         assert_eq!(state.error().map(|error| error.skip), Some(false));
     }

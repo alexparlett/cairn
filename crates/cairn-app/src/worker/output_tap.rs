@@ -12,12 +12,15 @@
 //! tap says so ([`crate::output_tail::OutputTail::cut`]). Nothing waits for git's next read: a
 //! wake is sent with the first lines after each drain.
 //!
-//! The local write lane keeps one tap for the writes it runs one at a time (every line of a
-//! write is drained before its ending is applied: the lane sends the wake before the ending,
-//! and the outbox keeps their order); the network lane keeps one for its fetch.
+//! Each write the local lane runs has a tap of its own, made as it starts and named by every
+//! wake it sends with the write's id: a wake drains only its own write's lines, however late
+//! the window applies it — one shared tap would let a wake still on its way for one write
+//! drain the next write's lines under the first write's id. The network lane keeps one for its
+//! fetch, the only operation it runs, and a fetch's progress has no id to misfile.
 //!
-//! The tap's mutex is taken by the lane for an append — a push and, past a bound, popping
-//! whole oldest reads — and by the window's drain, on the UI thread, for a swap
+//! The tap's mutex is taken by the lane for an append — a push of a read already copied, and,
+//! past a bound, popping whole oldest reads — and by the window's drain, on the UI thread, for a
+//! swap
 //! (`OutputTap::drain`, a `worker/` function the UI thread calls; the root `CLAUDE.md` names
 //! it among the residuals).
 
@@ -59,8 +62,10 @@ impl OutputTap {
         if lines.is_empty() {
             return false;
         }
+        // Copied before the lock, so the window's drain never waits behind the copy.
+        let lines = lines.clone();
         let mut waiting = self.lock();
-        waiting.lines.push(lines.clone());
+        waiting.lines.push(lines);
         !std::mem::replace(&mut waiting.woken, true)
     }
 
@@ -151,6 +156,13 @@ mod tests {
         assert_eq!(
             drained.iter().next_back().map(ScrubbedLines::text),
             Some(wide(39).as_str())
+        );
+        // Exactly as many reads as fit, the oldest of them first (phase 20's QA item 6).
+        let fit = OUTPUT_BYTES / wide(0).len();
+        assert_eq!(drained.iter().count(), fit);
+        assert_eq!(
+            drained.iter().next().map(ScrubbedLines::text),
+            Some(wide(40 - fit).as_str())
         );
 
         // A clone is the same tap, and only it equals it.

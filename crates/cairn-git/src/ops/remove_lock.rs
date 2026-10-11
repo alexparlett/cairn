@@ -89,6 +89,31 @@ pub fn index_lock_changed(repo: &Repository) -> Option<SystemTime> {
         .map(|seen| seen.modified)
 }
 
+/// What tells one `<gitdir>/index.lock` from another: its time, size, device and inode, as the
+/// removal's re-check compares them. Equal identities are the same file, untouched between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockIdentity {
+    modified: SystemTime,
+    bytes: u64,
+    device: u64,
+    inode: u64,
+}
+
+/// `repo`'s `<gitdir>/index.lock`'s identity, if one is there as a plain file: what the local
+/// lane compares before and after a write's attempt, to run again only a write git refused for a
+/// lock that stood, the same file, throughout it (staging-and-commit F5). Writes nothing.
+pub fn index_lock_identity(repo: &Repository) -> Option<LockIdentity> {
+    look(&index_lock(repo))
+        .ok()
+        .flatten()
+        .map(|seen| LockIdentity {
+            modified: seen.modified,
+            bytes: seen.bytes,
+            device: seen.device,
+            inode: seen.inode,
+        })
+}
+
 /// What removing `repo`'s `index.lock` would destroy, for its confirmation: the lock's path,
 /// its age as of now, and what identifies it. Refused — [`Error::LockRefused`] — when there is
 /// no lock, when it is not a plain file, or while Cairn runs a `git` in the repository, so the
@@ -240,6 +265,55 @@ mod tests {
             index_lock_changed(&repo),
             None,
             "a directory read as a lock"
+        );
+    }
+
+    /// Phase 19's QA item 2: the lock's identity is its time, size, device and inode — a lock
+    /// swapped for another of the same time but another size, or another inode, reads as another
+    /// lock, as the removal's own re-check reads it; one left alone reads the same. Caught by: an
+    /// identity of the time alone.
+    #[test]
+    fn a_lock_swapped_at_the_same_time_reads_as_another() {
+        let dir = scratch();
+        let repo = open(&dir);
+        let lock = dir.path().join(".git/index.lock");
+        assert_eq!(index_lock_identity(&repo), None);
+        std::fs::write(&lock, b"one").unwrap();
+        let when = SystemTime::now() - Duration::from_secs(60);
+        let stamp = |path: &Path| {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        };
+        stamp(&lock);
+        let first = index_lock_identity(&repo);
+        assert!(first.is_some());
+        assert_eq!(
+            index_lock_identity(&repo),
+            first,
+            "the same lock read as another"
+        );
+        // Rewritten in place, another size, the same time.
+        std::fs::write(&lock, b"longer").unwrap();
+        stamp(&lock);
+        assert_ne!(
+            index_lock_identity(&repo),
+            first,
+            "another size read as the same lock"
+        );
+        // Made again: another inode, the same size and time.
+        let second = index_lock_identity(&repo);
+        let held = dir.path().join(".git/held");
+        std::fs::rename(&lock, &held).unwrap();
+        std::fs::write(&lock, b"longer").unwrap();
+        stamp(&lock);
+        assert_ne!(
+            index_lock_identity(&repo),
+            second,
+            "another inode read as the same lock"
         );
     }
 

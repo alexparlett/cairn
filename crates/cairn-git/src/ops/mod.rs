@@ -231,7 +231,10 @@ pub use discard::{
     discard_lines_consequence,
 };
 pub use fetch::{FetchCancel, FetchInProgress, fetch};
-pub use remove_lock::{index_lock_changed, remove_index_lock, remove_lock_consequence};
+pub use remove_lock::{
+    LockIdentity, index_lock_changed, index_lock_identity, remove_index_lock,
+    remove_lock_consequence,
+};
 pub use stage::{UnstageTo, stage_files, stage_lines, unstage_files, unstage_lines};
 
 pub use crate::process::{Askpass, GitBinary, GitEnvironment, GitVersion};

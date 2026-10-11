@@ -1081,9 +1081,12 @@ impl LaneState {
             && running.id == id
             && running.commit
         {
-            match &running.cancel {
-                Some(cancel) => cancel(),
-                None => running.cancelled = true,
+            // Kept whichever way it lands: a kill installed for an attempt already reaped ends
+            // nothing, and the lock retry's next attempt must still see it (phase 19's QA item
+            // 3). `install` fires a kept cancel; the reads after a reap poll the close alone.
+            running.cancelled = true;
+            if let Some(cancel) = &running.cancel {
+                cancel();
             }
         }
     }
@@ -1135,8 +1138,10 @@ impl LaneState {
 
     /// Waits `after` before `id` runs again for the lock (F5) — a sleep on this, the lane's own
     /// thread, in `slice`s — and lets go of the cancel its last attempt installed, so a cancel
-    /// that comes now is kept for the next attempt's checks; `false`, at once, once the
-    /// repository is closing, when the write is not run again.
+    /// that comes now is kept for the next attempt's checks; `true` at once when a cancel is kept,
+    /// so that attempt's checks end it as cancelled rather than the wait ending it as the lock's
+    /// refusal (phase 19's QA item 4); `false`, at once, once the repository is closing, when the
+    /// write is not run again.
     fn wait_to_retry(&self, id: OperationId, after: Duration, slice: Duration) -> bool {
         if let Some(running) = self
             .lock()
@@ -1150,6 +1155,9 @@ impl LaneState {
         while waited < after {
             if self.is_closing() {
                 return false;
+            }
+            if self.cancel_kept(id) {
+                return true;
             }
             std::thread::sleep(slice);
             waited += slice;
@@ -1509,7 +1517,7 @@ fn run(
     let mut write = write;
     let mut retries = 0;
     let outcome = loop {
-        let before = ops::index_lock_changed(repo);
+        let before = ops::index_lock_identity(repo);
         let copy = write.token_free_copy();
         let amend = write.amend_words();
         let outcome = write.perform(
@@ -1519,7 +1527,7 @@ fn run(
             &watch,
         );
         // Run again only what git refused before writing: the lock stood from before this
-        // attempt began and is the same file now, so no git could have changed the index
+        // attempt began and is the same file now — its time, size, device and inode — so no git could have changed the index
         // meanwhile (the phase's stopping rule).
         let refused_for_the_lock = match &outcome {
             Err(error) => failed_on_lock(error, &lock),
@@ -1528,7 +1536,7 @@ fn run(
         if retries == LOCK_RETRIES
             || !refused_for_the_lock
             || before.is_none()
-            || ops::index_lock_changed(repo) != before
+            || ops::index_lock_identity(repo) != before
             || !serving
                 .lane
                 .wait_to_retry(id, LOCK_RETRY_AFTER, LOCK_RETRY_SLICE)
@@ -1925,6 +1933,37 @@ mod tests {
         };
         assert!(lane.if_unchanged(after, || sent = true));
         assert!(sent, "a read begun after the write was dropped");
+    }
+
+    /// Phase 19's QA item 3: a Cancel that lands after an attempt's git was reaped — its kill
+    /// still installed — and before the lock retry lets that kill go is kept for the retried
+    /// attempt's checks, which end it as cancelled. Caught by: a cancel spent on a dead kill,
+    /// so the retried commit runs.
+    #[test]
+    fn a_cancel_on_a_reaped_attempt_is_kept_for_the_retry() {
+        let id = OperationId::next();
+        let lane = running(id, true);
+        lane.install(id, Box::new(|| {}));
+        lane.cancel(id);
+        assert!(lane.wait_to_retry(id, Duration::ZERO, LOCK_RETRY_SLICE));
+        assert!(lane.cancel_kept(id), "the cancel was lost to the retry");
+    }
+
+    /// Phase 19's QA item 4: a Cancel during the retry's wait ends the wait within about one
+    /// slice, answering "run it" so the next attempt's checks end it as cancelled rather than as
+    /// the lock's refusal. Caught by: a wait that sleeps its whole second regardless.
+    #[test]
+    fn a_cancel_ends_the_retrys_wait_at_once() {
+        let id = OperationId::next();
+        let lane = running(id, true);
+        lane.cancel(id);
+        let started = std::time::Instant::now();
+        assert!(lane.wait_to_retry(id, Duration::from_secs(10), LOCK_RETRY_SLICE));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the wait ran on past a cancel: {:?}",
+            started.elapsed()
+        );
     }
 
     /// R4.6: a refresh is kept back while a commit runs, and only then. Caught by: deferring

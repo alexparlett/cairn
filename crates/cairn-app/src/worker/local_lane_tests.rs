@@ -1083,6 +1083,55 @@ fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation(
     drop(handle);
 }
 
+/// The stopping rule's negative arms (phase 19's QA items 1 and 2): a write git refused for the
+/// lock is run again only where the same lock stood from before the attempt until after it.
+/// (a) A lock made during the attempt — none before — and (b) a lock swapped during it for
+/// another file of the same time but another size each end the write failed after ONE `git`,
+/// since another git may have written the index between. Caught by: the condition dropped, or a
+/// lock told the same by its time alone.
+#[test]
+fn a_lock_made_or_swapped_during_the_attempt_is_never_run_through_again() {
+    for swapped in [false, true] {
+        let fixture = with_files(&format!("cairn-lane-lock-swapped-{swapped}"), &["a"]);
+        let lock = fixture.path.join(".git/index.lock");
+        if swapped {
+            std::fs::write(&lock, "").unwrap_or_else(|error| panic!("{error}"));
+        }
+        let body = format!(
+            "  L='{lock}'\n  echo $$ >> \"$DIR/adds\"\n  \
+             if [ -e \"$L\" ]; then /usr/bin/touch -r \"$L\" \"$DIR/stamp\"; /bin/rm -f \"$L\"; \
+             printf 'another' > \"$L\"; /usr/bin/touch -r \"$DIR/stamp\" \"$L\"; \
+             else : > \"$L\"; fi\n  \
+             echo \"fatal: Unable to create '$L': File exists.\" >&2\n  exit 128",
+            lock = lock.display()
+        );
+        let stub = stub(&[("add", &body)]);
+        let (home, runtime) = (Home::new(), RuntimeDir::new());
+        let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+        let before = std::fs::metadata(&lock).ok().map(|m| m.modified().ok());
+        let id = ask(&handle, stage(&["a"]));
+        let seen = until_ended(&mut updates, id);
+        assert!(
+            matches!(ending_of(&seen, id).0, WriteEnding::Failed(_)),
+            "swapped={swapped}: {seen:?}"
+        );
+        if swapped {
+            // The swap took: another file of another size, at the old lock's time.
+            let now = std::fs::metadata(&lock).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(now.len(), "another".len() as u64);
+            assert_eq!(Some(now.modified().ok()), before, "the swap kept no time");
+        }
+        let adds = std::fs::read_to_string(stub.directory.join("adds"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            adds.lines().count(),
+            1,
+            "swapped={swapped}: run again over a lock that did not stand throughout"
+        );
+        drop(handle);
+    }
+}
+
 /// F5 and the phase's stopping rule: a write git refused for a lock another program held, and let
 /// go of within the second, runs again and writes once — its first attempt wrote nothing, since
 /// the lock stood throughout it. Caught by: a write reported failed though the lock went, or

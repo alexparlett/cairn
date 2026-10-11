@@ -1145,9 +1145,20 @@ ref's press finds its row (`ref_find::find_commit`;
 `an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits`), and one append-only list of
 each `$ git …` it ran and what that said. Escape and a press outside close it.
 
-**Result lines.** Only where Fork's own Activity Manager was seen to say one: "staged" and "stage
-failed" for a stage of lines or files, "Switched to branch 'topic'" for a branch created and
-checked out, with or without Discard. Every other operation's row draws its name alone.
+**Result lines**, as Fork's Activity Manager draws them (observed first-hand,
+`docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`;
+`LocalWrite::result_lines`, `each_write_carries_forks_result_lines`): "staged", "unstaged" and
+"discarded" (files and lines alike); none for a commit, an amend, a branch created without
+checkout or a lock removed; git's own "Switched to branch 'topic'" for a branch checked out, with
+Discard or without; "<verb> failed" on every failure ("stage failed", "commit failed", "create
+branch failed", "remove failed"); and "cancelled" on a cancel. A fetch says "Already up to date"
+when git updated no branch and "Fetched 1 branch" or "Fetched N branches" when it did, counted
+from git's own ref-update lines in its record (`activity::branches_fetched`: a remote-tracking
+branch created, moved or forced; not a tag, a ref found up to date, refused or pruned), "fetch
+failed" and "cancelled" otherwise (`a_fetch_says_how_many_branches_it_fetched_as_fork_does`).
+Fork's own failed commit reading "succeeded", its "canceled" spelling and its missing space in
+"Switched to branch'topic'" are not copied; Cairn keeps rows for a line discard and a lock
+removed, which Fork adds none for.
 
 **What an entry says beyond its result.** Create Branch's Discard, whose prompt is never drawn
 (its dialog's press is the confirmation), quotes none: once it succeeded its entry says what
@@ -1237,7 +1248,11 @@ still running and never the newest, so only an operation larger than the bound a
 cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character, with the diff
 view's marker after it (`cairn_ui::cut_marker`;
 `a_long_line_is_kept_cut_with_the_diff_views_marker`). Both lists — the operations and the
-selected one's lines — are drawn through a virtualizing view whose rows are of one fixed height,
+selected one's lines — are drawn through a virtualizing view whose rows are of one fixed height
+(the selected entry's lines opened, as Fork opens them, at the end of a running operation's
+output so far and never following what arrives after, and at a finished one's top —
+`a_running_entry_opens_at_its_end_and_a_finished_one_at_its_top`,
+`a_running_entry_opens_at_its_end_and_does_not_follow`),
 the prompt laid out above the lines' list (`the_popover_builds_one_viewport_of_operations_and_of_lines`,
 `the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said`). The open popover reads a snapshot
 (`ActivityLog::shown`): the selected entry's lines shared by a reference count, copied only when

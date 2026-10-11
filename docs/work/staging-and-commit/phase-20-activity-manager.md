@@ -128,7 +128,12 @@ Otherwise do not stop for permission.
 
 The risk is the newest output lost, or a credential drawn.
 
-- A hook that prints 100,000 lines: the latest lines are drawn while it runs and after it ends.
+- A hook that prints 100,000 lines: the latest lines are kept while it runs and after it ends.
+  (Amended 2026-10-11, Fork observed first-hand, `docs/research/staging-and-commit/
+  fork-activity-result-lines-2026-10-11.md`: an entry selected while it runs opens at the end of
+  its output so far — its latest lines drawn — and does not follow the lines that arrive after;
+  a finished entry selected afresh opens at its top, its latest lines reachable by scrolling.
+  Was: "the latest lines are drawn while it runs and after it ends".)
 - Eviction drops whole oldest operations; the newest is never cut unless it alone passes the
   bound.
 - No line in the popover has passed anything but phase 12's one scrub.

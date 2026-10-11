@@ -52,6 +52,7 @@ type Lines = Arc<VecDeque<ActivityLine>>;
 
 fn entry(n: usize, lines: Lines) -> ActivityEntry {
     ActivityEntry {
+        id: n as u64,
         name: format!("Operation {n}"),
         result: None,
         status: ActivityStatus::Succeeded,
@@ -356,4 +357,38 @@ fn the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said() {
         "rows not of one fixed height"
     );
     assert!(!labels(&test).iter().any(|label| label == "Show All"));
+}
+
+/// Phase 20's QA item 1, as Fork does it (observed first-hand 2026-10-11,
+/// `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`): the selected
+/// entry's lines open, for a running operation, at the end of its output so far — its newest
+/// line built — and, for a finished one, at its top — its `$ git …` line built — over the window's
+/// one tail's worth of lines and fifty more. Caught by: every entry opened at its top (the
+/// newest of a running hook's flood a scroll away) or at its end.
+#[test]
+fn a_running_entry_opens_at_its_end_and_a_finished_one_at_its_top() {
+    // `crate::output_tail::OUTPUT_LINES` in the window, and fifty more.
+    let count = 10_000 + 50;
+    let lines: Lines = Arc::new(
+        std::iter::once(ActivityLine::Ran("$ git commit -q -F -".to_owned()))
+            .chain((0..count).map(|n| ActivityLine::Output(format!("hook line {n}"))))
+            .collect(),
+    );
+    let newest = format!("hook line {}", count - 1);
+    let (test, _) = launch(Rc::new(vec![ActivityEntry {
+        status: ActivityStatus::Running,
+        took: None,
+        cancellable: true,
+        ..entry(0, Arc::clone(&lines))
+    }]));
+    let shown = labels(&test);
+    assert!(shown.contains(&newest), "{shown:?}");
+    assert!(!shown.iter().any(|label| label == "$ git commit -q -F -"));
+    let (test, _) = launch(Rc::new(vec![entry(0, lines)]));
+    let shown = labels(&test);
+    assert!(
+        shown.iter().any(|label| label == "$ git commit -q -F -"),
+        "{shown:?}"
+    );
+    assert!(!shown.contains(&newest));
 }

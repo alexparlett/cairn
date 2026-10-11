@@ -3,6 +3,34 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 20's QA fixes, part 2: Fork's result lines and the lines' scroll (packet mode)
+
+The user chose to check Fork first-hand; the observation is saved in full as
+`docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md` and applied by the
+coordinator (state.md, "Phase 20").
+
+- **The result lines** (`LocalWrite::result_lines`; fetch's in `activity::Activity::of_fetch` and
+  `branches_fetched`): pinned by `each_write_carries_forks_result_lines` (every write, its success,
+  "<verb> failed" and "cancelled") and `a_fetch_says_how_many_branches_it_fetched_as_fork_does`
+  (none moved, one, three of eight ref-update lines — a tag, a tag update, a refusal, an up to date
+  and a prune not counted — a failure and both cancels). The fetch's count reads git's own
+  ref-update lines from the record the network lane already sends (`OperationRan`); no read added.
+- **Item 1, the lines' scroll, as Fork**: `cairn_ui`'s `EntryLines`, keyed by the entry's new
+  `ActivityEntry::id`, mounts afresh for each entry selected; a running entry is placed at its
+  end at its first layout (`on_sized`, `ScrollController::scroll_to_y` to the content's height
+  less the pane's) and never moved after; a finished one opens at its top. Freya's
+  `ScrollPosition::End` request (caa46f8, `use_scroll_controller.rs`, `use_apply`) stores a
+  position the content's whole height up, past the end, which the next lines then scroll into
+  view — found by `a_running_entry_opens_at_its_end_and_does_not_follow` failing with it ("the
+  pane moved as lines arrived", rows 100-123 shown after 50 more lines). Pinned by
+  `a_running_entry_opens_at_its_end_and_a_finished_one_at_its_top` (ui, 10,050 lines),
+  `a_running_entry_opens_at_its_end_and_does_not_follow` (window) and
+  `the_activity_manager_draws_forks_rows_and_header` (a running flood opened at its newest line,
+  then finished and chosen afresh, at "Earlier output not kept."). At the tail's bound a line that
+  arrives pops the oldest, so a running entry's view shifts by that line — the bound's, not a
+  follow.
+- The phase doc's QA brief line and PRD R12.1 amended, dated.
+
 ## 2026-10-11 — phase 20's QA fixes, part 1 (packet mode)
 
 The coordinator's adjudication (`qa-p20/adjudication.md`), the user having chosen to check Fork

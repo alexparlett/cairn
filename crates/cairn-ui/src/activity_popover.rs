@@ -103,6 +103,8 @@ impl ActivityStatus {
 /// An operation as the popover draws it, every text the window's.
 #[derive(Debug, Clone)]
 pub struct ActivityEntry {
+    /// Which operation it is, the same however the list moves: what its lines are opened by.
+    pub id: u64,
     pub name: String,
     /// Fork's result line under its row, where there is one.
     pub result: Option<String>,
@@ -130,7 +132,8 @@ pub struct ActivityEntry {
 /// Compared by the snapshot its lines are: a snapshot is replaced, never changed in place.
 impl PartialEq for ActivityEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.id == other.id
+            && self.name == other.name
             && self.result == other.result
             && self.status == other.status
             && self.started == other.started
@@ -318,6 +321,63 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
         .into()
 }
 
+/// The selected operation's lines, opened as Fork opens them (observed 2026-10-11,
+/// `fork-activity-result-lines-2026-10-11.md`): a running operation's at the end of its output so
+/// far, a finished one's at its top — its first `$ git …` — and, either way, left where they are
+/// as lines arrive, never following them. Mounted afresh for each entry selected (its key).
+struct EntryLines {
+    lines: Lines,
+    running: bool,
+    key: DiffKey,
+}
+
+impl PartialEq for EntryLines {
+    fn eq(&self, other: &Self) -> bool {
+        self.lines == other.lines && self.running == other.running && self.key == other.key
+    }
+}
+
+impl KeyExt for EntryLines {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for EntryLines {
+    fn render(&self) -> impl IntoElement {
+        // Where it opens, placed once, at its first layout: a running entry's end, as the pane's
+        // height then shows it; never moved after. (Freya's `ScrollPosition::End` request keeps
+        // a position past the end, which the next lines would then scroll into view.)
+        let running = self.running;
+        let mut placed = use_state(move || !running);
+        let mut controller = use_scroll_controller(ScrollConfig::default);
+        let rows = self.lines.lines.len() + usize::from(self.lines.earlier_not_kept);
+        let content = rows as f32 * LINE_ROW_HEIGHT;
+        rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            .on_sized(move |e: Event<SizedEventData>| {
+                let height = e.area.height();
+                if !*placed.peek() && height > 0. {
+                    controller.scroll_to_y(-((content - height).max(0.)) as i32);
+                    placed.set(true);
+                }
+            })
+            .child(
+                VirtualScrollView::new_with_data(self.lines.clone(), line_row)
+                    .length(rows)
+                    .item_size(LINE_ROW_HEIGHT)
+                    .scroll_controller(controller)
+                    .width(Size::fill())
+                    .height(Size::fill()),
+            )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
 fn line_row(item: VirtualItem, lines: &Lines) -> Element {
     let colours = get_theme_or_default().read().colors().clone();
     let (text, colour) = match item.index.checked_sub(usize::from(lines.earlier_not_kept)) {
@@ -384,18 +444,16 @@ impl Component for ActivityPopover {
         let right = self.entries.get(self.selected).map(|entry| {
             let on_replaced = self.on_replaced.clone();
             let replaced = entry.replaced;
-            let rows = entry.lines.len() + usize::from(entry.earlier_not_kept);
-            let lines = VirtualScrollView::new_with_data(
-                Lines {
+            // Keyed by the entry, so selecting another opens its lines afresh.
+            let lines = EntryLines {
+                lines: Lines {
                     lines: entry.lines.clone(),
                     earlier_not_kept: entry.earlier_not_kept,
                 },
-                line_row,
-            )
-            .length(rows)
-            .item_size(LINE_ROW_HEIGHT)
-            .width(Size::fill())
-            .height(Size::flex(1.));
+                running: entry.status == ActivityStatus::Running,
+                key: DiffKey::None,
+            }
+            .key(entry.id);
             rect()
                 .width(Size::flex(1.))
                 .height(Size::fill())

@@ -901,18 +901,22 @@ fn the_activity_manager_draws_forks_rows_and_header() {
     for text in [
         "staged",
         "stage failed",
+        "cancelled",
         FAILED_GLYPH,
         CANCELLED_GLYPH,
-        EARLIER_NOT_KEPT,
     ] {
         assert!(
             shown.iter().any(|label| label == text),
             "{text:?}: {shown:?}"
         );
     }
+    // The running entry, selected as the popover opens, opens at the end of its output so far
+    // (Fork, observed 2026-10-11): its newest line built.
+    let newest = format!("hook line {}", crate::output_tail::OUTPUT_LINES + 49);
+    assert!(drawn(&test, &newest), "{shown:?}");
     assert!(
-        !shown.iter().any(|label| label.contains("hook line 0")),
-        "the oldest line was kept past the bound"
+        !drawn(&test, EARLIER_NOT_KEPT),
+        "a running entry opened at its top"
     );
     let times = shown
         .iter()
@@ -922,12 +926,20 @@ fn the_activity_manager_draws_forks_rows_and_header() {
         })
         .count();
     assert_eq!(times, 4, "every row its start time: {shown:?}");
-    for word in ["running", "succeeded", "failed", "cancelled"] {
+    // No status word in a row: the four words are the header's; a cancel's row reads Fork's
+    // result line, "cancelled", once.
+    for word in ["running", "succeeded", "failed"] {
         assert!(
             !shown.iter().any(|label| label == word),
             "a status word in a row: {shown:?}"
         );
     }
+    assert_eq!(
+        shown.iter().filter(|label| *label == "cancelled").count(),
+        1,
+        "{shown:?}"
+    );
+
     assert!(
         shown
             .iter()
@@ -944,6 +956,45 @@ fn the_activity_manager_draws_forks_rows_and_header() {
         "{shown:?}"
     );
     assert!(drawn(&test, cairn_ui::GIT_ERROR_TEXT), "{shown:?}");
+    // The flooding commit, finished and selected afresh, opens at its top: "Earlier output not
+    // kept." first, its newest line far below.
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: flooding,
+            ending: WriteEnding::Done(Done {
+                description: "committed".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
+            }),
+            read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    let ended: Vec<String> = test.run_in(|| {
+        view.activity
+            .log
+            .peek()
+            .newest_first()
+            .map(|entry| entry.name.clone())
+            .collect()
+    });
+    assert_eq!(ended.first().map(String::as_str), Some("Commit"));
+    let mut log = view.activity.log;
+    test.run_in(|| {
+        let key = log.peek().key_at(0);
+        if let Some(key) = key {
+            log.write().choose(key);
+        }
+    });
+    settle(&mut test);
+    assert!(drawn(&test, EARLIER_NOT_KEPT), "{:?}", labels(&test));
+    assert!(!drawn(&test, &newest), "a finished entry opened at its end");
 }
 
 /// C35 (the user's ratification of 2026-10-10, option B): an amend run at the press that git
@@ -1057,5 +1108,46 @@ fn a_streamed_line_never_draws_the_window_again() {
         drawn_root.get(),
         open_at,
         "a streamed line drew the window again with the popover open"
+    );
+}
+
+/// Phase 20's QA item 1, as Fork does it (observed 2026-10-11,
+/// `fork-activity-result-lines-2026-10-11.md`): a running entry opens at the end of its output so
+/// far and does not follow the lines that arrive after. Caught by: a pane that opens at its top,
+/// or one that scrolls to each new line.
+#[test]
+fn a_running_entry_opens_at_its_end_and_does_not_follow() {
+    let (mut test, view, submitted) = launch();
+    let id = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::Commit {
+            message: "m".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let lines = |range: std::ops::Range<usize>| {
+        range
+            .map(|n| format!("hook line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    output(&mut test, view, &submitted, id, &lines(0..100));
+    open(&mut test);
+    assert!(drawn(&test, "hook line 99"), "{:?}", labels(&test));
+    assert!(
+        !drawn(&test, "hook line 0"),
+        "a running entry opened at its top"
+    );
+    output(&mut test, view, &submitted, id, &lines(100..150));
+    assert!(
+        drawn(&test, "hook line 99"),
+        "the pane moved as lines arrived: {:?}",
+        labels(&test)
+    );
+    assert!(
+        !drawn(&test, "hook line 149"),
+        "the pane followed the lines that arrived"
     );
 }

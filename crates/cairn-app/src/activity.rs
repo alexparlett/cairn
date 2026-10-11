@@ -127,6 +127,9 @@ pub struct Activity {
     pub cancellable: bool,
     /// Its output streamed as it ran: its records add their `$ git …` lines and endings alone.
     streamed: bool,
+    /// For a fetch, the branches git said it updated, read from its record (Fork's "Fetched 1
+    /// branch", "Already up to date"); `None` until its record arrives, and for every write.
+    fetched: Option<usize>,
     /// What it wrote and ran, one append-only list in the one bounded tail.
     lines: OutputTail<ActivityLine>,
 }
@@ -148,7 +151,20 @@ impl Activity {
             replaced: None,
             cancellable,
             streamed: false,
+            fetched: None,
             lines: OutputTail::default(),
+        }
+    }
+
+    /// A fetch of `remote`, which says how it ended as Fork's does.
+    fn of_fetch(key: ActivityKey, remote: &str, cancellable: bool) -> Self {
+        Self {
+            results: ResultLines {
+                succeeded: None,
+                failed: Some("fetch failed".to_owned()),
+                cancelled: Some("cancelled".to_owned()),
+            },
+            ..Self::new(key, format!("Fetch {remote}"), cancellable)
         }
     }
 
@@ -175,7 +191,12 @@ impl Activity {
     fn result(&self) -> Option<String> {
         match self.outcome {
             Outcome::Running => None,
-            Outcome::Succeeded => self.results.succeeded.clone(),
+            Outcome::Succeeded => match self.fetched {
+                Some(0) => Some("Already up to date".to_owned()),
+                Some(1) => Some("Fetched 1 branch".to_owned()),
+                Some(branches) => Some(format!("Fetched {branches} branches")),
+                None => self.results.succeeded.clone(),
+            },
             Outcome::Failed(_) => self.results.failed.clone(),
             Outcome::Cancelled(_) => self.results.cancelled.clone(),
         }
@@ -211,6 +232,10 @@ impl Activity {
     /// As the popover draws it: its lines only when it is the one selected.
     fn entry(&self, with_lines: bool, none: &Arc<VecDeque<ActivityLine>>) -> ActivityEntry {
         ActivityEntry {
+            id: match self.key {
+                ActivityKey::Write(id) => id.number(),
+                ActivityKey::Fetch(n) => u64::MAX - n,
+            },
             name: self.name.clone(),
             result: self.result(),
             status: self.outcome.status(),
@@ -412,6 +437,14 @@ impl ActivityLog {
             return;
         };
         let streamed = entry.streamed;
+        if let ActivityKey::Fetch(_) = key {
+            entry.fetched = Some(
+                commands
+                    .iter()
+                    .map(|record| branches_fetched(&record.stderr))
+                    .sum(),
+            );
+        }
         let lines: Vec<ActivityLine> = commands
             .iter()
             .flat_map(|record| command_lines(record, !streamed))
@@ -477,9 +510,9 @@ impl ActivityLog {
     pub fn fetch_started(&mut self, remote: &str) {
         self.fetches += 1;
         self.fetching = Some(self.fetches);
-        self.push(Activity::new(
+        self.push(Activity::of_fetch(
             ActivityKey::Fetch(self.fetches),
-            format!("Fetch {remote}"),
+            remote,
             true,
         ));
     }
@@ -508,7 +541,7 @@ impl ActivityLog {
             None => {
                 self.fetches += 1;
                 let key = ActivityKey::Fetch(self.fetches);
-                self.push(Activity::new(key, format!("Fetch {remote}"), false));
+                self.push(Activity::of_fetch(key, remote, false));
                 key
             }
         };
@@ -561,6 +594,32 @@ fn command_lines(record: &CommandRecord, output: bool) -> Vec<ActivityLine> {
     }
     lines.extend(ending_line(record).map(ActivityLine::Output));
     lines
+}
+
+/// The branches a fetch's stderr says git updated: each ref-update line git prints — ` <flag>
+/// <summary> <from> -> <to>` — for a remote-tracking branch it created, moved or forced, not one
+/// it pruned (`-`), found up to date (`=`) or refused (`!`), and not a tag (`t`, or a
+/// `<to>` with no `/`, which a remote-tracking branch's `<remote>/<branch>` always has). Read from
+/// git's own lines, already in the record, so no read is added for it.
+fn branches_fetched(stderr: &ScrubbedLines) -> usize {
+    stderr
+        .lines()
+        .filter(|line| {
+            let mut chars = line.chars();
+            let (Some(' '), Some(flag), Some(' ')) = (chars.next(), chars.next(), chars.next())
+            else {
+                return false;
+            };
+            let Some((_, to)) = line.split_once(" -> ") else {
+                return false;
+            };
+            matches!(flag, ' ' | '+' | '*')
+                && to
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|to| to.contains('/'))
+        })
+        .count()
 }
 
 /// How a command ended, in one form, when that was not a clean exit; nothing where how it
@@ -1129,6 +1188,88 @@ mod tests {
                 .map(|entry| entry.lines.bytes())
                 .sum::<usize>(),
             "the count drifted from the lines held"
+        );
+    }
+
+    /// Fork's fetch rows (observed 2026-10-11, `fork-activity-result-lines-2026-10-11.md`):
+    /// "Already up to date" when git updated no branch, "Fetched 1 branch" or "Fetched N
+    /// branches" counted from git's own ref-update lines — a tag, a branch found up to date, one
+    /// refused or one pruned not counted — "fetch failed" on a failure and "cancelled" on a
+    /// cancel; a write cancelled says "cancelled" too. Caught by: a count of every `->` line, a
+    /// fetch that moved nothing said to have fetched, or a cancel with no line.
+    #[test]
+    fn a_fetch_says_how_many_branches_it_fetched_as_fork_does() {
+        let fetched = |stderr: &str| {
+            let mut log = ActivityLog::default();
+            log.fetch_started("origin");
+            log.ran(
+                ActivityKey::Fetch(1),
+                &[record(
+                    &["fetch", "--progress"],
+                    stderr,
+                    CommandExit::Code(0),
+                )],
+            );
+            log.fetch_ended("origin", Outcome::Succeeded);
+            log.shown().0[0].result.clone()
+        };
+        assert_eq!(
+            fetched("remote: Counting objects: 3, done.").as_deref(),
+            Some("Already up to date")
+        );
+        assert_eq!(
+            fetched("From /r\n   12c8bf0..e94e4f0  master     -> origin/master").as_deref(),
+            Some("Fetched 1 branch")
+        );
+        assert_eq!(
+            fetched(
+                "From /r\n   12c8bf0..e94e4f0  master     -> origin/master\n \
+                 * [new branch]      topic      -> origin/topic\n \
+                 + 1111111...2222222 forced     -> origin/forced  (forced update)\n \
+                 * [new tag]         v1         -> v1\n \
+                 t [tag update]      v2         -> v2\n \
+                 ! [rejected]        held       -> origin/held  (would clobber existing tag)\n \
+                 = [up to date]      same       -> origin/same\n \
+                 - [deleted]         (none)     -> origin/gone"
+            )
+            .as_deref(),
+            Some("Fetched 3 branches")
+        );
+        let mut log = ActivityLog::default();
+        log.fetch_started("origin");
+        log.fetch_ended("origin", Outcome::Failed("git failed.".to_owned()));
+        log.fetch_started("origin");
+        log.fetch_ended("origin", Outcome::Cancelled(FETCH_CANCELLED.to_owned()));
+        let id = OperationId::for_tests(1);
+        log.write_started(&Asked {
+            results: crate::worker::LocalWrite::Commit {
+                message: "m".to_owned(),
+                skip_hooks: false,
+            }
+            .result_lines(),
+            ..asked(id, "Commit")
+        });
+        log.write_ended(
+            id,
+            &WriteEnding::Cancelled {
+                locks: Vec::new(),
+                ran: true,
+            },
+            None,
+        );
+        let results: Vec<Option<String>> = log
+            .shown()
+            .0
+            .iter()
+            .map(|entry| entry.result.clone())
+            .collect();
+        assert_eq!(
+            results,
+            [
+                Some("cancelled".to_owned()),
+                Some("cancelled".to_owned()),
+                Some("fetch failed".to_owned())
+            ]
         );
     }
 

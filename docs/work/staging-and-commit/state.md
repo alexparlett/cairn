@@ -49,8 +49,9 @@ below. QA is the coordinator's. Phase 19 (one home for each message) built in pa
 and their docs done, full gate green, its stopping rule not triggered; QA adjudicated, fix-now items
 1-4 and 6-10 fixed at d1207eb, full gate green; see "Phase 19" below. Phase 20 (Fork's Activity
 Manager) built in packet mode, steps 0-2 and 4-6, full gate green; its stopping rule triggered for
-the result lines Fork's observation does not give — with the user (NEEDS USER SIGN-OFF); see
-"Phase 20" below. QA is the coordinator's.**
+the result lines, and the user chose to check Fork first-hand (2026-10-11); QA adjudicated, items
+1-8 fixed with the result lines and the lines' scroll as Fork was observed, 9 and 10 to teardown,
+full gate green; see "Phase 20" below.**
 
 ## The redesign (2026-10-10)
 
@@ -114,9 +115,19 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   reads the fetch's); the C35 reflog-only wording "Amended 3f2a1c9. It can't be recovered: git
   kept no reflog of it."; the result lines decided as Fork observed them are on every stage
   (lines, files, all) and Create Branch's checkout with or without Discard.
-- **Stopping rule triggered — with the user**: no result line from Fork's observation or git's own
-  output for unstage, discard, commit, amend, Create Branch without checkout, Remove index.lock,
-  fetch, and any cancel; those rows draw the name alone (`ResultLines` `None`) pending sign-off.
+- **Stopping rule triggered, resolved**: the user chose to check Fork first-hand; the observation
+  is `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`.
+- **The coordinator's application of Fork's observed behaviour (2026-10-11; the user chose to
+  check Fork first-hand)**: result lines "staged", "unstaged", "discarded" (files and lines); none
+  for commit, amend, Create Branch without checkout and Remove index.lock (Cairn keeps its rows
+  for a line discard and a lock removed, which Fork adds none for); git's "Switched to branch
+  'topic'" (with the space) for Create Branch with checkout; fetch "Already up to date" when
+  nothing moved and "Fetched N branch(es)" when refs moved, counted from git's ref-update lines;
+  "<verb> failed" on every failure (Fork's "succeeded" on a failed commit not copied), ⚠ kept;
+  "cancelled" on a cancel (Fork's "canceled" spelled as the status word), ⊘ kept; running rows
+  unchanged. The lines' list: an entry selected while running opens at the end of its output
+  so far and does not follow; a finished entry selected afresh opens at its top. The phase doc's
+  QA brief line and PRD R12.1 amended, dated.
 - **QA part 1 (2026-10-11)**: items 2-8 fixed (a tap per write; the read copied before the lock;
   the commit box's output in `CommitBoxView::output`, read by no render; the bound's tests exact;
   `WriteEnding::Cancelled { ran }`), 9 and 10 on the teardown list, 11-13 dismissed by the

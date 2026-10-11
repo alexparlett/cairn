@@ -947,6 +947,17 @@ literally.
   Background tabs are not drawn (the user's to confirm, `state.md`). (Decided 2026-10-10, the
   user's answers, 5: Cairn has no background operations yet; the tabs are filed as an issue at
   teardown.)
+  (Applied 2026-10-11 as Fork, observed first-hand at the user's choice,
+  `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`:) the result lines
+  are "staged", "unstaged" and "discarded" (files and lines alike); none for a commit, an amend, a
+  branch created without checkout or a lock removed; git's own "Switched to branch 'topic'" for a
+  branch checked out; for a fetch "Already up to date" when it updated no branch and "Fetched 1
+  branch" / "Fetched N branches" when it did, counted from git's ref-update lines; "<verb>
+  failed" on every failure ("commit failed", "fetch failed", "remove failed"); and "cancelled" on
+  a cancel, beside its ⊘. Fork's own failed commit reading "succeeded", its "canceled" spelling,
+  its missing space in "Switched to branch'topic'", and its adding no row for a line discard or
+  a lock removed are not copied. The selected entry's lines open, for a running operation, at the
+  end of its output so far, never following what arrives after; for a finished one, at its top.
   (Decided 2026-10-10, the user's decisions on phase 14's open items, 2:) Create Branch's
   Discard, whose prompt is never drawn (the press is its confirmation, R11.3), is not quoted
   under "Confirmed:" in its entry. The entry describes what happened instead — "Discarded local

@@ -371,40 +371,41 @@ impl LocalWrite {
     }
 
     /// Fork's result line under its row in the activity popover (R12.1, C29), for each way it
-    /// can end — only where Fork's own Activity Manager was seen to say one (observed `am1`:
-    /// "staged" and "stage failed" for a stage, "Switched to branch 'topic'" for a branch
-    /// created and checked out) or git's own output gives one. Every other is `None` until the
-    /// user signs off on its words (phase 20's stopping rule).
+    /// can end, as Fork's Activity Manager says it (observed first-hand, 2026-10-11,
+    /// `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`): the verb's
+    /// past participle where Fork's says one — "staged", "unstaged", "discarded" (files and,
+    /// Cairn's own row, lines) — none for a commit, an amend, a branch created without checkout
+    /// or a lock removed, and git's own "Switched to branch 'topic'" for a branch checked out;
+    /// "<verb> failed" on every failure, as Fork's "stage failed"; "cancelled" on a cancel.
     pub fn result_lines(&self) -> ResultLines {
+        let lines = |succeeded: Option<String>, verb: &str| ResultLines {
+            succeeded,
+            failed: Some(format!("{verb} failed")),
+            cancelled: Some("cancelled".to_owned()),
+        };
+        let switched = |name: &str| Some(format!("Switched to branch '{name}'"));
         match self {
             Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => {
-                ResultLines {
-                    succeeded: Some("staged".to_owned()),
-                    failed: Some("stage failed".to_owned()),
-                    cancelled: None,
-                }
+                lines(Some("staged".to_owned()), "stage")
             }
-            Self::CreateBranchAndCheckout { name, .. } => ResultLines {
-                succeeded: Some(format!("Switched to branch '{name}'")),
-                ..ResultLines::default()
-            },
-            Self::CreateBranchDiscarding(confirmed) => ResultLines {
-                succeeded: confirmed
+            Self::UnstageLines { .. } | Self::UnstageFiles { .. } | Self::UnstageAll { .. } => {
+                lines(Some("unstaged".to_owned()), "unstage")
+            }
+            Self::DiscardLines(_) | Self::DiscardFiles(_) => {
+                lines(Some("discarded".to_owned()), "discard")
+            }
+            Self::Commit { .. } => lines(None, "commit"),
+            Self::Amend { .. } | Self::AmendAtPress { .. } => lines(None, "amend"),
+            Self::CreateBranch { .. } => lines(None, "create branch"),
+            Self::CreateBranchAndCheckout { name, .. } => lines(switched(name), "create branch"),
+            Self::CreateBranchDiscarding(confirmed) => lines(
+                confirmed
                     .consequence()
                     .checked_out()
-                    .map(|name| format!("Switched to branch '{name}'")),
-                ..ResultLines::default()
-            },
-            Self::UnstageLines { .. }
-            | Self::UnstageFiles { .. }
-            | Self::UnstageAll { .. }
-            | Self::DiscardLines(_)
-            | Self::DiscardFiles(_)
-            | Self::Commit { .. }
-            | Self::Amend { .. }
-            | Self::AmendAtPress { .. }
-            | Self::CreateBranch { .. }
-            | Self::RemoveLock(_) => ResultLines::default(),
+                    .and_then(|name| switched(&name)),
+                "create branch",
+            ),
+            Self::RemoveLock(_) => lines(None, "remove"),
         }
     }
 
@@ -1778,6 +1779,109 @@ mod tests {
             LocalWrite::RemoveLock(Confirmed::by_user(lock)).name(),
             "Remove index.lock"
         );
+    }
+
+    /// Fork's result lines, observed first-hand on 2026-10-11
+    /// (`fork-activity-result-lines-2026-10-11.md`): "staged", "unstaged", "discarded"; none for
+    /// a commit, an amend, a branch created without checkout and a lock removed; git's "Switched
+    /// to branch 'topic'" for a branch checked out, with Discard or without; "<verb> failed" on
+    /// every failure and "cancelled" on every cancel. Caught by: a line Fork does not draw, a
+    /// line missing, or Fork's "Switched to branch'topic'" typo copied.
+    #[test]
+    fn each_write_carries_forks_result_lines() {
+        use cairn_model::Consequence;
+        let at = Oid::from_bytes(&[1; 20]).unwrap();
+        let paths = vec![RepoPath::new("a.rs".to_owned())];
+        let confirmed = |consequence| Confirmed::by_user(consequence);
+        let cases: Vec<(LocalWrite, Option<&str>, &str)> = vec![
+            (
+                LocalWrite::StageFiles {
+                    paths: paths.clone(),
+                },
+                Some("staged"),
+                "stage",
+            ),
+            (
+                LocalWrite::UnstageFiles {
+                    paths: paths.clone(),
+                    to: UnstageTarget::Head,
+                },
+                Some("unstaged"),
+                "unstage",
+            ),
+            (
+                LocalWrite::DiscardFiles(confirmed(Consequence::DiscardFiles {
+                    files: Vec::new(),
+                })),
+                Some("discarded"),
+                "discard",
+            ),
+            (
+                LocalWrite::Commit {
+                    message: "m".to_owned(),
+                    skip_hooks: false,
+                },
+                None,
+                "commit",
+            ),
+            (
+                LocalWrite::AmendAtPress {
+                    message: "m".to_owned(),
+                    skip_hooks: false,
+                },
+                None,
+                "amend",
+            ),
+            (
+                LocalWrite::CreateBranch {
+                    name: "side".to_owned(),
+                    at,
+                },
+                None,
+                "create branch",
+            ),
+            (
+                LocalWrite::CreateBranchAndCheckout {
+                    name: "topic".to_owned(),
+                    at,
+                },
+                Some("Switched to branch 'topic'"),
+                "create branch",
+            ),
+            (
+                LocalWrite::CreateBranchDiscarding(confirmed(Consequence::CheckoutDiscarding {
+                    branch: "topic".to_owned(),
+                    at,
+                    head: None,
+                })),
+                Some("Switched to branch 'topic'"),
+                "create branch",
+            ),
+            (
+                LocalWrite::RemoveLock(confirmed(Consequence::RemoveLock {
+                    path: PathBuf::from("/r/.git/index.lock"),
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    read_at: std::time::SystemTime::UNIX_EPOCH,
+                    bytes: 0,
+                    device: 0,
+                    inode: 0,
+                })),
+                None,
+                "remove",
+            ),
+        ];
+        for (write, succeeded, verb) in cases {
+            let name = write.name();
+            assert_eq!(
+                write.result_lines(),
+                ResultLines {
+                    succeeded: succeeded.map(str::to_owned),
+                    failed: Some(format!("{verb} failed")),
+                    cancelled: Some("cancelled".to_owned()),
+                },
+                "{name}"
+            );
+        }
     }
 
     /// F5 and R12.4: a write is refused "for the lock" — retried, and its Git Error offering the

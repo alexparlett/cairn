@@ -171,8 +171,9 @@ and re-checked before it removes exactly that file — the one mutation Cairn ma
 `git`. The title bar's status box opens Fork's Activity
 Manager (`docs/systems/git-processes.md`, "The activity popover"), hung from the box, the
 window's keys inert while it is open: the session's writes and
-fetches, newest first, each row its one name, Fork's result line where Fork's was seen
-("staged", "stage failed", "Switched to branch 'topic'"), its time and ⚠ on a failure; the one
+fetches, newest first, each row its one name, Fork's result line as Fork draws it ("staged",
+"unstaged", "discarded", "Switched to branch 'topic'", "Fetched 1 branch", "Already up to date",
+"<verb> failed", "cancelled", none for a commit), its time and ⚠ on a failure; the one
 selected its word — running, succeeded, failed, cancelled — with its time and duration, a failure's
 or a cancel's one sentence, the prompt it confirmed whole only once it ran (Create Branch's
 Discard saying what it did instead, and an amend whose replaced commit was pushed while it ran

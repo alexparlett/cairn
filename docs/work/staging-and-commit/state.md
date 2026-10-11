@@ -45,9 +45,8 @@ stopping rule triggered; see "Phase 16" below. QA is the coordinator's. Phase 17
 diff) built in packet mode, full gate green, neither stopping rule triggered, nothing for the
 user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below. Phase 18 (the commit
 box rebuilt) built in packet mode, full gate green, its stopping rule not triggered; see "Phase 18"
-below. QA is the coordinator's. Phase 19 (one home for each message) built in packet mode, its
-code steps 1-5 done, `gate.sh --fast` green; the full gate, step 5's docs and the carried items
-below are open; see "Phase 19" below. QA is the coordinator's.**
+below. QA is the coordinator's. Phase 19 (one home for each message) built in packet mode, steps 1-5
+and their docs done, full gate green, its stopping rule not triggered; see "Phase 19" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -92,7 +91,7 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
 
-## Phase 19 of the rebuild, one home for each message (2026-10-11) — PARTLY DONE
+## Phase 19 of the rebuild, one home for each message (2026-10-11)
 
 - **Built** (code, `gate.sh --fast` green; tip after `ae55496`): (1) one name — `LocalWrite::name`
   alone (`what`, `awaited`, `Asked.what/awaited`, `UNKNOWN_WRITE`, `status_text::capitalised` gone);
@@ -126,15 +125,24 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   `a_write_is_refused_for_the_lock_only_where_git_could_not_create_it`,
   `the_closing_line_names_the_write_by_its_one_name`, `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`,
   `the_status_box_is_handed_what_runs_by_its_one_name`, `fetch_is_greyed_while_a_fetch_is_in_flight`.
-- **Open (carried)**: the full `scripts/gate.sh`; step 5's docs (`docs/systems/git-processes.md`,
-  `local-changes.md`, the root `CLAUDE.md` status paragraph, its UI-thread residuals — the status
-  box's and the lock banner's timers, `Request::LockConsequence` from the banner — and repo-map
-  rows for `ending_dialog.rs`, `leftover_lock.rs`, `modal.rs`, `worker/ending_words.rs`,
-  `cairn-ui/src/lock_banner.rs`); PRD R7.2's Escape site list unchanged (no new site); a discard's
-  write is not retried for the lock (its token is spent by the attempt — engine hand-back needed);
-  a cairn-ui headless test of the 250 ms delay. Decided here: the popover is not drawn while a
-  dialog is over it; an amend asking to be confirmed leaves no activity entry; a refusal, a stale
-  write, one never run and a partly done discard are "failed" in the popover.
+- **Docs** (step 5): `docs/systems/git-processes.md` gains "Where an ending goes" and "The
+  leftover lock" (the popover's lock offer, its entry at open and the network lane's drawn
+  refusal gone; endings, closing and the outcomes rewritten); `docs/systems/local-changes.md`
+  draws nothing under the lists; the root `CLAUDE.md` status paragraph, the UI-thread residuals
+  (the status box's and the lock banner's timers, `leftover_lock::ask`'s
+  `Request::LockConsequence`, the lane's lock-retry sleep) and the repo-map rows for
+  `ending_dialog.rs`, `leftover_lock.rs`, `modal.rs`, `worker/ending_words.rs` and
+  `cairn-ui/src/lock_banner.rs`. PRD R7.2's Escape sites unchanged: no new site.
+- **The 250 ms delay, headless**: `the_status_box_shows_an_operation_only_once_it_has_run_250_ms`
+  (`crates/cairn-ui/tests/status_box.rs`) drives the toolkit timer with the runner's `poll`:
+  nothing before 250 ms, "Commit · 1 waiting" after, and one already past it shown at once.
+- **Carried**: the discard not run again for the lock — on the teardown list above.
+  `a_staged_selection_unstages_by_the_drag_the_button_and_the_menu` presses another row after its
+  drop, since the headless runner's next press on the dropped row would be read as the second of
+  a double press (C18's double-press route) — the routes it pins are unchanged; for the
+  coordinator's QA to judge. Decided here: the popover is not drawn while a dialog is over it; an
+  amend asking to be confirmed leaves no activity entry; a refusal, a stale write, one never run
+  and a partly done discard are "failed" in the popover.
 
 ## Phase 18 of the rebuild, the commit box (2026-10-11)
 
@@ -713,6 +721,12 @@ each ("The coordinator's recommendations after phase 13's QA, answered 2026-10-1
 Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carries below and the
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
+
+- **From phase 19** (file as an issue): a discard of files that git refuses for the lock is not
+  run again (F5) — its `Confirmed` is spent by the first attempt, and `ops::discard_files` hands
+  no token back on a lock failure as `ops::amend` does (`Error::AmendNotMade`); retrying it needs
+  the engine to hand the token back when the restore was refused before writing. It ends failed
+  with `Remove index.lock…` offered, as every write past its retries does.
 
 - **From phase 18's QA, item 14** (file as an issue): `ops::amend`'s `logged_away_from` reads
   `logs/HEAD` and the branch's log whole after an amend at the press, polling no cancel — correct
@@ -1729,6 +1743,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
 | 17 one file's diff | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 2, 3 and 5 applied, 3's guard-tier pin carried to teardown, full gate green |
 | 18 the commit box | built in packet mode, stopping rule not triggered, full gate green; QA the coordinator's |
-| 19 one home for each message | planned — F7 decided (2026-10-10) |
+| 19 one home for each message | built in packet mode, stopping rule not triggered; steps 1-5 and their docs done, full gate green; QA the coordinator's |
 | 20 the Activity Manager | planned |
 | 21 QA | planned — the merge bar over the whole packet |

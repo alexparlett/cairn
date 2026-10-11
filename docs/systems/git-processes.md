@@ -89,7 +89,8 @@ crates/cairn-git/src/
                     <oid> --`), taking Confirmed, with checkout_discarding_consequence: the
                     branch, the commit and HEAD, no git run
     remove_lock.rs  remove_lock_consequence and remove_index_lock, taking Confirmed: the one
-                    mutation made without git, `<gitdir>/index.lock` removed
+                    mutation made without git, `<gitdir>/index.lock` removed; and
+                    index_lock_changed, the leftover lock's stat, which writes nothing
     fresh_state.rs  the index entry (gix) and the working-tree file (its bytes, and its git form
                     through reads/hash_object.rs) read fresh for a stale check or a re-check
     local_write.rs  how a local write runs: `--literal-pathspecs`, stdin, the locks around it
@@ -971,10 +972,11 @@ a completed invocation reported as cancelled (accepted by the user on
 4. A non-zero exit is `Error::GitFailed { arguments, status, stderr,
    present_locks }`, `stderr` the retained tail; for a write, `present_locks`
    lists the lock files present, which is what a write fails on and git never
-   waits for (`a_failed_write_names_a_present_index_lock`). For fetch the list
-   reaches the error's message, but the window's banner draws only git's
-   first `fatal:`/`error:` line, so it does not reach the user (issue #44). Nothing retries,
-   and nothing removes a lock. A read's is always empty
+   waits for (`a_failed_write_names_a_present_index_lock`). The application reads from it
+   whether git failed because it could not create `<gitdir>/index.lock` — the lock among
+   those present and git's words naming it (`Failure::index_lock`) — which the local lane
+   retries and the failure's Git Error offers to remove ("The leftover lock", below). Nothing
+   in the engine retries, and nothing in it removes a lock but `ops::remove_index_lock`. A read's is always empty
    (`a_failure_carries_the_arguments_the_status_and_stderr`,
    `a_real_read_fails_with_its_diagnostic_and_cancels_as_a_read`).
 
@@ -1124,8 +1126,9 @@ of them.
 Fork's Activity popover (staging-and-commit R12, `docs/design/ui.md`, "Activity"): the title
 bar's status box opens it over the window (`crate::activity::popover`, drawn by
 `cairn_ui::ActivityPopover`), on the left the session's operations — every local write and
-every fetch — newest first, each its name, its status (`running`, `succeeded`, `failed`, `not
-run`, `partly done`, `cancelled`) and when it started, with Fork's ×
+every fetch — newest first, each its name, its status in one of four words (`running`,
+`succeeded`, `failed`, `cancelled`: a refusal, a stale write, one never run and a partly done
+discard are each `failed`, their sentence saying which) and when it started, with Fork's ×
 beside a running one that can be cancelled (a commit, an amend, a fetch); on the right the one
 selected: its status, when it started and how long it took, what its ending said, the prompt it
 confirmed — however it ended, failed, cancelled part way or never run included: the write's
@@ -1134,8 +1137,7 @@ confirmed — however it ended, failed, cancelled part way or never run included
 back (`Done::acknowledged`, R1.6;
 `a_destructive_write_that_did_not_succeed_still_quotes_its_prompt`) — the way back where there is one — an amend that
 succeeded offers its replaced commit, whose press turns Show Lost Commits on and finds the
-commit as a ref's press finds its row (`ref_find::find_commit`) — and `Remove index.lock…`
-where it is offered, then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to
+commit as a ref's press finds its row (`ref_find::find_commit`) — then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to
 stderr and how it ended when that was not a clean exit. Escape and a press outside close it.
 
 The user's decisions of 2026-10-09 on it, as built:
@@ -1150,12 +1152,13 @@ The user's decisions of 2026-10-09 on it, as built:
   `the_panel_hangs_under_the_box_inside_the_window`,
   `the_popover_hangs_from_the_status_box_inside_the_window`,
   `the_popover_hangs_under_the_status_box`).
-- **Keys do nothing while it is open but close it** (I): `shortcuts::keys_inert` answers yes
-  while a credential prompt, a confirmation, the Git Error dialog or the popover is up, and the
-  window's chords (`shortcuts::act`), Local Changes' list intents
-  (`local_changes_actions::dialog_open`), the history list's presses and the Show Lost
-  Commits action ask it; the panel is `a11y_modal`, pulling focus into it; Escape closes it
-  (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
+- **Keys do nothing while it is open but close it** (I): it is the lowest rung of the one
+  modal state ("Where an ending goes", below), so `shortcuts::keys_inert` answers yes while it
+  is open, and the window's chords (`shortcuts::act`), Local Changes' list intents, the history
+  list's presses and the Show Lost Commits action ask it; the panel is `a11y_modal`, pulling
+  focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
+  A dialog opened over it is drawn alone, and the popover is drawn again once that is
+  answered.
 - **The confirmed prompt** keeps its four-line cut, with "Show All" where it runs past the cut
   (judged by its characters at the pane's width) — pressed, the prompt moves whole into the
   lines' virtualizing view as its first row, sized by its own laid-out height (`on_sized`), so
@@ -1171,16 +1174,12 @@ The user's decisions of 2026-10-09 on it, as built:
 - **A write that never started keeps its name** (N): one ended before it started — not run, the
   repository closing — is named as it was asked, from the writes the window kept queued
   (`a_write_refused_before_it_started_keeps_its_name`).
-- **A lock found as the repository opened** (H) is an entry of its own, "Lock files found as
-  the repository opened" (`activity::LOCKS_AT_OPEN_NAME`), status `found`, each lock a line,
-  carrying `Remove index.lock…` where `<gitdir>/index.lock` is among them
-  (`a_lock_found_at_open_is_an_entry_offering_its_removal`,
-  `the_locks_found_at_open_are_an_entry_of_their_own`).
+- **An amend that must be confirmed leaves no entry**: it ran nothing, and the amend confirmed
+  is an operation of its own (`every_ending_is_one_of_four_words`).
 
 **Where an entry's `git` comes from.** Each lane marks the command log as an operation starts
 (`Repository::command_mark`) and, as it ends, sends the records of the invocations it built
-since (`Repository::commands_since`) in `Update::OperationRan { by, commands, lock_named }`
-— `lock_named` whether its ending's locks name `<gitdir>/index.lock` — just
+since (`Repository::commands_since`) in `Update::OperationRan { by, commands }` just
 before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` from the network
 lane. A commit's output streams into its entry as it arrives (R10.4: a hook's lines while it
 runs, `Update::WriteOutput`), and is replaced by its commands' records once they are in.
@@ -1192,7 +1191,7 @@ a record's stderr, a failure's output, a fetch's progress and a commit's streame
 lines only a `Scrubber`'s output, or its own scrubbing constructor, can fill (the type's
 `compile_fail` doctests in `scrub.rs`). An error's text reaches it as the engine renders it,
 `cairn_git::Error::shown` — the error's `Display` scrubbed whole, for the values it quotes
-beside git's words — in the lanes (`local_lane::message_of`). No lane and no view scrubs again:
+beside git's words — where an ending's sentence falls back on it (`worker::ending_words`). No lane and no view scrubs again:
 the window only strips escape sequences (`crate::shown_output`). A URL a piece's end cuts
 anywhere — inside its scheme, its `://`, its userinfo or its host — loses its userinfo on both
 sides of the cut, and a quote inside a userinfo does not end it; older lines let go of are said
@@ -1202,42 +1201,6 @@ with a plain `older_dropped`, never an offset into the text. An scp-like address
 lane), `no_update_of_a_fetch_carries_a_token_its_git_wrote` (a real fetch through the worker),
 `the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept) and
 `the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
-
-**`Remove index.lock…`** (R12.4, L23, the user's decisions G and H of 2026-10-09): offered on
-an entry whose ending names `<gitdir>/index.lock` among its locks
-(`local_lane::names_index_lock`), and on the entry of the locks found as the repository opened
-when it is among them. What its removal would cost is not computed as the write ends but when it
-is pressed: the press sends `Request::LockConsequence { asked }`, which the local lane answers in
-its order with `ops::remove_lock_consequence` — the lock there, a plain file, no `git` of
-Cairn's running in the repository, refused with `Error::LockRefused` otherwise — as
-`Update::LockConsequence { asked, outcome }`, so the age the prompt says is the age at the press,
-and an offer is never lost because some `git` happened to run as the write ended. Only the
-answer to the latest press is kept (`ActivityLog::lock_answered`): a refusal is said beside the
-button, which stays; a consequence opens the confirmation (`activity::use_lock_confirmation`),
-titled "Remove Stale Lock" (`activity::REMOVE_LOCK_TITLE`), its prompt `Consequence::prompt`'s —
-"Remove <path>? It was last changed N ago and holds N bytes. Another program may still own it:
-removing a lock a running git holds can corrupt the index. You can't undo this." — and
-its button "Remove index.lock". While a write or a fetch of Cairn's runs the button is drawn
-unpressable, "Cairn is running git in this repository" beside it (`LockOffer::Blocked`). The
-token asks the local lane for `LocalWrite::RemoveLock`, which re-checks the registry, the lock's
-time, size, device and inode against the `Consequence` — refusing, removing nothing, a lock
-removed and made again since (`Error::LockChangedSinceConfirmed`) — then removes exactly that
-path with `std::fs::remove_file` (`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`), the
-one mutation Cairn makes without git; once it has, no entry offers it. Residual: another
-program — a `git` in a terminal — may take the lock between the re-check and the removal;
-nothing in `std` removes a file only if it is still the inode it was, and the prompt says
-another program may own it. Nor does the registry count every process Cairn started: a hook's
-child left running in the background, its pipes closed, is no longer counted once its `git` is
-reaped, and a `git` it starts can hold the lock. A lock that cannot be looked at (permission
-denied, an I/O error) is refused as unreadable (`LockRefusal::Unreadable`). Pinned by
-`ops/remove_lock.rs`'s tests (the exact file removed and nothing beside it; a lock made again,
-rewritten or gone refused; no lock, a directory, a link and another repository's lock refused; a
-stub `git` holding the lock and running refuses the consequence and the removal),
-`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails` (the lane's
-answer at the press and the confirmed removal through the worker),
-`the_lock_offer_answers_its_latest_press_and_goes_once_the_lock_is_removed`,
-`the_lock_removal_says_why_it_cannot_be_pressed` and
-`remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_confirmation`.
 
 **Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations, each at most
 `ACTIVITY_LINES` lines, all their lines together at most `ACTIVITY_BYTES` — counted as lines go
@@ -1256,7 +1219,9 @@ alone are built, when the open popover asks, and kept until a line changes; with
 update costs the lines it carries (`closed_the_popover_builds_no_lines`).
 
 **An operation's name** is Fork's imperative form, as its Activity Manager names one ("Fetch
-origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7): `LocalWrite::name` — "Stage
+origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7), and the only wording of
+it: the status box, a wait ("Waiting for Commit…"), the closing banner, the "Couldn't <name>"
+dialog, a prompt's title and the popover all say it. `LocalWrite::name` — "Stage
 1 file", "Stage lines of a.rs", "Unstage 2 files", "Commit", "Create branch 'topic'" — and, for a
 destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "Discard lines of
 a.rs", "Amend", "Remove index.lock"). A write ended before it started keeps the name it was
@@ -1273,6 +1238,100 @@ back or as the write ends; the receipt's drop — on the UI thread — is one at
 Pinned by `the_lines_of_one_read_are_handed_on_together` and
 `output_is_one_update_a_read_and_what_waits_is_bounded`. Residual: while the window is behind,
 held lines wait for git's next read or its end.
+
+## Where an ending goes
+
+Every operation's ending has one home (staging-and-commit R14, rule 4):
+
+- **Progress** is the title bar's status box's (`cairn_ui::StatusBox::running`, fed by
+  `window::running`): a spinner and the running write's one name with " · N waiting" while
+  writes queue behind it, and a fetch's name with git's latest progress line, each shown only
+  once it has run `cairn_ui::PROGRESS_AFTER` (250 ms) — a task on the toolkit's executor that
+  awaits `async_io::Timer` for what is left of it and ends with the line. A control a running
+  write holds says "Waiting for <name>…".
+- **Success** says nothing: the refresh after it is the message. **A cancel** opens nothing.
+- **A git failure** opens Fork's Git Error dialog — its title, Fork's sentence, `Error
+  Details:`, the command and git's output — for every operation the person started, a fetch
+  among them; a commit git made and then failed says so in its place ("The commit was made,
+  but git failed afterwards. The history shows it.").
+- **A refusal found while it ran** — a stale patch, a file changed since it was confirmed,
+  `HEAD` moved, the repository closing — opens the same component titled "Couldn't <name>"
+  (`cairn_ui::couldnt_title`), its one sentence and "Nothing was changed." once, and no Error
+  Details. A failure beneath git — Cairn lost hold of it, something else moved `HEAD` while a
+  commit ran — says its sentence there without the tail, since it may have done part of its
+  work. A discard that left files as they were says so in one sentence, the files behind Show
+  files, each path as `cairn_model::shown_path` spells it.
+
+The sentence is worded on the worker from the engine's typed error (`worker::ending_words`;
+`Failure { said, command, output, locks, index_lock }` on `WriteEnding::Failed`,
+`Update::FetchFailed` and a partly done discard), every path C-quoted where it could reshape the
+sentence; the engine's own text appears only where an error has no sentence of its own. The
+window keeps the commit box's Git Error with its skip and token (`commit_box_state::GitError`)
+and every other ending's dialog in `crate::ending_dialog::Endings`, the oldest first.
+
+**One modal state** decides which dialog is drawn (`crate::modal`): a credential prompt, then a
+confirmation, then the commit box's Git Error, then the other endings', then Create Branch,
+then the popover. Only the one on top is drawn, so no key reaches one beneath it — a commit's
+Git Error arriving while Create Branch is up is drawn alone, its Escape closes it, and Create
+Branch is drawn again as it was left — and while any is up the window's chords and the lists'
+keys do nothing (`shortcuts::keys_inert`). Pinned by `every_ending_has_exactly_one_home`,
+`the_workers_words_are_the_dialogs`, `a_sentence_names_its_path_escaped_and_ends_once`,
+`a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`,
+`a_cancelled_fetch_opens_nothing_and_a_failed_one_its_git_error`,
+`a_commits_git_error_beneath_create_branch_is_on_top_and_escape_closes_it_alone`,
+`the_status_box_is_handed_what_runs_by_its_one_name` and
+`the_status_box_shows_an_operation_only_once_it_has_run_250_ms`.
+
+## The leftover lock
+
+A leftover `<gitdir>/index.lock` is a state of the repository (staging-and-commit R12.4, F5,
+F6), never an operation's entry. Each status job on the refresh thread first stats it —
+`ops::index_lock_changed`, its time when it is a plain file, nothing otherwise; it writes nothing
+and runs no git — and sends `Update::IndexLock { changed }`, whether or not a write keeps the
+status back; a refresh runs on open, on focus, after every write and on Refresh. The window
+keeps it (`crate::leftover_lock::LeftoverLock`) and draws a banner under the title bar
+(`cairn_ui::LockBanner`) while the stat found the file, no write of Cairn's runs or waits and no
+fetch is in flight, and the file is at least `cairn_ui::LOCK_STALE_AFTER` (ten seconds) old —
+the banner waits out a younger lock on the toolkit's executor — saying "index.lock is in this
+repository, so git can't change the index. If no other git program is running, it was left
+behind."; the next stat that finds it gone takes it down, whoever removed it.
+
+**A write git refuses for the lock is run again** (`local_lane::run`): when the attempt failed
+because git could not create `<gitdir>/index.lock` and that file stood, the same, from before
+the attempt began until after it failed — so no git, Cairn's included, could have changed the
+index meanwhile and the attempt wrote nothing — the lane waits `LOCK_RETRY_AFTER` (a second, a
+sleep on the lane's own thread in 50 ms slices that a close ends) and runs it again, at most
+`LOCK_RETRIES` (two) times, before its ending goes out. A token-free write is copied for it; a
+confirmed amend runs again with the token its failure handed back; a discard's token is spent
+by its attempt, and it is not run again. Its Git Error then carries `Remove index.lock…` beside
+Close, as Fork's does.
+
+**`Remove index.lock…`**, on the banner or in that Git Error, asks what the removal would cost
+at the press: `Request::LockConsequence { asked }`, answered in the local lane's order with
+`ops::remove_lock_consequence` — the lock there, a plain file, no `git` of Cairn's running,
+refused with `Error::LockRefused` otherwise — as `Update::LockConsequence { asked, outcome }`,
+only the latest press's answer kept. A refusal opens "Couldn't Remove index.lock"; a
+consequence opens the one confirmation, "Remove Stale Lock"
+(`leftover_lock::REMOVE_LOCK_TITLE`), its prompt `Consequence::prompt`'s — "Remove <path>? It
+was last changed N ago and holds N bytes. Another program may still own it: removing a lock a
+running git holds can corrupt the index. You can't undo this." — and its button "Remove
+index.lock". The token asks the local lane for `LocalWrite::RemoveLock`, which re-checks the
+registry and the lock's time, size, device and inode against the `Consequence` — refusing a
+lock removed and made again since (`Error::LockChangedSinceConfirmed`) — then removes exactly
+that path with `std::fs::remove_file` (`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`),
+the one mutation Cairn makes without git. The failed write is never run again; the refresh
+after the removal is the message. Residual: another program may take the lock between the
+re-check and the removal — nothing in `std` removes a file only if it is still the inode it
+was, and the prompt says another program may own it — and the registry does not count a
+hook's child left running in the background once its `git` is reaped. Pinned by
+`ops/remove_lock.rs`'s tests,
+`a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation` (real git
+through the worker: the stat, three attempts a second apart, the removal confirmed, the stat
+gone), `a_write_refused_for_a_lock_let_go_of_runs_again_and_writes_once`,
+`a_write_is_refused_for_the_lock_only_where_git_could_not_create_it`,
+`a_write_refused_for_the_lock_offers_its_removal_through_the_confirmation`,
+`the_leftover_lock_banner_shows_exactly_while_it_should` and
+`a_lock_is_stale_from_ten_seconds_old`.
 
 ## The network lane
 
@@ -1295,11 +1354,10 @@ remote, or refuses it naming the fetch already in flight and how far it has
 got — "a fetch of origin is already running", or "already waiting to start"
 while it is queued — and a refusal goes to the window as
 `Update::FetchRefused { remote, reason }`, never dropped (R7.2). The window
-keeps it in its own state, beside the fetch in flight, which the refusal
-leaves as it was, and draws it as a banner — "Fetch of origin not started:
-…" — until the Fetch button is next pressed. The window hides that button
-while a fetch is in flight, so a refusal is what a second fetch meets when
-anything else asks for one.
+draws nothing for it: Fetch is greyed while a fetch is in flight, from the press
+on (staging-and-commit F9), so a refusal is met only by a press racing the
+first's start, and the fetch in flight, shown in the status box, says the rest.
+A fetch is cancelled from the activity popover, as in Fork.
 
 A cancel is not tied to the fetch it was pressed for. The lane clears
 `FetchControl` once a fetch is over and before its outcome reaches the window;
@@ -1311,9 +1369,8 @@ Pinned, G15:
 `a_second_fetch_while_one_runs_is_refused_with_a_reason` (through the
 boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_fetch_in_flight`
 (`network_lane.rs`), `a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched`
-(`session.rs`), `a_refused_fetch_is_drawn_with_its_reason_until_the_next_press`
-(`window.rs`, headless) and `a_refusal_names_the_fetch_refused_and_the_reason`
-(`status_text.rs`).
+(`session.rs`: `the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing`) and
+`fetch_is_greyed_while_a_fetch_is_in_flight` (`window.rs`, headless).
 
 ## The local write lane
 
@@ -1377,11 +1434,14 @@ which is a length of time, is waited out.
   draws, shared, from which the lane gathers every path (`LocalChanges::whole_file_paths`)
   before it runs `git add` or `git reset`: a status of tens of thousands of paths is never
   walked on the UI thread.
-- **Endings** (`WriteEnding`, R4.7). `Done` — the `Performed`'s description, the
-  prompt a destructive write quotes, and the lock files before and after it;
+- **Endings** (`WriteEnding`, R4.7), each a sentence for people apart from its
+  command, output and lock paths ("Where an ending goes", above). `Done` — the
+  `Performed`'s description, the prompt a destructive write quotes, and the lock
+  files before and after it;
   `Stale` — a patch the writes ahead of it made stale, or a file edited since its
   discard was confirmed, dropped naming its path, and the writes behind it still
-  run; `Refused`; `Failed`, with the lock files git failed beside; `Incomplete`,
+  run; `Refused`; `Failed(Failure)`, with git's command and output and the lock
+  files git failed beside; `Incomplete`,
   a discard of files that did not take every file; `Cancelled`, a commit or an
   amend the user cancelled that git had not made — `HEAD` read after the reap, or
   the cancel heard before git started — with what it stranded (R4.7: one git had
@@ -1507,18 +1567,9 @@ which is a length of time, is waited out.
   fetch and a write run at once and one ends, a prompt the ended one raised stays
   up until it is answered or cancelled, and the acceptor serves nothing else
   meanwhile.
-- **Lock files** (R3.8, R4.9). Before it runs any write, the lane lists every lock
-  file under the git directories as the repository opened
-  (`SharedRepository::lock_files`, the listing a cancel uses, which walks every
-  ref's directory and polls the lane's closing before each, so a close stops it)
-  and sends them as `Update::LocksAtOpen { locks, index_lock }` when there are any —
-  off the repository thread, so the walk never delays the history's first page — and
-  each ending carries the ones it found; the window keeps
-  the last listed and draws them by path, hedged as a cancelled fetch's are, and the
-  activity popover gives the ones found at open an entry of their own ("The activity
-  popover")
-  (`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails`,
-  `the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`).
+- **Lock files** (R3.8, R4.9). A write's ending carries the lock files it found; a
+  leftover `<gitdir>/index.lock` — one a write left when a close gave up on it among them —
+  is found by the stat every refresh makes, the open's first ("The leftover lock", above).
 - **A child reading the terminal** (R5.3). When Cairn was launched from a
   terminal, a hook that opens `/dev/tty` and reads is stopped rather than refused,
   its group being in the background of the terminal's session, and the write
@@ -1551,8 +1602,9 @@ runs on the UI thread:
    its hooks — runs to its end, however long, and is never ended by the close
    (staging-and-commit R4.9; the acceptor still answers a prompt it waits on).
    The window, told as the first close is asked (`Closing::when_requested`),
-   says which write it waits on, and that closing again leaves it unfinished:
-   "Finishing commit… Closing again leaves it unfinished." (`status_text::closing_line`).
+   says in its closing banner which write it waits on, by its one name, and that
+   closing again quits now: "Closing after Commit finishes. Close again to quit
+   now." (`status_text::closing_line`).
    Then it calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
    `CLOSE_BOUND` for their reaps. Past the fetch's cancel the registry is the
@@ -1609,25 +1661,25 @@ waits for instead, saying so; a second close request after
 stopped answering, and never ends the write (the user's decision of 2026-10-09,
 keeping R4.9): the write's `git` is left to run on, orphaned, with nobody
 reading its pipes — it finishes, or its next write to a pipe ends it with
-`SIGPIPE` — and a lock it leaves is named the next time the repository opens
-(`Update::LocksAtOpen`). So every local verb is silent on success: `git clean`
+`SIGPIPE` — and a lock it leaves is found by the next open's stat, its banner
+offering its removal ("The leftover lock"). So every local verb is silent on success: `git clean`
 is given `-q`, without which it names each file it removes and an orphaned
 discard would die at its next line, part way through its batch; `git restore
 --worktree` and `git apply` print nothing; and a commit is `git commit -q`
 (`the_destructive_verbs_say_nothing_on_success_so_an_orphan_finishes`). What
 cannot be quieted — an error, a hook's own output — can still end an orphan
-there. The closing banner says that closing again leaves the write unfinished.
+there. The closing banner says that closing again quits now.
 Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
 (a real commit held in its hook: the stream stays open past `CLOSE_BOUND`, the
 commit's `git` and its hook alive, until the test releases it; then its ending,
 the queued write `NotRun`, and the stream's end), `the_window_is_told_once_as_the_first_close_is_asked`
-(`closing.rs`) and `the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`
-(`window.rs`, headless).
+(`closing.rs`), `the_window_names_the_write_it_waits_on_and_its_prompt` (`window.rs`,
+headless) and `the_closing_line_names_the_write_by_its_one_name` (`status_text.rs`).
 
 What a close costs is the registry's: a write that outlasts the grace is
-`SIGKILL`ed and may strand its lock files, and its `FetchCancelled` lists
-them on a stream about to end, to a window about to close, so nobody may be
-left to read them (above, "The registry"; issue #44).
+`SIGKILL`ed and may strand its lock files; a cancel opens nothing, so a
+stranded `index.lock` is the next open's stat's to find (above, "The registry";
+issue #44).
 
 Pinned, G14: `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound`
 (`worker/lifecycle_tests.rs`: a stub fetch leading its group with a

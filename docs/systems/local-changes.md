@@ -36,10 +36,11 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   rather than set in a font, a submodule's box (`RefGlyph::Submodule`) whatever changed in it
   and Fork's warning triangle for a conflicted path (`RefGlyph::Gone`). Colour only reinforces
   the shape. The Commit tab keeps its own letters.
-- **Under the lists**: one line saying what the writes asked from the view are doing — the
-  write running and how many wait behind it, or the first queued — or why the last action
-  asked nothing, or how the last write ended when it did not do what was asked
-  (`local_changes_actions::acting_line`, staging-and-commit R8.6).
+- **Nothing under the lists** (staging-and-commit R14.6): a write running or queued shows in
+  the title bar's status box, and its ending, when it is not a success or a cancel, in its Git
+  Error or "Couldn't <name>" dialog — a stale patch naming its path once
+  (`docs/systems/git-processes.md`, "Where an ending goes";
+  `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`).
 - **Right**: the selection's primary's diff under the diff view's bar — previous and next change,
   ignore whitespace (drawn off and disabled here: the diff is always the exact one,
   staging-and-commit R8.5), context, entire file, side by side, the shared settings — unified
@@ -293,8 +294,8 @@ token asks `LocalWrite::DiscardFiles` or `LocalWrite::DiscardLines`. An answer f
 ask, or for a confirmation let go of, is dropped. A refusal the engine makes while counting —
 a file that changed while it was read, a path that is not a file — makes the same dialog the
 refusal (rule 4): "Couldn't Discard Changes", the engine's one sentence
-(`worker::local_lane::refused_while_counting`) and "Nothing was changed.", Close alone; nothing
-is said under the lists. No modifier, setting or route reaches a discard without the dialog.
+(`worker::local_lane::refused_while_counting`, worded as every ending is, its path C-quoted by
+`cairn_model::shown_path`) and "Nothing was changed.", Close alone. No modifier, setting or route reaches a discard without the dialog.
 
 **A conflicted row** (R8.7, C24) stages whole by every route — `git add`, which marks it
 resolved — and is never discarded. As in Fork, nothing more is said before it is staged (the
@@ -442,7 +443,7 @@ line and the description when there is one (`compose_message`; git's own cleanup
 R6.1). The button needs a subject (Fork's rule) and something staged, or a merge, single
 cherry-pick or revert in progress, which it concludes. **While it is asked** the button's place
 says what it is doing (`cairn_ui::Busy`, R10.4, C5): queued behind another write, "Waiting for
-<what that write is waited on for>…" — the one form every queued write uses; running,
+<that write's one name>…" ("Waiting for Stage 1 file…") — the one form every wait uses; running,
 "Committing 0:03" (or "Amending"), redrawn each second by a task of its own line's scope
 (`Elapsed`, on `async-io`'s timer; freya drops a scope's tasks as it unmounts), with a Cancel that
 asks `Request::CancelWrite` for that commit's id — never for one still queued (R4.3); asked with
@@ -452,12 +453,14 @@ write ahead of it, never one asked after. A cancel opens no
 dialog and keeps the draft (rule 4).
 
 **A failure** of git's own (`WriteEnding::Failed` with the command that ran) opens Fork's Git Error
-dialog (`cairn_ui::GitErrorDialog`, R10.5) over the window: the command, and the commit's output
+dialog (`cairn_ui::GitErrorDialog`, R10.5) over the window — the commit box's own, its skip and
+token kept with it, and first among the endings' dialogs in the one modal state: the command, and the commit's output
 as it streamed (`Update::WriteOutput`) — or, if nothing streamed, the output the engine kept —
 with ANSI sequences and control characters stripped (`strip_ansi`), the latest 10,000 lines or
 1 MiB kept (`OutputTail`), drawn one row per line through a virtualizing view opened at its end.
-In its footer, in the platform's order, are `Skip pre-commit hooks and commit` and Close — one
-button component for both (`answer_button`), focus on Close — the skip offered on every failed
+In its footer, in the platform's order, are `Skip pre-commit hooks and commit` and Close — and
+`Remove index.lock…` where git could not create the lock — one button component for all
+(`answer_button`), focus on Close — the skip offered on every failed
 commit or amend (C4: Cairn keeps no model of which hooks git would run, and where no hook ran
 the skip fails the same way again, harmlessly) and never for one whose hooks were already
 skipped. It answers once, asking the same message again with `--no-verify` for that one commit
@@ -467,8 +470,9 @@ Git Error state (`GitError`) until the skip spends it or Close lets it go (R1.1'
 user's answer of 2026-10-10) — so nothing asks twice; an amend at the press's at the press again,
 which reads its cost anew. No prompt is drawn in the dialog. The next commit runs its hooks.
 Close, Escape or a press outside closes it. The window's chords and Local Changes' actions are
-inert while it is open, as under a confirmation. A refusal, a stale amend, a cancel or a commit
-not run opens nothing here.
+inert while it is open, as under a confirmation. A refusal, a stale amend, a failure beneath git
+or a commit not run opens "Couldn't Commit" (or "Couldn't Amend …") with its sentence, the
+window's endings' dialog; a cancel opens nothing.
 
 **Amend** (R10.3, R10.6, C1, L12). Ticking it sets the draft aside, with whether the person had
 touched it, and makes amend's staged list an overlay over the lists (`LocalChangesState`, the
@@ -788,7 +792,7 @@ typed, the arrows are the editor's.
   take with a click to move a window); a held Alt does nothing.
 - A discard asked on the staged side by the chord does nothing, as Fork's does; the menu
   offers its Discard Changes… greyed with "Staged changes can't be discarded. Unstage them
-  first." beneath it (the redesign, rule 4, replacing the line under the lists of 2026-10-09).
+  first." beneath it (the redesign, rule 4).
 - A selection mixing a submodule or a conflicted path with paths that can be discarded
   discards those, its confirmation saying in one line what is left, where Fork asks twice
   (the redesign's D1).

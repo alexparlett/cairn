@@ -7,7 +7,11 @@
 //! left running), each over HTTPS-shaped HTTP and over SSH, because git
 //! shares no code between the two. Credentials are generated per fixture and
 //! never written into this file.
+
 #![cfg(unix)]
+
+#[path = "support/write_executable.rs"]
+mod write_executable;
 
 mod fixtures;
 mod remotes;
@@ -872,10 +876,7 @@ impl RecordingGit {
             real_git().display()
         );
         let git = directory.join("git");
-        std::fs::write(&git, script).unwrap_or_else(|e| panic!("{e}"));
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
+        write_executable::write_executable(&git, &script, 0o755);
         Self { directory }
     }
 

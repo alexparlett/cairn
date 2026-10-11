@@ -1125,19 +1125,14 @@ mod tests {
         fixture.git(&["commit", "-q", "-m", "one"]);
         let pid_file = fixture.root.join("hook.pid");
         let hook = fixture.root.join("slow-fsmonitor");
-        std::fs::write(
+        crate::process::stub_git::write_executable(
             &hook,
-            format!(
+            &format!(
                 "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
                 pid_file.display()
             ),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
-                .unwrap_or_else(|e| panic!("{e}"));
-        }
+            0o755,
+        );
         fixture.git(&["config", "core.fsmonitor", &hook.display().to_string()]);
 
         let repo = Repository::discover(fixture.repo()).unwrap_or_else(|e| panic!("{e}"));

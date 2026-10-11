@@ -5,7 +5,11 @@
 //! whole `PATH`, so "absent" is an empty directory and "too old" is a script.
 //! The runner itself is `pub(crate)`, so what a found `git` is then handed is
 //! tested inside the crate (`process/cli.rs`), with a copy of this stub helper.
+
 #![cfg(unix)]
+
+#[path = "support/write_executable.rs"]
+mod write_executable;
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -42,10 +46,7 @@ impl StubPath {
     fn with_git(script: &str) -> Self {
         let stub = Self::empty();
         let git = stub.git_path();
-        std::fs::write(&git, format!("#!/bin/sh\n{script}\n"))
-            .unwrap_or_else(|e| panic!("could not write {}: {e}", git.display()));
-        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("could not chmod {}: {e}", git.display()));
+        write_executable::write_executable(&git, &format!("#!/bin/sh\n{script}\n"), 0o755);
         stub
     }
 
@@ -298,8 +299,7 @@ fn the_installed_git_is_discovered_from_the_process_environment() {
 fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
     let stub = StubPath::empty();
     let git = stub.git_path();
-    std::fs::write(&git, "#!/nonexistent/interpreter\n").unwrap();
-    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable::write_executable(&git, "#!/nonexistent/interpreter\n", 0o755);
     let error = failure(stub.discover(), "unstartable git");
     match &error {
         Error::GitNotStarted { program, source } => {

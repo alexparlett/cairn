@@ -150,9 +150,8 @@ fn stored_message(repo: &Repo) -> Vec<u8> {
 }
 
 fn hook(repo: &Repo, directory: &str, name: &str, body: &str, mode: u32) {
-    let path = format!("{directory}/{name}");
-    repo.write(&path, format!("#!/bin/sh\n{body}").as_bytes());
-    repo.chmod(&path, mode);
+    let path = repo.path().join(directory).join(name);
+    super::write_executable(&path, &format!("#!/bin/sh\n{body}"), mode);
 }
 
 // --- C13: the message, byte for byte, as `git commit -F` leaves it ---
@@ -2084,7 +2083,6 @@ fn watching<R>(run: impl FnOnce(CommitWatch<'_>) -> R) -> R {
 /// Answers the binary the engine commits with, and the wrapper's directory, removed by the
 /// caller.
 fn failing_after_commit(name: &str) -> (GitBinary, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt as _;
     let real = std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -2098,19 +2096,17 @@ fn failing_after_commit(name: &str) -> (GitBinary, std::path::PathBuf) {
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
     let wrapper = directory.join("git");
-    std::fs::write(
+    super::write_executable(
         &wrapper,
-        format!(
+        &format!(
             "#!/bin/sh\n'{}' \"$@\"\nstatus=$?\nfor argument in \"$@\"; do\n  \
              if [ \"$argument\" = commit ] && [ $status -eq 0 ]; then\n    \
              echo 'fatal: repository has been updated, but unable to write new_index file' >&2\n    \
              exit 128\n  fi\ndone\nexit $status\n",
             real.display()
         ),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
-        .unwrap_or_else(|e| panic!("{e}"));
+        0o755,
+    );
     let mut path = std::ffi::OsString::from(directory.as_os_str());
     path.push(":");
     path.push(std::env::var_os("PATH").unwrap_or_default());

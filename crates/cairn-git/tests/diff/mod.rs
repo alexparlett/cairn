@@ -1,5 +1,9 @@
 //! C1, C2, C3, C5 and C6, plus the reporter behind C14.
 
+#[path = "../support/write_executable.rs"]
+mod write_executable;
+pub use write_executable::write_executable;
+
 mod repositories;
 mod scratch;
 

@@ -457,19 +457,10 @@ fn opening_reads_the_system_file_without_running_a_process() {
     let recorded = holder.with_extension("recorded");
     let _ = std::fs::remove_file(&recorded);
     let recorder = shim.join("git");
-    ok(
-        std::fs::write(
-            &recorder,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CAIRN_TEST_RECORDED\"\nexit 1\n",
-        ),
-        "writing the recording git",
-    );
-    ok(
-        std::fs::set_permissions(
-            &recorder,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        ),
-        "making the recording git executable",
+    super::write_executable(
+        &recorder,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CAIRN_TEST_RECORDED\"\nexit 1\n",
+        0o755,
     );
     let path = std::env::join_paths(
         std::iter::once(shim.clone()).chain(

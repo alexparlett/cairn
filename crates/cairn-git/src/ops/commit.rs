@@ -635,12 +635,12 @@ mod tests {
     /// cut, or a failure built from another text.
     #[test]
     fn a_hooks_output_reaches_the_commit_as_whole_scrubbed_lines() {
-        use std::os::unix::fs::PermissionsExt as _;
         let stub = super::super::recording_stub::RecordingStub::new();
         stub.config("user.name", "Commit Ter");
         stub.config("user.email", "committer@example.com");
-        stub.write(
-            ".git/hooks/pre-commit",
+        let hook = stub.repository().git_dir().join("hooks/pre-commit");
+        crate::process::stub_git::write_executable(
+            &hook,
             "#!/bin/sh\n\
              PATH=/usr/bin:/bin\n\
              printf 'denied by https://u:SEC'\n\
@@ -649,9 +649,8 @@ mod tests {
              printf 'caf\\303\\251 closed\\n' >&2\n\
              printf 'redraw 1\\rredraw 2\\n'\n\
              exit 1\n",
+            0o755,
         );
-        let hook = stub.repository().git_dir().join("hooks/pre-commit");
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         let repo = stub.repository();
         let (outcome, seen) = commit_seen(&stub, &repo);
         for line in [

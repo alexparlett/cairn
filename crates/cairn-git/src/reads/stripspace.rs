@@ -333,9 +333,11 @@ mod tests {
         for hook in ["pre-commit", "commit-msg", "post-commit"] {
             let path = root.join(".git/hooks").join(hook);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, format!("#!/bin/sh\n{}\n", leaves(hook, "true"))).unwrap();
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::process::stub_git::write_executable(
+                &path,
+                &format!("#!/bin/sh\n{}\n", leaves(hook, "true")),
+                0o755,
+            );
         }
         let before = snapshot(&root.join(".git"));
         assert_eq!(cleaned(&root, "subject\n\n# a comment\n"), "subject\n");

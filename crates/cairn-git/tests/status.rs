@@ -31,6 +31,9 @@
 //!
 //! Run by `scripts/git-floor.sh` under git 2.30.9 and 2.32.7 as well as the host's git.
 
+#[path = "support/write_executable.rs"]
+mod write_executable;
+
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
@@ -1437,11 +1440,8 @@ fn snapshot(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
 
 /// A script beside the repository (outside its working tree, so never listed), executable.
 fn script(repo: &Repo, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
     let path = repo.root.join(name);
-    std::fs::write(&path, body).unwrap_or_else(|e| panic!("{e}"));
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        .unwrap_or_else(|e| panic!("{e}"));
+    write_executable::write_executable(&path, body, 0o755);
     path
 }
 
@@ -1503,14 +1503,11 @@ fn a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor() {
     ] {
         repo.git(&["config", key, &value]);
     }
-    let hooks = repo.path().join(".git/hooks");
-    std::fs::create_dir_all(&hooks).unwrap_or_else(|e| panic!("{e}"));
-    std::fs::write(
-        hooks.join("post-index-change"),
-        format!("#!/bin/sh\n: > '{}'\n", hook_mark.display()),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    repo.chmod(".git/hooks/post-index-change", 0o755);
+    write_executable::write_executable(
+        &repo.path().join(".git/hooks/post-index-change"),
+        &format!("#!/bin/sh\n: > '{}'\n", hook_mark.display()),
+        0o755,
+    );
     repo.write(".gitattributes", "*.txt diff=trap filter=mark\n");
     repo.git(&["add", ".gitattributes"]);
     // A locked status, as the user's own, writes the untracked cache and the token; the

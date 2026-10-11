@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -42,10 +41,7 @@ impl StubGit {
             .unwrap_or_else(|e| panic!("could not make {}: {e}", directory.display()));
         let git = directory.join("git");
         let script = script(&directory);
-        std::fs::write(&git, format!("#!/bin/sh\n{script}\n"))
-            .unwrap_or_else(|e| panic!("could not write {}: {e}", git.display()));
-        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("could not chmod {}: {e}", git.display()));
+        write_executable(&git, &format!("#!/bin/sh\n{script}\n"), 0o755);
         Self { directory }
     }
 
@@ -74,6 +70,42 @@ impl StubGit {
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
+}
+
+/// Writes `contents` to `path` with `mode` — a stub `git`, a hook — through a child `sh`, so this
+/// multi-threaded test process never holds a writable descriptor to a file a test then has git
+/// execute: one held while a parallel test forks would make that exec fail "Text file busy" (os
+/// error 26). The same writer as `crates/cairn-git/tests/support/write_executable.rs`, for the
+/// crate's unit tests (phase 19's QA item 6).
+pub(crate) fn write_executable(path: &Path, contents: &str, mode: u32) {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|e| panic!("making {}: {e}", parent.display()));
+    }
+    let mut writer = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$0\" && chmod \"$1\" \"$0\""])
+        .arg(path)
+        .arg(format!("{mode:o}"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("starting the writer of {}: {e}", path.display()));
+    {
+        let Some(mut stdin) = writer.stdin.take() else {
+            panic!("the writer of {} has no stdin", path.display());
+        };
+        stdin
+            .write_all(contents.as_bytes())
+            .unwrap_or_else(|e| panic!("handing {} to its writer: {e}", path.display()));
+    }
+    let status = writer
+        .wait()
+        .unwrap_or_else(|e| panic!("waiting on the writer of {}: {e}", path.display()));
+    assert!(
+        status.success(),
+        "writing {} failed: {status}",
+        path.display()
+    );
 }
 
 /// What `/bin/sh` itself adds to a child's environment; not ours and not git's.

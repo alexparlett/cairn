@@ -432,13 +432,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("a hook path has a parent")),
         )
         .unwrap_or_else(|error| panic!("{error}"));
-        std::fs::write(
+        crate::process::stub_git::write_executable(
             &hook,
-            format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
-        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap_or_else(|error| panic!("{error}"));
+            &format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+            0o755,
+        );
         (scratch, marker)
     }
 

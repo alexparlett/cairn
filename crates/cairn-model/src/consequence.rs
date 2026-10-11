@@ -531,10 +531,19 @@ fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// A path as git's `quote_c_style` writes it under `core.quotePath=false`:
-/// as it is when nothing in it needs quoting, otherwise in double quotes with
-/// `"`, `\` and control characters escaped — and, beyond git, the line
-/// separators and bidirectional controls a prompt must not let through.
+/// A path as a person is shown it anywhere the window draws one in a sentence
+/// (staging-and-commit R14.2, phase 15's QA item 3): as git's `quote_c_style`
+/// writes it under `core.quotePath=false` — as it is when nothing in it needs
+/// quoting, otherwise in double quotes with `"`, `\` and control characters
+/// escaped — and, beyond git, with the line separators and bidirectional
+/// controls escaped too, so a name holding a newline or a right-to-left
+/// override cannot reshape the sentence around it. The one path-display
+/// function: a prompt's paths and an ending's are both spelled by it.
+pub fn shown_path(path: &str) -> String {
+    quoted(path.as_bytes())
+}
+
+/// `bytes`, as [`shown_path`] spells a path.
 fn quoted(bytes: &[u8]) -> String {
     let inner = escaped(bytes);
     if inner.as_bytes() == bytes && !bytes.contains(&b'"') {
@@ -633,6 +642,20 @@ mod tests {
 
     fn oid(byte: u8) -> Oid {
         Oid::from_bytes(&[byte; 20]).unwrap()
+    }
+
+    /// Phase 15's QA item 3: a path drawn in a sentence is the one path-display function's — a
+    /// plain name as it is, and a name holding a newline, a right-to-left override or a quote
+    /// C-quoted, so none can reshape the sentence it is drawn in. Caught by: the raw path drawn,
+    /// or the bidirectional control let through as git itself would.
+    #[test]
+    fn a_path_shown_in_a_sentence_is_c_quoted_where_it_could_reshape_it() {
+        assert_eq!(shown_path("src/a.rs"), "src/a.rs");
+        assert_eq!(shown_path("sp ace"), "sp ace");
+        assert_eq!(shown_path("a\nb"), r#""a\nb""#);
+        assert_eq!(shown_path("a\u{202e}b"), r#""a\342\200\256b""#);
+        assert_eq!(shown_path("quo\"te"), r#""quo\"te""#);
+        assert_eq!(shown_path("tab\there"), r#""tab\there""#);
     }
 
     fn modified(path: &str, lines: Option<usize>) -> DiscardedFile {

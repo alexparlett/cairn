@@ -541,6 +541,7 @@ fn cairn_write_costs() {
                 None,
                 cairn_git::ops::CommitWatch {
                     cancel: &cancel,
+                    closing: &cancel,
                     running: &mut running,
                     output: &mut output,
                 },

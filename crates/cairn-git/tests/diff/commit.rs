@@ -88,6 +88,7 @@ fn commit_by(
         None,
         CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         },
@@ -107,6 +108,7 @@ fn amend_with(repo: &Repo, confirmed: Confirmed, message: &str) -> Result<ops::P
         None,
         CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         },
@@ -131,6 +133,7 @@ fn amend_at_press(repo: &Repo, message: &str, hooks: Hooks) -> Result<AmendAnswe
         None,
         CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         },
@@ -293,6 +296,7 @@ fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commi
         None,
         CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         },
@@ -1744,6 +1748,7 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
         None,
         CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         },
@@ -1806,6 +1811,7 @@ fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
             None,
             CommitWatch {
                 cancel: &cancel,
+                closing: &cancel,
                 running: &mut running,
                 output: &mut output,
             },
@@ -1890,6 +1896,7 @@ fn cancelled_at(repo: &Repo, marker: &std::path::Path, amend: bool) -> Result<bo
         let mut output = |_: &cairn_model::ScrubbedLines| {};
         let watch = CommitWatch {
             cancel: &cancel,
+            closing: &cancel,
             running: &mut running,
             output: &mut output,
         };
@@ -1973,6 +1980,91 @@ fn a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so() {
     }
 }
 
+/// C35 under a cancel (phase 18's QA item 2): an amend at the press cancelled while its
+/// `post-commit` hook runs — git made it, and the write's own cancel has fired, both its signal
+/// and its kill — still answers what it cost once git is reaped: that read runs under the
+/// watch's `closing`, which only the repository's close sets. Caught by: the read run under the
+/// write's own cancel, answering nothing for the very amend C35 reports.
+#[test]
+fn an_amend_cancelled_after_git_made_it_still_reports_what_it_cost() {
+    use cairn_git::Cancel as _;
+    use std::time::{Duration, Instant};
+    let repo = identified("c35-cancelled");
+    repo.write("a.txt", b"a\n");
+    let replaced = repo.commit("base");
+    repo.write("a.txt", b"b\n");
+    repo.git(&["add", "a.txt"]);
+    let marker = repo.path().join(".git/hook-ran");
+    hook(
+        &repo,
+        ".git/hooks",
+        "post-commit",
+        &format!("touch '{}'\nsleep 30\n", marker.display()),
+        0o755,
+    );
+    for _ in 0..20 {
+        let _ = std::fs::remove_file(&marker);
+        let cancel = CancelSignal::new();
+        let closing = CancelSignal::new();
+        let mut waiter = None;
+        let (watched, signal) = (marker.clone(), cancel.clone());
+        let mut running = |handle: CommitCancel| {
+            let (watched, signal) = (watched.clone(), signal.clone());
+            waiter = Some(std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !watched.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                signal.cancel();
+                handle.cancel();
+            }));
+        };
+        let mut output = |_: &cairn_model::ScrubbedLines| {};
+        let outcome = ops::amend_unconfirmed(
+            committer(),
+            &engine(&repo),
+            "amended",
+            Hooks::Run,
+            None,
+            CommitWatch {
+                cancel: &cancel,
+                closing: &closing,
+                running: &mut running,
+                output: &mut output,
+            },
+        );
+        if let Some(waiter) = waiter {
+            let _ = std::fs::write(&marker, b"");
+            let _ = waiter.join();
+        }
+        match outcome {
+            Err(Error::GitFailed { stderr, .. }) if stderr.contains("Text file busy") => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(AmendAnswer::Amended {
+                replaced: answered,
+                after,
+                ..
+            }) => {
+                assert!(cancel.is_cancelled(), "the write was never cancelled");
+                assert_eq!(answered, replaced);
+                assert_eq!(
+                    after,
+                    Some(Consequence::Amend {
+                        commit: replaced,
+                        published: Publication::Unpublished,
+                        reflog: Reflog::Written,
+                    }),
+                    "a cancelled amend git made answered nothing of its cost"
+                );
+                return;
+            }
+            other => panic!("the cancelled amend ended {other:?}"),
+        }
+    }
+    panic!("the hook stayed busy");
+}
+
 /// Runs `run` with a watch that cancels nothing and keeps nothing.
 fn watching<R>(run: impl FnOnce(CommitWatch<'_>) -> R) -> R {
     let cancel = CancelSignal::new();
@@ -1980,6 +2072,7 @@ fn watching<R>(run: impl FnOnce(CommitWatch<'_>) -> R) -> R {
     let mut output = |_: &cairn_model::ScrubbedLines| {};
     run(CommitWatch {
         cancel: &cancel,
+        closing: &cancel,
         running: &mut running,
         output: &mut output,
     })

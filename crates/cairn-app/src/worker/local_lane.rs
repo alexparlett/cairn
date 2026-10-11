@@ -604,8 +604,12 @@ impl Watch<'_> {
         };
         let flow = std::cell::RefCell::new(OutputFlow::new(Arc::clone(self.budget)));
         let mut output = |said: &ScrubbedLines| flow.borrow_mut().read(said, &mut send);
+        let closing = Closing(lane);
         let outcome = commit(CommitWatch {
             cancel: &before,
+            // A read after git is reaped is ended by the close alone, never by the write's
+            // Cancel (C35, phase 18's QA item 2).
+            closing: &closing,
             running: &mut running,
             output: &mut output,
         });

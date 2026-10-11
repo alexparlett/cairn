@@ -93,6 +93,10 @@ pub enum Hooks {
 pub struct CommitWatch<'a> {
     /// Polled through the checks before git runs; a cancel there writes nothing.
     pub cancel: &'a dyn Cancel,
+    /// What ends a read made after git is reaped — an amend at the press's cost read again (R1.5,
+    /// C35): the repository's close alone, never the write's own cancel, so an amend git made
+    /// after a cancel was pressed still answers what it cost.
+    pub closing: &'a dyn Cancel,
     /// Called once, as git starts, with what ends it from another thread.
     pub running: &'a mut dyn FnMut(CommitCancel),
     /// The lines git or a hook writes, stdout's and stderr's alike, as they arrive: each call
@@ -192,7 +196,7 @@ pub fn amend_unconfirmed(
 ) -> Result<AmendAnswer, Error> {
     utf8_messages(git, repo, watch.cancel)?;
     let consequence = cost_now(git, repo, watch.cancel)?;
-    let cancel = watch.cancel;
+    let closing = watch.closing;
     let replaced = match &consequence {
         Consequence::Amend { commit, .. } if !consequence.needs_confirming() => *commit,
         Consequence::Amend { .. }
@@ -222,7 +226,7 @@ pub fn amend_unconfirmed(
     Ok(AmendAnswer::Amended {
         performed,
         replaced,
-        after: amend_after(repo, replaced, &cancel).ok(),
+        after: amend_after(repo, replaced, &closing).ok(),
     })
 }
 
@@ -512,6 +516,7 @@ mod tests {
             None,
             CommitWatch {
                 cancel: &cancel,
+                closing: &cancel,
                 running: &mut running,
                 output: &mut output,
             },
@@ -527,6 +532,7 @@ mod tests {
             None,
             CommitWatch {
                 cancel: &cancel,
+                closing: &cancel,
                 running: &mut running,
                 output: &mut output,
             },
@@ -604,6 +610,7 @@ mod tests {
                 None,
                 CommitWatch {
                     cancel: &cancel,
+                    closing: &cancel,
                     running: &mut running,
                     output: &mut output,
                 },

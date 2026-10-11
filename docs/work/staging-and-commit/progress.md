@@ -3,6 +3,90 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 20 built (packet mode; stopped at its stopping rule for the result lines)
+
+Steps 0-2 and 4-6 of `phase-20-activity-manager.md`; step 3's QA is the coordinator's.
+
+**Built.** (1) Rows: name, Fork's result line where Fork's was observed (`am1`: "staged" / "stage
+failed" for every stage of lines or files, "Switched to branch '<name>'" for Create Branch's
+checkout with or without Discard — `LocalWrite::result_lines`, `worker::ResultLines`, kept on
+`Asked::results`), `HH:MM:SS UTC`, ⚠ on a failure, ⊘ on a cancel, no status word. (2) The right
+pane: name; the word with its time and duration ("failed 09:40:12 UTC · took 12 ms"); a failure's
+or cancel's one sentence, wrapped (`activity::WRITE_CANCELLED`, `FETCH_CANCELLED` decided here);
+the confirmed prompt whole and wrapped only once it ran (Done, Incomplete, a git failure,
+Cancelled — not Refused, Stale, NotRun or a failure beneath git); "Show in Lost Commits";
+`$ git …` lines appended after what streamed, each command's ending "exit code N", "killed by
+signal N" or "cancelled" (NotStarted and Unknown say nothing); C35's report from
+`Done::cost_after` through `Consequence::amend_reported` (the push sentence in the PRD's words;
+"Amended 3f2a1c9. It can't be recovered: git kept no reflog of it." where only the reflog fact
+holds); Create Branch's Discard quotes no prompt (`LocalWrite::prompt` is `None` for it) and says
+`Consequence::happened` once it succeeded. (3) One store: `crate::output_tail::OutputTail<T>`
+(`OUTPUT_LINES` 10,000, `OUTPUT_BYTES` 1 MiB, items in an `Arc`, whole oldest items popped) for
+the lane's tap, the commit box's output and each entry; `worker::OutputTap` (renamed from
+`output_flow.rs`) replaces `OutputReceipt` and the budget — one wake per tap in flight, drained
+by the window, latest kept — for a commit's output and fetch's progress (#15: chunks popped, never
+a String's front moved; #16: fetch progress joins it); the log evicts whole oldest entries past
+`LOG_BYTES` (4 × `OUTPUT_BYTES`), never a running one nor the newest; the popover reads a
+snapshot (`ActivityLog::shown`, the selected entry's tail by `Arc`), no `RefCell`;
+`ActivityView { log, open }` — the root reads `open`, the popover is `ActivityLayer`, a child that
+alone reads the log, and `running()` peeks the log for the fetch's entry. (4) Show All gone; the
+prompt is laid out above the lines' list, `ItemSize::Fixed`.
+
+**Pinned.** model `a_forced_checkout_says_what_happened_and_the_rest_quote_their_prompt`,
+`an_amend_reports_what_it_turned_out_to_cost_only_where_it_would_now_be_confirmed`; app
+`the_tail_keeps_the_latest_whole_items_under_both_bounds`,
+`one_wake_for_whatever_waits_and_the_latest_kept`,
+`each_operation_is_an_entry_with_its_result_its_git_and_its_way_back`,
+`the_prompt_is_drawn_only_for_an_operation_that_ran`,
+`an_amend_pushed_while_it_ran_says_so_in_its_entry` (unit and window),
+`whole_oldest_entries_go_at_the_bound_and_an_entry_alone_is_cut`,
+`the_popover_reads_a_shared_snapshot`, `each_command_ends_in_one_form`,
+`every_ending_is_one_of_four_words`, `the_activity_manager_draws_forks_rows_and_header`,
+`a_destructive_write_quotes_its_prompt_only_once_it_ran`,
+`a_streamed_line_never_draws_the_window_again` (the root's renders counted by
+`local_changes_tests::launch_counted`; checked to fail, in a detached scratch worktree, with the
+root made to read the log again: "a streamed line drew the window again with the popover
+closed"); ui `each_row_is_forks_name_result_time_and_glyph`,
+`the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said`, the viewport twin
+`the_popover_builds_one_viewport_of_operations_and_of_lines` kept (200 operations, 100,000 lines).
+
+**What went.** The status words' strings outside `ActivityStatus::word` (four, phase 19 had already
+cut eight to four); Show All — `PROMPT_CHARS_PER_LINE`, `longer_than_its_cut`, `Lines.prompt`'s
+measured `State`, the `ItemSize::Dynamic` closure, `SHOW_ALL_CAPTION`, `SHOW_LESS_CAPTION`, and
+their two tests; `LINES_LET_GO` and `let_go`; the `streamed` / `commands` two-phase store and
+the `drawn` `RefCell` cache; "(not started)", "(how it ended is not known)" and "(exit status
+N)"; "Show Replaced Commit" (`SHOW_REPLACED_CAPTION`); `OutputReceipt`, `OutputFlow`,
+`IN_FLIGHT_BYTES`, `HELD_LINES`/`HELD_BYTES`, `commit_box_state::OUTPUT_LINES`/`OUTPUT_BYTES` and
+its own `OutputTail`, `ACTIVITY_LINES`/`ACTIVITY_BYTES`; `activity::popover`.
+
+**C21's window check, re-run** (`writes_check`, release, warm, on a fresh `--no-local
+--no-hardlinks` tmpfs clone of the bench at `c999cef531e`, `maintenance.auto=false`, `gc.auto=0`,
+no commit-graph, no alternates, deleted after; the bench untouched — `find .git -newer <marker>`
+empty, `.git`'s mtime still 2026-10-08 20:35:34). Slowest frame while a hook ran, popover closed /
+open, three runs:
+
+| Hook | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| A line every 50 ms for 2 s | 1.57 / 1.57 | 1.02 / 1.38 | 1.95 / 1.43 |
+| 20,000 lines, each flushed (the flood) | 4.21 / 6.06 | 4.76 / 6.61 | 4.19 / 6.21 |
+| Five lines of 200 KiB | 3.31 / 1.68 | 3.87 / 1.87 | 3.15 / 1.73 |
+
+Every frame under 16.7 ms. Under the flood the window applied 8,936 (closed) and 10,420 (open)
+wakes for 20,000 lines — one in flight per tap, each draining whatever waited. Press to the
+refreshed lists drawn, median of seven (bars 93 / 93 / 76 / 87): run 1 stage 86.0, unstage 86.1,
+discard 68.7, commit 87.2; run 2 69.4, 85.4, 51.7, 69.6; run 3 86.1, 86.1, 68.8, 70.4. Run 1's
+commit is 0.2 ms over its bar. The medians are bimodal by one status read (~17 ms), as phase 11
+and 12 recorded; the same check built at d1207eb (before this phase) on the same host gave 85.5,
+85.4, 68.5, 69.7 and then 135.8, 120.9, 118.4, 119.7 — the host's variance, not this phase's
+(phase 20 changes nothing a stage, unstage or discard runs). Show Lost Commits' first page 17.7,
+17.8 and 18.5 ms after the toggle. For the merge bar (phase 21) to re-measure.
+
+**Stopped at the stopping rule** (the coordinator's escalation, NEEDS USER SIGN-OFF): result
+lines for unstage, discard, commit, amend, Create Branch without checkout, Remove index.lock,
+fetch (Fork's "Already up to date" needs a way to know nothing moved) and every cancel have no
+line Fork's observation or git's own output gives (Cairn runs git with `-q`); their rows draw the
+name alone until the user signs off on the words.
+
 ## 2026-10-11 — phase 18's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p18/adjudication.md`): FIX NOW 1, 2, 4, 5, 6, 7, each test

@@ -455,9 +455,10 @@ dialog and keeps the draft (rule 4).
 **A failure** of git's own (`WriteEnding::Failed` with the command that ran) opens Fork's Git Error
 dialog (`cairn_ui::GitErrorDialog`, R10.5) over the window — the commit box's own, its skip and
 token kept with it, and first among the endings' dialogs in the one modal state: the command, and the commit's output
-as it streamed (`Update::WriteOutput`) — or, if nothing streamed, the output the engine kept —
-with ANSI sequences and control characters stripped (`strip_ansi`), the latest 10,000 lines or
-1 MiB kept (`OutputTail`), drawn one row per line through a virtualizing view opened at its end.
+as it streamed (drained from the local lane's tap on each `Update::WriteOutput`) — or, if nothing
+streamed, the output the engine kept — with ANSI sequences and control characters stripped
+(`strip_ansi`), the latest lines kept in the one bounded tail (`crate::output_tail::OutputTail`,
+`OUTPUT_LINES` and `OUTPUT_BYTES`), drawn one row per line through a virtualizing view opened at its end.
 In its footer, in the platform's order, are `Skip pre-commit hooks and commit` and Close — and
 `Remove index.lock…` where git could not create the lock — one button component for all
 (`answer_button`), focus on Close — the skip offered on every failed

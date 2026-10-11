@@ -46,7 +46,11 @@ diff) built in packet mode, full gate green, neither stopping rule triggered, no
 user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below. Phase 18 (the commit
 box rebuilt) built in packet mode, full gate green, its stopping rule not triggered; see "Phase 18"
 below. QA is the coordinator's. Phase 19 (one home for each message) built in packet mode, steps 1-5
-and their docs done, full gate green, its stopping rule not triggered; see "Phase 19" below. QA is the coordinator's.**
+and their docs done, full gate green, its stopping rule not triggered; QA adjudicated, fix-now items
+1-4 and 6-10 fixed at d1207eb, full gate green; see "Phase 19" below. Phase 20 (Fork's Activity
+Manager) built in packet mode, steps 0-2 and 4-6, full gate green; its stopping rule triggered for
+the result lines Fork's observation does not give — with the user (NEEDS USER SIGN-OFF); see
+"Phase 20" below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -90,6 +94,33 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 20 of the rebuild, Fork's Activity Manager (2026-10-11)
+
+- **Built** (`phase-20-activity-manager.md` steps 1, 2, 4-6; progress.md has the detail): rows of
+  name, result line, `HH:MM:SS UTC`, ⚠ / ⊘ and no status word; the right pane's word, time,
+  duration, one sentence, prompt whole only once the operation ran, "Show in Lost Commits", one
+  append-only list with one ending form; C35's entry (`Consequence::amend_reported` from
+  `Done::cost_after`); Create Branch's Discard saying `Consequence::happened` in place of a prompt;
+  one bounded tail (`crate::output_tail::OutputTail`) for the lane's tap, the commit box and each
+  entry; `worker::OutputTap` in place of `OutputReceipt` (#15, #16 closed); whole oldest entries
+  evicted past `LOG_BYTES`; the popover a child (`activity::ActivityLayer`) reading a snapshot,
+  the root reading `ActivityView::open` alone; Show All gone, the lines' list `ItemSize::Fixed`.
+- **Decided here**: the cancel sentences (`activity::WRITE_CANCELLED` "Cancelled before git made
+  it. Nothing was changed.", `FETCH_CANCELLED` "Cancelled while git ran. Whatever it had already
+  fetched stays."); "ran" for the prompt is Done, Incomplete, a git failure (`Failure::command`
+  set) and Cancelled; an operation whose output streamed appends its records' `$ git …` lines and
+  endings without their stderr (the same output); a running entry is never evicted (the status box
+  reads the fetch's); the C35 reflog-only wording "Amended 3f2a1c9. It can't be recovered: git
+  kept no reflog of it."; the result lines decided as Fork observed them are on every stage
+  (lines, files, all) and Create Branch's checkout with or without Discard.
+- **Stopping rule triggered — with the user**: no result line from Fork's observation or git's own
+  output for unstage, discard, commit, amend, Create Branch without checkout, Remove index.lock,
+  fetch, and any cancel; those rows draw the name alone (`ResultLines` `None`) pending sign-off.
+- **C21's window check**: every frame under 16.7 ms with a hook flooding, popover open and closed
+  (worst 6.61 ms); numbers in progress.md. One run's commit median 87.2 ms against its 87 ms bar,
+  the press-to-lists medians bimodal by a status read on this host, as at d1207eb — for the merge
+  bar to re-measure.
 
 ## Phase 19 of the rebuild, one home for each message (2026-10-11)
 
@@ -722,6 +753,11 @@ Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carrie
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
 
+- **From phase 20's coordinator** (file as an issue): the process guards
+  (`the_retired_runner_is_gone`, `every_git_invocation_disables_the_terminal_prompt`) read
+  `crates/cairn-git/src/process/stub_git.rs` as production code although its parent declares it
+  under `#[cfg(all(test, unix))]` — they do not recognise a file-level cfg(test) declaration as the
+  DiffContent matcher does; phase 19 worked around it with an inline test module.
 - **From phase 19** (file as an issue): a discard of files that git refuses for the lock is not
   run again (F5) — its `Confirmed` is spent by the first attempt, and `ops::discard_files` hands
   no token back on a lock failure as `ops::amend` does (`Error::AmendNotMade`); retrying it needs
@@ -796,16 +832,8 @@ commented, not filed again.
 - **The engine's half of #46** (comment): the command log and `Error::GitFailed` keep git's stderr
   unscrubbed; every drawn line is scrubbed. (Phase 12 scrubs at the runner, before anything is
   kept; comment #46 with what it closes.)
-- **Responsiveness 2**: while Show All is pressed, Freya's `VirtualScrollView` asks the size
-  callback for every row above the viewport on each layout — bounded by `ACTIVITY_LINES` + 1, and
-  stated in CLAUDE.md; laying the whole prompt out above the list would keep `ItemSize::Fixed`.
-- **Responsiveness 3**: `activity::popover` reads the activity log on every window render, the
-  popover closed included, so each streamed line re-renders the window's root; reading `is_open`
-  in a child component would leave a closed popover unsubscribed. Within budget (C21, phase 12).
 - ~~**F7, Escape as a literal**~~ — resolved 2026-10-10: an allowed convention, its sites named
   in PRD R7.2.
-- **Responsiveness 2 and 3** above are taken by phase 20 (Show All goes; `is_open` read in a
-  child); drop them from the list if it lands them.
 - ~~**W3's residuals**~~ — resolved by the redesign (2026-10-10): Create Branch's Discard
   predicts nothing and its fixed prompt says untracked files in the way go (phase 14).
 - **The review's refactors the rebuild does not take** (2026-10-10; each phase doc marks its
@@ -1743,6 +1771,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
 | 17 one file's diff | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 2, 3 and 5 applied, 3's guard-tier pin carried to teardown, full gate green |
 | 18 the commit box | built in packet mode, stopping rule not triggered, full gate green; QA the coordinator's |
-| 19 one home for each message | built in packet mode, stopping rule not triggered; steps 1-5 and their docs done, full gate green; QA the coordinator's |
-| 20 the Activity Manager | planned |
+| 19 one home for each message | built in packet mode, stopping rule not triggered; QA adjudicated, fix-now items 1-4, 6-10 fixed at d1207eb, full gate green |
+| 20 the Activity Manager | built in packet mode, steps 0-2 and 4-6, full gate green; stopping rule triggered for the result lines (with the user); QA the coordinator's |
 | 21 QA | planned — the merge bar over the whole packet |

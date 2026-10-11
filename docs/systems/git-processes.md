@@ -1123,22 +1123,42 @@ of them.
 
 ## The activity popover
 
-Fork's Activity popover (staging-and-commit R12, `docs/design/ui.md`, "Activity"): the title
-bar's status box opens it over the window (`crate::activity::popover`, drawn by
-`cairn_ui::ActivityPopover`), on the left the session's operations — every local write and
-every fetch — newest first, each its name, its status in one of four words (`running`,
-`succeeded`, `failed`, `cancelled`: a refusal, a stale write, one never run and a partly done
-discard are each `failed`, their sentence saying which) and when it started, with Fork's ×
-beside a running one that can be cancelled (a commit, an amend, a fetch); on the right the one
-selected: its status, when it started and how long it took, what its ending said, the prompt it
-confirmed — however it ended, failed, cancelled part way or never run included: the write's
-`Confirmed` prompt is copied as the window asks it (`LocalWrite::prompt`, kept on
-`local_writes::Asked`), since the verb spends the token and only an ending that ran carries it
-back (`Done::acknowledged`, R1.6;
-`a_destructive_write_that_did_not_succeed_still_quotes_its_prompt`) — the way back where there is one — an amend that
-succeeded offers its replaced commit, whose press turns Show Lost Commits on and finds the
-commit as a ref's press finds its row (`ref_find::find_commit`) — then each `git` it ran as Fork prints it, `$ git ...`, with what it wrote to
-stderr and how it ended when that was not a clean exit. Escape and a press outside close it.
+Fork's Activity Manager (staging-and-commit R12, C29, `docs/design/ui.md`, "Activity"; observed
+in `fork-observed-2026-10-10.md`, `am1`, `am2`): the title bar's status box opens it over the
+window, drawn by `cairn_ui::ActivityPopover` inside `crate::activity::ActivityLayer`, a child
+component of the window that alone reads the log. On the left the session's operations — every
+local write and every fetch — newest first, each row its one name, Fork's result line under it
+(`LocalWrite::result_lines`, kept on `local_writes::Asked`), its start time as `HH:MM:SS UTC`,
+`⚠` on a failure (`cairn_ui::FAILED_GLYPH`) and `⊘` on a cancel (`CANCELLED_GLYPH`), and no
+status word, with Fork's × beside a running one that can be cancelled (a commit, an amend, a
+fetch). On the right the one selected: its name; one of four words — `running`, `succeeded`,
+`failed`, `cancelled` (`cairn_ui::ActivityStatus`: a refusal, a stale write, one never run and
+a partly done discard are each `failed`) — with its time and how long it took; for a failure or
+a cancel its one sentence, wrapped, never cut (a write's cancel `activity::WRITE_CANCELLED`, a
+fetch's `FETCH_CANCELLED`); the prompt it confirmed under "Confirmed:", whole and wrapped, only
+once it ran — git ran it, failed, was cancelled while it ran, or succeeded; never one refused,
+stale or not run (`a_destructive_write_quotes_its_prompt_only_once_it_ran`,
+`the_prompt_is_drawn_only_for_an_operation_that_ran`). The prompt is copied as the window asks
+the write (`LocalWrite::prompt`), since the verb spends the token. Then an amend's way back,
+"Show in Lost Commits", whose press turns Show Lost Commits on and finds the replaced commit as a
+ref's press finds its row (`ref_find::find_commit`;
+`an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits`), and one append-only list of
+each `$ git …` it ran and what that said. Escape and a press outside close it.
+
+**Result lines.** Only where Fork's own Activity Manager was seen to say one: "staged" and "stage
+failed" for a stage of lines or files, "Switched to branch 'topic'" for a branch created and
+checked out, with or without Discard. Every other operation's row draws its name alone.
+
+**What an entry says beyond its result.** Create Branch's Discard, whose prompt is never drawn
+(its dialog's press is the confirmation), quotes none: once it succeeded its entry says what
+happened, rendered from its `Consequence` (`Consequence::happened`: "Discarded local changes and
+any untracked files in the way, then checked out 'topic' at a1b2c3d."). An amend run at the press
+whose cost, read again once git was reaped (`Done::cost_after`), says it would now have needed
+confirming says so once, as its sentence (`Consequence::amend_reported`: "Amended 3f2a1c9, which
+was pushed to origin/main while the amend ran. Sharing the amended commit needs a force push.",
+and, where git kept no reflog, that it can't be recovered) — it reports, prevents nothing and
+opens no dialog (C35; `an_amend_pushed_while_it_ran_says_so_in_its_entry`,
+`an_amend_reports_what_it_turned_out_to_cost_only_where_it_would_now_be_confirmed`).
 
 The user's decisions of 2026-10-09 on it, as built:
 
@@ -1159,30 +1179,34 @@ The user's decisions of 2026-10-09 on it, as built:
   focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
   A dialog opened over it is drawn alone, and the popover is drawn again once that is
   answered.
-- **The confirmed prompt** keeps its four-line cut, with "Show All" where it runs past the cut
-  (judged by its characters at the pane's width) — pressed, the prompt moves whole into the
-  lines' virtualizing view as its first row, sized by its own laid-out height (`on_sized`), so
-  it scrolls with git's lines below it, and "Show Less" cuts it again (K;
-  `show_all_makes_the_whole_confirmed_prompt_reachable`).
+- **Keys do nothing while it is open but close it** (I): it is the lowest rung of the one
+  modal state ("Where an ending goes", below), so `shortcuts::keys_inert` answers yes while it
+  is open, and the window's chords (`shortcuts::act`), Local Changes' list intents, the history
+  list's presses and the Show Lost Commits action ask it; the panel is `a11y_modal`, pulling
+  focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
+  A dialog opened over it is drawn alone, and the popover is drawn again once that is
+  answered.
 - **Each `$ git …` line pastes into a terminal** (L): every argument written as a POSIX shell
   needs it — bare when it is all ASCII letters, digits and `-_./:,+=@%`, otherwise in single
   quotes with an embedded `'` written `'\''`, an empty one `''` (`activity::shell_quoted`;
   `each_argument_is_quoted_as_a_shell_reads_it_back`, which has `sh` read the line back).
-- **Lines let go of say so** (M): an operation whose lines the byte bound let go of draws "Its
-  output was let go to make room for newer operations." (`activity::LINES_LET_GO`) in their
-  place (`an_operation_whose_lines_were_let_go_says_so`).
 - **A write that never started keeps its name** (N): one ended before it started — not run, the
   repository closing — is named as it was asked, from the writes the window kept queued
   (`a_write_refused_before_it_started_keeps_its_name`).
 - **An amend that must be confirmed leaves no entry**: it ran nothing, and the amend confirmed
   is an operation of its own (`every_ending_is_one_of_four_words`).
 
-**Where an entry's `git` comes from.** Each lane marks the command log as an operation starts
-(`Repository::command_mark`) and, as it ends, sends the records of the invocations it built
-since (`Repository::commands_since`) in `Update::OperationRan { by, commands }` just
-before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` from the network
-lane. A commit's output streams into its entry as it arrives (R10.4: a hook's lines while it
-runs, `Update::WriteOutput`), and is replaced by its commands' records once they are in.
+**Where an entry's lines come from.** One append-only list, never replaced under its reader.
+What an operation writes as it runs — a commit's hooks, a fetch's progress — is appended as the
+window drains it ("Output on its way to the window", below). Each lane marks the command log as
+an operation starts (`Repository::command_mark`) and, as it ends, sends the records of the
+invocations it built since (`Repository::commands_since`) in `Update::OperationRan { by,
+commands }` just before the ending — `RanBy::Write(id)` from the local lane, `RanBy::Fetch` from
+the network lane — and each record appends its `$ git …` line, its stderr unless the
+operation's output already streamed (it is the same output), and how it ended in one form when
+that was not a clean exit: `exit code N`, `killed by signal N` or `cancelled`; one never started,
+or whose end is not known, says nothing (`each_command_ends_in_one_form`,
+`each_operation_is_an_entry_with_its_result_its_git_and_its_way_back`).
 
 **Scrubbed once, in the runner** (R12.2, R4.10): the userinfo of every `scheme://` URL is
 removed from each line of git's as the runner splits it, before anything keeps or cuts it ("The
@@ -1202,21 +1226,25 @@ lane), `no_update_of_a_fetch_carries_a_token_its_git_wrote` (a real fetch throug
 `the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept) and
 `the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
 
-**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations, each at most
-`ACTIVITY_LINES` lines, all their lines together at most `ACTIVITY_BYTES` — counted as lines go
-in and out, the oldest operations' lines let go of first and, for the newest alone over the
-budget, its oldest lines, so a running operation keeps its latest output; what a running
-operation wrote is let go of once its commands' records arrive, which are drawn in its place
-(`what_is_held_stays_under_the_bound_across_many_operations`,
-`a_running_operation_over_the_budget_keeps_its_latest_lines`); an operation whose lines were let
-go of says so in their place (M, above). Nothing is written anywhere.
-Each line is cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character,
-with the diff view's marker after it (`cairn_ui::cut_marker`;
+**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations; each
+operation's lines one `crate::output_tail::OutputTail` — the one bounded tail, `OUTPUT_LINES`
+lines and `OUTPUT_BYTES` bytes, its oldest whole lines let go of — headed "Earlier output not
+kept." (`cairn_ui::EARLIER_NOT_KEPT`) once its own tail or the lane's let older lines go; and
+past `activity::LOG_BYTES` together (four tails' worth), whole oldest operations go, never one
+still running and never the newest, so only an operation larger than the bound alone is cut
+(`whole_oldest_entries_go_at_the_bound_and_an_entry_alone_is_cut`,
+`the_activity_manager_draws_forks_rows_and_header`). Nothing is written anywhere. Each line is
+cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character, with the diff
+view's marker after it (`cairn_ui::cut_marker`;
 `a_long_line_is_kept_cut_with_the_diff_views_marker`). Both lists — the operations and the
-selected one's lines — are drawn through a virtualizing view
-(`the_popover_builds_one_viewport_of_operations_and_of_lines`), and the selected entry's lines
-alone are built, when the open popover asks, and kept until a line changes; with it closed an
-update costs the lines it carries (`closed_the_popover_builds_no_lines`).
+selected one's lines — are drawn through a virtualizing view whose rows are of one fixed height,
+the prompt laid out above the lines' list (`the_popover_builds_one_viewport_of_operations_and_of_lines`,
+`the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said`). The open popover reads a snapshot
+(`ActivityLog::shown`): the selected entry's lines shared by a reference count, copied only when
+a line arrives while a snapshot is held (`the_popover_reads_a_shared_snapshot`). The window's
+root reads whether the popover is open (`ActivityView::open`, a state of its own), never the
+log, so a streamed line draws nothing again while the popover is closed, and only the popover
+while it is open (`a_streamed_line_never_draws_the_window_again`).
 
 **An operation's name** is Fork's imperative form, as its Activity Manager names one ("Fetch
 origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7), and the only wording of
@@ -1227,17 +1255,21 @@ destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "
 a.rs", "Amend", "Remove index.lock"). A write ended before it started keeps the name it was
 asked under; "A write" is said only of one the window never asked.
 
-**A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a commit's
-stdout and stderr on a read of a pipe at a time, as whole scrubbed lines (`Invocation::lines`),
-the commit's `CommitWatch` hands those lines on together, and the lane sends each read as one
-`Update::WriteOutput` whose
-`OutputReceipt` counts its bytes in a budget shared with the window. Past
-`output_flow::IN_FLIGHT_BYTES` waiting for the window, the lane holds the newest lines
-itself, at most the window's own tail's bounds, and sends them once the window has given bytes
-back or as the write ends; the receipt's drop — on the UI thread — is one atomic subtraction.
-Pinned by `the_lines_of_one_read_are_handed_on_together` and
-`output_is_one_update_a_read_and_what_waits_is_bounded`. Residual: while the window is behind,
-held lines wait for git's next read or its end.
+**Output on its way to the window** (phase 05's QA item 3, phase 12's QA #15 and #16): the
+runner hands a commit's stdout and stderr, and a fetch's stderr, on a read of a pipe at a time,
+as whole scrubbed lines (`Invocation::lines`). The lane never sends lines: it puts each read into
+its tap (`worker::OutputTap`, one per lane — the local lane's writes run one at a time, the
+network lane's fetch alone), a shared `OutputTail` of reads bounded by the one pair of bounds,
+whose oldest whole reads are popped, never moved; and it wakes the window with one update —
+`Update::WriteOutput { id, tap }` or `Update::FetchProgress { tap }` — only when no wake is on its
+way. Applying it, the window drains everything waiting (`OutputTap::drain`, on the UI thread:
+a swap under the tap's mutex, which the lane holds only for an append), latest kept, and hands
+it to the commit box's tail, the activity entry and the status box's progress line. However far
+behind the window falls, at most one wake per tap waits in the outbox; a read after a drain wakes
+it again, so nothing waits for git's next read; and every line of a write is drained before its
+ending, which the lane sends after. Pinned by `the_lines_of_one_read_are_handed_on_together`,
+`one_wake_for_whatever_waits_and_the_latest_kept` and
+`the_tail_keeps_the_latest_whole_items_under_both_bounds`.
 
 ## Where an ending goes
 

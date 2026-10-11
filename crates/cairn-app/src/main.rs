@@ -34,6 +34,7 @@ mod local_writes;
 mod lost_commits;
 mod modal;
 mod next_selection;
+mod output_tail;
 mod ref_find;
 mod refresh;
 mod refresh_state;
@@ -138,7 +139,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // Create Branch, for the session (staging-and-commit R11.3).
     let branch = create_branch::CreateBranchView::used();
     // The activity popover's operations, for the session (staging-and-commit R12).
-    let activity = use_state(activity::ActivityLog::default);
+    let activity = activity::ActivityView::used();
     let view = View {
         rows,
         progress,

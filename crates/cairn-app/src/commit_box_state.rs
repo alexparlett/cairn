@@ -15,22 +15,15 @@
 //! A commit that is made clears the draft it took, untouched again, and an amend unticks
 //! itself; one that fails keeps it.
 
-use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
 use cairn_model::{Confirmed, Consequence, OperationInProgress, ScrubbedLines};
 use freya::prelude::*;
 
+use crate::output_tail::OutputTail;
 use crate::shown_output::{shown_lines, spoken_lines};
 use crate::worker::{CommitReads, OperationId};
-
-/// The most lines of a commit's output the window keeps for the Git Error dialog: the latest,
-/// the oldest let go of first, so a hook that writes without end costs a bounded tail
-/// (R10.5's "bounded to the retained tail").
-pub const OUTPUT_LINES: usize = 10_000;
-/// The most bytes of output kept, whatever the count of lines.
-pub const OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// The window's handles on the box: the draft, bound to its fields, and the rest of its state.
 #[derive(Clone, Copy, PartialEq)]
@@ -103,43 +96,6 @@ impl GitError {
     }
 }
 
-/// A commit's output as it arrives, bounded to its latest [`OUTPUT_LINES`] and
-/// [`OUTPUT_BYTES`].
-#[derive(Debug, Default)]
-pub struct OutputTail {
-    lines: VecDeque<String>,
-    bytes: usize,
-}
-
-impl OutputTail {
-    /// One line more, as it is drawn — scrubbed by the engine, ANSI sequences stripped here; the
-    /// oldest let go of past the bounds.
-    pub fn push(&mut self, line: String) {
-        self.bytes += line.len();
-        self.lines.push_back(line);
-        while self.lines.len() > OUTPUT_LINES || (self.bytes > OUTPUT_BYTES && self.lines.len() > 1)
-        {
-            if let Some(dropped) = self.lines.pop_front() {
-                self.bytes -= dropped.len();
-            }
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.lines.clear();
-        self.bytes = 0;
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
-    }
-
-    /// The lines kept, oldest first.
-    pub fn lines(&self) -> Vec<String> {
-        self.lines.iter().cloned().collect()
-    }
-}
-
 /// A draft set aside as Amend was ticked: its two fields and whether the person had touched it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Kept {
@@ -165,7 +121,8 @@ pub struct CommitBox {
     /// Cancel was pressed for the commit asked: "Cancelling…" until it ends.
     cancelling: bool,
     started: Option<Instant>,
-    output: OutputTail,
+    /// Its commit's output as it arrives: the latest, in the one bounded tail (R10.5).
+    output: OutputTail<String>,
     error: Option<GitError>,
     /// An amend at the press that must be confirmed: its consequence and the amend pressed, until
     /// the box opens the confirmation dialog on it (R10.6).
@@ -318,9 +275,7 @@ impl CommitBox {
     /// A read of the write `id`'s output: its spoken lines kept when it is this box's commit.
     pub fn output_arrived(&mut self, id: OperationId, lines: &ScrubbedLines) {
         if self.asked.as_ref().is_some_and(|asked| asked.id == id) {
-            for line in spoken_lines(lines) {
-                self.output.push(line);
-            }
+            self.output.extend(spoken_lines(lines));
         }
     }
 
@@ -358,7 +313,7 @@ impl CommitBox {
         let lines = if self.output.is_empty() {
             shown_lines(&failure.output)
         } else {
-            self.output.lines()
+            self.output.iter().cloned().collect()
         };
         self.output.clear();
         let serial = self.next_serial();
@@ -451,27 +406,43 @@ mod tests {
         assert_eq!(compose_message("Only a subject", ""), "Only a subject");
     }
 
-    /// R10.5's bound: the output kept is the latest lines, however many a hook writes. Caught
-    /// by: an unbounded buffer, or the newest lines dropped rather than the oldest.
+    /// R10.5's bound: the output kept is the latest lines of the one bounded tail, however many
+    /// a hook writes. Caught by: an unbounded buffer, or the newest lines dropped rather than
+    /// the oldest.
     #[test]
     fn the_output_kept_is_its_latest_bounded_tail() {
-        let mut tail = OutputTail::default();
-        for n in 0..OUTPUT_LINES + 5 {
-            tail.push(format!("line {n}"));
-        }
-        let lines = tail.lines();
-        assert_eq!(lines.len(), OUTPUT_LINES);
-        assert_eq!(lines.first().map(String::as_str), Some("line 5"));
+        use crate::output_tail::OUTPUT_LINES;
+        let id = OperationId::for_tests(1);
+        let asked = AskedCommit {
+            id,
+            amend: false,
+            message: "m".to_owned(),
+            skip_hooks: false,
+        };
+        let mut state = CommitBox::default();
+        state.commit_asked(asked.clone());
+        let lines: Vec<String> = (0..OUTPUT_LINES + 5).map(|n| format!("line {n}")).collect();
+        state.output_arrived(id, &ScrubbedLines::scrubbing(&lines.join("\n")));
+        state.ended(id);
+        state.failed(
+            asked,
+            &crate::worker::Failure {
+                said: "failed".to_owned(),
+                command: None,
+                output: ScrubbedLines::new(),
+                locks: Vec::new(),
+                index_lock: false,
+            },
+            None,
+        );
+        let shown = state.error().map(|error| error.lines.clone());
+        let shown = shown.as_deref().map(Vec::as_slice).unwrap_or_default();
+        assert_eq!(shown.len(), OUTPUT_LINES);
+        assert_eq!(shown.first().map(String::as_str), Some("line 5"));
         assert_eq!(
-            lines.last().map(String::as_str),
+            shown.last().map(String::as_str),
             Some(format!("line {}", OUTPUT_LINES + 4).as_str())
         );
-        let mut wide = OutputTail::default();
-        let long = "x".repeat(OUTPUT_BYTES / 2 + 1);
-        for _ in 0..3 {
-            wide.push(long.clone());
-        }
-        assert_eq!(wide.lines().len(), 1, "past the byte bound");
     }
 
     /// R10.3, C7 and the QA brief's first case: a draft typed, Amend ticked and unticked comes

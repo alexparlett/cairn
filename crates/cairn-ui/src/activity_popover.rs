@@ -1,25 +1,26 @@
-//! Fork's Activity popover (staging-and-commit R12.1; `fork-staging-and-commit.md` §7), opened
-//! from the title bar's status box: on the left the session's operations, newest first — each
-//! its name, its status and when it started, with a cancel for a running one that can be
-//! cancelled — and on the right the one selected: its status and how long it took, what it
-//! said, the prompt it confirmed when it had one (Cairn's addition, L14), the way back where
-//! there is one — an amend's replaced commit, shown in Show Lost Commits — then each `git` it
-//! ran as Fork prints it, `$ git ...`, with what it wrote to stderr. (`Remove index.lock…` left
-//! it in staging-and-commit phase 19: the leftover lock is the repository's banner, and a
-//! write's Git Error, R12.4.)
+//! Fork's Activity Manager (staging-and-commit R12.1, C29; `fork-observed-2026-10-10.md` `am1`,
+//! `am2`), opened from the title bar's status box: on the left the session's operations, newest
+//! first — each its one name, Fork's result line under it ("staged", "Switched to branch
+//! 'topic'"), when it started, ⚠ on a failure and a shape of its own on a cancel, with a cancel
+//! for a running one that can be cancelled, and no status word — and on the right the one
+//! selected: its name; one of four words, running, succeeded, failed or cancelled, with its time
+//! and how long it took (F8, which Fork lacks); a failed or cancelled operation's one sentence,
+//! never cut; the prompt it confirmed, whole and wrapped, for an operation that ran (F3,
+//! Cairn's addition); an amend's way back, "Show in Lost Commits" (F4); then one append-only
+//! list of each `$ git …` it ran and what that said, each command's ending in one form.
 //!
-//! Both lists are virtualized — the operations and the selected one's lines, which are as long
-//! as git's output makes them — so neither builds more than a viewport of rows (R12.1). Every
-//! line is the window's, already stripped of escape sequences and of a URL's userinfo
-//! (R12.2): this file draws text it is given and reads nothing else. Escape and a press
-//! outside close it.
-//!
-//! The user's decisions of 2026-10-09 on it: it hangs from the status box, its left edge under
-//! the box's and an arrow pointing up at it, kept inside the window's width (A); the confirmed
-//! prompt is cut to four lines with "Show All", which moves it
-//! whole into the scrolling list above the lines, to scroll with them, and "Show Less" (K).
+//! Both lists are virtualized, each row of one fixed height — the operations and the selected
+//! one's lines, which are as long as git's output makes them — so neither builds more than a
+//! viewport of rows (R12.1). An operation whose output passed its bound starts with "Earlier
+//! output not kept.". Every line is the window's, already stripped of escape sequences and of a
+//! URL's userinfo (R12.2): this file draws text it is given and reads nothing else. Escape and
+//! a press outside close it. It hangs from the status box, its left edge under the box's and an
+//! arrow pointing up at it, kept inside the window's width (the user's decision A,
+//! 2026-10-09).
 
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cairn_model::Oid;
 use freya::prelude::*;
@@ -28,18 +29,21 @@ use crate::diff_palette::DIFF_FONT_FAMILY;
 
 /// The popover's title, Fork's word for its log.
 pub const ACTIVITY_TITLE: &str = "Activity";
-/// The way back from an amend: its replaced commit, in Show Lost Commits.
-pub const SHOW_REPLACED_CAPTION: &str = "Show Replaced Commit";
+/// The way back from an amend (F4): Show Lost Commits turned on and the replaced commit selected.
+pub const SHOW_IN_LOST_COMMITS_CAPTION: &str = "Show in Lost Commits";
 /// The cancel beside a running operation that can be cancelled (Fork's ×).
 pub const CANCEL_OPERATION_CAPTION: &str = "×";
 /// What the popover says before any operation has run.
 pub const NO_ACTIVITY: &str = "Nothing has run in this window yet.";
 /// Said above the prompt an operation confirmed.
 pub const CONFIRMED_CAPTION: &str = "Confirmed:";
-/// Shows a confirmed prompt cut to four lines whole (the user's decision K, 2026-10-09).
-pub const SHOW_ALL_CAPTION: &str = "Show All";
-/// Cuts a prompt shown whole back to four lines.
-pub const SHOW_LESS_CAPTION: &str = "Show Less";
+/// The first line of an operation whose output passed its bound: its oldest lines went.
+pub const EARLIER_NOT_KEPT: &str = "Earlier output not kept.";
+/// Beside a failed operation's row, as Fork marks one.
+pub const FAILED_GLYPH: &str = "⚠";
+/// Beside a cancelled operation's row: a shape of its own, since the window tells kinds apart
+/// by shape.
+pub const CANCELLED_GLYPH: &str = "⊘";
 
 const WIDTH: f32 = 860.;
 const HEIGHT: f32 = 460.;
@@ -50,13 +54,6 @@ const MARGIN: f32 = 8.;
 const ARROW: f32 = 12.;
 /// How far the arrow's tip sits in from the box's left edge.
 const ARROW_INSET: f32 = 18.;
-/// The confirmed prompt's cut (the user's decision K): four lines.
-const PROMPT_LINES: usize = 4;
-/// About how many characters a line of the right pane holds, for whether a prompt is longer
-/// than its cut: its width over a character's mean advance at 12 px.
-const PROMPT_CHARS_PER_LINE: f32 = (WIDTH - LIST_WIDTH - 16.) / 6.5;
-/// The prompt's line height, for its first measure before it is laid out.
-const PROMPT_LINE_HEIGHT: f32 = 16.;
 /// One operation's row on the left.
 pub const ENTRY_ROW_HEIGHT: f32 = 38.;
 /// One line on the right.
@@ -69,29 +66,82 @@ const TOP: f32 = 44.;
 pub enum ActivityLine {
     /// A `git` it ran, as Fork prints it: `$ git ...`.
     Ran(String),
-    /// A line it wrote — stderr, a hook's output.
+    /// A line it wrote — stderr, a hook's output — or how a command ended.
     Output(String),
 }
 
+/// How an operation stands, in one of the four words (rule 5, R14.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl ActivityStatus {
+    /// Its word, as the right pane's header says it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// What its row draws beside the time: ⚠ for a failure, a shape of its own for a cancel.
+    fn glyph(self) -> Option<&'static str> {
+        match self {
+            Self::Failed => Some(FAILED_GLYPH),
+            Self::Cancelled => Some(CANCELLED_GLYPH),
+            Self::Running | Self::Succeeded => None,
+        }
+    }
+}
+
 /// An operation as the popover draws it, every text the window's.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ActivityEntry {
     pub name: String,
-    /// `running`, `succeeded`, …
-    pub status: String,
+    /// Fork's result line under its row, where there is one.
+    pub result: Option<String>,
+    pub status: ActivityStatus,
     /// When it started, as the window says it.
     pub started: String,
     /// How long it took, once it has ended.
     pub took: Option<String>,
-    /// What its ending said, beyond its status.
-    pub message: Option<String>,
-    /// The prompt it confirmed, for a destructive operation (R1.6).
+    /// Its one sentence: why it failed or what a cancel left, or what a success did beyond its
+    /// name (an amend whose replaced commit was pushed while it ran, a forced checkout).
+    pub sentence: Option<String>,
+    /// The prompt it confirmed, for a destructive operation that ran (R1.6, F3).
     pub prompt: Option<String>,
-    /// The commit an amend replaced, which Show Lost Commits draws (R12.1).
+    /// The commit an amend replaced, which Show Lost Commits draws (R12.1, F4).
     pub replaced: Option<Oid>,
     /// A running operation that can be cancelled: a commit, an amend, a fetch.
     pub cancellable: bool,
-    pub lines: Rc<Vec<ActivityLine>>,
+    /// Its `$ git …` lines and what they said, oldest first: a snapshot of what the window
+    /// keeps, shared, never copied — empty for an entry not selected.
+    pub lines: Arc<VecDeque<ActivityLine>>,
+    /// Older lines were let go of to keep it bounded: "Earlier output not kept." heads them.
+    pub earlier_not_kept: bool,
+}
+
+/// Compared by the snapshot its lines are: a snapshot is replaced, never changed in place.
+impl PartialEq for ActivityEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.result == other.result
+            && self.status == other.status
+            && self.started == other.started
+            && self.took == other.took
+            && self.sentence == other.sentence
+            && self.prompt == other.prompt
+            && self.replaced == other.replaced
+            && self.cancellable == other.cancellable
+            && Arc::ptr_eq(&self.lines, &other.lines)
+            && self.earlier_not_kept == other.earlier_not_kept
+    }
 }
 
 /// The popover over `entries`, newest first, with `selected` drawn on the right.
@@ -192,25 +242,18 @@ impl PartialEq for EntryList {
     }
 }
 
-/// The selected operation's lines, compared by identity: an entry's lines are replaced, never
-/// changed in place — and, shown whole, its confirmed prompt as the first row.
+/// The selected operation's lines, compared by their snapshot — and, first when its oldest
+/// lines went, "Earlier output not kept.".
 #[derive(Clone)]
 struct Lines {
-    lines: Rc<Vec<ActivityLine>>,
-    prompt: Option<(String, State<f32>)>,
+    lines: Arc<VecDeque<ActivityLine>>,
+    earlier_not_kept: bool,
 }
 
 impl PartialEq for Lines {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.lines, &other.lines)
-            && self.prompt.as_ref().map(|(text, _)| text)
-                == other.prompt.as_ref().map(|(text, _)| text)
+        Arc::ptr_eq(&self.lines, &other.lines) && self.earlier_not_kept == other.earlier_not_kept
     }
-}
-
-/// Whether `prompt` runs past its four-line cut, by its characters at the pane's width.
-fn longer_than_its_cut(prompt: &str) -> bool {
-    prompt.chars().count() as f32 > PROMPT_CHARS_PER_LINE * PROMPT_LINES as f32
 }
 
 fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
@@ -229,6 +272,7 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
         .horizontal()
         .content(Content::Flex)
         .cross_align(Alignment::center())
+        .spacing(6.)
         .padding(Gaps::new(2., 8., 2., 8.))
         .maybe(selected, |row| row.background(colours.surface_secondary))
         .on_press(move |_| on_select.call(index))
@@ -243,14 +287,28 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
                         .font_size(13.)
                         .color(colours.text_primary),
                 )
-                .child(
+                .maybe_child(entry.result.clone().map(|result| {
                     label()
-                        .text(format!("{} · {}", entry.status, entry.started))
+                        .text(result)
                         .max_lines(1)
+                        .text_overflow(TextOverflow::Ellipsis)
                         .font_size(11.)
-                        .color(colours.text_secondary),
-                ),
+                        .color(colours.text_secondary)
+                })),
         )
+        .child(
+            label()
+                .text(entry.started.clone())
+                .max_lines(1)
+                .font_size(11.)
+                .color(colours.text_secondary),
+        )
+        .maybe_child(entry.status.glyph().map(|glyph| {
+            label()
+                .text(glyph)
+                .font_size(12.)
+                .color(colours.text_primary)
+        }))
         .maybe_child(entry.cancellable.then(|| {
             Button::new()
                 .compact()
@@ -262,34 +320,13 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
 
 fn line_row(item: VirtualItem, lines: &Lines) -> Element {
     let colours = get_theme_or_default().read().colors().clone();
-    // Shown whole, the prompt is the first row, as tall as it lays out.
-    let index = match &lines.prompt {
-        Some((prompt, height)) if item.index == 0 => {
-            let mut height = *height;
-            return rect()
-                .key(usize::MAX)
-                .width(Size::fill())
-                .height(Size::px(item.size))
-                .padding(Gaps::new(4., 6., 4., 6.))
-                .child(
-                    label()
-                        .text(prompt.clone())
-                        .width(Size::fill())
-                        .font_size(12.)
-                        .color(colours.text_primary)
-                        .on_sized(move |e: Event<SizedEventData>| {
-                            height.set_if_modified(e.area.height() + 8.);
-                        }),
-                )
-                .into();
-        }
-        Some(_) => item.index - 1,
-        None => item.index,
-    };
-    let (text, colour) = match lines.lines.get(index) {
-        Some(ActivityLine::Ran(command)) => (command.clone(), colours.text_primary),
-        Some(ActivityLine::Output(output)) => (output.clone(), colours.text_secondary),
-        None => (String::new(), colours.text_secondary),
+    let (text, colour) = match item.index.checked_sub(usize::from(lines.earlier_not_kept)) {
+        None => (EARLIER_NOT_KEPT.to_owned(), colours.text_secondary),
+        Some(index) => match lines.lines.get(index) {
+            Some(ActivityLine::Ran(command)) => (command.clone(), colours.text_primary),
+            Some(ActivityLine::Output(output)) => (output.clone(), colours.text_secondary),
+            None => (String::new(), colours.text_secondary),
+        },
     };
     rect()
         .key(item.index)
@@ -307,14 +344,19 @@ fn line_row(item: VirtualItem, lines: &Lines) -> Element {
         .into()
 }
 
+/// The right pane's header line: the status word with when it started, and how long it took.
+fn header_line(entry: &ActivityEntry) -> String {
+    match &entry.took {
+        Some(took) => format!("{} {} · took {took}", entry.status.word(), entry.started),
+        None => format!("{} {}", entry.status.word(), entry.started),
+    }
+}
+
 impl Component for ActivityPopover {
     fn render(&self) -> impl IntoElement {
         let colours = get_theme_or_default().read().colors().clone();
         let close = self.on_close.clone();
         let closing = self.on_close.clone();
-        // Which entry's prompt is shown whole, by place; another selection cuts it again.
-        let mut whole = use_state(|| None::<usize>);
-        let prompt_height = use_state(|| 0f32);
         let list = EntryList {
             entries: self.entries.clone(),
             selected: self.selected,
@@ -339,41 +381,19 @@ impl Component for ActivityPopover {
                 .expanded()
                 .into()
         };
-        let selected = self.selected;
         let right = self.entries.get(self.selected).map(|entry| {
             let on_replaced = self.on_replaced.clone();
             let replaced = entry.replaced;
-            let shown_whole = *whole.read() == Some(selected) && entry.prompt.is_some();
-            let whole_prompt = entry.prompt.clone().filter(|_| shown_whole);
-            let rows = entry.lines.len() + usize::from(whole_prompt.is_some());
-            let size = if let Some(prompt) = &whole_prompt {
-                let height = prompt_height;
-                // A first measure, until the prompt is laid out and measures itself.
-                let estimate = (prompt.chars().count() as f32 / PROMPT_CHARS_PER_LINE).ceil()
-                    * PROMPT_LINE_HEIGHT
-                    + 8.;
-                ItemSize::Dynamic(Callback::new(move |index: usize| {
-                    if index > 0 {
-                        LINE_ROW_HEIGHT
-                    } else {
-                        match *height.peek() {
-                            measured if measured > 0. => measured,
-                            _ => estimate,
-                        }
-                    }
-                }))
-            } else {
-                ItemSize::Fixed(LINE_ROW_HEIGHT)
-            };
+            let rows = entry.lines.len() + usize::from(entry.earlier_not_kept);
             let lines = VirtualScrollView::new_with_data(
                 Lines {
                     lines: entry.lines.clone(),
-                    prompt: whole_prompt.map(|prompt| (prompt, prompt_height)),
+                    earlier_not_kept: entry.earlier_not_kept,
                 },
                 line_row,
             )
             .length(rows)
-            .item_size(size)
+            .item_size(LINE_ROW_HEIGHT)
             .width(Size::fill())
             .height(Size::flex(1.));
             rect()
@@ -392,70 +412,43 @@ impl Component for ActivityPopover {
                 )
                 .child(
                     label()
-                        .text(match &entry.took {
-                            Some(took) => {
-                                format!(
-                                    "{} · started {} · took {took}",
-                                    entry.status, entry.started
-                                )
-                            }
-                            None => format!("{} · started {}", entry.status, entry.started),
-                        })
+                        .text(header_line(entry))
                         .max_lines(1)
                         .font_size(12.)
                         .color(colours.text_secondary),
                 )
-                .maybe_child(entry.message.clone().map(|message| {
+                // One sentence, never cut (rule 6).
+                .maybe_child(entry.sentence.clone().map(|sentence| {
                     label()
-                        .text(message)
-                        .max_lines(3)
-                        .text_overflow(TextOverflow::Ellipsis)
+                        .text(sentence)
+                        .width(Size::fill())
                         .font_size(12.)
                         .color(colours.text_primary)
                 }))
+                // The prompt it confirmed, whole and wrapped (F3): laid out above the lines, so
+                // their rows keep one fixed height.
                 .maybe_child(entry.prompt.clone().map(|prompt| {
-                    let long = longer_than_its_cut(&prompt);
                     rect()
                         .width(Size::fill())
                         .child(
-                            rect()
-                                .horizontal()
-                                .spacing(8.)
-                                .cross_align(Alignment::center())
-                                .child(
-                                    label()
-                                        .text(CONFIRMED_CAPTION)
-                                        .font_size(11.)
-                                        .color(colours.text_secondary),
-                                )
-                                .maybe_child((long || shown_whole).then(|| {
-                                    Button::new()
-                                        .compact()
-                                        .on_press(move |_| {
-                                            let open = *whole.peek() == Some(selected);
-                                            whole.set((!open).then_some(selected));
-                                        })
-                                        .child(if shown_whole {
-                                            SHOW_LESS_CAPTION
-                                        } else {
-                                            SHOW_ALL_CAPTION
-                                        })
-                                })),
+                            label()
+                                .text(CONFIRMED_CAPTION)
+                                .font_size(11.)
+                                .color(colours.text_secondary),
                         )
-                        .maybe_child((!shown_whole).then(|| {
+                        .child(
                             label()
                                 .text(prompt)
-                                .max_lines(PROMPT_LINES)
-                                .text_overflow(TextOverflow::Ellipsis)
+                                .width(Size::fill())
                                 .font_size(12.)
-                                .color(colours.text_primary)
-                        }))
+                                .color(colours.text_primary),
+                        )
                 }))
                 .maybe_child(replaced.map(|commit| {
                     Button::new()
                         .compact()
                         .on_press(move |_| on_replaced.call(commit))
-                        .child(SHOW_REPLACED_CAPTION)
+                        .child(SHOW_IN_LOST_COMMITS_CAPTION)
                 }))
                 .child(
                     rect()

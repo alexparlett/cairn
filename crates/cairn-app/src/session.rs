@@ -97,16 +97,22 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::diff_actions::configured(context, view, worker.submit);
         }
         Update::FetchStarted { remote } => {
-            activity.write().fetch_started(&remote);
+            activity.log.write().fetch_started(&remote);
             fetch.write().started(remote);
         }
-        Update::FetchProgress { lines } => {
-            let key = activity.peek().fetch_key();
+        // The fetch wrote: whatever waits in its lane's tap, drained once (`output_tap`).
+        Update::FetchProgress { tap } => {
+            let drained = tap.drain();
+            let key = activity.log.peek().fetch_key();
             if let Some(key) = key {
-                activity.write().output(key, &lines);
+                activity.log.write().output(key, &drained);
             }
             // The status box draws the latest redraw.
-            if let Some(line) = lines.spoken().next_back() {
+            let latest = drained
+                .iter()
+                .rev()
+                .find_map(|lines| lines.spoken().next_back());
+            if let Some(line) = latest {
                 fetch.write().progressed(line.to_owned());
             }
         }
@@ -114,14 +120,15 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::OperationRan { by, commands } => {
             let key = match by {
                 crate::worker::RanBy::Write(id) => Some(crate::activity::ActivityKey::Write(id)),
-                crate::worker::RanBy::Fetch => activity.peek().fetch_key(),
+                crate::worker::RanBy::Fetch => activity.log.peek().fetch_key(),
             };
             if let Some(key) = key {
-                activity.write().ran(key, &commands);
+                activity.log.write().ran(key, &commands);
             }
         }
         Update::FetchFinished { remote } => {
             activity
+                .log
                 .write()
                 .fetch_ended(&remote, crate::activity::Outcome::Succeeded);
             if !writes.peek().is_running() {
@@ -132,9 +139,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         // A cancel opens nothing (R14.5).
         Update::FetchCancelled { remote } => {
-            activity
-                .write()
-                .fetch_ended(&remote, crate::activity::Outcome::Cancelled);
+            activity.log.write().fetch_ended(
+                &remote,
+                crate::activity::Outcome::Cancelled(crate::activity::FETCH_CANCELLED.to_owned()),
+            );
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -143,7 +151,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         // git's failure opens its Git Error, as every operation the person started does (R14.3).
         Update::FetchFailed { remote, failure } => {
-            activity.write().fetch_ended(
+            activity.log.write().fetch_ended(
                 &remote,
                 crate::activity::Outcome::Failed(failure.said.clone()),
             );
@@ -161,17 +169,22 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::WriteStarted { id } => {
             writes.write().started(id);
             if let Some(asked) = writes.peek().running() {
-                activity.write().write_started(asked);
+                activity.log.write().write_started(asked);
             }
             crate::commit_box_pane::write_started(id, view);
         }
         // The commit box's commit's output, kept for the Git Error dialog (R10.5), and every
         // write's for the activity popover (R10.4, R12.1).
-        Update::WriteOutput { id, lines, .. } => {
-            crate::commit_box_pane::write_output(id, &lines, view);
+        // Drained once from the local lane's tap, whatever waits (`output_tap`).
+        Update::WriteOutput { id, tap } => {
+            let drained = tap.drain();
+            for lines in drained.iter() {
+                crate::commit_box_pane::write_output(id, lines, view);
+            }
             activity
+                .log
                 .write()
-                .output(crate::activity::ActivityKey::Write(id), &lines);
+                .output(crate::activity::ActivityKey::Write(id), &drained);
         }
         Update::WriteEnded {
             id,
@@ -210,7 +223,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                     endings.write().push(shown);
                 }
             }
-            activity.write().write_ended(id, &ending, asked.as_ref());
+            activity
+                .log
+                .write()
+                .write_ended(id, &ending, asked.as_ref());
             writes.write().ended(id);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
@@ -549,7 +565,7 @@ mod tests {
                         writes: State::create(crate::local_writes::LocalWrites::default()),
                         confirming: State::create(None),
                         show_lost: State::create(false),
-                        activity: State::create(crate::activity::ActivityLog::default()),
+                        activity: crate::activity::ActivityView::created(),
                         branch: crate::create_branch::CreateBranchView::created(),
                     }
                 })
@@ -1168,9 +1184,9 @@ mod tests {
             view,
             &asked,
             Update::FetchProgress {
-                lines: cairn_model::ScrubbedLines::scrubbing(
+                tap: crate::worker::OutputTap::holding(&cairn_model::ScrubbedLines::scrubbing(
                     "Receiving objects: 20%\nReceiving objects: 40%\n",
-                ),
+                )),
             },
         );
         assert_eq!(

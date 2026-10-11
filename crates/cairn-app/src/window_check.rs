@@ -428,7 +428,7 @@ fn launch(path: &str) -> Harness {
                 writes: State::create(crate::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
-                activity: State::create(crate::activity::ActivityLog::default()),
+                activity: crate::activity::ActivityView::created(),
                 branch: crate::create_branch::CreateBranchView::created(),
             })
         },
@@ -1307,8 +1307,8 @@ fn writes_check() {
             if open {
                 // Opened once the commit is running: its entry is the newest, and selected.
                 let _ = harness.pump(Stimulus::Nothing, 0, |view| view.writes.peek().is_running());
-                let mut activity = harness.view.activity;
-                harness.test.run_in(|| activity.write().open());
+                let activity = harness.view.activity;
+                harness.test.run_in(|| activity.open());
             }
             let running = harness.pump(Stimulus::Nothing, 5, move |view| {
                 rows(view, staged) == 0 && !view.writes.peek().is_running()
@@ -1318,8 +1318,8 @@ fn writes_check() {
                 if open { "open on it" } else { "closed" }
             ));
             worst_hook_frame = worst_hook_frame.max(running.slowest.0);
-            let mut activity = harness.view.activity;
-            harness.test.run_in(|| activity.write().close());
+            let activity = harness.view.activity;
+            harness.test.run_in(|| activity.close());
         }
     }
     eprintln!(

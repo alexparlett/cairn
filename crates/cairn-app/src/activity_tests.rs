@@ -14,8 +14,9 @@ use cairn_model::{
     UnstagedChange,
 };
 use cairn_ui::{
-    ACTIVITY_TITLE, CANCEL_CAPTION, CLOSE_CAPTION, GIT_ERROR_TITLE, LOCK_BANNER_TEXT, MainView,
-    NO_ACTIVITY, REMOVE_LOCK_CAPTION, SHOW_REPLACED_CAPTION,
+    ACTIVITY_TITLE, CANCEL_CAPTION, CANCELLED_GLYPH, CLOSE_CAPTION, EARLIER_NOT_KEPT, FAILED_GLYPH,
+    GIT_ERROR_TITLE, LOCK_BANNER_TEXT, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
+    SHOW_IN_LOST_COMMITS_CAPTION,
 };
 
 use crate::leftover_lock::REMOVE_LOCK_TITLE;
@@ -23,7 +24,8 @@ use freya::prelude::*;
 use freya_testing::TestingRunner;
 
 use crate::local_changes_tests::{
-    Submitted, apply, changed, labels, launch, open_local_changes, press_row, status,
+    Submitted, apply, changed, labels, launch, launch_counted, open_local_changes, press_row,
+    status,
 };
 use crate::local_writes::Asked;
 use crate::window::View;
@@ -189,7 +191,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
         "Stage 1 file",
         "$ git --literal-pathspecs add https://example.com/r",
         "hint: https://example.com/r refused",
-        "(exit status 1)",
+        "exit code 1",
     ] {
         assert!(drawn(&test, text), "{text:?} missing: {:?}", labels(&test));
     }
@@ -462,31 +464,30 @@ fn a_write_refused_before_it_started_keeps_its_name() {
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
-/// R12.1, the merge bar's W2: a destructive write that git failed, or that was cancelled, still
-/// quotes the prompt the user accepted — copied as it was asked,
-/// since the verb spent the token and only an ending that ran carries it back — and so does one
-/// that never ran. Caught by: the prompt drawn only for a write that succeeded.
+/// F3 (R12.1 as amended 2026-10-10): a destructive write quotes the prompt the user accepted —
+/// copied as it was asked, since the verb spent the token — whole, only once it ran: an amend
+/// cancelled while git ran does, a removal never run does not; and Create Branch's Discard
+/// quotes none, its entry saying once it succeeded what it did, under Fork's "Switched to
+/// branch 'topic'", or git's failure where it failed. Caught by: "Confirmed:" over an
+/// operation that never happened, or the forced checkout's question quoted.
 #[test]
-fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
+fn a_destructive_write_quotes_its_prompt_only_once_it_ran() {
     let (mut test, view, submitted) = launch();
     let amend = Consequence::Amend {
         commit: Oid::from_bytes(&[0xab; 20]).unwrap(),
         published: Publication::Unpublished,
         reflog: Reflog::NotWritten,
     };
-    let discarding = Consequence::CheckoutDiscarding {
+    let discarding = || Consequence::CheckoutDiscarding {
         branch: "topic".to_owned(),
         at: Oid::from_bytes(&[0xcd; 20]).unwrap(),
         head: Some(Oid::from_bytes(&[1; 20]).unwrap()),
     };
     let lock = index_lock();
-    let prompts = [amend.prompt(), discarding.prompt(), lock.prompt()];
-    assert!(
-        prompts.iter().all(|prompt| !prompt.is_empty()),
-        "{prompts:?}"
-    );
+    let (amend_prompt, discard_prompt, lock_prompt) =
+        (amend.prompt(), discarding().prompt(), lock.prompt());
 
-    // An amend cancelled before git made it.
+    // An amend cancelled while git ran.
     let killed = started(
         &mut test,
         view,
@@ -513,7 +514,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
         &mut test,
         view,
         &submitted,
-        &LocalWrite::CreateBranchDiscarding(Confirmed::by_user(discarding)),
+        &LocalWrite::CreateBranchDiscarding(Confirmed::by_user(discarding())),
     );
     apply(
         &mut test,
@@ -554,29 +555,82 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
             unspent: crate::worker::Unspent::none(),
         },
     );
+    // Create Branch's discard, which succeeded.
+    let checked_out = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::CreateBranchDiscarding(Confirmed::by_user(discarding())),
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: checked_out,
+            ending: WriteEnding::Done(Done {
+                description: "checked out".to_owned(),
+                acknowledged: Some(discard_prompt.clone()),
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
+            }),
+            read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
 
-    // Newest first: the removal, the checkout, the amend — each selected in turn.
+    // Newest first: the checkout that succeeded, the removal, the checkout that failed, the
+    // amend — each selected in turn.
     open(&mut test);
     let names: Vec<String> = test.run_in(|| {
         view.activity
+            .log
             .peek()
             .newest_first()
             .map(|entry| entry.name.clone())
             .collect()
     });
-    assert_eq!(names.len(), 3, "{names:?}");
-    for (name, prompt) in names.iter().zip(prompts.iter().rev()) {
-        click_lowest(&mut test, name);
-        assert!(
-            drawn(&test, prompt),
-            "{name:?} did not quote {prompt:?}: {:?}",
-            labels(&test)
-        );
-    }
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert!(
+        drawn(&test, "Switched to branch 'topic'"),
+        "{:?}",
+        labels(&test)
+    );
+    assert!(drawn(
+        &test,
+        "Discarded local changes and any untracked files in the way, then checked out 'topic' \
+         at cdcdcdc."
+    ));
+    assert!(
+        !drawn(&test, &discard_prompt),
+        "the forced checkout's prompt was quoted"
+    );
+    assert!(!drawn(&test, cairn_ui::CONFIRMED_CAPTION));
+    click_lowest(&mut test, &names[1]);
+    assert!(
+        !drawn(&test, &lock_prompt),
+        "a removal never run quoted its prompt"
+    );
+    assert!(!drawn(&test, cairn_ui::CONFIRMED_CAPTION));
+    click_lowest(&mut test, &names[2]);
+    assert!(
+        !drawn(&test, &discard_prompt),
+        "the forced checkout's prompt was quoted"
+    );
+    assert!(drawn(
+        &test,
+        "git checkout failed: fatal: a branch named 'topic' already exists"
+    ));
+    click_lowest(&mut test, &names[3]);
+    assert!(drawn(&test, &amend_prompt), "{:?}", labels(&test));
+    assert!(drawn(&test, cairn_ui::CONFIRMED_CAPTION));
+    assert!(drawn(&test, crate::activity::WRITE_CANCELLED));
 }
 
-/// R12.1's way back: an amend that succeeded draws the prompt it confirmed and offers its
-/// replaced commit, whose press switches to All Commits, turns Show Lost Commits on and looks
+/// R12.1's way back (F4): an amend that succeeded draws the prompt it confirmed and offers
+/// "Show in Lost Commits", whose press switches to All Commits, turns Show Lost Commits on and looks
 /// for the commit in the walk that draws it. Caught by: a way back that changes nothing, or one
 /// offered for an amend that did not run.
 #[test]
@@ -597,13 +651,15 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
     });
     // An amend's asked state names no commit: its way back is what its run answered (phase 18).
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
-    let mut activity = view.activity;
+    let mut activity = view.activity.log;
     test.run_in(|| {
         activity.write().write_started(&Asked {
             id,
             name: "Amend".to_owned(),
             cancellable: true,
-            prompt: None,
+            prompt: Some("Replaces cdcdcdc 'old'.".to_owned()),
+            happened: None,
+            results: crate::worker::ResultLines::default(),
         });
     });
     apply(
@@ -631,7 +687,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
         labels(&test)
     );
     submitted.borrow_mut().clear();
-    click(&mut test, SHOW_REPLACED_CAPTION);
+    click(&mut test, SHOW_IN_LOST_COMMITS_CAPTION);
     assert!(!drawn(&test, ACTIVITY_TITLE), "the popover stayed open");
     assert!(*view.show_lost.peek());
     assert_eq!(*view.sidebar.main.peek(), MainView::AllCommits);
@@ -745,5 +801,235 @@ fn while_the_popover_is_open_the_keys_do_nothing_but_close_it() {
             }
         )),
         "{asked:?}"
+    );
+}
+
+/// One read of a running write's output, as its lane wakes the window for it.
+fn output(
+    test: &mut TestingRunner,
+    view: View,
+    submitted: &Submitted,
+    id: OperationId,
+    text: &str,
+) {
+    apply(
+        test,
+        view,
+        submitted,
+        Update::WriteOutput {
+            id,
+            tap: crate::worker::OutputTap::holding(&ScrubbedLines::scrubbing(text)),
+        },
+    );
+}
+
+/// C29, Fork's Activity Manager as the window draws it (observed `am1`, `am2`): each row its
+/// name, Fork's result line under it ("staged", "stage failed"), its start time as `HH:MM:SS
+/// UTC`, ⚠ on a failure and a shape of its own on a cancel, and no status word; the selected
+/// one's header its name, one of four words with its time, and how long it took; a failure's
+/// one sentence; and an operation whose output passed its bound headed "Earlier output not
+/// kept." over its latest lines. Caught by: a status word in a row, a result line or glyph
+/// missing, or the latest output dropped instead of the oldest.
+#[test]
+fn the_activity_manager_draws_forks_rows_and_header() {
+    let (mut test, view, submitted) = launch();
+    let stage = |path: &str| LocalWrite::StageFiles {
+        paths: vec![path.into()],
+    };
+    let staged = started(&mut test, view, &submitted, &stage("a.rs"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: staged,
+            ending: WriteEnding::Done(Done {
+                description: "staged".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
+            }),
+            read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    let refused = started(&mut test, view, &submitted, &stage("b.rs"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: refused,
+            ending: failed_on_the_lock(),
+            read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    let commit = LocalWrite::Commit {
+        message: "m".to_owned(),
+        skip_hooks: false,
+    };
+    let cancelled = started(&mut test, view, &submitted, &commit);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: cancelled,
+            ending: WriteEnding::Cancelled { locks: Vec::new() },
+            read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    // A hook that wrote past the one tail's bound, still running.
+    let flooding = started(&mut test, view, &submitted, &commit);
+    let lines: Vec<String> = (0..crate::output_tail::OUTPUT_LINES + 50)
+        .map(|n| format!("hook line {n}"))
+        .collect();
+    output(&mut test, view, &submitted, flooding, &lines.join("\n"));
+
+    open(&mut test);
+    let shown = labels(&test);
+    for text in [
+        "staged",
+        "stage failed",
+        FAILED_GLYPH,
+        CANCELLED_GLYPH,
+        EARLIER_NOT_KEPT,
+    ] {
+        assert!(
+            shown.iter().any(|label| label == text),
+            "{text:?}: {shown:?}"
+        );
+    }
+    assert!(
+        !shown.iter().any(|label| label.contains("hook line 0")),
+        "the oldest line was kept past the bound"
+    );
+    let times = shown
+        .iter()
+        .filter(|label| {
+            let bytes = label.as_bytes();
+            label.len() == 12 && label.ends_with(" UTC") && bytes[2] == b':' && bytes[5] == b':'
+        })
+        .count();
+    assert_eq!(times, 4, "every row its start time: {shown:?}");
+    for word in ["running", "succeeded", "failed", "cancelled"] {
+        assert!(
+            !shown.iter().any(|label| label == word),
+            "a status word in a row: {shown:?}"
+        );
+    }
+    assert!(
+        shown
+            .iter()
+            .any(|label| label.starts_with("running ") && label.ends_with(" UTC")),
+        "the header's word and time: {shown:?}"
+    );
+    // The failed stage, selected: its word, time and duration, and its one sentence.
+    click_lowest(&mut test, "stage failed");
+    let shown = labels(&test);
+    assert!(
+        shown
+            .iter()
+            .any(|label| label.starts_with("failed ") && label.contains(" UTC · took ")),
+        "{shown:?}"
+    );
+    assert!(drawn(&test, cairn_ui::GIT_ERROR_TEXT), "{shown:?}");
+}
+
+/// C35 (the user's ratification of 2026-10-10, option B): an amend run at the press that git
+/// made while its replaced commit was pushed says so in its entry, once — and opens no dialog.
+/// Caught by: the engine's answer never drawn, or a dialog opened for it.
+#[test]
+fn an_amend_pushed_while_it_ran_says_so_in_its_entry() {
+    let (mut test, view, submitted) = launch();
+    let id = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::AmendAtPress {
+            message: "m".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let commit = Oid::from_bytes(&[0x3f; 20]).unwrap();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::Done(Done {
+                description: "amended".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: Some(commit),
+                cost_after: Some(Box::new(Consequence::Amend {
+                    commit,
+                    published: Publication::Upstream(cairn_model::RefName::new(
+                        "refs/remotes/origin/main",
+                    )),
+                    reflog: Reflog::Written,
+                })),
+            }),
+            read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    assert!(!drawn(&test, GIT_ERROR_TITLE), "a dialog opened for it");
+    assert!(view.confirming.peek().is_none(), "a dialog opened for it");
+    open(&mut test);
+    let said = "Amended 3f3f3f3, which was pushed to origin/main while the amend ran. Sharing \
+                the amended commit needs a force push.";
+    assert_eq!(
+        labels(&test).iter().filter(|label| *label == said).count(),
+        1,
+        "{:?}",
+        labels(&test)
+    );
+    assert!(drawn(&test, SHOW_IN_LOST_COMMITS_CAPTION));
+}
+
+/// The merge bar's responsiveness 3: the window's root reads whether the popover is open, never
+/// the log, so a running write's streamed lines draw nothing again while it is closed — and,
+/// while it is open, only the popover, which shows them. Caught by: the root subscribed to the
+/// log (`is_open` read from it, or the fetch's entry read with `read`).
+#[test]
+fn a_streamed_line_never_draws_the_window_again() {
+    let (mut test, view, submitted, drawn_root) = launch_counted();
+    let id = started(
+        &mut test,
+        view,
+        &submitted,
+        &LocalWrite::Commit {
+            message: "m".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let before = drawn_root.get();
+    for n in 0..20 {
+        output(&mut test, view, &submitted, id, &format!("hook line {n}"));
+    }
+    assert_eq!(
+        drawn_root.get(),
+        before,
+        "a streamed line drew the window again with the popover closed"
+    );
+    open(&mut test);
+    assert!(drawn(&test, "hook line 19"), "{:?}", labels(&test));
+    let open_at = drawn_root.get();
+    output(&mut test, view, &submitted, id, "hook line 20");
+    assert!(
+        drawn(&test, "hook line 20"),
+        "the open popover missed a line"
+    );
+    assert_eq!(
+        drawn_root.get(),
+        open_at,
+        "a streamed line drew the window again with the popover open"
     );
 }

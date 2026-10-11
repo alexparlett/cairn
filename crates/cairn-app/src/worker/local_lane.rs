@@ -48,7 +48,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -64,7 +64,7 @@ use cairn_model::{
 };
 
 use super::epoch::{Epoch, Superseded};
-use super::output_flow::{OutputFlow, OutputReceipt};
+use super::output_tap::OutputTap;
 use super::pool::Outbox;
 use super::request::{AmendRead, CheckoutRefused, CommitReads, RanBy, Update};
 
@@ -326,14 +326,16 @@ impl LocalWrite {
     /// The prompt a destructive write's confirmation recorded — what the user accepted — copied
     /// as the write is asked, before the verb spends the token, so the activity popover quotes
     /// it however the write ends (R12.1): `None` for a write that asks no confirmation.
+    /// Create Branch's Discard quotes none: its prompt is never drawn, its dialog's press the
+    /// confirmation, and its entry says what happened instead ([`Self::happened`]).
     pub fn prompt(&self) -> Option<String> {
         match self {
             Self::DiscardLines(confirmed)
             | Self::DiscardFiles(confirmed)
             | Self::Amend { confirmed, .. }
-            | Self::CreateBranchDiscarding(confirmed)
             | Self::RemoveLock(confirmed) => Some(confirmed.prompt().to_owned()),
-            Self::StageLines { .. }
+            Self::CreateBranchDiscarding(_)
+            | Self::StageLines { .. }
             | Self::UnstageLines { .. }
             | Self::StageFiles { .. }
             | Self::UnstageFiles { .. }
@@ -343,6 +345,66 @@ impl LocalWrite {
             | Self::AmendAtPress { .. }
             | Self::CreateBranch { .. }
             | Self::CreateBranchAndCheckout { .. } => None,
+        }
+    }
+
+    /// What it did once it succeeded, for the one destructive write whose prompt is not quoted
+    /// — Create Branch's Discard — rendered from its consequence (R12.1); `None` for every other.
+    pub fn happened(&self) -> Option<String> {
+        match self {
+            Self::CreateBranchDiscarding(confirmed) => confirmed.consequence().happened(),
+            Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Amend { .. }
+            | Self::RemoveLock(_)
+            | Self::StageLines { .. }
+            | Self::UnstageLines { .. }
+            | Self::StageFiles { .. }
+            | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
+            | Self::Commit { .. }
+            | Self::AmendAtPress { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. } => None,
+        }
+    }
+
+    /// Fork's result line under its row in the activity popover (R12.1, C29), for each way it
+    /// can end — only where Fork's own Activity Manager was seen to say one (observed `am1`:
+    /// "staged" and "stage failed" for a stage, "Switched to branch 'topic'" for a branch
+    /// created and checked out) or git's own output gives one. Every other is `None` until the
+    /// user signs off on its words (phase 20's stopping rule).
+    pub fn result_lines(&self) -> ResultLines {
+        match self {
+            Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => {
+                ResultLines {
+                    succeeded: Some("staged".to_owned()),
+                    failed: Some("stage failed".to_owned()),
+                    cancelled: None,
+                }
+            }
+            Self::CreateBranchAndCheckout { name, .. } => ResultLines {
+                succeeded: Some(format!("Switched to branch '{name}'")),
+                ..ResultLines::default()
+            },
+            Self::CreateBranchDiscarding(confirmed) => ResultLines {
+                succeeded: confirmed
+                    .consequence()
+                    .checked_out()
+                    .map(|name| format!("Switched to branch '{name}'")),
+                ..ResultLines::default()
+            },
+            Self::UnstageLines { .. }
+            | Self::UnstageFiles { .. }
+            | Self::UnstageAll { .. }
+            | Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Commit { .. }
+            | Self::Amend { .. }
+            | Self::AmendAtPress { .. }
+            | Self::CreateBranch { .. }
+            | Self::RemoveLock(_) => ResultLines::default(),
         }
     }
 
@@ -538,6 +600,15 @@ impl LocalWrite {
     }
 }
 
+/// Fork's result line under an operation's row in the activity popover (R12.1, C29), for each
+/// way it can end: `None` where there is none to say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResultLines {
+    pub succeeded: Option<String>,
+    pub failed: Option<String>,
+    pub cancelled: Option<String>,
+}
+
 /// What a write's run came to: what it did, or — an amend at the press that must be confirmed —
 /// the `Consequence` it ran nothing for.
 #[derive(Debug)]
@@ -573,8 +644,8 @@ struct Watch<'a> {
     lane: &'a LaneState,
     id: OperationId,
     outbox: &'a Outbox,
-    /// What the lane's output waiting for the window counts against.
-    budget: &'a Arc<AtomicUsize>,
+    /// Where its output waits for the window.
+    tap: &'a OutputTap,
 }
 
 impl Watch<'_> {
@@ -586,24 +657,29 @@ impl Watch<'_> {
         let mut running = |cancel: ops::CommitCancel| {
             lane.install(id, Box::new(move || cancel.cancel()));
         };
-        let mut send = |lines: ScrubbedLines, receipt: OutputReceipt| {
-            outbox.send(None, Update::WriteOutput { id, lines, receipt });
+        let tap = self.tap;
+        // Each read's lines wait in the tap; the window is woken once for whatever waits, and
+        // every line is drained before the ending this lane sends after it.
+        let mut output = |said: &ScrubbedLines| {
+            if tap.hold(said) {
+                outbox.send(
+                    None,
+                    Update::WriteOutput {
+                        id,
+                        tap: tap.clone(),
+                    },
+                );
+            }
         };
-        let flow = std::cell::RefCell::new(OutputFlow::new(Arc::clone(self.budget)));
-        let mut output = |said: &ScrubbedLines| flow.borrow_mut().read(said, &mut send);
         let closing = Closing(lane);
-        let outcome = commit(CommitWatch {
+        commit(CommitWatch {
             cancel: &before,
             // A read after git is reaped is ended by the close alone, never by the write's
             // Cancel (C35, phase 18's QA item 2).
             closing: &closing,
             running: &mut running,
             output: &mut output,
-        });
-        flow.borrow_mut().flush(&mut |lines, receipt| {
-            outbox.send(None, Update::WriteOutput { id, lines, receipt });
-        });
-        outcome
+        })
     }
 }
 
@@ -1213,7 +1289,9 @@ pub(super) struct Local<'a> {
 /// open's refresh (R12.4), not here.
 pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     let repo = shared.to_worker();
-    let budget = Arc::new(AtomicUsize::new(0));
+    // The writes' output on its way to the window (`output_tap`): one tap, the writes run one
+    // at a time.
+    let tap = OutputTap::new();
     while let Ok(job) = serving.jobs.recv() {
         match job {
             LocalJob::Stop => break,
@@ -1230,7 +1308,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     },
                 );
             }
-            LocalJob::Write { id, write } => run(&repo, id, *write, serving, &budget),
+            LocalJob::Write { id, write } => run(&repo, id, *write, serving, &tap),
             LocalJob::Consequence {
                 asked,
                 paths,
@@ -1487,7 +1565,7 @@ fn run(
     id: OperationId,
     write: LocalWrite,
     serving: &Local<'_>,
-    budget: &Arc<AtomicUsize>,
+    tap: &OutputTap,
 ) {
     let commit = write.is_commit();
     let asked = write.read_again();
@@ -1512,7 +1590,7 @@ fn run(
         lane: serving.lane,
         id,
         outbox: serving.outbox,
-        budget,
+        tap,
     };
     let mut write = write;
     let mut retries = 0;

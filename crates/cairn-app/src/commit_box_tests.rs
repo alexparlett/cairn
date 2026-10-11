@@ -628,8 +628,7 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
             &submitted,
             Update::WriteOutput {
                 id,
-                lines: ScrubbedLines::scrubbing(line),
-                receipt: crate::worker::OutputReceipt::none(),
+                tap: crate::worker::OutputTap::holding(&ScrubbedLines::scrubbing(line)),
             },
         );
     }
@@ -714,8 +713,7 @@ fn the_git_error_draws_no_token_a_hook_printed() {
                     &submitted,
                     Update::WriteOutput {
                         id,
-                        lines: read,
-                        receipt: crate::worker::OutputReceipt::none(),
+                        tap: crate::worker::OutputTap::holding(&read),
                     },
                 );
             }

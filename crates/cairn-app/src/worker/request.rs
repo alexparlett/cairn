@@ -10,7 +10,7 @@ use cairn_model::ShownDiff;
 use cairn_model::{
     AheadBehind, BranchName, ChangeSet, ChangedFile, CommandRecord, Consequence, Context,
     Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress, RefName,
-    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, ScrubbedLines, Selection, SidebarRow,
+    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -596,9 +596,10 @@ pub enum Update {
     ConfiguredContext { context: Context },
     /// git is running; a `CancelFetch` from here on has something to kill.
     FetchStarted { remote: String },
-    /// The redraws of git's own progress meter one read of its stderr completed, for the one
-    /// fetch in flight: whole lines, scrubbed by the engine as it split them (R4.10, R12.2).
-    FetchProgress { lines: ScrubbedLines },
+    /// The fetch in flight wrote: the redraws of git's own progress meter wait in the network
+    /// lane's tap — whole lines, scrubbed by the engine as it split them (R4.10, R12.2) — for
+    /// the window to drain as it applies this, one wake for whatever waits (`output_tap`).
+    FetchProgress { tap: super::OutputTap },
     /// The fetch ended. Whether it moved a ref is the refresh's to find out, which the
     /// window asks for on every ending, since a fetch that failed or was killed may have
     /// moved some refs before it stopped (refs-and-status R10.1).
@@ -661,16 +662,14 @@ pub enum Update {
     /// A local write has started (staging-and-commit R4.2): the writes asked before it have
     /// ended, and it is no longer queued.
     WriteStarted { id: OperationId },
-    /// The lines a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
-    /// stderr's alike, as they arrived (staging-and-commit R6.5): one read of a pipe's, or what
-    /// the lane held while the window was behind (`output_flow`) — whole lines, scrubbed by the
-    /// engine as it split them (R4.10, R12.2). What the Git Error dialog and the activity popover
-    /// draw; the receipt gives the lines' bytes back to the lane's budget as the update is
-    /// dropped.
+    /// A running commit or amend's `git` — or a hook it runs — wrote: its lines, stdout's and
+    /// stderr's alike as they arrived (staging-and-commit R6.5), wait in the local lane's tap —
+    /// whole lines, scrubbed by the engine as it split them (R4.10, R12.2) — for the window to
+    /// drain as it applies this, one wake for whatever waits (`output_tap`). What the Git Error
+    /// dialog and the activity popover draw.
     WriteOutput {
         id: OperationId,
-        lines: ScrubbedLines,
-        receipt: super::OutputReceipt,
+        tap: super::OutputTap,
     },
     /// A local write has ended, how, and what the window reads again after it (R4.5): what
     /// its `Invalidated` names — everything, for a commit, whatever its ending, so a refresh

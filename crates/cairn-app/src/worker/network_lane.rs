@@ -180,6 +180,8 @@ pub(super) fn serve_network_lane(
     outbox: &Outbox,
 ) {
     let repo = shared.to_worker();
+    // The fetch's progress on its way to the window: one tap, one fetch at a time.
+    let tap = super::OutputTap::new();
     while let Ok(operation) = operations.recv() {
         match operation {
             Operation::Fetch { remote } => {
@@ -208,13 +210,13 @@ pub(super) fn serve_network_lane(
                     );
                     // Each read's lines as the engine split and scrubbed them (R4.10, R12.2): a
                     // remote URL with a token in it is never drawn.
+                    // They wait in the lane's tap, the window woken once for whatever waits
+                    // (`output_tap`, phase 12's QA #16): a progress meter's redraws never
+                    // queue one update a read.
                     started.finish(|lines| {
-                        outbox.send(
-                            None,
-                            Update::FetchProgress {
-                                lines: lines.clone(),
-                            },
-                        );
+                        if tap.hold(lines) {
+                            outbox.send(None, Update::FetchProgress { tap: tap.clone() });
+                        }
                     })
                 });
                 control.clear();

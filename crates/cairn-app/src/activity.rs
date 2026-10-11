@@ -1,47 +1,74 @@
-//! The activity popover as the window keeps it (staging-and-commit R12): one entry per
+//! Fork's Activity Manager as the window keeps it (staging-and-commit R12, C29): one entry per
 //! operation of the session — every local write and every fetch — newest first, bounded, with
-//! its name, when it started, how long it took, how it ended — one of four status words, R14.2 —
-//! the prompt it confirmed, each `git` it ran with its stderr, and the way back where there is
-//! one. Nothing of it outlives the window (R12.3, L14). (`Remove index.lock…` left it in phase
-//! 19: the leftover lock is a state of the repository, `crate::leftover_lock`.)
+//! its one name, Fork's result line, when it started and how long it took, how it ended — one of
+//! four words, R14.2 — its one sentence when it failed or was cancelled, the prompt it confirmed
+//! when it ran, each `git` it ran with what that said, and an amend's way back. Nothing of it
+//! outlives the window (R12.3, L14).
 //!
 //! Fed by `session::apply` from the updates the lanes send: a write's start, its output as it
-//! streams (R10.4: a hook's lines while it runs), what it ran (`Update::OperationRan`, the
-//! command log's records of its own `git`), and its ending; a fetch's the same. Every text of
-//! git's kept here arrives as `cairn_model::ScrubbedLines`, scrubbed of a URL's userinfo by the
-//! engine's runner as it split git's output (R12.2, R4.10), so no entry can draw a token; it is
-//! only stripped of escape sequences here (`crate::shown_output`). Each line is
-//! cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character with the diff
-//! view's marker after it (`cairn_ui::cut_marker`), so no row holds or shapes a 256 KiB piece.
+//! is drained from the lane's tap (R10.4: a hook's lines while it runs), what it ran
+//! (`Update::OperationRan`, the command log's records of its own `git`), and its ending; a
+//! fetch's the same. Every text of git's kept here arrives as `cairn_model::ScrubbedLines`,
+//! scrubbed of a URL's userinfo by the engine's runner as it split git's output (R12.2, R4.10),
+//! so no entry can draw a token; it is only stripped of escape sequences here
+//! (`crate::shown_output`). Each line is cut, as the diff view cuts one, at
+//! `cairn_model::LINE_CUT_BYTES` on a character with the diff view's marker after it
+//! (`cairn_ui::cut_marker`), so no row holds or shapes a 256 KiB piece.
 //!
-//! On the UI thread, each update costs what it carries: an entry counts its bytes as lines go in
-//! and out, the log keeps their total, and the bound lets go of the oldest entries' lines — and,
-//! for the newest alone over the budget, its oldest lines — without walking any line; an
-//! entry's drawn lines are built only when the open popover asks for the entry selected, and
-//! kept until a line changes. What a running operation wrote is let go of once its commands'
-//! records arrive, since those are drawn in its place.
+//! **One append-only list** (phase 20): an entry's lines are one bounded tail
+//! (`crate::output_tail`) — what it wrote as it ran, then each `$ git …` it ran as its records
+//! arrive, with each command's ending in one form; nothing already drawn is replaced. An
+//! operation whose output streamed (a commit's hooks, a fetch's progress) keeps what streamed
+//! as that output, and its records add their `$ git …` lines and endings beneath. An entry past
+//! the tail's bound keeps its latest lines and says "Earlier output not kept." first; past
+//! [`LOG_BYTES`] together, whole oldest entries go, never one still running and never the
+//! newest.
+//!
+//! On the UI thread, each update costs what it carries, counted as lines go in and out; the
+//! open popover reads a snapshot (`ActivityLog::shown`), the selected entry's lines shared by
+//! a reference count. The popover is a child of the window ([`ActivityLayer`]) that alone reads
+//! the log, so a streamed line re-renders nothing while it is closed, and only it while open:
+//! the window's root reads whether it is open ([`ActivityView::open`]), never the log.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use cairn_model::{CommandExit, CommandRecord, Oid, ScrubbedLines};
-use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover};
+use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover, ActivityStatus};
 use freya::prelude::*;
 
 use crate::local_writes::Asked;
+use crate::output_tail::{Measured, OUTPUT_BYTES, OutputTail};
 use crate::shown_output::{shown_lines, spoken_lines};
 use crate::window::View;
 use crate::worker::Request;
-use crate::worker::{OperationId, WriteEnding};
+use crate::worker::{OperationId, ResultLines, WriteEnding};
 
 /// The most operations the popover keeps: the newest, the oldest let go of first.
 pub const ACTIVITY_ENTRIES: usize = 200;
-/// The most lines one operation keeps — its commands and what they said — the latest kept.
-pub const ACTIVITY_LINES: usize = 10_000;
-/// The most bytes of lines every operation together keeps: the oldest operations' lines are
-/// let go of first, the entries themselves kept.
-pub const ACTIVITY_BYTES: usize = 4 * 1024 * 1024;
+/// The most bytes of lines every operation together keeps — four of the one tail's bound: past
+/// it, whole oldest operations go.
+pub const LOG_BYTES: usize = 4 * OUTPUT_BYTES;
+
+/// A cancelled write's one sentence: a commit or an amend git had not made (R4.7).
+pub const WRITE_CANCELLED: &str = "Cancelled before git made it. Nothing was changed.";
+/// A cancelled fetch's one sentence: what git had fetched before it was stopped stays, and the
+/// refresh after it shows any ref it moved.
+pub const FETCH_CANCELLED: &str = "Cancelled while git ran. Whatever it had already fetched stays.";
+
+impl Measured for ActivityLine {
+    fn lines(&self) -> usize {
+        1
+    }
+
+    fn bytes(&self) -> usize {
+        match self {
+            ActivityLine::Ran(text) | ActivityLine::Output(text) => text.len(),
+        }
+    }
+}
 
 /// Which operation an entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,36 +77,25 @@ pub enum ActivityKey {
     /// The `n`th fetch of the session.
     Fetch(u64),
 }
-/// Said in place of an operation's lines once the byte bound let them go (the user's decision
-/// M, 2026-10-09).
-pub const LINES_LET_GO: &str = "Its output was let go to make room for newer operations.";
 
-/// How an operation stands, in one of the four status words (rule 5, R14.2): running,
-/// succeeded, failed, cancelled — a refusal and a partly done discard among the failures, its
-/// sentence saying which.
+/// How an operation stands, in one of the four words (rule 5, R14.2): running, succeeded,
+/// failed, cancelled — a refusal and a partly done discard among the failures — with the one
+/// sentence a failure or a cancel says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Running,
     Succeeded,
     Failed(String),
-    Cancelled,
+    Cancelled(String),
 }
 
 impl Outcome {
-    /// The status the list draws.
-    pub fn status(&self) -> &'static str {
+    fn status(&self) -> ActivityStatus {
         match self {
-            Self::Running => "running",
-            Self::Succeeded => "succeeded",
-            Self::Failed(_) => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn message(&self) -> Option<String> {
-        match self {
-            Self::Failed(message) => Some(message.clone()),
-            Self::Running | Self::Succeeded | Self::Cancelled => None,
+            Self::Running => ActivityStatus::Running,
+            Self::Succeeded => ActivityStatus::Succeeded,
+            Self::Failed(_) => ActivityStatus::Failed,
+            Self::Cancelled(_) => ActivityStatus::Cancelled,
         }
     }
 }
@@ -89,28 +105,31 @@ impl Outcome {
 pub struct Activity {
     pub key: ActivityKey,
     pub name: String,
-    pub started: SystemTime,
+    started: SystemTime,
     clock: Instant,
-    pub took: Option<Duration>,
-    pub outcome: Outcome,
-    pub prompt: Option<String>,
+    took: Option<Duration>,
+    outcome: Outcome,
+    /// Fork's result line for each way it can end.
+    results: ResultLines,
+    /// The prompt its confirmation recorded: drawn once it ran (F3).
+    prompt: Option<String>,
+    /// It ran — git started, or it succeeded — so the prompt it confirmed is drawn.
+    ran: bool,
+    /// What Create Branch's Discard did, said once it succeeded in place of a prompt.
+    happened: Option<String>,
+    /// What an amend run at the press turned out to cost, said once beside its result (C35).
+    reported: Option<String>,
     /// The commit an amend replaced: offered as the way back once the amend succeeded.
-    replaces: Option<Oid>,
+    replaced: Option<Oid>,
     pub cancellable: bool,
-    /// The byte bound let go of its lines: it says so in their place (the user's decision M).
-    let_go: bool,
-    /// Its `git` commands and what they said, once they are over.
-    commands: VecDeque<ActivityLine>,
-    /// What it wrote as it ran, while it runs: let go of once `commands` arrive.
-    streamed: VecDeque<String>,
-    /// The bytes of `commands` and `streamed`, counted as lines go in and out.
-    bytes: usize,
-    /// The lines drawn, built when the open popover asks and kept until a line changes.
-    drawn: std::cell::RefCell<Option<Rc<Vec<ActivityLine>>>>,
+    /// Its output streamed as it ran: its records add their `$ git …` lines and endings alone.
+    streamed: bool,
+    /// What it wrote and ran, one append-only list in the one bounded tail.
+    lines: OutputTail<ActivityLine>,
 }
 
 impl Activity {
-    fn new(key: ActivityKey, name: String, replaces: Option<Oid>, cancellable: bool) -> Self {
+    fn new(key: ActivityKey, name: String, cancellable: bool) -> Self {
         Self {
             key,
             name,
@@ -118,72 +137,29 @@ impl Activity {
             clock: Instant::now(),
             took: None,
             outcome: Outcome::Running,
+            results: ResultLines::default(),
             prompt: None,
-            replaces,
+            ran: false,
+            happened: None,
+            reported: None,
+            replaced: None,
             cancellable,
-            let_go: false,
-            commands: VecDeque::new(),
-            streamed: VecDeque::new(),
-            bytes: 0,
-            drawn: std::cell::RefCell::new(None),
+            streamed: false,
+            lines: OutputTail::default(),
         }
     }
 
-    /// The lines drawn: its commands once they are in, what it wrote while it runs. Built once
-    /// each time a line changes, when the open popover asks.
-    pub fn lines(&self) -> Rc<Vec<ActivityLine>> {
-        let mut drawn = self.drawn.borrow_mut();
-        if let Some(lines) = drawn.as_ref() {
-            return Rc::clone(lines);
+    fn of_write(asked: &Asked) -> Self {
+        Self {
+            results: asked.results.clone(),
+            prompt: asked.prompt.clone(),
+            happened: asked.happened.clone(),
+            ..Self::new(
+                ActivityKey::Write(asked.id),
+                asked.name.clone(),
+                asked.cancellable,
+            )
         }
-        let lines: Vec<ActivityLine> = if self.let_go && self.commands.is_empty() {
-            vec![ActivityLine::Output(LINES_LET_GO.to_owned())]
-        } else if self.commands.is_empty() {
-            self.streamed
-                .iter()
-                .cloned()
-                .map(ActivityLine::Output)
-                .collect()
-        } else {
-            self.commands.iter().cloned().collect()
-        };
-        let lines = Rc::new(lines);
-        *drawn = Some(Rc::clone(&lines));
-        lines
-    }
-
-    /// A line changed: what is drawn is built again when next asked.
-    fn changed(&mut self) {
-        *self.drawn.get_mut() = None;
-    }
-
-    /// Lets go of its oldest line — what it wrote while it runs, else its commands' — and
-    /// answers the bytes freed, or `None` when it holds none.
-    fn let_go_of_oldest(&mut self) -> Option<usize> {
-        let freed = match self.streamed.pop_front() {
-            Some(line) => line.len(),
-            None => line_bytes(&self.commands.pop_front()?),
-        };
-        self.bytes -= freed;
-        self.changed();
-        Some(freed)
-    }
-
-    /// The byte bound lets go of every line, answering the bytes freed: it says so in their
-    /// place.
-    fn let_go_by_the_bound(&mut self) -> usize {
-        let freed = self.let_go_of_lines();
-        self.let_go |= freed > 0;
-        freed
-    }
-
-    /// Lets go of every line, answering the bytes freed.
-    fn let_go_of_lines(&mut self) -> usize {
-        let freed = std::mem::take(&mut self.bytes);
-        self.commands.clear();
-        self.streamed.clear();
-        self.changed();
-        freed
     }
 
     fn end(&mut self, outcome: Outcome) {
@@ -192,16 +168,62 @@ impl Activity {
         self.cancellable = false;
     }
 
-    /// The way back, once there is one: an amend that succeeded.
-    pub fn replaced(&self) -> Option<Oid> {
-        self.replaces
-            .filter(|_| matches!(self.outcome, Outcome::Succeeded))
+    /// Fork's result line, for how it stands now.
+    fn result(&self) -> Option<String> {
+        match self.outcome {
+            Outcome::Running => None,
+            Outcome::Succeeded => self.results.succeeded.clone(),
+            Outcome::Failed(_) => self.results.failed.clone(),
+            Outcome::Cancelled(_) => self.results.cancelled.clone(),
+        }
     }
-}
 
-fn line_bytes(line: &ActivityLine) -> usize {
-    match line {
-        ActivityLine::Ran(text) | ActivityLine::Output(text) => text.len(),
+    /// Its one sentence: a failure's or a cancel's, or what a success did beyond its name.
+    fn sentence(&self) -> Option<String> {
+        match &self.outcome {
+            Outcome::Running => None,
+            Outcome::Failed(said) | Outcome::Cancelled(said) => Some(said.clone()),
+            Outcome::Succeeded => self.reported.clone().or_else(|| self.happened.clone()),
+        }
+    }
+
+    /// The way back, once there is one: an amend that succeeded.
+    fn way_back(&self) -> Option<Oid> {
+        match self.outcome {
+            Outcome::Succeeded => self.replaced,
+            Outcome::Running | Outcome::Failed(_) | Outcome::Cancelled(_) => None,
+        }
+    }
+
+    /// Lines after the rest, answering how many bytes it holds more — or fewer, past its bound.
+    fn append(&mut self, lines: impl IntoIterator<Item = ActivityLine>, cut: bool) -> isize {
+        let before = self.lines.bytes();
+        self.lines.extend(lines);
+        if cut {
+            self.lines.mark_cut();
+        }
+        self.lines.bytes() as isize - before as isize
+    }
+
+    /// As the popover draws it: its lines only when it is the one selected.
+    fn entry(&self, with_lines: bool, none: &Arc<VecDeque<ActivityLine>>) -> ActivityEntry {
+        ActivityEntry {
+            name: self.name.clone(),
+            result: self.result(),
+            status: self.outcome.status(),
+            started: started_text(self.started),
+            took: self.took.map(took_text),
+            sentence: self.sentence(),
+            prompt: self.prompt.clone().filter(|_| self.ran),
+            replaced: self.way_back(),
+            cancellable: self.cancellable,
+            lines: if with_lines {
+                self.lines.snapshot()
+            } else {
+                Arc::clone(none)
+            },
+            earlier_not_kept: with_lines && self.lines.cut(),
+        }
     }
 }
 
@@ -220,6 +242,51 @@ fn cut_line(line: String) -> String {
     shown
 }
 
+/// The window's handles on the popover: the session's operations, and whether it is open —
+/// two states, so the window's root, which reads only the second, is not drawn again for each
+/// line the first takes in.
+#[derive(Clone, Copy, PartialEq)]
+pub struct ActivityView {
+    pub log: State<ActivityLog>,
+    pub open: State<bool>,
+}
+
+impl ActivityView {
+    /// Each handle made by its hook, in the window's root.
+    pub fn used() -> Self {
+        Self {
+            log: use_state(ActivityLog::default),
+            open: use_state(|| false),
+        }
+    }
+
+    /// Each handle made outside a component, for a test's view.
+    #[cfg(test)]
+    pub fn created() -> Self {
+        Self {
+            log: State::create(ActivityLog::default()),
+            open: State::create(false),
+        }
+    }
+
+    /// Opened from the status box: the newest entry selected.
+    pub fn open(self) {
+        let (mut log, mut open) = (self.log, self.open);
+        log.write().opened();
+        open.set(true);
+    }
+
+    pub fn close(self) {
+        let mut open = self.open;
+        open.set(false);
+    }
+
+    /// Whether it is open, read without subscribing: what a key handler asks.
+    pub fn is_open(self) -> bool {
+        *self.open.peek()
+    }
+}
+
 /// The session's operations, oldest first, and the popover's own state.
 #[derive(Debug, Default)]
 pub struct ActivityLog {
@@ -231,23 +298,14 @@ pub struct ActivityLog {
     fetches: u64,
     /// The fetch running, if any.
     fetching: Option<u64>,
-    open: bool,
     /// The entry drawn on the right; the newest when none was chosen or it was let go of.
     selected: Option<ActivityKey>,
 }
 
 impl ActivityLog {
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn open(&mut self) {
-        self.open = true;
+    /// The popover opened: the newest entry is the one drawn.
+    fn opened(&mut self) {
         self.selected = None;
-    }
-
-    pub fn close(&mut self) {
-        self.open = false;
     }
 
     pub fn choose(&mut self, key: ActivityKey) {
@@ -268,18 +326,6 @@ impl ActivityLog {
         self.anchor = Some(anchor);
     }
 
-    /// Lets go of `key`'s entry and the bytes its lines hold.
-    fn forget(&mut self, key: ActivityKey) {
-        if let Some(at) = self.entries.iter().position(|entry| entry.key == key) {
-            if let Some(entry) = self.entries.remove(at) {
-                self.bytes -= entry.bytes;
-            }
-            if self.selected == Some(key) {
-                self.selected = None;
-            }
-        }
-    }
-
     /// Every entry, newest first.
     pub fn newest_first(&self) -> impl Iterator<Item = &Activity> {
         self.entries.iter().rev()
@@ -294,96 +340,86 @@ impl ActivityLog {
         self.entries.iter_mut().rev().find(|entry| entry.key == key)
     }
 
-    fn push(&mut self, entry: Activity) {
-        self.entries.push_back(entry);
-        while self.entries.len() > ACTIVITY_ENTRIES {
-            if let Some(oldest) = self.entries.pop_front() {
-                self.bytes -= oldest.bytes;
+    /// Lets go of the entry at `at` and the bytes its lines hold.
+    fn remove(&mut self, at: usize) {
+        if let Some(entry) = self.entries.remove(at) {
+            self.bytes -= entry.lines.bytes();
+            if self.selected == Some(entry.key) {
+                self.selected = None;
             }
         }
     }
 
-    /// Keeps every entry's lines together under [`ACTIVITY_BYTES`], reading counts alone: the
-    /// oldest entries' lines let go of first, and — when the newest alone is over — its oldest
-    /// lines, so a running operation keeps its latest output.
-    fn bound(&mut self) {
-        let newest = self.entries.len().saturating_sub(1);
-        for entry in self.entries.iter_mut().take(newest) {
-            if self.bytes <= ACTIVITY_BYTES {
-                return;
-            }
-            self.bytes -= entry.let_go_by_the_bound();
+    /// Lets go of `key`'s entry.
+    fn forget(&mut self, key: ActivityKey) {
+        if let Some(at) = self.entries.iter().position(|entry| entry.key == key) {
+            self.remove(at);
         }
-        if let Some(entry) = self.entries.back_mut() {
-            while self.bytes > ACTIVITY_BYTES {
-                let Some(freed) = entry.let_go_of_oldest() else {
-                    break;
-                };
-                self.bytes -= freed;
+    }
+
+    fn push(&mut self, entry: Activity) {
+        self.entries.push_back(entry);
+        self.bound(|log| log.entries.len() > ACTIVITY_ENTRIES);
+    }
+
+    /// Lines added to — or let go of by — `key`'s entry: the log's count kept, then its bound.
+    fn grew(&mut self, by: isize) {
+        self.bytes = self.bytes.saturating_add_signed(by);
+        self.bound(|log| log.bytes > LOG_BYTES);
+    }
+
+    /// Lets go of whole oldest entries while `over` holds: never one still running — the
+    /// status box and its updates read it — and never the newest.
+    fn bound(&mut self, over: impl Fn(&Self) -> bool) {
+        let mut at = 0;
+        while over(self) && at + 1 < self.entries.len() {
+            if matches!(self.entries[at].outcome, Outcome::Running) {
+                at += 1;
+            } else {
+                self.remove(at);
             }
         }
     }
 
     /// A local write has started.
     pub fn write_started(&mut self, asked: &Asked) {
-        self.push(Activity::new(
-            ActivityKey::Write(asked.id),
-            asked.name.clone(),
-            None,
-            asked.cancellable,
-        ));
+        self.push(Activity::of_write(asked));
     }
 
-    /// Lines a running operation wrote, kept while it runs (R10.4), the latest
-    /// [`ACTIVITY_LINES`].
-    pub fn output(&mut self, key: ActivityKey, lines: &ScrubbedLines) {
+    /// What a running operation wrote, drained from its lane's tap (R10.4): its spoken lines
+    /// after the rest, "Earlier output not kept." first once older ones went — the lane's or
+    /// the entry's own.
+    pub fn output(&mut self, key: ActivityKey, drained: &OutputTail<ScrubbedLines>) {
         let Some(entry) = self.find(key) else {
             return;
         };
-        // Once its commands are in they are drawn, and a late line is not.
-        if !entry.commands.is_empty() {
-            return;
-        }
-        let before = entry.bytes;
-        for line in spoken_lines(lines) {
-            let line = cut_line(line);
-            entry.bytes += line.len();
-            entry.streamed.push_back(line);
-        }
-        while entry.streamed.len() > ACTIVITY_LINES {
-            if let Some(dropped) = entry.streamed.pop_front() {
-                entry.bytes -= dropped.len();
-            }
-        }
-        entry.changed();
-        let after = entry.bytes;
-        self.bytes = self.bytes + after - before;
-        self.bound();
+        entry.streamed = true;
+        let lines = drained
+            .iter()
+            .flat_map(spoken_lines)
+            .map(|line| ActivityLine::Output(cut_line(line)));
+        let by = entry.append(lines, drained.cut());
+        self.grew(by);
     }
 
-    /// What an operation ran.
+    /// What an operation ran, after what it wrote: each `$ git …` line and how that ended — with
+    /// what it wrote to stderr, unless its output already streamed.
     pub fn ran(&mut self, key: ActivityKey, commands: &[CommandRecord]) {
         let Some(entry) = self.find(key) else {
             return;
         };
-        let freed = entry.let_go_of_lines();
-        let mut kept: VecDeque<ActivityLine> = commands.iter().flat_map(command_lines).collect();
-        while kept.len() > ACTIVITY_LINES {
-            kept.pop_front();
-        }
-        entry.bytes = kept.iter().map(line_bytes).sum();
-        entry.commands = kept;
-        entry.changed();
-        let added = entry.bytes;
-        self.bytes = self.bytes + added - freed;
-        self.bound();
+        let streamed = entry.streamed;
+        let lines: Vec<ActivityLine> = commands
+            .iter()
+            .flat_map(|record| command_lines(record, !streamed))
+            .collect();
+        let by = entry.append(lines, false);
+        self.grew(by);
     }
 
-    /// A local write has ended, as `ending` says (already scrubbed by the window); `asked` is
+    /// A local write has ended, as `ending` says (already scrubbed by the engine); `asked` is
     /// the write as the window asked it, if it saw it asked: its name, for one that never
-    /// started (the user's decision N, 2026-10-09), and the prompt its confirmation recorded,
-    /// quoted however it ended (R12.1) — the token is spent by then, and only an ending that ran
-    /// carries the prompt back.
+    /// started (the user's decision N, 2026-10-09).
     pub fn write_ended(&mut self, id: OperationId, ending: &WriteEnding, asked: Option<&Asked>) {
         let key = ActivityKey::Write(id);
         // An amend at the press that must be confirmed ran nothing: no entry; the amend
@@ -394,30 +430,40 @@ impl ActivityLog {
         }
         if self.find(key).is_none() {
             // Never started: not run, as the repository was closing — named as it was asked.
-            let name = asked.map_or_else(|| "A write".to_owned(), |asked| asked.name.clone());
-            self.push(Activity::new(key, name, None, false));
+            let entry = match asked {
+                Some(asked) => Activity::of_write(asked),
+                None => Activity::new(key, "A write".to_owned(), false),
+            };
+            self.push(entry);
         }
         let Some(entry) = self.find(key) else {
             return;
         };
-        let (outcome, acknowledged) = match ending {
+        let (outcome, ran) = match ending {
             // An amend's way back is the commit its run answered it replaced (R12.1), never one
-            // read from the request: an amend at the press reads its commit as it runs.
+            // read from the request; and what it turned out to cost, read after git was
+            // reaped, is said once, where it would now have needed confirming (C35).
             WriteEnding::Done(done) => {
-                entry.replaces = done.replaced;
-                (Outcome::Succeeded, done.acknowledged.clone())
+                entry.replaced = done.replaced;
+                entry.reported = done
+                    .cost_after
+                    .as_deref()
+                    .and_then(|cost| cost.amend_reported());
+                (Outcome::Succeeded, true)
             }
-            WriteEnding::Incomplete { done, said, .. } => {
-                (Outcome::Failed(said.clone()), done.acknowledged.clone())
-            }
+            WriteEnding::Incomplete { said, .. } => (Outcome::Failed(said.clone()), true),
             WriteEnding::Stale { said, .. }
             | WriteEnding::Refused { said }
-            | WriteEnding::NotRun { said } => (Outcome::Failed(said.clone()), None),
-            WriteEnding::Failed(failure) => (Outcome::Failed(failure.said.clone()), None),
-            WriteEnding::Cancelled { .. } => (Outcome::Cancelled, None),
+            | WriteEnding::NotRun { said } => (Outcome::Failed(said.clone()), false),
+            // git ran and failed — or something beneath git did, before it ran.
+            WriteEnding::Failed(failure) => (
+                Outcome::Failed(failure.said.clone()),
+                failure.command.is_some(),
+            ),
+            WriteEnding::Cancelled { .. } => (Outcome::Cancelled(WRITE_CANCELLED.to_owned()), true),
             WriteEnding::NeedsConfirming { .. } => return,
         };
-        entry.prompt = acknowledged.or_else(|| asked.and_then(|asked| asked.prompt.clone()));
+        entry.ran = ran;
         entry.end(outcome);
     }
 
@@ -428,7 +474,6 @@ impl ActivityLog {
         self.push(Activity::new(
             ActivityKey::Fetch(self.fetches),
             format!("Fetch {remote}"),
-            None,
             true,
         ));
     }
@@ -457,7 +502,7 @@ impl ActivityLog {
             None => {
                 self.fetches += 1;
                 let key = ActivityKey::Fetch(self.fetches);
-                self.push(Activity::new(key, format!("Fetch {remote}"), None, false));
+                self.push(Activity::new(key, format!("Fetch {remote}"), false));
                 key
             }
         };
@@ -467,25 +512,17 @@ impl ActivityLog {
     }
 
     /// What the window's popover draws: every entry, newest first, and the place of the one
-    /// selected — the newest when none is.
+    /// selected — the newest when none is — whose lines alone are handed over, as a snapshot.
     pub fn shown(&self) -> (Rc<Vec<ActivityEntry>>, usize) {
         let selected = self
             .selected
             .and_then(|key| self.newest_first().position(|entry| entry.key == key))
             .unwrap_or(0);
-        // The selected entry's lines alone: the rest are drawn by name and status.
-        let none: Rc<Vec<ActivityLine>> = Rc::new(Vec::new());
+        let none = Arc::new(VecDeque::new());
         let entries: Vec<ActivityEntry> = self
             .newest_first()
             .enumerate()
-            .map(|(place, activity)| {
-                let lines = if place == selected {
-                    activity.lines()
-                } else {
-                    Rc::clone(&none)
-                };
-                entry_of(activity, lines)
-            })
+            .map(|(place, activity)| activity.entry(place == selected, &none))
             .collect();
         (Rc::new(entries), selected)
     }
@@ -496,9 +533,10 @@ impl ActivityLog {
     }
 }
 
-/// A record of the command log as the popover draws it: `$ git <arguments>`, then what it
-/// wrote to stderr, and how it ended when that was not a clean exit.
-fn command_lines(record: &CommandRecord) -> Vec<ActivityLine> {
+/// A record of the command log as the popover draws it: `$ git <arguments>`, then — with
+/// `output` — what it wrote to stderr, then how it ended, in one form, when that was not a
+/// clean exit: `exit code N`, `killed by signal N` or `cancelled`.
+fn command_lines(record: &CommandRecord, output: bool) -> Vec<ActivityLine> {
     let mut lines = vec![ActivityLine::Ran(cut_line(format!(
         "$ git {}",
         record
@@ -508,25 +546,28 @@ fn command_lines(record: &CommandRecord) -> Vec<ActivityLine> {
             .collect::<Vec<_>>()
             .join(" ")
     )))];
-    lines.extend(
-        shown_lines(&record.stderr)
-            .into_iter()
-            .map(|line| ActivityLine::Output(cut_line(line))),
-    );
-    let ended = match record.exit {
-        CommandExit::Code(0) if !record.cancelled => None,
-        CommandExit::Code(code) => Some(format!("exit status {code}")),
-        CommandExit::Signal(signal) => Some(format!("ended by signal {signal}")),
-        CommandExit::NotStarted => Some("not started".to_owned()),
-        CommandExit::Unknown => Some("how it ended is not known".to_owned()),
-    };
-    let ended = match (ended, record.cancelled) {
-        (Some(ended), true) => Some(format!("{ended}, cancelled")),
-        (None, true) => Some("cancelled".to_owned()),
-        (ended, false) => ended,
-    };
-    lines.extend(ended.map(|ended| ActivityLine::Output(format!("({ended})"))));
+    if output {
+        lines.extend(
+            shown_lines(&record.stderr)
+                .into_iter()
+                .map(|line| ActivityLine::Output(cut_line(line))),
+        );
+    }
+    lines.extend(ending_line(record).map(ActivityLine::Output));
     lines
+}
+
+/// How a command ended, in one form, when that was not a clean exit; nothing where how it
+/// ended is not git's to say (never started, or not known).
+fn ending_line(record: &CommandRecord) -> Option<String> {
+    if record.cancelled {
+        return Some("cancelled".to_owned());
+    }
+    match record.exit {
+        CommandExit::Code(0) | CommandExit::NotStarted | CommandExit::Unknown => None,
+        CommandExit::Code(code) => Some(format!("exit code {code}")),
+        CommandExit::Signal(signal) => Some(format!("killed by signal {signal}")),
+    }
 }
 
 /// `argument` as a POSIX shell needs it written to read it back whole (the user's decision L,
@@ -547,7 +588,7 @@ pub fn shell_quoted(argument: &str) -> String {
 }
 
 /// When an operation started, as the popover says it: the time of day, UTC, as the history's
-/// dates are drawn.
+/// dates are drawn (F7).
 fn started_text(started: SystemTime) -> String {
     let seconds = started
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -561,7 +602,7 @@ fn started_text(started: SystemTime) -> String {
     )
 }
 
-/// How long an operation took, as the popover says it.
+/// How long an operation took, as the popover says it (F8).
 pub fn took_text(took: Duration) -> String {
     let millis = took.as_millis();
     if millis < 1_000 {
@@ -574,46 +615,50 @@ pub fn took_text(took: Duration) -> String {
     }
 }
 
-fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>) -> ActivityEntry {
-    ActivityEntry {
-        name: activity.name.clone(),
-        status: activity.outcome.status().to_owned(),
-        started: started_text(activity.started),
-        took: activity.took.map(took_text),
-        message: activity.outcome.message(),
-        prompt: activity.prompt.clone(),
-        replaced: activity.replaced(),
-        cancellable: activity.cancellable,
-        lines,
+/// The popover, while it is open (R12.1): a child of the window, the one reader of the log, so
+/// only it is drawn again as an operation's lines arrive. A cancel asks the write's or the
+/// fetch's cancel; the way back shows the replaced commit in Show Lost Commits.
+pub struct ActivityLayer {
+    view: View,
+    submit: Option<Rc<dyn Fn(Request)>>,
+}
+
+impl ActivityLayer {
+    pub fn new(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Self {
+        Self { view, submit }
     }
 }
 
-/// The popover, while it is open (R12.1): drawn over the window, its operations from the log.
-/// A cancel asks the write's or the fetch's cancel; the way back finds the replaced commit in
-/// Show Lost Commits.
-pub fn popover(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
-    let (entries, selected, anchor) = {
-        let log = view.activity.read();
-        if !log.is_open() {
-            return None;
-        }
-        let (entries, selected) = log.shown();
-        (entries, selected, log.anchor())
-    };
-    let mut activity = view.activity;
-    let cancelling = submit.clone();
-    let returning = submit;
-    Some(
+// By the handles it reads: the submitter is the same repository's however often it is built.
+impl PartialEq for ActivityLayer {
+    fn eq(&self, other: &Self) -> bool {
+        self.view.activity == other.view.activity
+            && self.view.fetch == other.view.fetch
+            && self.submit.is_some() == other.submit.is_some()
+    }
+}
+
+impl Component for ActivityLayer {
+    fn render(&self) -> impl IntoElement {
+        let view = self.view;
+        let (entries, selected, anchor) = {
+            let log = view.activity.log.read();
+            let (entries, selected) = log.shown();
+            (entries, selected, log.anchor())
+        };
+        let mut log = view.activity.log;
+        let cancelling = self.submit.clone();
+        let returning = self.submit.clone();
         ActivityPopover::new(entries, selected)
             .anchor(anchor)
             .on_select(move |place: usize| {
-                let key = activity.peek().key_at(place);
+                let key = log.peek().key_at(place);
                 if let Some(key) = key {
-                    activity.write().choose(key);
+                    log.write().choose(key);
                 }
             })
             .on_cancel(move |place: usize| {
-                let key = view.activity.peek().key_at(place);
+                let key = view.activity.log.peek().key_at(place);
                 let Some(submit) = cancelling.as_deref() else {
                     return;
                 };
@@ -628,21 +673,16 @@ pub fn popover(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elemen
                 }
             })
             .on_replaced(move |commit: Oid| {
-                let mut activity = view.activity;
-                activity.write().close();
-                show_replaced(commit, view, returning.as_deref());
+                view.activity.close();
+                show_in_lost_commits(commit, view, returning.as_deref());
             })
-            .on_close(move |()| {
-                let mut activity = view.activity;
-                activity.write().close();
-            })
-            .into(),
-    )
+            .on_close(move |()| view.activity.close())
+    }
 }
 
-/// The way back from an amend (R12.1): Show Lost Commits turned on, if it is not, and the
+/// The way back from an amend (R12.1, F4): Show Lost Commits turned on, if it is not, and the
 /// replaced commit found in the history and selected, as a ref's press finds its row.
-fn show_replaced(commit: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
+fn show_in_lost_commits(commit: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
     crate::ref_find::find_commit(commit, commit.short().as_str().to_owned(), view, submit);
     // After the find: the reopen asks it again of the walk that draws lost commits.
     if !*view.show_lost.peek() {
@@ -654,19 +694,19 @@ fn show_replaced(commit: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
 mod tests {
     use std::path::PathBuf;
 
+    use cairn_model::{Consequence, Publication, RefName, Reflog};
+
     use super::*;
     use crate::worker::Done;
 
-    fn asked(id: OperationId, what: &str) -> Asked {
-        let mut letters = what.chars();
-        let name = letters.next().map_or_else(String::new, |first| {
-            first.to_uppercase().chain(letters).collect()
-        });
+    fn asked(id: OperationId, name: &str) -> Asked {
         Asked {
             id,
-            name,
+            name: name.to_owned(),
             cancellable: true,
             prompt: None,
+            happened: None,
+            results: ResultLines::default(),
         }
     }
 
@@ -685,51 +725,85 @@ mod tests {
         }
     }
 
-    /// A read's lines, as the engine would hand them on.
-    fn said<S: AsRef<str>>(lines: &[S]) -> ScrubbedLines {
-        let mut said = ScrubbedLines::new();
+    /// One drain of a lane's tap holding `lines`, as the window takes it.
+    fn drained<S: AsRef<str>>(lines: &[S]) -> OutputTail<ScrubbedLines> {
+        let mut tail = OutputTail::default();
         for line in lines {
-            said.append(&ScrubbedLines::scrubbing(line.as_ref()));
+            tail.push(ScrubbedLines::scrubbing(line.as_ref()));
         }
-        said
+        tail
     }
 
-    fn done(acknowledged: Option<&str>) -> WriteEnding {
-        WriteEnding::Done(Done {
-            description: "amended".to_owned(),
-            acknowledged: acknowledged.map(str::to_owned),
+    fn done() -> Done {
+        Done {
+            description: "done".to_owned(),
+            acknowledged: None,
             locks_before: Vec::new(),
             locks_after: Vec::new(),
             replaced: None,
             cost_after: None,
+        }
+    }
+
+    fn failed(said: &str, command: Option<&str>) -> WriteEnding {
+        WriteEnding::Failed(crate::worker::Failure {
+            said: said.to_owned(),
+            command: command.map(str::to_owned),
+            output: ScrubbedLines::new(),
+            locks: Vec::new(),
+            index_lock: false,
         })
     }
 
-    /// R12.1: an entry per operation, newest first, with its name, status, the prompt it
-    /// confirmed, each `git` it ran with its stderr, and the way back for an amend that
-    /// succeeded; a hook's lines while it runs, then the commands once they are in. Caught by:
-    /// entries oldest first, the prompt lost, the way back offered for an amend that failed.
+    fn texts(lines: &VecDeque<ActivityLine>) -> Vec<&str> {
+        lines
+            .iter()
+            .map(|line| match line {
+                ActivityLine::Ran(text) | ActivityLine::Output(text) => text.as_str(),
+            })
+            .collect()
+    }
+
+    /// C29: an entry per operation, newest first — its name and Fork's result line, the four
+    /// words, its one sentence on a failure; what it wrote as it ran, then its `$ git …` lines
+    /// appended beneath without replacing a line, git's stderr not drawn twice for an operation
+    /// whose output streamed; and an amend's way back once it succeeded. Caught by: entries
+    /// oldest first, the streamed lines swapped for the records, a result line for an ending it
+    /// was not given, or the way back offered for an amend that failed.
     #[test]
-    fn each_operation_is_an_entry_with_its_git_its_prompt_and_its_way_back() {
+    fn each_operation_is_an_entry_with_its_result_its_git_and_its_way_back() {
         let mut log = ActivityLog::default();
         let (stage, amend) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        log.write_started(&asked(stage, "staging 1 file"));
-        log.write_ended(stage, &done(None), None);
-        let replaced = Oid::from_bytes(&[0xab; 20]).unwrap();
-        log.write_started(&asked(amend, "amend"));
+        log.write_started(&Asked {
+            results: ResultLines {
+                succeeded: Some("staged".to_owned()),
+                failed: Some("stage failed".to_owned()),
+                cancelled: None,
+            },
+            ..asked(stage, "Stage 1 file")
+        });
+        log.ran(
+            ActivityKey::Write(stage),
+            &[record(
+                &["add", "a.rs"],
+                "warning: LF",
+                CommandExit::Code(0),
+            )],
+        );
+        log.write_ended(stage, &WriteEnding::Done(done()), None);
+        log.write_started(&asked(amend, "Amend"));
         log.output(
             ActivityKey::Write(amend),
-            &said(&["hook: \u{1b}[31mok\u{1b}[0m"]),
+            &drained(&["hook: \u{1b}[31mok\u{1b}[0m"]),
         );
         let (entries, selected) = log.shown();
         assert_eq!(selected, 0);
         assert_eq!(entries[0].name, "Amend");
-        assert_eq!(entries[0].status, "running");
+        assert_eq!(entries[0].status, ActivityStatus::Running);
+        assert_eq!(entries[0].result, None, "a result line while it runs");
         assert!(entries[0].cancellable);
-        assert_eq!(
-            *entries[0].lines,
-            [ActivityLine::Output("hook: ok".to_owned())]
-        );
+        let streamed = Arc::clone(&entries[0].lines);
+        assert_eq!(texts(&streamed), ["hook: ok"]);
         log.ran(
             ActivityKey::Write(amend),
             &[record(
@@ -738,198 +812,303 @@ mod tests {
                 CommandExit::Code(0),
             )],
         );
-        // The way back is what the run answered it replaced (phase 18): an amend at the press
-        // names no commit as it is asked.
-        let amended = match done(Some("Amend abababa? It replaces …")) {
-            WriteEnding::Done(done) => WriteEnding::Done(Done {
+        let replaced = Oid::from_bytes(&[0xab; 20]).unwrap();
+        log.write_ended(
+            amend,
+            &WriteEnding::Done(Done {
                 replaced: Some(replaced),
-                ..done
+                ..done()
             }),
-            other => other,
-        };
-        log.write_ended(amend, &amended, None);
+            None,
+        );
         let (entries, _) = log.shown();
         assert_eq!(
             entries
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Amend", "Staging 1 file"]
+            ["Amend", "Stage 1 file"]
         );
         let amended = &entries[0];
-        assert_eq!(amended.status, "succeeded");
+        assert_eq!(amended.status, ActivityStatus::Succeeded);
         assert!(!amended.cancellable);
         assert!(amended.took.is_some());
-        assert_eq!(
-            amended.prompt.as_deref(),
-            Some("Amend abababa? It replaces …")
-        );
         assert_eq!(amended.replaced, Some(replaced));
         assert_eq!(
-            *amended.lines,
-            [
-                ActivityLine::Ran("$ git commit -q --amend -F -".to_owned()),
-                ActivityLine::Output("hook: ok".to_owned()),
-            ]
+            amended.sentence, None,
+            "a recoverable amend reported something"
         );
+        assert_eq!(
+            texts(&amended.lines),
+            ["hook: ok", "$ git commit -q --amend -F -"],
+            "the streamed lines were replaced, or git's stderr drawn twice"
+        );
+        assert_eq!(
+            texts(&streamed),
+            ["hook: ok"],
+            "a snapshot changed under its reader"
+        );
+        assert_eq!(entries[1].result.as_deref(), Some("staged"));
         assert_eq!(entries[1].replaced, None);
+        log.choose(ActivityKey::Write(stage));
+        let (entries, selected) = log.shown();
+        assert_eq!(selected, 1);
+        assert!(
+            entries[0].lines.is_empty(),
+            "an entry not selected handed its lines"
+        );
+        assert_eq!(texts(&entries[1].lines), ["$ git add a.rs", "warning: LF"]);
 
+        // A stage that failed: Fork's "stage failed", ⚠'s status, its one sentence.
+        let refused = OperationId::for_tests(3);
+        log.write_started(&Asked {
+            results: ResultLines {
+                succeeded: Some("staged".to_owned()),
+                failed: Some("stage failed".to_owned()),
+                cancelled: None,
+            },
+            ..asked(refused, "Stage 1 file")
+        });
+        log.write_ended(refused, &failed("git refused it.", Some("git add")), None);
         // An amend that failed points nowhere: nothing was replaced.
-        let failed = OperationId::for_tests(3);
-        log.write_started(&asked(failed, "amend"));
+        let broken = OperationId::for_tests(4);
+        log.write_started(&asked(broken, "Amend"));
         log.write_ended(
-            failed,
-            &WriteEnding::Failed(crate::worker::Failure {
-                said: "git commit failed".to_owned(),
-                command: None,
-                output: ScrubbedLines::new(),
-                locks: Vec::new(),
-                index_lock: false,
-            }),
+            broken,
+            &failed("git commit failed.", Some("git commit")),
             None,
         );
         let (entries, _) = log.shown();
-        assert_eq!(entries[0].status, "failed");
-        assert_eq!(entries[0].message.as_deref(), Some("git commit failed"));
+        assert_eq!(entries[0].status, ActivityStatus::Failed);
+        assert_eq!(entries[0].sentence.as_deref(), Some("git commit failed."));
         assert_eq!(entries[0].replaced, None);
+        assert_eq!(entries[1].result.as_deref(), Some("stage failed"));
+        assert_eq!(entries[1].sentence.as_deref(), Some("git refused it."));
     }
 
-    /// R12.1's bounds: at most [`ACTIVITY_ENTRIES`] operations, the oldest let go of; at most
-    /// [`ACTIVITY_LINES`] lines one, the latest kept; at most [`ACTIVITY_BYTES`] of lines
-    /// together, the oldest operations' lines let go of first. Caught by: an unbounded log.
+    /// F3 and the user's decision of 2026-10-10 on phase 14's item 11: the prompt an operation
+    /// confirmed is drawn whole only once it ran — git ran it, failed, was cancelled or
+    /// succeeded — never for one refused, stale or not run; and Create Branch's Discard quotes
+    /// none, saying once it succeeded what it did instead. Caught by: "Confirmed:" over an
+    /// operation that never happened, or the forced checkout's question quoted.
     #[test]
-    fn the_log_is_bounded_by_entries_lines_and_bytes() {
+    fn the_prompt_is_drawn_only_for_an_operation_that_ran() {
+        let prompt = "Discard all changes in a.rs? You can't undo this.";
+        let endings = [
+            (WriteEnding::Done(done()), true),
+            (failed("git failed.", Some("git restore")), true),
+            (WriteEnding::Cancelled { locks: Vec::new() }, true),
+            (failed("a.rs could not be read.", None), false),
+            (
+                WriteEnding::Refused {
+                    said: "Nothing is selected.".to_owned(),
+                },
+                false,
+            ),
+            (
+                WriteEnding::Stale {
+                    path: "a.rs".to_owned(),
+                    said: "a.rs changed since you confirmed.".to_owned(),
+                },
+                false,
+            ),
+            (
+                WriteEnding::NotRun {
+                    said: "The repository was closing.".to_owned(),
+                },
+                false,
+            ),
+        ];
+        for (n, (ending, ran)) in endings.iter().enumerate() {
+            let mut log = ActivityLog::default();
+            let id = OperationId::for_tests(n as u64);
+            log.write_started(&Asked {
+                prompt: Some(prompt.to_owned()),
+                ..asked(id, "Discard 1 file")
+            });
+            log.write_ended(id, ending, None);
+            let (entries, _) = log.shown();
+            assert_eq!(
+                entries[0].prompt.as_deref(),
+                ran.then_some(prompt),
+                "{ending:?}"
+            );
+        }
+        let mut log = ActivityLog::default();
+        let id = OperationId::for_tests(9);
+        let happened = "Discarded local changes and any untracked files in the way, then \
+                        checked out 'topic' at abababa.";
+        log.write_started(&Asked {
+            happened: Some(happened.to_owned()),
+            results: ResultLines {
+                succeeded: Some("Switched to branch 'topic'".to_owned()),
+                ..ResultLines::default()
+            },
+            ..asked(id, "Create branch 'topic'")
+        });
+        log.write_ended(id, &WriteEnding::Done(done()), None);
+        let (entries, _) = log.shown();
+        assert_eq!(entries[0].prompt, None);
+        assert_eq!(entries[0].sentence.as_deref(), Some(happened));
+        assert_eq!(
+            entries[0].result.as_deref(),
+            Some("Switched to branch 'topic'")
+        );
+    }
+
+    /// C35: an amend run at the press whose cost, read once git was reaped, says it would now
+    /// have needed confirming reports so in its entry, once, beside its result — and one still
+    /// recoverable, or whose read failed, reports nothing. Caught by: the engine's answer never
+    /// drawn, or drawn for a recoverable amend.
+    #[test]
+    fn an_amend_pushed_while_it_ran_says_so_in_its_entry() {
+        let pushed = Consequence::Amend {
+            commit: Oid::from_bytes(&[0x3f; 20]).unwrap(),
+            published: Publication::Upstream(RefName::new("refs/remotes/origin/main")),
+            reflog: Reflog::Written,
+        };
+        let recoverable = Consequence::Amend {
+            commit: Oid::from_bytes(&[0x3f; 20]).unwrap(),
+            published: Publication::Unpublished,
+            reflog: Reflog::Written,
+        };
+        for (n, (after, said)) in [
+            (
+                Some(pushed),
+                Some(
+                    "Amended 3f3f3f3, which was pushed to origin/main while the amend ran. \
+                     Sharing the amended commit needs a force push.",
+                ),
+            ),
+            (Some(recoverable), None),
+            (None, None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut log = ActivityLog::default();
+            let id = OperationId::for_tests(n as u64);
+            log.write_started(&asked(id, "Amend"));
+            log.write_ended(
+                id,
+                &WriteEnding::Done(Done {
+                    replaced: Some(Oid::from_bytes(&[0x3f; 20]).unwrap()),
+                    cost_after: after.map(Box::new),
+                    ..done()
+                }),
+                None,
+            );
+            let (entries, _) = log.shown();
+            assert_eq!(entries[0].sentence.as_deref(), said);
+            assert_eq!(entries[0].status, ActivityStatus::Succeeded);
+            assert_eq!(
+                entries[0].prompt, None,
+                "an amend at the press confirmed nothing"
+            );
+        }
+    }
+
+    /// C29's bounds: at most [`ACTIVITY_ENTRIES`] operations; one operation's lines the one
+    /// tail's latest, "Earlier output not kept." heading them — whether the lane or the entry let
+    /// go; and past [`LOG_BYTES`] together, whole oldest operations go, never one still running
+    /// and never the newest. Caught by: an unbounded log, lines of an old entry trimmed instead
+    /// of the entry going, the newest cut while it fits, or a running fetch evicted.
+    #[test]
+    fn whole_oldest_entries_go_at_the_bound_and_an_entry_alone_is_cut() {
         let mut log = ActivityLog::default();
         for n in 0..ACTIVITY_ENTRIES as u64 + 5 {
             let id = OperationId::for_tests(n);
-            log.write_started(&asked(id, &format!("write {n}")));
-            log.write_ended(id, &done(None), None);
+            log.write_started(&asked(id, &format!("Write {n}")));
+            log.write_ended(id, &WriteEnding::Done(done()), None);
         }
         assert_eq!(log.len(), ACTIVITY_ENTRIES);
         assert_eq!(
             log.newest_first().last().map(|entry| entry.name.as_str()),
             Some("Write 5")
         );
-        let id = OperationId::for_tests(10_000);
-        log.write_started(&asked(id, "commit"));
-        let lines: Vec<String> = (0..ACTIVITY_LINES + 7)
-            .map(|n| format!("line {n}"))
-            .collect();
-        log.output(ActivityKey::Write(id), &said(&lines));
-        let (entries, _) = log.shown();
-        assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
-        assert_eq!(
-            entries[0].lines.last(),
-            Some(&ActivityLine::Output(format!(
-                "line {}",
-                ACTIVITY_LINES + 6
-            )))
-        );
-    }
 
-    /// The bytes every entry keeps — its commands and what it wrote — read from the lines.
-    fn held(log: &ActivityLog) -> usize {
-        log.newest_first()
-            .map(|entry| {
-                entry.commands.iter().map(line_bytes).sum::<usize>()
-                    + entry.streamed.iter().map(String::len).sum::<usize>()
-            })
-            .sum()
-    }
-
-    /// Phase 11's QA (app item 1): what is held stays under [`ACTIVITY_BYTES`] across many
-    /// operations — their streamed output let go of once their commands arrive, never held
-    /// uncounted beside them — and the count the log keeps is what its entries hold. Caught by:
-    /// `streamed` kept after `ran`, or a count that drifts from the lines.
-    #[test]
-    fn what_is_held_stays_under_the_bound_across_many_operations() {
-        let mut log = ActivityLog::default();
-        let wide: Vec<String> = (0..1_000)
-            .map(|n| format!("{n:05}{}", "w".repeat(1_500)))
-            .collect();
-        for n in 0..40 {
-            let id = OperationId::for_tests(n);
-            log.write_started(&asked(id, "commit"));
-            log.output(ActivityKey::Write(id), &said(&wide));
-            log.ran(
-                ActivityKey::Write(id),
-                &[record(
-                    &["commit"],
-                    &wide[..200].join("\n"),
-                    CommandExit::Code(1),
-                )],
-            );
-            log.write_ended(id, &done(None), None);
-            assert!(
-                log.newest_first().all(|entry| entry.streamed.is_empty()),
-                "what a finished operation wrote was kept beside its commands"
-            );
-        }
-        assert!(log.bytes <= ACTIVITY_BYTES, "{} bytes held", log.bytes);
-        assert_eq!(
-            log.bytes,
-            held(&log),
-            "the count drifted from the lines held"
-        );
-        assert_eq!(
-            log.newest_first().map(|entry| entry.bytes).sum::<usize>(),
-            log.bytes
-        );
-    }
-
-    /// Phase 11's QA (app item 1): a running operation alone over the budget keeps its latest
-    /// lines, its oldest let go of — never its whole output. Caught by: a bound that clears the
-    /// newest entry as it clears the old ones.
-    #[test]
-    fn a_running_operation_over_the_budget_keeps_its_latest_lines() {
+        // One operation alone past the tail's bound keeps its latest lines, said cut.
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "commit"));
-        for n in 0..4_000 {
-            let line = format!("{n:05}{}", "x".repeat(1_500));
-            log.output(ActivityKey::Write(id), &said(&[&line]));
-        }
-        assert!(log.bytes <= ACTIVITY_BYTES, "{}", log.bytes);
+        log.write_started(&asked(id, "Commit"));
+        let lines: Vec<String> = (0..crate::output_tail::OUTPUT_LINES + 7)
+            .map(|n| format!("line {n}"))
+            .collect();
+        log.output(ActivityKey::Write(id), &drained(&[lines.join("\n")]));
         let (entries, _) = log.shown();
-        let lines = &entries[0].lines;
-        assert!(lines.len() > 1_000, "{} lines kept", lines.len());
+        assert!(entries[0].earlier_not_kept);
+        assert_eq!(entries[0].lines.len(), crate::output_tail::OUTPUT_LINES);
+        assert_eq!(
+            entries[0].lines.back(),
+            Some(&ActivityLine::Output(format!(
+                "line {}",
+                crate::output_tail::OUTPUT_LINES + 6
+            )))
+        );
+        // The lane's cut is said too.
+        let lane_cut = OperationId::for_tests(2);
+        log.write_started(&asked(lane_cut, "Commit"));
+        let mut cut = drained(&["the latest"]);
+        cut.mark_cut();
+        log.output(ActivityKey::Write(lane_cut), &cut);
+        assert!(log.shown().0[0].earlier_not_kept);
+
+        // Past the log's bound, whole oldest entries go — the running fetch and the newest kept.
+        let mut log = ActivityLog::default();
+        log.fetch_started("origin");
+        let wide: Vec<String> = (0..400)
+            .map(|n| format!("{n:05}{}", "w".repeat(2_000)))
+            .collect();
+        for n in 0..12 {
+            let id = OperationId::for_tests(n);
+            log.write_started(&asked(id, &format!("Commit {n}")));
+            log.output(ActivityKey::Write(id), &drained(&wide));
+            log.write_ended(id, &WriteEnding::Done(done()), None);
+            assert!(log.bytes <= LOG_BYTES, "{} bytes held", log.bytes);
+        }
+        let names: Vec<&str> = log
+            .newest_first()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names.first(), Some(&"Commit 11"));
+        assert_eq!(
+            names.last(),
+            Some(&"Fetch origin"),
+            "the running fetch was let go of"
+        );
+        assert!(!names.contains(&"Commit 0"), "{names:?}");
         assert!(
-            matches!(lines.last(), Some(ActivityLine::Output(last)) if last.starts_with("03999")),
-            "the latest line was let go of"
+            log.newest_first()
+                .filter(|entry| entry.key != ActivityKey::Fetch(1))
+                .all(|entry| !entry.lines.cut()),
+            "an entry's lines were trimmed rather than whole entries let go"
+        );
+        assert_eq!(
+            log.bytes,
+            log.newest_first()
+                .map(|entry| entry.lines.bytes())
+                .sum::<usize>(),
+            "the count drifted from the lines held"
         );
     }
 
-    /// Phase 11's QA (app item 1): with the popover closed, thirty thousand one-line outputs
-    /// build no drawn lines — each costs the line it carries — and the open popover builds the
-    /// selected entry's alone, once, until a line changes. Caught by: lines rebuilt per update.
+    /// The open popover reads a snapshot: with nothing changed, it is handed the same lines;
+    /// a line taken in hands the next a new one, and an entry not selected hands none. Caught
+    /// by: lines copied for every read, or a snapshot changed in place under the popover.
     #[test]
-    fn closed_the_popover_builds_no_lines() {
+    fn the_popover_reads_a_shared_snapshot() {
         let mut log = ActivityLog::default();
-        let (older, newer) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        log.write_started(&asked(older, "commit"));
-        log.write_started(&asked(newer, "commit"));
-        for n in 0..30_000 {
-            log.output(ActivityKey::Write(newer), &said(&[format!("line {n}")]));
-        }
-        assert!(
-            log.newest_first()
-                .all(|entry| entry.drawn.borrow().is_none())
-        );
-        let (entries, _) = log.shown();
-        assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
-        assert!(
-            entries[1].lines.is_empty(),
-            "an entry not selected built its lines"
-        );
-        let built = log
-            .newest_first()
-            .next()
-            .and_then(|entry| entry.drawn.borrow().clone());
+        let id = OperationId::for_tests(1);
+        log.write_started(&asked(id, "Commit"));
+        log.output(ActivityKey::Write(id), &drained(&["one"]));
+        let (first, _) = log.shown();
         let (again, _) = log.shown();
-        assert!(
-            built.is_some_and(|built| Rc::ptr_eq(&built, &again[0].lines)),
-            "the lines were built again with nothing changed"
-        );
+        assert!(Arc::ptr_eq(&first[0].lines, &again[0].lines));
+        log.output(ActivityKey::Write(id), &drained(&["two"]));
+        let (after, _) = log.shown();
+        assert!(!Arc::ptr_eq(&first[0].lines, &after[0].lines));
+        assert_eq!(texts(&first[0].lines), ["one"]);
+        assert_eq!(texts(&after[0].lines), ["one", "two"]);
     }
 
     /// Phase 11's QA (app item 3): a line past the long-line limit is kept cut on a character,
@@ -939,11 +1118,11 @@ mod tests {
     fn a_long_line_is_kept_cut_with_the_diff_views_marker() {
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "commit"));
+        log.write_started(&asked(id, "Commit"));
         let long = format!("x{}", "é".repeat(128 * 1024));
-        log.output(ActivityKey::Write(id), &said(&[&long]));
+        log.output(ActivityKey::Write(id), &drained(&[&long]));
         let (entries, _) = log.shown();
-        let Some(ActivityLine::Output(kept)) = entries[0].lines.first() else {
+        let Some(ActivityLine::Output(kept)) = entries[0].lines.front() else {
             panic!("{:?}", entries[0].lines);
         };
         let (drawn, _) = cairn_model::drawn_bytes(long.as_bytes());
@@ -954,25 +1133,52 @@ mod tests {
         assert_eq!(cut_line("short".to_owned()), "short");
     }
 
-    /// A command that did not exit cleanly says how it ended, and the times read as the popover
-    /// draws them.
+    /// C29: each command ends in one form — `exit code N`, `killed by signal N`, `cancelled` —
+    /// a clean exit, one never started and one whose end is not known saying nothing; and the
+    /// times read as the popover draws them. Caught by: "(not started)", "(how it ended is not
+    /// known)", "exit status", or two forms for one end.
     #[test]
-    fn an_unclean_exit_is_kept() {
-        let mut log = ActivityLog::default();
-        let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "Stage 1 file"));
-        log.ran(
-            ActivityKey::Write(id),
-            &[record(
+    fn each_command_ends_in_one_form() {
+        let ended = |exit, cancelled| {
+            ending_line(&CommandRecord {
+                cancelled,
+                ..record(&["add"], "", exit)
+            })
+        };
+        assert_eq!(ended(CommandExit::Code(0), false), None);
+        assert_eq!(
+            ended(CommandExit::Code(128), false).as_deref(),
+            Some("exit code 128")
+        );
+        assert_eq!(
+            ended(CommandExit::Signal(9), false).as_deref(),
+            Some("killed by signal 9")
+        );
+        assert_eq!(
+            ended(CommandExit::Signal(15), true).as_deref(),
+            Some("cancelled")
+        );
+        assert_eq!(
+            ended(CommandExit::Code(0), true).as_deref(),
+            Some("cancelled")
+        );
+        assert_eq!(ended(CommandExit::NotStarted, false), None);
+        assert_eq!(ended(CommandExit::Unknown, false), None);
+        let lines = command_lines(
+            &record(
                 &["add"],
                 "fatal: Unable to create index.lock",
                 CommandExit::Code(128),
-            )],
+            ),
+            true,
         );
-        let (entries, _) = log.shown();
         assert_eq!(
-            entries[0].lines.last(),
-            Some(&ActivityLine::Output("(exit status 128)".to_owned()))
+            lines,
+            [
+                ActivityLine::Ran("$ git add".to_owned()),
+                ActivityLine::Output("fatal: Unable to create index.lock".to_owned()),
+                ActivityLine::Output("exit code 128".to_owned()),
+            ]
         );
         assert_eq!(took_text(Duration::from_millis(12)), "12 ms");
         assert_eq!(took_text(Duration::from_millis(1_500)), "1.5 s");
@@ -983,10 +1189,11 @@ mod tests {
         );
     }
 
-    /// Rule 5 (R14.2): every ending is one of four status words — a refusal, a stale patch, a
-    /// write never run and a partly done discard all "failed", with their sentence — and an amend
-    /// asking to be confirmed, which ran nothing, leaves no entry. Caught by: "not run", "partly
-    /// done" or "found" drawn, or a pending amend drawn as an operation.
+    /// Rule 5 (R14.2): every ending is one of four words — a refusal, a stale patch, a write
+    /// never run and a partly done discard all failed, with their sentence; a cancel is
+    /// cancelled with its own — and an amend asking to be confirmed, which ran nothing, leaves
+    /// no entry. Caught by: another word drawn, a cancel with nothing said, or a pending amend
+    /// drawn as an operation.
     #[test]
     fn every_ending_is_one_of_four_words() {
         let mut log = ActivityLog::default();
@@ -1000,14 +1207,14 @@ mod tests {
             None,
         );
         let (entries, _) = log.shown();
-        assert_eq!(entries[0].status, "failed");
-        assert_eq!(entries[0].message.as_deref(), Some("Nothing is selected."));
+        assert_eq!(entries[0].status, ActivityStatus::Failed);
+        assert_eq!(entries[0].sentence.as_deref(), Some("Nothing is selected."));
         let pending = OperationId::for_tests(2);
         log.write_started(&asked(pending, "Amend"));
         log.write_ended(
             pending,
             &WriteEnding::NeedsConfirming {
-                consequence: cairn_model::Consequence::RemoveLock {
+                consequence: Consequence::RemoveLock {
                     path: PathBuf::from("/r/.git/index.lock"),
                     modified: SystemTime::UNIX_EPOCH,
                     read_at: SystemTime::UNIX_EPOCH,
@@ -1023,11 +1230,25 @@ mod tests {
             1,
             "an amend asking to be confirmed left an entry"
         );
-        for entry in log.shown().0.iter() {
+        let cancelled = OperationId::for_tests(3);
+        log.write_started(&asked(cancelled, "Commit"));
+        log.write_ended(
+            cancelled,
+            &WriteEnding::Cancelled { locks: Vec::new() },
+            None,
+        );
+        log.fetch_started("origin");
+        log.fetch_ended("origin", Outcome::Cancelled(FETCH_CANCELLED.to_owned()));
+        let (entries, _) = log.shown();
+        assert_eq!(entries[0].status, ActivityStatus::Cancelled);
+        assert_eq!(entries[0].sentence.as_deref(), Some(FETCH_CANCELLED));
+        assert_eq!(entries[1].status, ActivityStatus::Cancelled);
+        assert_eq!(entries[1].sentence.as_deref(), Some(WRITE_CANCELLED));
+        for entry in entries.iter() {
             assert!(
-                ["running", "succeeded", "failed", "cancelled"].contains(&entry.status.as_str()),
+                ["running", "succeeded", "failed", "cancelled"].contains(&entry.status.word()),
                 "{}",
-                entry.status
+                entry.status.word()
             );
         }
     }
@@ -1074,56 +1295,13 @@ mod tests {
         let arguments: Vec<&str> = cases.iter().map(|(argument, _)| *argument).collect();
         assert_eq!(words, arguments);
         // And the line drawn is built of them.
-        let lines = command_lines(&record(
-            &["commit", "-m", "it's done"],
-            "",
-            CommandExit::Code(0),
-        ));
+        let lines = command_lines(
+            &record(&["commit", "-m", "it's done"], "", CommandExit::Code(0)),
+            true,
+        );
         assert_eq!(
             lines[0],
             ActivityLine::Ran("$ git commit -m 'it'\\''s done'".to_owned())
-        );
-    }
-
-    /// The user's decision M: an operation whose lines the byte bound let go of says so in their
-    /// place, and one that never had lines says nothing. Caught by: an empty pane for an
-    /// operation that ran, after newer output pushed its lines out.
-    #[test]
-    fn an_operation_whose_lines_were_let_go_says_so() {
-        let mut log = ActivityLog::default();
-        let quiet = OperationId::for_tests(1);
-        log.write_started(&asked(quiet, "commit"));
-        log.write_ended(quiet, &done(None), None);
-        let old = OperationId::for_tests(2);
-        log.write_started(&asked(old, "commit"));
-        log.ran(
-            ActivityKey::Write(old),
-            &[record(
-                &["commit"],
-                "a hook said this",
-                CommandExit::Code(1),
-            )],
-        );
-        log.write_ended(old, &done(None), None);
-        let new = OperationId::for_tests(3);
-        log.write_started(&asked(new, "commit"));
-        let wide: Vec<String> = (0..4_000)
-            .map(|n| format!("{n:05}{}", "x".repeat(1_500)))
-            .collect();
-        log.output(ActivityKey::Write(new), &said(&wide));
-        let lines: Vec<_> = log
-            .newest_first()
-            .map(|entry| (entry.key, entry.lines()))
-            .collect();
-        assert_eq!(
-            *lines[1].1,
-            [ActivityLine::Output(LINES_LET_GO.to_owned())],
-            "{:?}",
-            lines[1].0
-        );
-        assert!(
-            lines[2].1.is_empty(),
-            "an operation with no lines said they went"
         );
     }
 }

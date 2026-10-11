@@ -442,6 +442,89 @@ impl Consequence {
             ),
         }
     }
+
+    /// What it did once it succeeded, said in its activity entry in place of the prompt it
+    /// confirmed, for the one operation whose prompt is never drawn — Create Branch's Discard,
+    /// its dialog's press its confirmation (R12.1; the user's decision of 2026-10-10 on phase
+    /// 14's open item 11): "Discarded local changes and any untracked files in the way, then
+    /// checked out 'topic' at a1b2c3d." `None` for every operation whose prompt is quoted.
+    pub fn happened(&self) -> Option<String> {
+        match self {
+            Self::CheckoutDiscarding {
+                branch,
+                at,
+                head: _,
+            } => Some(format!(
+                "Discarded local changes and any untracked files in the way, then checked out \
+                 '{}' at {}.",
+                escaped(branch.as_bytes()),
+                at.short().as_str()
+            )),
+            Self::DiscardLines { .. }
+            | Self::DiscardFiles { .. }
+            | Self::Amend { .. }
+            | Self::RemoveLock { .. } => None,
+        }
+    }
+
+    /// The branch a forced checkout checks out, as its name says it: what its result line
+    /// names. `None` for every other operation.
+    pub fn checked_out(&self) -> Option<String> {
+        match self {
+            Self::CheckoutDiscarding {
+                branch,
+                at: _,
+                head: _,
+            } => Some(escaped(branch.as_bytes())),
+            Self::DiscardLines { .. }
+            | Self::DiscardFiles { .. }
+            | Self::Amend { .. }
+            | Self::RemoveLock { .. } => None,
+        }
+    }
+
+    /// What an amend run at the press turned out to cost, read once git was reaped, as its
+    /// activity entry says it (R1.5, C35; the user's ratification of 2026-10-10, option B) —
+    /// only where it would now have needed confirming: a remote came to have the replaced
+    /// commit while the amend ran ("Amended 3f2a1c9, which was pushed to origin/main while the
+    /// amend ran. Sharing the amended commit needs a force push."), or git kept no reflog of the
+    /// move, so the replaced commit can't be recovered. It reports and prevents nothing. `None`
+    /// for an amend still recoverable, and for every other operation.
+    pub fn amend_reported(&self) -> Option<String> {
+        if !self.needs_confirming() {
+            return None;
+        }
+        let Self::Amend {
+            commit,
+            published,
+            reflog,
+        } = self
+        else {
+            return None;
+        };
+        let short = commit.short();
+        let short = short.as_str();
+        let on = match published {
+            Publication::Unpublished => None,
+            Publication::Upstream(upstream) => Some(quoted(upstream.shorthand().as_bytes())),
+            Publication::SomeRemote => Some("a remote".to_owned()),
+        };
+        let pushed = on.map(|on| {
+            format!(
+                "Amended {short}, which was pushed to {on} while the amend ran. Sharing the \
+                 amended commit needs a force push."
+            )
+        });
+        let lost = (*reflog == Reflog::NotWritten).then(|| match &pushed {
+            Some(_) => format!("{short} can't be recovered: git kept no reflog of it."),
+            None => format!("Amended {short}. It can't be recovered: git kept no reflog of it."),
+        });
+        match (pushed, lost) {
+            (Some(pushed), Some(lost)) => Some(format!("{pushed} {lost}")),
+            (Some(sentence), None) | (None, Some(sentence)) => Some(sentence),
+            (None, None) => None,
+        }
+    }
 }
 
 /// R10.6's dialog text (the redesign of 2026-10-10): one fixed sentence for each reason the amend
@@ -677,6 +760,89 @@ mod tests {
             at: oid(0xab),
             head: Some(oid(7)),
         }
+    }
+
+    /// R12.1 (the user's decision of 2026-10-10 on phase 14's open item 11): Create Branch's
+    /// Discard, whose prompt is never drawn, says in its activity entry what happened, rendered
+    /// from its consequence, and names the branch its result line says; every operation whose
+    /// prompt is quoted says nothing of the kind. Caught by: the prompt's question quoted for
+    /// it, or a description given to an operation that quotes its prompt.
+    #[test]
+    fn a_forced_checkout_says_what_happened_and_the_rest_quote_their_prompt() {
+        assert_eq!(
+            checkout().happened().as_deref(),
+            Some(
+                "Discarded local changes and any untracked files in the way, then checked out \
+                 'topic' at abababa."
+            )
+        );
+        assert_eq!(checkout().checked_out().as_deref(), Some("topic"));
+        let amend = Consequence::Amend {
+            commit: oid(0x3f),
+            published: Publication::Unpublished,
+            reflog: Reflog::Written,
+        };
+        let files = Consequence::DiscardFiles {
+            files: vec![modified("a.rs", Some(2))],
+        };
+        for other in [amend, files] {
+            assert_eq!(other.happened(), None, "{other:?}");
+            assert_eq!(other.checked_out(), None, "{other:?}");
+        }
+    }
+
+    /// C35 (the user's ratification of 2026-10-10, option B): an amend run at the press reports,
+    /// once git was reaped, what it would now have needed confirming — pushed while it ran, in
+    /// the PRD's words, and no reflog kept, that the replaced commit can't be recovered — and
+    /// nothing for an amend still recoverable or any other operation. Caught by: a recoverable
+    /// amend reported, the remote or the reflog fact left out, or the push named wrongly.
+    #[test]
+    fn an_amend_reports_what_it_turned_out_to_cost_only_where_it_would_now_be_confirmed() {
+        let amend = |published, reflog| Consequence::Amend {
+            commit: oid(0x3f),
+            published,
+            reflog,
+        };
+        let upstream = || Publication::Upstream(RefName::new("refs/remotes/origin/main"));
+        assert_eq!(
+            amend(Publication::Unpublished, Reflog::Written).amend_reported(),
+            None
+        );
+        assert_eq!(
+            amend(upstream(), Reflog::Written)
+                .amend_reported()
+                .as_deref(),
+            Some(
+                "Amended 3f3f3f3, which was pushed to origin/main while the amend ran. Sharing \
+                 the amended commit needs a force push."
+            )
+        );
+        assert_eq!(
+            amend(Publication::SomeRemote, Reflog::Written)
+                .amend_reported()
+                .as_deref(),
+            Some(
+                "Amended 3f3f3f3, which was pushed to a remote while the amend ran. Sharing the \
+                 amended commit needs a force push."
+            )
+        );
+        assert_eq!(
+            amend(Publication::Unpublished, Reflog::NotWritten)
+                .amend_reported()
+                .as_deref(),
+            Some("Amended 3f3f3f3. It can't be recovered: git kept no reflog of it.")
+        );
+        assert_eq!(
+            amend(upstream(), Reflog::NotWritten)
+                .amend_reported()
+                .as_deref(),
+            Some(
+                "Amended 3f3f3f3, which was pushed to origin/main while the amend ran. Sharing \
+                 the amended commit needs a force push. 3f3f3f3 can't be recovered: git kept no \
+                 reflog of it."
+            )
+        );
+        assert_eq!(checkout().amend_reported(), None);
     }
 
     /// Create Branch's Discard (R11.3, the user's decision of 2026-10-10): the prompt the

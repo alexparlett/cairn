@@ -104,8 +104,8 @@ pub struct View {
     /// (staging-and-commit R11.3).
     pub branch: crate::create_branch::CreateBranchView,
     /// The activity popover: the session's operations, and whether it is open
-    /// (staging-and-commit R12).
-    pub activity: State<crate::activity::ActivityLog>,
+    /// (staging-and-commit R12), in two states.
+    pub activity: crate::activity::ActivityView,
 }
 
 impl std::fmt::Debug for View {
@@ -211,15 +211,12 @@ pub fn window(
             // Fork's: the status box opens the activity popover (R12.1), which hangs from where
             // the box is laid out (the user's decision A, 2026-10-09).
             rect()
-                .on_press(move |_| {
-                    let mut activity = view.activity;
-                    activity.write().open();
-                })
+                .on_press(move |_| view.activity.open())
                 .on_sized(move |e: Event<SizedEventData>| {
                     let anchor = (e.area.min_x(), e.area.max_y());
-                    let mut activity = view.activity;
-                    if activity.peek().anchor_moved(anchor) {
-                        activity.write().set_anchor(anchor);
+                    let mut log = view.activity.log;
+                    if log.peek().anchor_moved(anchor) {
+                        log.write().set_anchor(anchor);
                     }
                 })
                 .child(status_box(
@@ -262,7 +259,9 @@ pub fn window(
             Some(Modal::CommitError) => crate::commit_box_pane::git_error(view, erring),
             Some(Modal::Ending) => crate::ending_dialog::dialog(view, ending),
             Some(Modal::CreateBranch) => crate::create_branch::dialog(view, branching),
-            Some(Modal::Popover) => crate::activity::popover(view, popping),
+            // A child of its own, the one reader of the log (phase 20): a streamed line draws
+            // it again, never the window.
+            Some(Modal::Popover) => Some(crate::activity::ActivityLayer::new(view, popping).into()),
             None => None,
         })
         // Every context menu opens here, so none panics for want of a host (R7.5).
@@ -519,7 +518,8 @@ fn running(view: View) -> Vec<Running> {
     };
     let fetching = fetch
         .is_in_flight()
-        .then(|| view.activity.read().fetch_running())
+        // Read without subscribing: the fetch's own state draws the box again as it changes.
+        .then(|| view.activity.log.peek().fetch_running())
         .flatten()
         .map(|(serial, name, started)| Running {
             serial: u64::MAX - serial,
@@ -828,7 +828,7 @@ pub(crate) mod tests {
             writes: State::create(crate::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
-            activity: State::create(crate::activity::ActivityLog::default()),
+            activity: crate::activity::ActivityView::created(),
             branch: crate::create_branch::CreateBranchView::created(),
         }
     }
@@ -1589,7 +1589,7 @@ pub(crate) mod tests {
             writes.write().started(one);
         });
         let mut fetch = view.fetch;
-        let mut activity = view.activity;
+        let mut activity = view.activity.log;
         test.run_in(|| {
             activity.write().fetch_started("origin");
             fetch.write().started("origin".to_owned());

@@ -21,7 +21,7 @@ mod local_lane;
 #[cfg(test)]
 mod local_lane_tests;
 mod network_lane;
-mod output_flow;
+mod output_tap;
 mod pool;
 mod refresh_lane;
 #[cfg(test)]
@@ -46,9 +46,9 @@ pub(crate) use expand_all::EXPAND_ALL_LINES;
 #[cfg(test)]
 pub use local_lane::Done;
 pub use local_lane::{
-    Failure, LocalWrite, OperationId, ReadAgain, Unspent, UnstageTarget, WriteEnding,
+    Failure, LocalWrite, OperationId, ReadAgain, ResultLines, Unspent, UnstageTarget, WriteEnding,
 };
-pub use output_flow::OutputReceipt;
+pub use output_tap::OutputTap;
 #[cfg(test)]
 pub use pool::Updates;
 #[cfg(test)]

@@ -43,10 +43,20 @@ const HEIGHT: f32 = 860.;
 pub(crate) type Submitted = Rc<RefCell<Vec<Request>>>;
 
 pub(crate) fn launch() -> (TestingRunner, View, Submitted) {
+    let (test, view, submitted, _) = launch_counted();
+    (test, view, submitted)
+}
+
+/// The window as [`launch`] draws it, with how many times its root has been drawn: what a test
+/// of what draws the whole window again reads.
+pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell::Cell<usize>>) {
     let submitted = Submitted::default();
+    let drawn = Rc::new(std::cell::Cell::new(0));
     let app = {
         let submitted = submitted.clone();
+        let drawn = Rc::clone(&drawn);
         move || {
+            drawn.set(drawn.get() + 1);
             let view = use_consume::<View>();
             let submitted = submitted.clone();
             let submit: Rc<dyn Fn(Request)> =
@@ -87,14 +97,14 @@ pub(crate) fn launch() -> (TestingRunner, View, Submitted) {
                 writes: State::create(crate::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
-                activity: State::create(crate::activity::ActivityLog::default()),
+                activity: crate::activity::ActivityView::created(),
                 branch: crate::create_branch::CreateBranchView::created(),
             })
         },
         1.,
     );
     test.sync_and_update();
-    (test, view, submitted)
+    (test, view, submitted, drawn)
 }
 
 pub(crate) fn apply(test: &mut TestingRunner, view: View, submitted: &Submitted, update: Update) {

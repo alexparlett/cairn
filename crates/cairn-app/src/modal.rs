@@ -43,7 +43,7 @@ pub fn modal(view: View) -> Option<Modal> {
         Some(Modal::Ending)
     } else if view.branch.state.peek().is_up() {
         Some(Modal::CreateBranch)
-    } else if view.activity.peek().is_open() {
+    } else if view.activity.is_open() {
         Some(Modal::Popover)
     } else {
         None
@@ -63,7 +63,7 @@ pub fn drawn(view: View) -> Option<Modal> {
         Some(Modal::Ending)
     } else if view.branch.state.read().is_up() {
         Some(Modal::CreateBranch)
-    } else if view.activity.read().is_open() {
+    } else if *view.activity.open.read() {
         Some(Modal::Popover)
     } else {
         None

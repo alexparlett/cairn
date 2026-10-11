@@ -506,10 +506,31 @@ fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
         matches!(seen.last(), Some(Update::FetchFailed { .. })),
         "{seen:?}"
     );
+    // What the fetch wrote waits in the lane's tap, drained as the window drains it.
+    let progress: Vec<String> = seen
+        .iter()
+        .find_map(|update| match update {
+            Update::FetchProgress { tap } => Some(tap.drain()),
+            _ => None,
+        })
+        .map(|drained| {
+            drained
+                .iter()
+                .map(|lines| lines.text().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
-        seen.iter()
-            .any(|update| matches!(update, Update::FetchProgress { lines } if lines.contains("https://example.com/again"))),
-        "{seen:?}"
+        progress
+            .iter()
+            .any(|lines| lines.contains("https://example.com/again")),
+        "{progress:?}"
+    );
+    assert!(
+        progress
+            .iter()
+            .all(|lines| !lines.contains("SECRET") && !lines.contains("TOKEN")),
+        "{progress:?}"
     );
     assert!(
         seen.iter()

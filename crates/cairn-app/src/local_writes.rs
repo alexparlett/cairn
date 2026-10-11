@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::worker::{LocalWrite, OperationId, Request};
+use crate::worker::{LocalWrite, OperationId, Request, ResultLines};
 
 /// A write the window asked for: its id and its one name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +21,13 @@ pub struct Asked {
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
     pub cancellable: bool,
     /// The prompt a destructive write's confirmation recorded, copied as it was asked
-    /// (`LocalWrite::prompt`): what the activity popover quotes however the write ends.
+    /// (`LocalWrite::prompt`): what the activity popover quotes once the write ran.
     pub prompt: Option<String>,
+    /// What Create Branch's Discard did once it succeeded, said in its entry in place of a
+    /// prompt (`LocalWrite::happened`).
+    pub happened: Option<String>,
+    /// Fork's result line under its row for each way it can end (`LocalWrite::result_lines`).
+    pub results: ResultLines,
 }
 
 impl Asked {
@@ -33,6 +38,8 @@ impl Asked {
             name: "A write".to_owned(),
             cancellable: false,
             prompt: None,
+            happened: None,
+            results: ResultLines::default(),
         }
     }
 }
@@ -58,6 +65,8 @@ impl LocalWrites {
             name: write.name(),
             cancellable: write.is_cancellable(),
             prompt: write.prompt(),
+            happened: write.happened(),
+            results: write.result_lines(),
         });
     }
 

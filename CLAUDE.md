@@ -1074,8 +1074,9 @@ Project invariants:
   `LOCK_STALE_AFTER` — each ending when its line or banner unmounts. On the worker side, the
   local lane's wait before it runs again a write git refused for the lock
   (`LaneState::wait_to_retry`, `worker/local_lane.rs`) is a `std::thread::sleep` on the lane's
-  own thread, in 50 ms slices a close ends, at most `LOCK_RETRIES` times
-  `LOCK_RETRY_AFTER` per write — it holds the lane, and the close that waits on it, that long;
+  own thread, in 50 ms slices that a close or a kept Cancel ends, at most `LOCK_RETRIES` times
+  `LOCK_RETRY_AFTER` per write — it holds the lane, and the writes queued behind it, that long,
+  while a close waits on it at most one slice past the attempt already running;
   and `leftover_lock::ask`, called on the UI thread by the banner's and the Git Error's
   `Remove index.lock…`, is one atomic increment and one `submit` of
   `Request::LockConsequence`, whose arm only sends the local lane one job. Also

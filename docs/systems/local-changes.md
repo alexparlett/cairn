@@ -669,7 +669,7 @@ typed, the arrows are the editor's.
   `backspace_in_the_filter_edits_the_filter_and_discards_nothing`,
   `a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered`,
   `local_changes_diff_is_always_exact_and_leaves_the_setting_alone`,
-  `a_write_is_drawn_queued_running_and_stale_where_it_was_asked`,
+  `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`,
   `a_discard_names_only_paths_the_lists_drawn_still_list`,
   `the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first`,
   `every_route_takes_the_selection_and_nothing_the_person_did_not_select`,

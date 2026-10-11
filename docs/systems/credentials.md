@@ -199,23 +199,19 @@ never enters `cairn-git` and never enters application state.
   rather than before is pinned on the runner, against a stub that takes
   300 ms to remove its lock (`a_cancelled_write_lists_its_locks_only_once_it_is_reaped`
   in `ops/authority.rs`), since no fixture can hold a real git mid ref-write
-  at the instant of a cancel. The worker hands the paths on as `Update::FetchCancelled::stranded_locks`
-  (`a_cancelled_fetch_carries_the_lock_files_it_stranded`, and the planted
-  lock in `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`),
-  the session into `FetchStatus::Cancelled`
-  (`a_cancelled_fetch_hands_the_lock_files_it_found_to_the_banner`), and the
-  banner names every one with when acting on it is safe
-  (`a_cancel_that_left_a_lock_behind_names_every_lock_file` in
-  `crates/cairn-app/src/status_text.rs`). The press itself is said at once:
-  Cancel puts the view in `FetchStatus::Cancelling` and takes the button
-  away, since the worker's answer may be the whole grace period away, and a
-  `FetchStarted` that lands after the press does not undo it
+  at the instant of a cancel. A cancel opens nothing in the window (staging-and-commit R14.5): the worker hands
+  on `Update::FetchCancelled { remote }` alone (`every_outcome_names_how_the_fetch_ended`,
+  `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`,
+  `a_cancelled_fetch_opens_nothing_and_a_failed_one_its_git_error`), and a stranded
+  `<gitdir>/index.lock` is the leftover lock's to find, by the stat every refresh makes
+  (`docs/systems/git-processes.md`, "The leftover lock"). The press itself is said at once:
+  Cancel, in the activity popover as in Fork, puts the view in `FetchStatus::Cancelling`,
+  and a `FetchStarted` that lands after the press does not undo it
   (`a_cancel_is_said_at_once_and_survives_a_late_start` in
-  `crates/cairn-app/src/fetch_state.rs`, and the window test
-  `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`). Listing only: removing a lock
-  another process may still hold is a decision for a confirmed operation
-  that does not exist yet (issue #19); a FAILED fetch names the lock files
-  present in its error, which the banner does not yet draw (issue #44).
+  `crates/cairn-app/src/fetch_state.rs`). Removing a lock another process may still hold is
+  `Remove index.lock…`'s, confirmed, for `<gitdir>/index.lock` alone; the other locks a
+  cancel can strand under the git directory are git's to report on the next write that
+  meets them.
   "Not destructive" is kept true against the user's configuration
   by one flag and one refusal (issue #17, decided 2026-09-17). `fetch.prune`
   and `remote.<name>.prune` are honoured exactly as `git fetch` honours them
@@ -427,18 +423,20 @@ never enters `cairn-git` and never enters application state.
   `letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket` and
   `a_prompt_waiting_at_shutdown_is_refused`.
 - **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
-  `fetch_state.rs`). A "Fetch <remote>" button for the default remote, gone
-  from the press itself (`FetchStatus::Starting`) and "Cancel" until the fetch
-  ends; a one-line banner with git's latest progress or the outcome — for a
-  failure, git's first `fatal:` line, else its first `error:` line, else the
-  message's first line, because a fetch's stderr is progress first and the
-  reason after it (`status_text::why_it_failed`, pinned by
-  `a_failure_says_why_it_failed_and_not_how_far_git_got`); and the dialog
-  whenever a `PromptView` is set,
+  `fetch_state.rs`). A "Fetch <remote>" button for the default remote, greyed from the press
+  (`FetchStatus::Starting`) until the fetch ends (`fetch_is_greyed_while_a_fetch_is_in_flight`);
+  its progress in the title bar's status box — "Fetch origin" and git's latest progress line,
+  once it has run 250 ms (`the_status_box_is_handed_what_runs_by_its_one_name`,
+  `the_status_box_shows_an_operation_only_once_it_has_run_250_ms`); its failure in Fork's Git
+  Error dialog, the command and git's whole output with Fork's sentence, or "Couldn't Fetch
+  <remote>" with the sentence for a failure beneath git
+  (`a_cancelled_fetch_opens_nothing_and_a_failed_one_its_git_error`,
+  `a_failed_fetch_carries_gits_command_and_words`; `docs/systems/git-processes.md`, "Where an
+  ending goes"); nothing for a success or a cancel; and the dialog whenever a `PromptView` is set,
   answered through the worker's `Replier` callback and taken down.
-  `session::apply` is where an `Update` becomes view state: a fetch that moved
-  a ref clears the rows, resets the progress and asks for the history from
-  `HEAD` again (one that moved nothing leaves the reader's place alone); a
+  `session::apply` is where an `Update` becomes view state: every fetch ending
+  asks for a refresh and touches no row — the refresh reopens the history only
+  if the refs it walks from moved (`docs/systems/history-graph.md`); a
   fetch ending with a dialog still up refuses that prompt, which releases the
   helper — unless a local write runs, whose prompt it may be; a prompt arriving
   with neither a fetch nor a local write in flight is refused rather than
@@ -447,12 +445,10 @@ never enters `cairn-git` and never enters application state.
   reference is what lets the acceptor go. Pinned by
   `a_prompt_draws_the_dialog_and_its_answer_leaves_as_a_secret_for_that_prompt`,
   `cancelling_the_dialog_refuses_that_prompt`,
-  `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`,
-  `a_failed_fetch_is_said_in_the_window_and_the_button_comes_back`, and in
+  `fetch_is_greyed_while_a_fetch_is_in_flight`, and in
   `session.rs`
-  `a_fetch_that_moved_refs_clears_the_rows_and_asks_for_the_history_again`,
-  `a_fetch_that_moved_nothing_leaves_the_rows_alone`,
-  `a_cancelled_or_failed_fetch_that_moved_refs_reloads_too`,
+  `every_fetch_ending_asks_for_a_refresh_and_touches_no_row`,
+  `a_fetch_ended_by_the_close_asks_for_nothing`,
   `a_fetch_ending_takes_the_dialog_down_and_refuses_its_prompt` and
   `a_prompt_with_no_fetch_in_flight_is_refused_not_shown`.
 
@@ -553,13 +549,13 @@ Known limits, described rather than pinned:
 - A cancel ends `git` and its process group (`SIGTERM`, then `SIGKILL`
   after two seconds) — `ssh` and the helper with it — and returns once the
   group is reaped (`docs/systems/git-processes.md`). A `SIGKILL` that lands while git is updating
-  refs can still leave a `*.lock`; the cancel names every lock file it
-  finds, and removing one is the user's by hand once they know no other git
-  is running — nothing in Cairn removes a lock yet, since the process
-  holding it might not be Cairn's (issue #19). A failed fetch names the lock
-  files present in its error (`GitFailed::present_locks`), but the banner
-  draws only git's first `fatal:`/`error:` line, so the list does not reach
-  the user (issue #44).
+  refs can still leave a `*.lock`; the engine lists what it finds, and the
+  window says nothing of a cancel. A stranded `<gitdir>/index.lock` is the
+  leftover lock's banner's to show, with `Remove index.lock…` confirmed as
+  "Remove Stale Lock" (`docs/systems/git-processes.md`, "The leftover lock");
+  a ref's lock is git's to report on the next write that meets it, since the
+  process holding it might not be Cairn's (issue #19). A failed fetch's Git
+  Error shows git's whole output, its lock refusal among it (issue #44).
 - Closing the window closes the repository first: every `git` in it is
   ended and reaped, the acceptor stopped and the socket directory removed,
   and only then does the window go (`docs/systems/git-processes.md`,

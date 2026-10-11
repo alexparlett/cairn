@@ -3,6 +3,17 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 18's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p18/adjudication.md`): FIX NOW 1, 2, 4, 5, 6, 7, each test
+first; 8 ruled by the coordinator under rule 4 (the detached line wins) and built; 10 probed in
+the pinned freya, no fix needed (state.md, "Phase 18", QA). CARRY 3 to phase 20; FILE 14 at
+teardown. Dismissed, with the adjudicator's reasons: 9 (the dialog opening when the box is next
+shown is the designed shape, the dialog self-contained), 11 (no defect: each superseded status
+is retired and the layout runs on the lane), 12 (`HEAD`'s message does not depend on the status
+the lists were read for, and fills only an empty, untouched draft), 13 (each wording gives a
+greyed control its reason and wraps; the singular is Fork's). Full gate green.
+
 ## 2026-10-11 — phase 18 built (packet mode)
 
 The commit box rebuilt over phase 13's engine (state.md, "Phase 18"): one button and the chord,

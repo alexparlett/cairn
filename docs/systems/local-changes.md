@@ -443,9 +443,12 @@ R6.1). The button needs a subject (Fork's rule) and something staged, or a merge
 cherry-pick or revert in progress, which it concludes. **While it is asked** the button's place
 says what it is doing (`cairn_ui::Busy`, R10.4, C5): queued behind another write, "Waiting for
 <what that write is waited on for>…" — the one form every queued write uses; running,
-"Committing 0:03" (or "Amending"), redrawn each second by a task of its own (`Elapsed`, on
-`async-io`'s timer), with a Cancel that asks `Request::CancelWrite` for that commit's id — never
-for one still queued (R4.3); cancelled, "Cancelling…" until git is reaped. A cancel opens no
+"Committing 0:03" (or "Amending"), redrawn each second by a task of its own line's scope
+(`Elapsed`, on `async-io`'s timer; freya drops a scope's tasks as it unmounts), with a Cancel that
+asks `Request::CancelWrite` for that commit's id — never for one still queued (R4.3); asked with
+no write ahead of it but not yet started (the lane busy with a read), its verb alone, with no
+Cancel until git runs; cancelled, "Cancelling…" until git is reaped. "Waiting for" names only a
+write ahead of it, never one asked after. A cancel opens no
 dialog and keeps the draft (rule 4).
 
 **A failure** of git's own (`WriteEnding::Failed` with the command that ran) opens Fork's Git Error
@@ -490,7 +493,8 @@ amend, removes them (`UnstageTarget::Nothing`, `git rm --cached -f -q --`): the 
 amended commit (`local_changes_actions::unstage_target`). Lines unstaged by the gesture are
 applied against the index as from any staged diff. Where amend's staged list cannot be read —
 a partial clone's missing blob on git 2.44 and later — the box's one line says so and why
-("Amend's staged list couldn't be read, so the lists show what is staged against HEAD: …"), the
+("Amend's staged list couldn't be read, so the lists show what is staged against HEAD: …"; on a
+detached `HEAD` the detached line wins, saying what the press will do), the
 lists are the status's against `HEAD`, and the amend itself is still offered.
 
 **Amend Last Commit** is ready with a subject even with nothing new staged. Its press — or the
@@ -499,7 +503,7 @@ commit chord, which does exactly the same — asks `LocalWrite::AmendAtPress`
 and runs an amend git logs and no remote has at once, with no token (the old commit stays in Show
 Lost Commits), or ends `WriteEnding::NeedsConfirming` with the `Consequence`. On that ending the
 box opens the confirmation dialog (`use_amend_confirmation`, the box holding the submitter its
-answer needs), titled "Amend Commit" (`AMEND_TITLE`), its words the consequence's fixed sentences
+answer needs) — once any confirmation already open is answered, never replacing it — titled "Amend Commit" (`AMEND_TITLE`), its words the consequence's fixed sentences
 — "3f2a1c9 is already on origin/main. Amending it rewrites history others may have.", "3f2a1c9
 can't be recovered after this: this repository keeps no reflog." — and its button "Amend", the
 one confirmation surface for it (`CONFIRMATION_SURFACES`; the commit box left it in phase 18):

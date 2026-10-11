@@ -537,7 +537,10 @@ amend's staged list with `HEAD` at a remote tip).
   (`an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped`: a remote-tracking ref
   moved onto it by a `pre-commit` hook answers published, the reflog removed by one under
   `core.logAllRefUpdates=false` answers not written; `an_amend_git_logs_and_no_remote_has_runs_at_once`:
-  an untouched amend answers as its cost did). Nothing is undone and no dialog opens; the
+  an untouched amend answers as its cost did). That read runs under `CommitWatch::closing` — the
+  repository's close alone, never the write's Cancel — so an amend git made after a cancel was
+  pressed still answers it (`an_amend_cancelled_after_git_made_it_still_reports_what_it_cost`).
+  Nothing is undone and no dialog opens; the
   activity entry's wording is phase 20's.
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
   does.

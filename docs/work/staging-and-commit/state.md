@@ -164,8 +164,26 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   line's slot (an operation first, then amend unread, unborn, detached).
 - **Stopping rule, not triggered**: the Git Error state keeps a token only for a confirmed amend's
   skip.
+- **QA (2026-10-11), fixed**: #1 the amend's dialog never replaces an open confirmation — the
+  effect reads `View::confirming` and waits (`the_amend_dialog_waits_for_a_confirmation_already_open`);
+  #2 `amend_after` runs under `CommitWatch::closing`, the lane's close alone
+  (`an_amend_cancelled_after_git_made_it_still_reports_what_it_cost`, host and floors; floor 219);
+  #4 a lane-only `Request::StopAmending` returns, submitted by `amend_unticked`
+  (`unticking_amend_supersedes_the_amend_read_and_nothing_else`); #5 the untick draws the newest
+  status wherever it is not drawn (`unticking_amend_ends_its_read_and_draws_the_newest_status`);
+  #6 "Waiting for" names only a write ahead, and no Cancel until git runs
+  (`a_queued_commit_offers_no_dead_cancel_and_waits_only_on_writes_ahead`,
+  `a_commit_asked_stands_in_the_buttons_place`); #7 the skip's test injects a token of another
+  commit; #8 the detached line wins over amend's unread one, the coordinator's ruling under rule 4
+  (`the_detached_line_wins_over_amends_unread_one`); #10 probed, no fix: the pinned freya's
+  `spawn` attaches the task to the current scope (`freya-core/src/lifecycle/task.rs`,
+  `spawn_in_scope(future, None)` → `current_scope_id`), and the runner drops every task of a
+  scope as the scope is removed (`runner.rs`, the `tasks.retain` over `scope_id`), so `Elapsed`'s
+  timer ends with its line. Carried: #3 `Done::cost_after`'s wording to phase 20 (its step
+  amended); #14 to the teardown list. Dismissed: 9, 11, 12, 13.
 - **Carried**: M2's rest (one consequence ask) — the teardown list as planned; the activity
-  entry's C35 wording — phase 20 (`Done::cost_after` ready); "Couldn't <name>" for refusals —
+  entry's C35 wording — phase 20 (`Done::cost_after` carried, never drawn yet; phase 20's step
+  amended to say so, QA item 3); "Couldn't <name>" for refusals —
   phase 19 (a refusal or a stale amend now opens nothing in the box; the lists' line says it as
   before).
 
@@ -649,6 +667,11 @@ each ("The coordinator's recommendations after phase 13's QA, answered 2026-10-1
 Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carries below and the
 merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
 commented, not filed again.
+
+- **From phase 18's QA, item 14** (file as an issue): `ops::amend`'s `logged_away_from` reads
+  `logs/HEAD` and the branch's log whole after an amend at the press, polling no cancel — correct
+  as a recoverability test, and on the local lane after the reap, but its cost grows with the
+  reflog's length; bound it (read from the end) or poll the close.
 
 - **From phase 16** (review-code-app-ui.md H2, file as an issue): one pointer-drag primitive for
   the lists' drag and the diff's line drag — phase 16 left the drag's lifecycle as it was.

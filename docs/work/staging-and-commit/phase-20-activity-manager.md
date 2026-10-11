@@ -42,7 +42,12 @@ STEP 2  Implement.
            pushed to origin/main while the amend ran. Sharing the amended
            commit needs a force push." where a remote has it, and that the
            replaced commit can't be recovered where git kept no reflog. It
-           reports and does not prevent; no dialog opens.
+           reports and does not prevent; no dialog opens. (Carried from phase
+           18's QA item 3: the answer is on the write's ending as
+           `Done::cost_after` — `Some` a `Consequence::Amend` read after the
+           reap, `needs_confirming()` saying whether the entry speaks; `None`
+           where that read failed — and `activity.rs` reads only
+           `Done::replaced` today. Drawing it is this step's.)
            Create Branch's Discard, whose prompt is never drawn (its dialog's
            press is the confirmation), quotes no prompt under "Confirmed:": its
            entry describes what happened instead, rendered from its

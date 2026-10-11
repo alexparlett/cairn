@@ -43,7 +43,9 @@ the user's answers to its six questions (2026-10-10), full gate green; see "Phas
 is the coordinator's. Phase 16 (one selection) built in packet mode, full gate green, neither
 stopping rule triggered; see "Phase 16" below. QA is the coordinator's. Phase 17 (one file's
 diff) built in packet mode, full gate green, neither stopping rule triggered, nothing for the
-user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below.**
+user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below. Phase 18 (the commit
+box rebuilt) built in packet mode, full gate green, its stopping rule not triggered; see "Phase 18"
+below. QA is the coordinator's.**
 
 ## The redesign (2026-10-10)
 
@@ -87,6 +89,85 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   replacement inverts into its insertion then its removal, as `git reset -p` leaves it); C21
   gains no staged-rename row, a measurement issue filed at teardown; Escape matched as a literal
   key is an allowed convention, its sites named in PRD R7.2.
+
+## Phase 18 of the rebuild, the commit box (2026-10-11)
+
+- **Built** (`phase-18-commit-box.md`, C13, C14, C24, C33 views, C35's engine half, C1 and C22's
+  roster rows): (1) one button — `cairn_ui::CommitButton::{Commit { files }, Amend}`, "Commit N
+  Files" or "Amend Last Commit", nothing under it, ready amending with a subject and nothing new
+  staged; the chord presses it in every state; Amend's press asks `LocalWrite::AmendAtPress`
+  (its `expect(dead_code)` gone), `WriteEnding::NeedsConfirming` keeps the consequence in the box
+  state and `commit_box_pane::use_amend_confirmation` opens the dialog "Amend Commit"
+  (`cairn_ui::AMEND_TITLE`) holding the submitter, Cancel returning unchanged, Amend asking
+  `LocalWrite::Amend` with the dialog's token; the commit box left `CONFIRMATION_SURFACES` (guard
+  row, prose and CLAUDE.md in the same commit). (2) `cairn_ui::Busy::{Waiting, Running,
+  Cancelling}` in the button's place: "Waiting for <awaited>…", "Committing 0:03" / "Amending
+  0:03" with Cancel (`elapsed_text`), "Cancelling…" from the press until the ending
+  (`CommitBox::cancel_asked`); a cancel opens nothing, keeps the draft. (3) The Git Error's skip
+  in the footer as an `answer_button` beside Close, focus on Close, once; a confirmed amend's
+  skip spends the token its failure handed back — the lane carries it on
+  `Update::WriteEnded::unspent` (`worker::Unspent`, a clone carrying none, boxed) to
+  `commit_box_state::GitError` (field `unspent`, `take_unspent`); an amend at the press's skip asks
+  `AmendAtPress { skip_hooks: true }`; no prompt drawn. (4) One touched bit (`CommitBox::touch`,
+  from `CommitBox::on_edit` — the field's `on_validate`, a key that changes the text — and a
+  recall), carried through Amend's toggling; every fill only into an empty, untouched draft
+  (`amend_message_arrived`, `reads_arrived`); `cairn_ui::operation_line` — "Merging. Committing
+  concludes the merge; Amend is unavailable.", "Cherry-picking a1b2c3d. …" / "Reverting …", "A
+  rebase is in progress. Continue or abort it with git rebase --continue or --abort." (and `git am`,
+  sequences), `DETACHED_LINE`; the amend-unread sentence in the same slot; `UNBORN_LINE` "No
+  commit yet, so Amend is unavailable." (rule 4, decided here); one line, wrapped, never cut. (5)
+  Amend's lists an overlay: every status lands in `LocalChangesState` (`amend_ticked`,
+  `amend_unticked`, `amend_arrived`, `amend_unread`), the lists drawn before kept until amend's
+  arrive; `Request::Amending` reads amend's staged list and `HEAD`'s message alone (`AmendRead {
+  message, lists }`); `Request::StopAmending` and the amending-lane bump in `Request::Write` gone.
+  (6) `AmendAnswer::Amended { performed, replaced, after }`; the lane reports the replaced commit
+  from the answer (`Done::replaced`; `LocalWrite::replaces` and `Asked::replaces` gone; the
+  activity entry's way back read from the ending). (7) C35's engine half: `ops::amend::amend_after`
+  re-reads, after the reap, publication of the replaced commit (the same `reaches` walk over the
+  refs as they are now, `publication` factored out of `amend_consequence`) and whether `HEAD`'s or
+  the branch's reflog holds a move away from it (`logged_away_from` — the log itself, the
+  definitive fact, rather than the setting); `Done::cost_after` carries it for phase 20.
+- **Pinned**: engine `an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped` (host,
+  2.30.9, 2.32.7; the floor's `diff_engine` run raised to 218, count-1) and
+  `an_amend_git_logs_and_no_remote_has_runs_at_once` (replaced and the untouched case); lane
+  `amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog`,
+  `a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`,
+  `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane` (no `git config` read for
+  amend's lists — C14's "no cost read before the press"); window
+  `amend_last_commit_asks_the_amend_at_the_press_by_button_and_chord`,
+  `an_amend_that_must_be_confirmed_opens_the_dialog_and_cancel_returns_unchanged`,
+  `a_failed_amends_skip_amends_once_without_asking_again`, `a_detached_head_commits_under_one_line`,
+  `a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly` (the QA brief's first case),
+  `cancel_reaches_only_the_running_commit` (Cancelling, no dialog, draft kept), the operation
+  lines in `during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it` and the merge test,
+  `amend_is_disabled_on_an_unborn_branch` (its line); ui `amend_last_commit_reports_its_press_and_draws_no_line`,
+  `a_commit_asked_stands_in_the_buttons_place`, `an_edit_in_a_field_is_reported`,
+  `the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close`, the Git Error's viewport
+  twin kept; guards `the_window_holds_a_token_only_for_the_git_errors_skip` with self-test
+  `the_window_token_field_matcher_catches_the_shapes_it_claims` (`WINDOW_TOKEN_FIELDS`), and
+  `CONFIRMED_HOLDERS` rows for `Unspent` and `GitError`.
+- **Removed**: `CommitButton::{AmendInPlace, AmendAsking, ReadingAmend, AmendUnreadable}`,
+  `AmendButton`, `AmendSkip`, `confirm_in_place`, `token`, `on_confirmed` and the box's confirmed
+  state; the note line and `line()`'s `max_lines(3)` and ellipsis; `READING_AMEND`;
+  `commit_box_pane.rs`'s `amend_arrived` (rewritten for the overlay), `status_arrived_amending`,
+  `open_amend_dialog`, `amend_confirmed`, `skip_amend_hooks`, the `needs_confirming` branch of the
+  press, "(waiting)" and `AMEND_TITLE` (moved to `cairn_ui`); `commit_box_state.rs`'s `Amendable`,
+  `amendable`, `reading_amend`, `amend_asked`, `fill_with_head`, `merge_filled` and
+  `AskedCommit::confirmed_with`; `git_error_dialog.rs`'s `skip_amend` and the body-placed skip;
+  `Request::StopAmending`, `Routed::StopAmending`, the Write arm's bump and
+  `a_write_supersedes_the_amend_read_and_nothing_else`; `AmendRead::consequence`; session.rs's
+  status fork; `LocalWrite::replaces`, `Asked::replaces`; the tests of the removed surfaces.
+- **Decided here**: the dialog opens from a render side effect of the box (`use_lock_confirmation`'s
+  pattern), since the ending arrives where no `'static` submitter is held; the after-run reflog
+  fact is read from the log's entries, not `core.logAllRefUpdates`; `Unspent` and `Done::cost_after`
+  boxed (clippy's variant-size lint); the amend-unread sentence and the unborn line take the one
+  line's slot (an operation first, then amend unread, unborn, detached).
+- **Stopping rule, not triggered**: the Git Error state keeps a token only for a confirmed amend's
+  skip.
+- **Carried**: M2's rest (one consequence ask) — the teardown list as planned; the activity
+  entry's C35 wording — phase 20 (`Done::cost_after` ready); "Couldn't <name>" for refusals —
+  phase 19 (a refusal or a stale amend now opens nothing in the box; the lists' line says it as
+  before).
 
 ## Phase 17 of the rebuild, one file's diff (2026-10-10)
 
@@ -1578,7 +1659,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 15 the discard prompts | built in packet mode after the user's answers (2026-10-10), QA fixes applied, full gate green |
 | 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
 | 17 one file's diff | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 2, 3 and 5 applied, 3's guard-tier pin carried to teardown, full gate green |
-| 18 the commit box | planned |
+| 18 the commit box | built in packet mode, stopping rule not triggered, full gate green; QA the coordinator's |
 | 19 one home for each message | planned — F7 decided (2026-10-10) |
 | 20 the Activity Manager | planned |
 | 21 QA | planned — the merge bar over the whole packet |

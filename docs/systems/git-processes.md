@@ -1461,8 +1461,13 @@ which is a length of time, is waited out.
   it and no remote has `HEAD`, ending `Done` with no prompt, or runs no git and ends
   `NeedsConfirming` with the `Consequence` for the dialog, whose token then asks
   `LocalWrite::Amend` (`amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog`).
-  Nothing in the window asks it yet: the commit box's Amend confirms in place or by the
-  dialog and asks `LocalWrite::Amend`.
+  The commit box asks it on Amend Last Commit's press and the commit chord. An amend made ends
+  `Done` naming the commit it replaced (`Done::replaced`, from the run's answer, never the
+  request: the activity popover's way back) and, for one at the press, what it cost read again
+  once git was reaped (`Done::cost_after`, C35; its wording in the entry is phase 20's). A
+  confirmed amend git refused before amending ends git's failure and carries its token back
+  unspent on `Update::WriteEnded`'s `unspent` (`worker::Unspent`, whose clone carries none), for
+  the Git Error dialog's skip (`a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`).
 - **What the commit box reads, in the lane's order** (staging-and-commit R6.7, R6.9,
   R6.10, R6.3, R6.4, R10). `Request::CommitReads` — asked as the box is shown and as each
   refresh's refs arrive — is a job of the lane's (`LocalJob::CommitReads`), read after
@@ -1471,15 +1476,12 @@ which is a length of time, is waited out.
   merge, a cherry-pick or a revert in progress — `MERGE_MSG` as git's editor session leaves it,
   through `git stripspace` — and the last ten messages, each answer or its failure, as
   `Update::CommitReads`. `Request::Amending { status }` —
-  asked while Amend is ticked, over each status that arrives — reads what an amend would
-  replace (`ops::amend_consequence`), the message of the commit it names, and amend's
-  staged list laid out with the status's unstaged one (`LocalChanges::amending`), as
-  `Update::Amending`. Each is numbered in a lane of its own (`QueryLane::CommitBox`,
-  `QueryLane::Amending`) and answered under that number, so a newer ask — or, for an
-  amend's read, `Request::StopAmending`, Amend unticked, or any write asked, which
-  `submit` numbers the amending lane for so a stage never waits on a stale amend's walk —
-  ends the one before, its walk and its `git` read, and an answer superseded is never
-  drawn (`a_write_supersedes_the_amend_read_and_nothing_else`). Pinned by
+  asked while Amend is ticked, over each status that arrives (Local Changes' overlay) — reads
+  `HEAD`'s message and amend's staged list laid out with the status's unstaged one
+  (`LocalChanges::amending`), as `Update::Amending`, and never what the amend costs, which is
+  read at its press (rule 3). Each is numbered in a lane of its own (`QueryLane::CommitBox`,
+  `QueryLane::Amending`) and answered under that number, so a newer ask ends the one before,
+  its `git` read with it, and an answer superseded is never drawn. Pinned by
   `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
   (`worker/local_lane_tests.rs`).
 - **Prompts during a write** (R5.1, L11). Every write begins a channel operation

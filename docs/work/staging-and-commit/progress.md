@@ -3,6 +3,16 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 18 built (packet mode)
+
+The commit box rebuilt over phase 13's engine (state.md, "Phase 18"): one button and the chord,
+the amend at the press, the "Amend Commit" dialog on `NeedsConfirming`, the Git Error's footer
+skip spending the token the failure handed back, one touched bit for every fill, one line, and
+amend's lists an overlay over each status. The engine answers the replaced commit and its cost
+read again after the reap (C35), pinned on the host and both floors. Full gate green (the floors'
+`diff_engine` run 219 tests, floor 218). Stopping rule not triggered; nothing for the user's
+sign-off. QA is the coordinator's.
+
 ## 2026-10-11 — phase 17's QA fixes (packet mode)
 
 The coordinator's adjudication (`qa-p17/adjudication.md`): FIX NOW 1, 2, 3 (the sentence) and 5;

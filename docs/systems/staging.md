@@ -464,8 +464,9 @@ unspent, `Error::AmendNotMade { failure, unspent }` (R1.1's option (a), as (a′
 refresh and the tree objects it writes before a hook runs are its own bookkeeping, outside
 what the consequence names, and the skip's run re-checks it; a refusal before git ran or a
 cancel hands none back (`a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends`).
-The local lane lets the returned token go, and the window's skip builds a new token from the
-same consequence (`AmendSkip`).
+The local lane carries the returned token to the window on the write's ending
+(`worker::Unspent`), whose Git Error state keeps it for the skip, which spends it without asking
+again (staging-and-commit phase 18).
 
 **What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
 `c999cef531e`, 13 remote-tracking refs, release build, warm; the
@@ -484,8 +485,8 @@ own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for 
 object walk and git's 10 ms
 (`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
-at the press, again in a confirmed amend's re-check, and, while Amend is ticked, once per
-status the window reads
+at the press, again in a confirmed amend's re-check, and again once an amend at the press is
+made (C35) — never on a status, since phase 18
 (phase 09's QA item 9, measured and not split: 0.14 ms for the consequence and 2.6 ms for
 amend's staged list with `HEAD` at a remote tip).
 
@@ -527,8 +528,17 @@ amend's staged list with `HEAD` at a remote tip).
   git amends, and Cairn still reports "amended <short>" with no token taken. The replaced
   commit stays in the reflog git writes, so Show Lost Commits finds it; where `HEAD` was moved,
   the amend reads `Error::CommitUnconfirmed`, whose text says git may have amended what `HEAD`
-  had become. No check after the run asks whether a remote came to hold the replaced commit
-  meanwhile (the user's to decide, phase 13's QA item 2(b)).
+  had become. It reports and does not prevent (R1.5, C35, the user's option B of 2026-10-10):
+  once git is reaped the cost is read again for the replaced commit (`amend_after`, in
+  `src/ops/amend.rs`) — the same walk over the refs as they are now, and whether `HEAD`'s or the
+  branch's reflog holds a move away from it — and returned beside it on
+  `AmendAnswer::Amended { performed, replaced, after }`, `after` a `Consequence::Amend` whose
+  `needs_confirming` says whether the amend would now have needed confirming
+  (`an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped`: a remote-tracking ref
+  moved onto it by a `pre-commit` hook answers published, the reflog removed by one under
+  `core.logAllRefUpdates=false` answers not written; `an_amend_git_logs_and_no_remote_has_runs_at_once`:
+  an untouched amend answers as its cost did). Nothing is undone and no dialog opens; the
+  activity entry's wording is phase 20's.
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
   does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the

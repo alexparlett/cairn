@@ -404,7 +404,11 @@ state (`crates/cairn-app/src/commit_box_state.rs`) by `commit_box_pane::CommitBo
 also holds what each press does: a one-line subject with Fork's counter — the characters left
 before 50, negative past it, red past 70 (`subject_count`) — and the `≡` that opens Recent
 Commit Messages; a description in IBM Plex Mono with a ruler at column 72; `Amend` at the left;
-and the button at the right, `Commit N Files` (`commit_caption`: plain `Commit` with none).
+and one button at the right — `Commit N Files` (`commit_caption`: plain `Commit` with none), or
+Fork's "Amend Last Commit" while Amend is ticked (`AMEND_BUTTON_CAPTION`, the user's answer of
+2026-10-10) — with nothing under it (R10.6, C6); the commit chord presses it, in every state. At
+most one line is drawn, over the fields, wrapped and never cut (`operation_line`, R10.8, C8,
+rule 6).
 
 **The draft is the window's** (R10.7). The subject and the description are two `State<String>`s
 kept by `LocalChangesView::commit` for the window's life, bound two ways to the fields — so a
@@ -412,9 +416,15 @@ refresh, Local Changes hidden and shown again, a failed hook and Amend's togglin
 was, and what the window writes into it (a recalled message, `HEAD`'s, `MERGE_MSG`) is what the
 fields show. Both fields are built by the one key policy heard in the commit box's scope
 (`text_field_in`, and for the subject `text_field_recalling`, `FieldScope::CommitBox`): the
-commit chord (⌘Return, Ctrl+Enter) commits without a new line, the window's chords reach the
-window, and no list or staging chord fires (R7.3 as amended). Tab moves from the subject to the
-description. A commit made clears the draft; one that fails keeps it.
+commit chord (⌘Return, Ctrl+Enter) presses the button without a new line, the window's chords
+reach the window, and no list or staging chord fires (R7.3 as amended). Tab moves from the
+subject to the description. A key that changes either field's text is the person's edit
+(`CommitBox::on_edit`, heard through the field's validator), and so is a recalled message: the
+draft is then theirs (`commit_box_state::CommitBox::touch`). **One rule fills it** (C7, Fork's
+developer's rule, Tracker #61): `HEAD`'s message as Amend is ticked, and a merge's, single
+cherry-pick's or revert's message, go only into an empty draft the person has not touched — so a
+fill the person cleared stays cleared. A commit made clears the draft it took, untouched again;
+one that fails keeps it.
 
 **What is asked, and where** (`docs/systems/git-processes.md`, "The local write lane"). As the box
 is shown, and as each refresh's refs arrive while Local Changes is shown, the box asks its reads
@@ -423,46 +433,52 @@ message git prepared for the commit that concludes a merge, a cherry-pick or a r
 `MERGE_MSG` as git's own editor session would leave it under the repository's `commit.cleanup`
 and comment character — and the last ten
 messages — on the local lane, after the writes asked before them,
-numbered in the commit-box lane so the next ask supersedes the last. Nothing is read on the UI
+numbered in the commit-box lane so the next ask supersedes the last. What an amend costs is
+never read here, nor on a status: it is read at its press (rule 3). Nothing is read on the UI
 thread.
 
 **Commit** asks `LocalWrite::Commit` with the draft composed as typed — the subject, then a blank
 line and the description when there is one (`compose_message`; git's own cleanup is git's,
-R6.1). The button needs a subject (Fork's rule) and something staged, or a merge in progress.
-While it waits its turn the box says `Committing (waiting)…`; once git runs it says
-`Committing…` with the time it has run, redrawn each second by a task of its own line's
-(`Elapsed`, on `async-io`'s timer), and a Cancel that asks `Request::CancelWrite` for that
-commit's id — never for one still queued (R4.3, R10.4).
+R6.1). The button needs a subject (Fork's rule) and something staged, or a merge, single
+cherry-pick or revert in progress, which it concludes. **While it is asked** the button's place
+says what it is doing (`cairn_ui::Busy`, R10.4, C5): queued behind another write, "Waiting for
+<what that write is waited on for>…" — the one form every queued write uses; running,
+"Committing 0:03" (or "Amending"), redrawn each second by a task of its own (`Elapsed`, on
+`async-io`'s timer), with a Cancel that asks `Request::CancelWrite` for that commit's id — never
+for one still queued (R4.3); cancelled, "Cancelling…" until git is reaped. A cancel opens no
+dialog and keeps the draft (rule 4).
 
 **A failure** of git's own (`WriteEnding::Failed` with the command that ran) opens Fork's Git Error
 dialog (`cairn_ui::GitErrorDialog`, R10.5) over the window: the command, and the commit's output
 as it streamed (`Update::WriteOutput`) — or, if nothing streamed, the output the engine kept —
 with ANSI sequences and control characters stripped (`strip_ansi`), the latest 10,000 lines or
 1 MiB kept (`OutputTail`), drawn one row per line through a virtualizing view opened at its end.
-`Skip pre-commit hooks and commit` is offered on every failure git reports (R10.5 as C4
-amended it: Cairn keeps no model of which hooks git would run, and where no hook ran the skip
-fails the same way again, harmlessly), and never for a commit whose hooks were already
-skipped. For a commit it asks the same message
-again with `skip_hooks`, `--no-verify` for that one commit; for an amend it is the commit box's
-`cairn_ui::AmendSkip`, drawn in the dialog with the prompt the amend was confirmed with, whose
-one press builds the skipped amend's token from that consequence and asks it at once — no
-second dialog (the user's decision, 2026-10-09). The next commit runs its hooks. Close, Escape or a press outside closes it. The window's chords and Local
-Changes' actions are inert while it is open, as under a confirmation. A refusal, a stale amend,
-a cancel or a commit not run is said under the lists, as any write's ending is.
+In its footer, in the platform's order, are `Skip pre-commit hooks and commit` and Close — one
+button component for both (`answer_button`), focus on Close — the skip offered on every failed
+commit or amend (C4: Cairn keeps no model of which hooks git would run, and where no hook ran
+the skip fails the same way again, harmlessly) and never for one whose hooks were already
+skipped. It answers once, asking the same message again with `--no-verify` for that one commit
+or amend: a commit's as a commit; a confirmed amend's under the token its failure handed back —
+the engine's `Error::AmendNotMade`, carried on the ending as `worker::Unspent` and kept by the
+Git Error state (`GitError`) until the skip spends it or Close lets it go (R1.1's option (a), the
+user's answer of 2026-10-10) — so nothing asks twice; an amend at the press's at the press again,
+which reads its cost anew. No prompt is drawn in the dialog. The next commit runs its hooks.
+Close, Escape or a press outside closes it. The window's chords and Local Changes' actions are
+inert while it is open, as under a confirmation. A refusal, a stale amend, a cancel or a commit
+not run opens nothing here.
 
-**Amend** (R10.3, R10.6, L12). Ticking it sets the draft aside and asks what an amend would
-replace (`Request::Amending`, on the local lane, numbered in the amending lane): the
-`Consequence` (`ops::amend_consequence`), `HEAD`'s message — of the commit the consequence names
-— and amend's lists over the status the window drew, Unstaged as the status lists it and Staged
-as amend's staged list against `HEAD`'s parent (`LocalChanges::amending`, laid out on the lane).
-The lists that answer are drawn as a status's are; each status that arrives while Amend is
-ticked asks again over it, superseding the read before, and every write asked supersedes it too,
-so a stage queued behind it never waits on its walk; and the box shows `Reading what Amend
-would replace…` until the first answer, the button waiting for each newer one. An empty draft is
-filled with `HEAD`'s message once it arrives; a draft with text is kept as the amend's message.
-Unticking puts the draft set aside back exactly as typed, ends the read in flight
-(`Request::StopAmending`) and draws the status's own lists again. Amend is disabled on an
-unborn branch and while any operation is in progress (R10.1).
+**Amend** (R10.3, R10.6, C1, L12). Ticking it sets the draft aside, with whether the person had
+touched it, and makes amend's staged list an overlay over the lists (`LocalChangesState`, the
+review's M3): every status still lands in the lists' state, and while Amend is ticked each asks
+amend's lists over it (`Request::Amending`, on the local lane, numbered in the amending lane):
+Unstaged as the status lists it and Staged as amend's staged list against `HEAD`'s parent
+(`LocalChanges::amending`, laid out on the lane), with `HEAD`'s message. Until they arrive the
+lists drawn before stay drawn, so the selection never passes through the status's own Staged
+list; a newer status supersedes the read before. An empty, untouched draft is filled with
+`HEAD`'s message; a draft with text is kept as the amend's message. Unticking puts the draft set
+aside back exactly as it was, its touched bit with it, and draws the status's own lists again.
+Amend is greyed while any operation is in progress, the operation's line saying why, and on an
+unborn branch, under "No commit yet, so Amend is unavailable." (`UNBORN_LINE`; R10.1, rule 4).
 
 While amending, a path chosen in Staged asks its diff against `HEAD`'s parent
 (`WorkingSide::Amending`, `WorkingTreeDiff::Amending`: `git diff --cached HEAD^`'s answer), and an
@@ -471,32 +487,37 @@ to the parent's (`UnstageTarget::Commit`, `git reset -q <parent> --`) or, for a 
 amend, removes them (`UnstageTarget::Nothing`, `git rm --cached -f -q --`): the file leaves the
 amended commit (`local_changes_actions::unstage_target`). Lines unstaged by the gesture are
 applied against the index as from any staged diff. Where amend's staged list cannot be read —
-a partial clone's missing blob on git 2.44 and later — the box says so and why, the lists stay
-the status's against `HEAD`, and the amend itself is still offered.
+a partial clone's missing blob on git 2.44 and later — the box's one line says so and why
+("Amend's staged list couldn't be read, so the lists show what is staged against HEAD: …"), the
+lists are the status's against `HEAD`, and the amend itself is still offered.
 
-The button reads Fork's "Amend Last Commit" (`AMEND_BUTTON_CAPTION`, the user's answer of
-2026-10-10), with no line under it. **The commit box is the second confirmation surface** (R1.1,
-`CONFIRMATION_SURFACES`, beside the dialog): an amend git logs and no remote has is confirmed by
-the box's button, or by the commit chord from either field, which does exactly what the button
-does — `cairn_ui::AmendButton` builds the token from the consequence it holds, once per
-consequence, and hands it to the window to ask `LocalWrite::Amend` at once. It refuses a
-consequence that must be confirmed (`Consequence::needs_confirming`: a remote has `HEAD`, or git
-keeps no reflog): that amend reads "Amend Last Commit…" and, by button or chord, opens the
-confirmation dialog first, titled "Amend Commit", its words the consequence's fixed sentences and
-its button, "Amend", the one that builds the token. The engine's amend at the press
-(`LocalWrite::AmendAtPress`, `docs/systems/git-processes.md`), which runs a recoverable amend
-with no token at all, is not asked by the box: nothing in the window asks it. Whichever builds it, the engine re-checks the token's consequence before git runs, and
-refuses an amend whose `HEAD` moved or was pushed since. A commit made — or an amend — clears the
-draft only where it still holds the message the commit took, so a draft typed while it ran is
-kept; an amend unticks Amend.
+**Amend Last Commit** is ready with a subject even with nothing new staged. Its press — or the
+commit chord, which does exactly the same — asks `LocalWrite::AmendAtPress`
+(`docs/systems/git-processes.md`, "The local write lane"): one job that reads what the amend costs
+and runs an amend git logs and no remote has at once, with no token (the old commit stays in Show
+Lost Commits), or ends `WriteEnding::NeedsConfirming` with the `Consequence`. On that ending the
+box opens the confirmation dialog (`use_amend_confirmation`, the box holding the submitter its
+answer needs), titled "Amend Commit" (`AMEND_TITLE`), its words the consequence's fixed sentences
+— "3f2a1c9 is already on origin/main. Amending it rewrites history others may have.", "3f2a1c9
+can't be recovered after this: this repository keeps no reflog." — and its button "Amend", the
+one confirmation surface for it (`CONFIRMATION_SURFACES`; the commit box left it in phase 18):
+Cancel returns to the box unchanged, and Amend asks `LocalWrite::Amend` of the message pressed,
+under the token it built, which the engine re-checks before git runs. A commit made — or an
+amend — clears the draft only where it still holds the message it took, so a draft typed while
+it ran is kept; an amend unticks Amend. The way back to the replaced commit is the one its run
+answered (`Done::replaced`), never one read from the request.
 
-**An operation in progress** (R10.8, L25): with a merge, a single cherry-pick or a single
-revert, an empty draft is filled once per operation with git's `MERGE_MSG` as git's own editor
-session would leave it under the repository's `commit.cleanup` and comment character (R6.10:
-under the default, no `# Conflicts:` block and no scissors section), so what it shows is what
-is committed — the merge commit, or the pick or revert concluded; Amend is
-disabled. During a rebase, `git am` or a sequence of picks or reverts the fields and the buttons
-are disabled and the box says "Committing is unavailable while a rebase is in progress."
+**An operation in progress** (R10.8, L25, C3, C8): with a merge, a single cherry-pick or a single
+revert, an empty, untouched draft is filled with git's `MERGE_MSG` as git's own editor session
+would leave it under the repository's `commit.cleanup` and comment character (R6.10: under the
+default, no `# Conflicts:` block and no scissors section), so what it shows is what is committed
+— the merge commit, or the pick or revert concluded — under one line: "Merging. Committing
+concludes the merge; Amend is unavailable.", "Cherry-picking a1b2c3d. Committing concludes it;
+Amend is unavailable." (or "Reverting …"). During a rebase, `git am` or a sequence of picks or
+reverts the fields and the button are disabled under one line naming git's command — "A rebase
+is in progress. Continue or abort it with git rebase --continue or --abort.". With none, on a
+detached `HEAD` one line reads "HEAD is detached: this commit will be on no branch.", asking
+nothing (rule 2: the commit is recoverable).
 
 **Recent Commit Messages** (R10.2): the `≡` opens a menu of the last ten messages' subjects,
 newest first; choosing one fills both fields (`split_message`: the first line, and the rest after
@@ -509,20 +530,20 @@ typed, the arrows are the editor's.
 
 - The commit box, at the component (`crates/cairn-ui/tests/commit_box.rs`):
   `the_amend_toggle_reports_its_toggled_state_to_assistive_technology`,
-  `the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws`,
-  `a_published_amends_button_asks_rather_than_confirms`,
-  `the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready`,
-  `a_failed_amends_skip_confirms_the_prompt_it_draws_once`,
-  `the_counter_is_drawn_and_a_stopped_box_asks_nothing`,
-  `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered`; in the window
+  `amend_last_commit_reports_its_press_and_draws_no_line`,
+  `the_counter_is_drawn_and_a_stopped_box_asks_nothing` (the line uncapped),
+  `a_commit_asked_stands_in_the_buttons_place`, `an_edit_in_a_field_is_reported`,
+  `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered`,
+  `the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close`, and in
+  `src/commit_box.rs` `one_line_names_the_operation_or_a_detached_head` and
+  `the_elapsed_time_reads_as_the_button_says_it`; in the window
   (`crates/cairn-app/src/commit_box_tests.rs`):
   `a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly`,
-  `the_amend_button_and_its_token_name_one_head`,
-  `a_published_amend_and_the_commit_chord_ask_the_dialog_first`,
-  `the_commit_chord_amends_an_unpublished_commit_as_the_button_does`,
+  `amend_last_commit_asks_the_amend_at_the_press_by_button_and_chord`,
+  `an_amend_that_must_be_confirmed_opens_the_dialog_and_cancel_returns_unchanged`,
   `the_commit_chord_asks_nothing_while_the_box_is_not_ready`,
-  `a_newer_amend_read_names_its_own_head`,
-  `a_failed_amends_skip_amends_at_once_under_the_line_confirmed`,
+  `a_detached_head_commits_under_one_line`,
+  `a_failed_amends_skip_amends_once_without_asking_again`,
   `a_draft_typed_while_a_commit_runs_outlives_its_ending`,
   `a_cancel_while_the_commit_is_queued_asks_nothing`,
   `a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them`,
@@ -534,14 +555,16 @@ typed, the arrows are the editor's.
   `amends_staged_list_unread_is_said_and_the_status_lists_stay`,
   `recent_messages_fill_both_fields_from_the_menu_and_the_arrows`; the window's state
   (`commit_box_state.rs`): `a_message_split_into_the_fields_composes_back_unchanged`,
-  `ansi_sequences_and_control_characters_are_stripped`,
   `the_output_kept_is_its_latest_bounded_tail`,
-  `amend_sets_the_draft_aside_and_fills_only_an_empty_one`, `a_merge_fills_an_empty_draft_once`,
+  `amend_sets_the_draft_aside_and_fills_only_an_empty_untouched_one`,
+  `a_merge_fills_an_empty_untouched_draft`,
   `a_failure_offers_the_skip_unless_it_was_skipped`; through the real boundary
-  (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`,
-  `amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog`,
-  and a write superseding the amend read (`a_write_supersedes_the_amend_read_and_nothing_else`,
-  `worker/pool.rs`),
+  (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
+  (no cost read for amend's lists, C14),
+  `amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog` (the replaced
+  commit and the cost read after the reap on the ending),
+  `a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`; the seal's window rows,
+  `the_window_holds_a_token_only_for_the_git_errors_skip` (`crates/cairn-guards`);
   `a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again` (its
   command and output, and the hook run again on the next commit),
   `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:

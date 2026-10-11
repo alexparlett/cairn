@@ -1340,6 +1340,74 @@ fn a_working_tree_diff_answers_through_the_boundary() {
     drop(handle);
 }
 
+/// `query`'s answer's content (`ShownDiff::content`), asked and awaited; `None` where git
+/// prints nothing.
+fn answer_content(
+    handle: &RepositoryHandle,
+    updates: &mut Updates,
+    query: &FileQuery,
+) -> Option<u64> {
+    handle.submit(Request::FileDiff(query.clone()));
+    let seen = collect_until(updates, |u| match u {
+        Update::FileDiff {
+            query: answered, ..
+        } => answered == query,
+        Update::DiffFailed { .. } => true,
+        _ => false,
+    });
+    match seen.last() {
+        Some(Update::FileDiff { diff, .. }) => diff.as_ref().map(|shown| shown.content()),
+        other => panic!("expected {query:?}'s diff, got {other:?}"),
+    }
+}
+
+/// R9.6, L4 (C26) at the boundary: the diff thread keys a working-tree answer with its
+/// question — the same query over the same text twice answers one content, not 0, and the file
+/// rewritten answers another — and keys a committed file's answer not at all (0), the views
+/// that read a content being Local Changes' alone. Caught by: the production answer left
+/// unkeyed (every content 0, so a selection outlives any change of text), or keyed with
+/// something that differs between two reads of the same text.
+#[test]
+fn a_working_tree_answer_is_keyed_to_its_text_and_a_committed_one_is_not() {
+    let ids = {
+        let (handle, mut updates) = checkout();
+        commits(&handle, &mut updates, 1)
+    };
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-keyed-{}", std::process::id()));
+    fixture.point_main_at(&ids[0].to_string());
+    let file = fixture.fixture.path.join("keyed.txt");
+    write(&file, "one\ntwo\n");
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    let query = FileQuery {
+        target: FileTarget::WorkingTree {
+            path: RepoPath::from("keyed.txt"),
+            side: WorkingSide::Untracked,
+        },
+        options: DiffOptions::default(),
+    };
+    let first = answer_content(&handle, &mut updates, &query).expect("an untracked file's lines");
+    let again = answer_content(&handle, &mut updates, &query).expect("read again");
+    assert_ne!(first, 0, "the working-tree answer was not keyed");
+    assert_eq!(first, again, "the same text answered two contents");
+    write(&file, "one\nTwo\n");
+    let rewritten = answer_content(&handle, &mut updates, &query).expect("read rewritten");
+    assert_ne!(rewritten, first, "other text answered the same content");
+    drop(handle);
+
+    let (handle, mut updates) = checkout();
+    let of = Comparison::Commit(ids[0]);
+    let changes = change_set(&handle, &mut updates, of);
+    let changed = changes
+        .files
+        .first()
+        .unwrap_or_else(|| panic!("the commit changed nothing"));
+    assert_eq!(
+        answer_content(&handle, &mut updates, &committed(of, changed)),
+        Some(0),
+        "a committed file's answer was keyed"
+    );
+}
+
 /// R2: a change set handed back to the worker is freed there without an answer, and the
 /// repository thread goes on serving: the next request asked after it is answered first.
 /// Caught by: a retirement answered with an update, or one that ends the thread.

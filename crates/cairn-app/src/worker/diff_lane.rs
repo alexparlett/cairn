@@ -354,13 +354,18 @@ impl<'a> Served<'a, '_> {
                 .map(|changes| Some(Update::Changes { of: *of, changes })),
             // Prepared for the views here, on this thread, never on the UI thread: both rows'
             // indexes and a pass over the drawn bytes, 39 ms for a 64 MiB file (phase 06 QA) —
-            // and keyed with the question it answers, a second pass over its bytes, so a line
-            // selection over it belongs to this text alone (staging-and-commit R9.6).
+            // and, for a working-tree answer alone, keyed with the question it answers, a second
+            // pass over its bytes, so a line selection over it belongs to this text alone
+            // (staging-and-commit R9.6). A committed file draws no gesture, so it is not keyed.
             DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| {
                 Some(Update::FileDiff {
                     query: asked.clone(),
                     diff: diff.map(|diff| {
-                        Box::new(ShownDiff::new(diff, asked.options.context).keyed(asked))
+                        let shown = ShownDiff::new(diff, asked.options.context);
+                        Box::new(match &asked.target {
+                            FileTarget::WorkingTree { .. } => shown.keyed(asked),
+                            FileTarget::Committed { .. } => shown,
+                        })
                     }),
                 })
             }),

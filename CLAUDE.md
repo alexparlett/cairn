@@ -1060,7 +1060,8 @@ Project invariants:
 - **No component names a literal modifier** (decision D5, PRD R8.3). Every
   keyboard shortcut is an `Action` mapped to a list of distinct chords per
   platform (`accelerators::chords`, staging-and-commit L22: Fork keeps alternates,
-  stage on Return and ⌘S or Ctrl+S, discard on Backspace, Delete and Ctrl+Shift+D), and
+  stage on Return and ⌘S, or Enter, Ctrl+S and Ctrl+Shift+S, discard on Backspace,
+  Delete and Ctrl+Shift+D), and
   to the scope it is heard in — each chord its action's scope but the stage's bare
   Return, heard from the file lists alone (`accelerators::chord_heard_in`) — in the
   accelerator table,
@@ -1099,7 +1100,13 @@ Project invariants:
   check reads where a call sits, not what is asserted of it, so an example asserted
   the wrong way round (`assert!(pin_violations(&letter).is_empty())`) passes it; and
   R4.8's pin needs none, since its examples are compile-time — each required line
-  binds the `Absent` pattern that is its assertion. A view leaves alone only the
+  binds the `Absent` pattern that is its assertion. That the resolver
+  (`resolve_key_on`) reads each chord's scope through `chord_heard_in`, rather than its
+  action's, is pinned by the table's unit tests
+  `every_chord_resolves_to_its_action_in_its_scope_only` and
+  `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks` (a bare Return heard on the
+  diff), not by the guard, whose pin reads the table's rows; that gap is `qa-checklist`'s
+  item 11. A view leaves alone only the
   chords of the window, the detail pane and the scopes it is in
   (`accelerators::is_chord(event, own)`), so another view's chord — Local Changes'
   Shift+↓ — is its arrow. **Every text field takes the one key policy**
@@ -1295,9 +1302,10 @@ Project invariants:
     diff and each scroll, its chunk found by a binary search of the hunks; a drag's
     selection is read from the layout once, when it ends (`selection_in`, costing the
     changed lines selected), and copied once per action, never per frame — the layer reads
-    it in place. What a selection belongs to, the diff's content, is hashed once per answer
-    on the diff thread (`ShownDiff::keyed`, a pass over the answer's bytes beside the one
-    that prepares it), and compared on the UI thread as one number. A press in
+    it in place. What a selection belongs to, the diff's content, is hashed once per
+    working-tree answer on the diff thread (`ShownDiff::keyed`, a pass over the answer's bytes
+    beside the one that prepares it; a committed file's answer, which draws no gesture, is not
+    keyed), and compared on the UI thread as one number. A press in
     the sidebar looks for its row among the labelled, stash and `HEAD` rows alone
     (`History::labelled_position`), never every loaded row, and a find then looks
     through each page as it arrives (`ref_find::pages_arrived`), never a page twice. A refresh asks the UI thread for

@@ -1480,8 +1480,10 @@ which is a length of time, is waited out.
   `HEAD`'s message and amend's staged list laid out with the status's unstaged one
   (`LocalChanges::amending`), as `Update::Amending`, and never what the amend costs, which is
   read at its press (rule 3). Each is numbered in a lane of its own (`QueryLane::CommitBox`,
-  `QueryLane::Amending`) and answered under that number, so a newer ask ends the one before,
-  its `git` read with it, and an answer superseded is never drawn. Pinned by
+  `QueryLane::Amending`) and answered under that number, so a newer ask — or, for amend's read,
+  `Request::StopAmending`, Amend unticked — ends the one before, its `git` read with it, and an
+  answer superseded is never drawn (`unticking_amend_supersedes_the_amend_read_and_nothing_else`).
+  Pinned by
   `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
   (`worker/local_lane_tests.rs`).
 - **Prompts during a write** (R5.1, L11). Every write begins a channel operation

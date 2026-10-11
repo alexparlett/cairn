@@ -461,6 +461,9 @@ pub enum Request {
     /// amending lane, so the next status asking again ends the read before — its `git` read.
     /// `status` is the window's own, shared.
     Amending { status: Arc<LocalChanges> },
+    /// Ends amend's read in flight or queued, and asks nothing: Amend unticked, so a commit
+    /// pressed next never waits on the serial lane behind an answer that is thrown away.
+    StopAmending,
     /// Whether `name`, typed in Create Branch, can be a new branch's: git's `check-ref-format
     /// --branch`, then the ref looked up (staging-and-commit R11.3), read on the local lane and
     /// answered by [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's
@@ -531,7 +534,7 @@ impl Request {
             | Self::DiscardLinesConsequence { .. }
             | Self::StopCounting => &[QueryLane::DiscardCount],
             Self::CommitReads => &[QueryLane::CommitBox],
-            Self::Amending { .. } => &[QueryLane::Amending],
+            Self::Amending { .. } | Self::StopAmending => &[QueryLane::Amending],
             Self::CheckBranchName { .. } => &[QueryLane::BranchName],
             Self::CheckoutConsequence { .. } => &[QueryLane::CheckoutCount],
             Self::ListRemotes

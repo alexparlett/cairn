@@ -16,7 +16,7 @@
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
 //! | discard count (`DiscardConsequence`, `DiscardLinesConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
-//! | commit box (`CommitReads`) and amend's staged list (`Amending`) | `cairn-local`, in the lane's order, so what the box reads is read after the writes asked before it — a commit's message among the recent ones once it has ended, amend's staged list against the `HEAD` the writes left |
+//! | commit box (`CommitReads`) and amend's staged list (`Amending`, `StopAmending`) | `cairn-local`, in the lane's order, so what the box reads is read after the writes asked before it — a commit's message among the recent ones once it has ended, amend's staged list against the `HEAD` the writes left; `StopAmending` only numbers the lane |
 //! | `LockConsequence` | `cairn-local`, in the lane's order, so the lock is read after the writes asked before it |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
@@ -178,6 +178,8 @@ pub(super) enum Routed {
     Amending {
         status: Arc<LocalChanges>,
     },
+    /// Nothing sent: numbering the amending lane is all it is for.
+    StopAmending,
     /// A name's check, to the local lane under the branch-name lane's number.
     CheckBranchName {
         name: String,
@@ -213,6 +215,7 @@ impl Routed {
             | Self::StopCounting
             | Self::CommitReads
             | Self::Amending { .. }
+            | Self::StopAmending
             | Self::CheckBranchName { .. }
             | Self::CheckoutConsequence { .. }
             | Self::LockConsequence { .. } => Some(Thread::Local),
@@ -290,6 +293,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::StopCounting => Routed::StopCounting,
         Request::CommitReads => Routed::CommitReads,
         Request::Amending { status } => Routed::Amending { status },
+        Request::StopAmending => Routed::StopAmending,
         Request::CheckBranchName { name } => Routed::CheckBranchName { name },
         Request::CheckoutConsequence { asked, name, at } => {
             Routed::CheckoutConsequence { asked, name, at }
@@ -356,6 +360,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::StopCounting => Request::StopCounting,
         Routed::CommitReads => Request::CommitReads,
         Routed::Amending { status } => Request::Amending { status },
+        Routed::StopAmending => Request::StopAmending,
         Routed::CheckBranchName { name } => Request::CheckBranchName { name },
         Routed::CheckoutConsequence { asked, name, at } => {
             Request::CheckoutConsequence { asked, name, at }
@@ -461,6 +466,7 @@ mod tests {
                     cairn_model::WorkingTreeStatus::Listed(Vec::new()),
                 )),
             },
+            Request::StopAmending,
             Request::CancelWrite {
                 id: OperationId::for_tests(1),
             },

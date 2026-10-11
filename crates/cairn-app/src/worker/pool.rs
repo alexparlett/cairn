@@ -707,6 +707,8 @@ impl RepositoryHandle {
                     });
                 }
             }
+            // Numbered above: amend's read in flight is superseded, and nothing is sent.
+            Routed::StopAmending => {}
             Routed::Amending { status } => {
                 if let Some(epoch) = epoch {
                     let _ = self.local.send(LocalJob::Amending {
@@ -2355,6 +2357,43 @@ mod tests {
             "the close left the walk in progress to finish its page"
         );
         assert_eq!(asked(), vec![Request::Close], "the close was not queued");
+    }
+
+    /// Phase 18's QA item 4: unticking Amend ends amend's read in flight or queued
+    /// (`Request::StopAmending`, numbering the amending lane and sending nothing), so a commit
+    /// pressed straight after never waits behind an answer that would be thrown away; nothing
+    /// else is superseded by it, and a write asked supersedes no read. Caught by: an untick that
+    /// leaves the read current, or a stop or a write that supersedes the box's reads.
+    #[test]
+    fn unticking_amend_supersedes_the_amend_read_and_nothing_else() {
+        let (handle, _asked) = idle_handle();
+        let status = Arc::new(cairn_model::LocalChanges::new(
+            cairn_model::WorkingTreeStatus::Listed(Vec::new()),
+        ));
+        let amending = handle.submit(Request::Amending { status });
+        let reads = handle.submit(Request::CommitReads);
+        let (Some(amending), Some(reads)) = (amending, reads) else {
+            panic!("the reads were numbered in no lane");
+        };
+        handle.submit(Request::Write {
+            id: crate::worker::OperationId::next(),
+            write: crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        });
+        assert!(
+            handle.epochs.is_current(amending),
+            "a write superseded the amend read"
+        );
+        handle.submit(Request::StopAmending);
+        assert!(
+            !handle.epochs.is_current(amending),
+            "unticking left the amend read current"
+        );
+        assert!(
+            handle.epochs.is_current(reads),
+            "unticking superseded the box's reads"
+        );
     }
 
     /// Staging-and-commit R4.9: a close marks the local lane closing as it is submitted, so a

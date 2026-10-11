@@ -476,7 +476,9 @@ Unstaged as the status lists it and Staged as amend's staged list against `HEAD`
 lists drawn before stay drawn, so the selection never passes through the status's own Staged
 list; a newer status supersedes the read before. An empty, untouched draft is filled with
 `HEAD`'s message; a draft with text is kept as the amend's message. Unticking puts the draft set
-aside back exactly as it was, its touched bit with it, and draws the status's own lists again.
+aside back exactly as it was, its touched bit with it, ends amend's read in flight
+(`Request::StopAmending`), and draws the newest status's own lists wherever they are not drawn
+already (`unticking_amend_ends_its_read_and_draws_the_newest_status`).
 Amend is greyed while any operation is in progress, the operation's line saying why, and on an
 unborn branch, under "No commit yet, so Amend is unavailable." (`UNBORN_LINE`; R10.1, rule 4).
 

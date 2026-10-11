@@ -31,7 +31,7 @@
 
 use std::sync::{Arc, LazyLock};
 
-use cairn_model::{ChangeList, LocalChanges, MatchedRows, StagedAgainst, WorkingTreeStatus};
+use cairn_model::{ChangeList, LocalChanges, MatchedRows, WorkingTreeStatus};
 use cairn_ui::{ChangeCursor, LocalSelection, ShownFiles};
 use freya::prelude::*;
 
@@ -334,17 +334,21 @@ impl LocalChangesState {
             .unwrap_or_default()
     }
 
-    /// Amend unticked, or ended by a commit made: the overlay let go of, and `latest`'s own lists
-    /// drawn where amend's were. Returns what to submit.
+    /// Amend unticked, or ended by a commit made: the overlay let go of, amend's read in flight
+    /// ended (`Request::StopAmending`), and `latest`'s own lists drawn wherever they are not the
+    /// newest drawn already — amend's were, or a status arrived while amend's lists for it were
+    /// on their way. Returns what to submit.
     pub fn amend_unticked(&mut self, latest: Option<Arc<LocalChanges>>) -> Vec<Request> {
         let Some(overlay) = self.amend.take() else {
             return Vec::new();
         };
-        let mut requests: Vec<Request> = overlay.awaiting.map(retire).into_iter().collect();
-        let drawn_amend = self
+        let mut requests = vec![Request::StopAmending];
+        requests.extend(overlay.awaiting.map(retire));
+        let drawn = self
             .newest()
-            .is_some_and(|newest| newest.staged_against() != StagedAgainst::Head);
-        if let (true, Some(latest)) = (drawn_amend, latest) {
+            .zip(latest.as_ref())
+            .is_some_and(|(newest, latest)| Arc::ptr_eq(newest, latest));
+        if let (false, Some(latest)) = (drawn, latest) {
             requests.extend(self.lay_out(latest));
         }
         requests
@@ -674,5 +678,48 @@ mod tests {
         assert!(Arc::ptr_eq(state.drawn().unwrap(), &second));
         assert_eq!(shown_rows(&state, ChangeList::Staged), &ShownFiles::All);
         assert!(state.is_settled());
+    }
+
+    /// Phase 18's QA items 4 and 5: unticking Amend ends amend's read in flight
+    /// (`Request::StopAmending`), and draws the newest status even when amend's lists never
+    /// arrived — a status parked while Amend was ticked is drawn, not left behind the pre-tick
+    /// lists, and the parked hold is let go of on a worker. Caught by: the read left running on
+    /// the serial lane, or the newer status undrawn until the next refresh.
+    #[test]
+    fn unticking_amend_ends_its_read_and_draws_the_newest_status() {
+        let mut state = LocalChangesState::default();
+        let first = lists(&["a"]);
+        let _ = state.status_arrived(Arc::clone(&first));
+        let asked = state.amend_ticked(Some(Arc::clone(&first)));
+        assert!(
+            asked.iter().any(|r| matches!(r, Request::Amending { .. })),
+            "{asked:?}"
+        );
+        let second = lists(&["a", "b"]);
+        let parked = state.status_arrived(Arc::clone(&second));
+        assert!(
+            Arc::ptr_eq(state.drawn().unwrap(), &first),
+            "a status drawn before amend's lists for it"
+        );
+        let requests = state.amend_unticked(Some(Arc::clone(&second)));
+        assert!(
+            requests.iter().any(|r| matches!(r, Request::StopAmending)),
+            "the amend read was not ended: {requests:?}"
+        );
+        assert!(
+            Arc::ptr_eq(state.drawn().unwrap(), &second),
+            "the newest status was not drawn"
+        );
+        // The parked hold and the pre-tick lists, each freed on a worker.
+        assert_eq!(retired(&requests), 2, "{requests:?}");
+        drop(parked);
+        // With the newest already drawn, an untick redraws nothing.
+        let mut state = LocalChangesState::default();
+        let _ = state.status_arrived(Arc::clone(&second));
+        let _ = state.amend_ticked(None);
+        let serial = state.serial();
+        let requests = state.amend_unticked(Some(Arc::clone(&second)));
+        assert_eq!(state.serial(), serial, "the drawn status was drawn again");
+        assert_eq!(retired(&requests), 0, "{requests:?}");
     }
 }

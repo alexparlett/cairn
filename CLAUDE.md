@@ -1003,7 +1003,7 @@ Project invariants:
   arm bumps the discard-count lane's counter and sends that lane the paths a discard
   would take (its `Request::DiscardLinesConsequence` arm likewise, the diff and the lines), and its `Request::StopCounting` arm only bumps that counter, whose `Request::CommitReads` and
   `Request::Amending` arms bump the commit-box and amending lanes' counters and send the local lane one job
-  (`Amending` the window's status, shared), whose `Request::CheckBranchName` and
+  (`Amending` the window's status, shared), and its `Request::StopAmending` arm only bumps the amending counter (Amend unticked), whose `Request::CheckBranchName` and
   `Request::CheckoutConsequence` arms (Create Branch's name check and what its "Discard" would be confirmed as) each bump
   their lane's counter, take an atomic watch of that number and send the local lane one job, and whose
   `Request::LockConsequence` arm (what `Remove index.lock…` would remove, read at its press) only sends it one,
@@ -1306,7 +1306,7 @@ Project invariants:
     Changes is shown, and — while Amend is ticked — amend's staged list over every status that
     arrives (`Request::Amending`: a `git diff-index --cached` against `HEAD`'s parent and
     `HEAD`'s message, never what the amend costs, which is read at its press), each numbered in
-    a lane of its own and ended by a newer ask. The diff's
+    a lane of its own and ended by a newer ask, amend's also by Amend unticked. The diff's
     staging gesture (`cairn_ui::staging_gesture`) draws one layer over the rows — an
     outline, a tint and at most three actions — re-rendered on each pointer move over the
     diff and each scroll, its chunk found by a binary search of the hunks; a drag's

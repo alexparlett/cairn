@@ -1,30 +1,24 @@
-//! Headless tests for the commit box (staging-and-commit R10) and the dialogs it opens: the
-//! Amend toggle reports its state to assistive technology; the amend button confirmed in place
-//! is the confirmation surface's own, building one token from the consequence it draws; the
-//! counter is Fork's; a disabled box asks nothing; and the Git Error dialog draws its output
-//! through a virtualizing view, offering the skip only where it is told a hook exists.
+//! Headless tests for the commit box (staging-and-commit R10) and the Git Error dialog: the
+//! Amend toggle reports its state to assistive technology; the one button and the commit chord
+//! report the same press, building no token; the counter is Fork's; a disabled box asks nothing;
+//! the line is drawn whole; a commit asked stands in the button's place; an edit is reported;
+//! and the Git Error dialog draws its output through a virtualizing view, the skip in its footer
+//! beside Close, focus on Close.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Instant;
 
-use cairn_model::{Confirmed, Consequence, Oid, Publication, Reflog};
 use cairn_ui::{
-    AMEND_BUTTON_CAPTION, AMEND_CAPTION, AmendButton, CLOSE_CAPTION, CommitBox, CommitButton,
-    GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
+    AMEND_BUTTON_CAPTION, AMEND_CAPTION, Busy, CANCEL_COMMIT_CAPTION, CANCELLING, CLOSE_CAPTION,
+    CommitBox, CommitButton, GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT,
+    SKIP_HOOKS_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
 const WIDTH: f32 = 900.;
 const HEIGHT: f32 = 600.;
-
-fn amend() -> Consequence {
-    Consequence::Amend {
-        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        published: Publication::Unpublished,
-        reflog: Reflog::Written,
-    }
-}
 
 fn settle(test: &mut TestingRunner) {
     for _ in 0..4 {
@@ -58,20 +52,23 @@ fn click(test: &mut TestingRunner, caption: &str) {
 struct Reports {
     amend: Rc<RefCell<Vec<bool>>>,
     commits: Rc<RefCell<usize>>,
-    tokens: Rc<RefCell<Vec<Confirmed>>>,
+    cancels: Rc<RefCell<usize>>,
+    edits: Rc<RefCell<usize>>,
 }
 
-/// The box with Amend `ticked` and `button`, its subject `subject`, `stopped` when the box is
-/// disabled by an operation in progress.
+/// The box with Amend `ticked` and `button`, its subject `subject`, `stopped` when an operation
+/// in progress disables it, `line` over it and `busy` in the button's place.
 fn launch(
     ticked: bool,
     button: CommitButton,
     subject: &str,
-    stopped: Option<&str>,
+    stopped: bool,
+    line: Option<&str>,
+    busy: Option<Busy>,
 ) -> (TestingRunner, Reports) {
     let reports = Reports::default();
     let subject = subject.to_owned();
-    let stopped = stopped.map(str::to_owned);
+    let line = line.map(str::to_owned);
     let (mut test, _) = TestingRunner::new(
         {
             let reports = reports.clone();
@@ -81,16 +78,20 @@ fn launch(
                 let Reports {
                     amend,
                     commits,
-                    tokens,
+                    cancels,
+                    edits,
                 } = reports.clone();
                 rect().expanded().child(
                     CommitBox::new(typed, body)
                         .amend(ticked, true)
                         .button(button.clone(), true)
-                        .stopped(stopped.clone())
+                        .stopped(stopped)
+                        .line(line.clone())
+                        .busy(busy.clone())
                         .on_amend(move |on: bool| amend.borrow_mut().push(on))
                         .on_commit(move |()| *commits.borrow_mut() += 1)
-                        .on_confirmed(move |token: Confirmed| tokens.borrow_mut().push(token)),
+                        .on_cancel(move |()| *cancels.borrow_mut() += 1)
+                        .on_edit(move |()| *edits.borrow_mut() += 1),
                 )
             }
         },
@@ -120,180 +121,180 @@ fn amend_toggled(test: &TestingRunner) -> Option<Toggled> {
 #[test]
 fn the_amend_toggle_reports_its_toggled_state_to_assistive_technology() {
     for (ticked, toggled) in [(false, Toggled::False), (true, Toggled::True)] {
-        let (mut test, reports) = launch(ticked, CommitButton::Commit { files: 1 }, "x", None);
+        let (mut test, reports) = launch(
+            ticked,
+            CommitButton::Commit { files: 1 },
+            "x",
+            false,
+            None,
+            None,
+        );
         assert_eq!(amend_toggled(&test), Some(toggled));
         click(&mut test, AMEND_CAPTION);
         assert_eq!(*reports.amend.borrow(), [!ticked]);
     }
 }
 
-/// R10.6 and C1: the amend button confirmed in place is the confirmation surface's own — its
-/// label Fork's "Amend Last Commit", its token built from that consequence and recording the
-/// prompt rendered from it — and one consequence buys one token, however often it is pressed;
-/// the box itself reports no commit for it. Caught by: a token per press, a label typed apart
-/// from the consequence, or the press reported as a plain commit.
+/// R10.6, C1 and C6: amending, the one button reads Fork's "Amend Last Commit" with nothing
+/// under it and reports the press — the box builds no token; the chord's press is the window's
+/// test (`commit_box_tests.rs`). Caught by: a line under the button, or the press unheard.
 #[test]
-fn the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws() {
-    let consequence = Rc::new(amend());
-    let (mut test, reports) = launch(
-        true,
-        CommitButton::AmendInPlace {
-            serial: 7,
-            consequence: consequence.clone(),
-        },
-        "Fix the parser",
-        None,
-    );
+fn amend_last_commit_reports_its_press_and_draws_no_line() {
+    let (mut test, reports) = launch(true, CommitButton::Amend, "Fix", false, None, None);
     let shown = labels(&test);
     assert!(shown.iter().any(|l| l == AMEND_BUTTON_CAPTION), "{shown:?}");
-    click(&mut test, AMEND_BUTTON_CAPTION);
-    click(&mut test, AMEND_BUTTON_CAPTION);
-    let tokens = reports.tokens.borrow();
-    assert_eq!(tokens.len(), 1, "one consequence bought two tokens");
-    assert_eq!(tokens[0].consequence(), &*consequence);
-    assert_eq!(tokens[0].prompt(), consequence.prompt());
-    assert_eq!(*reports.commits.borrow(), 0);
-}
-
-/// R10.6, L12: an amend a remote has is not confirmed by the box's button — the press is
-/// reported, for the window to open the dialog — and builds no token. Caught by: the in-place
-/// button drawn for a published amend.
-#[test]
-fn a_published_amends_button_asks_rather_than_confirms() {
-    let consequence = Rc::new(Consequence::Amend {
-        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        published: Publication::SomeRemote,
-        reflog: Reflog::Written,
-    });
-    let (mut test, reports) = launch(
-        true,
-        CommitButton::AmendAsking {
-            serial: 3,
-            consequence,
-        },
-        "Fix the parser",
-        None,
+    assert_eq!(
+        shown
+            .iter()
+            .filter(|l| l.contains("Show Lost Commits") || l.contains("reflog"))
+            .count(),
+        0,
+        "a line under the button: {shown:?}"
     );
-    click(&mut test, &format!("{AMEND_BUTTON_CAPTION}…"));
-    assert!(reports.tokens.borrow().is_empty());
+    click(&mut test, AMEND_BUTTON_CAPTION);
     assert_eq!(*reports.commits.borrow(), 1);
 }
 
-/// R1.1 and the user's decision (2026-10-09), its line cut back by phase 13 (staging-and-commit
-/// R6.4 as amended; phase 18 rebuilds the box): the amend button confirmed in place refuses a
-/// consequence that must be confirmed — a remote has the commit, or git keeps no reflog — which
-/// the dialog confirms, and builds nothing while not ready. Caught by: a pushed or unlogged
-/// commit amended by the box's button, or a press heard while the box is not ready.
-#[test]
-fn the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready() {
-    let published = Consequence::Amend {
-        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        published: Publication::SomeRemote,
-        reflog: Reflog::Written,
-    };
-    let unlogged = Consequence::Amend {
-        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
-        published: Publication::Unpublished,
-        reflog: Reflog::NotWritten,
-    };
-    for (consequence, ready) in [(published, true), (unlogged, true), (amend(), false)] {
-        let tokens: Rc<RefCell<Vec<Confirmed>>> = Rc::default();
-        let (mut test, _) = TestingRunner::new(
-            {
-                let tokens = tokens.clone();
-                move || {
-                    let tokens = tokens.clone();
-                    let confirmed = use_state(|| None::<u64>);
-                    rect().expanded().child(
-                        AmendButton::new(1, Rc::new(consequence.clone()), confirmed)
-                            .ready(ready)
-                            .on_confirmed(move |token: Confirmed| tokens.borrow_mut().push(token)),
-                    )
-                }
-            },
-            (WIDTH, HEIGHT).into(),
-            |_| {},
-            1.,
-        );
-        settle(&mut test);
-        click(&mut test, AMEND_BUTTON_CAPTION);
-        assert!(
-            tokens.borrow().is_empty(),
-            "ready {ready}: a token was built"
-        );
-    }
-}
-
-/// The user's decision (2026-10-09): a failed amend's skip is drawn in the Git Error dialog
-/// with the prompt the amend was confirmed with, and one press builds one token from that
-/// consequence, the dialog closing as it does; the commit's own skip is not drawn beside it.
-/// Caught by: a skip confirming other words, or two tokens from one press.
-#[test]
-fn a_failed_amends_skip_confirms_the_prompt_it_draws_once() {
-    let tokens: Rc<RefCell<Vec<Confirmed>>> = Rc::default();
-    let closed: Rc<RefCell<usize>> = Rc::default();
-    let consequence = Rc::new(amend());
-    let (mut test, _) = TestingRunner::new(
-        {
-            let (tokens, closed, consequence) =
-                (tokens.clone(), closed.clone(), consequence.clone());
-            move || {
-                let (tokens, closed) = (tokens.clone(), closed.clone());
-                rect().expanded().child(
-                    GitErrorDialog::new(1, "git commit -q --amend -F -", Rc::new(Vec::new()))
-                        .skip(true)
-                        .skip_amend(consequence.clone(), move |token: Confirmed| {
-                            tokens.borrow_mut().push(token)
-                        })
-                        .on_close(move |()| *closed.borrow_mut() += 1),
-                )
-            }
-        },
-        (WIDTH, HEIGHT).into(),
-        |_| {},
-        1.,
-    );
-    settle(&mut test);
-    assert!(
-        labels(&test).iter().any(|l| *l == consequence.prompt()),
-        "{:?}",
-        labels(&test)
-    );
-    let skips = labels(&test)
-        .iter()
-        .filter(|l| *l == SKIP_HOOKS_CAPTION)
-        .count();
-    assert_eq!(skips, 1, "the commit's skip drawn beside the amend's");
-    click(&mut test, SKIP_HOOKS_CAPTION);
-    click(&mut test, SKIP_HOOKS_CAPTION);
-    let tokens = tokens.borrow();
-    assert_eq!(tokens.len(), 1);
-    assert_eq!(tokens[0].prompt(), consequence.prompt());
-    assert_eq!(*closed.borrow(), 1);
-}
-
-/// R10.1: Fork's counter beside the subject, and its button naming the files; R10.8: a box an
-/// operation in progress disables names it, and its button and Amend ask nothing. Caught by:
-/// a disabled box that still commits or amends.
+/// R10.1, rule 4: Fork's counter beside the subject, and its button naming the files; R10.8: a
+/// box an operation in progress disables draws its one line whole — wrapped, never cut — and
+/// its button and Amend ask nothing. Caught by: a disabled box that still commits or amends,
+/// or the line cut to an ellipsis.
 #[test]
 fn the_counter_is_drawn_and_a_stopped_box_asks_nothing() {
     let (test, _) = launch(
         false,
         CommitButton::Commit { files: 3 },
         &"x".repeat(88),
+        false,
+        None,
         None,
     );
     let shown = labels(&test);
     assert!(shown.iter().any(|l| l == "-38"), "{shown:?}");
     assert!(shown.iter().any(|l| l == "Commit 3 Files"), "{shown:?}");
 
-    let said = "Committing is unavailable while a rebase is in progress.";
-    let (mut test, reports) = launch(false, CommitButton::Commit { files: 3 }, "x", Some(said));
-    assert!(labels(&test).iter().any(|l| l == said));
+    let said = cairn_ui::operation_line(Some(&cairn_model::OperationInProgress::Rebase), false)
+        .unwrap_or_default();
+    let (mut test, reports) = launch(
+        false,
+        CommitButton::Commit { files: 3 },
+        "x",
+        true,
+        Some(&said),
+        None,
+    );
+    assert!(labels(&test).contains(&said));
+    let line = test
+        .find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == said)
+                .map(|label| label.max_lines)
+        })
+        .unwrap_or_else(|| panic!("no line"));
+    assert_eq!(line, None, "the line is capped");
     click(&mut test, "Commit 3 Files");
     click(&mut test, AMEND_CAPTION);
     assert_eq!(*reports.commits.borrow(), 0);
     assert!(reports.amend.borrow().is_empty());
+}
+
+/// R10.4 and C5: a commit asked stands in the button's place — waiting in the one form every
+/// queued write uses, with no Cancel; running, "Committing 0:00" beside its Cancel, which is
+/// reported; cancelled, "Cancelling…" with no Cancel — and no press of the button is heard
+/// meanwhile. Caught by: a Cancel offered while queued or cancelling, or the button drawn beside.
+#[test]
+fn a_commit_asked_stands_in_the_buttons_place() {
+    let waiting = "Waiting for staging to finish…";
+    let (test, _) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "x",
+        false,
+        None,
+        Some(Busy::Waiting(waiting.to_owned())),
+    );
+    let shown = labels(&test);
+    assert!(shown.iter().any(|l| l == waiting), "{shown:?}");
+    assert!(
+        !shown
+            .iter()
+            .any(|l| l == CANCEL_COMMIT_CAPTION || l == "Commit 1 File")
+    );
+
+    let (mut test, reports) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "x",
+        false,
+        None,
+        Some(Busy::Running {
+            verb: "Committing",
+            started: Some(Instant::now()),
+        }),
+    );
+    assert!(
+        labels(&test).iter().any(|l| l == "Committing 0:00"),
+        "{:?}",
+        labels(&test)
+    );
+    click(&mut test, CANCEL_COMMIT_CAPTION);
+    assert_eq!(*reports.cancels.borrow(), 1);
+
+    let (test, _) = launch(
+        true,
+        CommitButton::Amend,
+        "x",
+        false,
+        None,
+        Some(Busy::Cancelling),
+    );
+    let shown = labels(&test);
+    assert!(shown.iter().any(|l| l == CANCELLING), "{shown:?}");
+    assert!(
+        !shown
+            .iter()
+            .any(|l| l == CANCEL_COMMIT_CAPTION || l == AMEND_BUTTON_CAPTION)
+    );
+}
+
+/// C7: a key that changes a field's text is reported as the person's edit, and one that does
+/// not (an arrow) is not. Caught by: no edit reported, which would let a fill overwrite a draft
+/// the person cleared.
+#[test]
+fn an_edit_in_a_field_is_reported() {
+    let (mut test, reports) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "",
+        false,
+        None,
+        None,
+    );
+    let at = test
+        .find(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|paragraph| {
+                    paragraph
+                        .spans
+                        .iter()
+                        .map(|span| span.text.as_ref())
+                        .collect::<String>()
+                        == cairn_ui::SUBJECT_PLACEHOLDER
+                })
+                .map(|_| {
+                    let area = node.layout().area;
+                    (f64::from(area.min_x() + 4.), f64::from(area.center().y))
+                })
+        })
+        .unwrap_or_else(|| panic!("no subject field"));
+    test.click_cursor(at);
+    settle(&mut test);
+    test.press_key(Key::Named(NamedKey::ArrowLeft));
+    settle(&mut test);
+    assert_eq!(*reports.edits.borrow(), 0, "an arrow was an edit");
+    test.write_text("a");
+    settle(&mut test);
+    assert!(*reports.edits.borrow() >= 1, "typing was no edit");
 }
 
 /// What the Git Error dialog reported.
@@ -360,5 +361,24 @@ fn the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered() 
 
     let (mut test, answers) = launch_error(3, true);
     click(&mut test, SKIP_HOOKS_CAPTION);
-    assert_eq!(*answers.skipped.borrow(), 1);
+    click(&mut test, SKIP_HOOKS_CAPTION);
+    assert_eq!(*answers.skipped.borrow(), 1, "the skip ran twice");
+}
+
+/// R10.5 and C4: the skip sits in the dialog's footer beside Close — the same answer component,
+/// on the same row — and focus starts on Close, so a Return pressed by habit closes rather than
+/// skips the hooks. Caught by: the skip drawn in the body, or focus on the skip.
+#[test]
+fn the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close() {
+    let (mut test, answers) = launch_error(3, true);
+    let skip = centre_of(&test, SKIP_HOOKS_CAPTION);
+    let close = centre_of(&test, CLOSE_CAPTION);
+    assert!(
+        (skip.1 - close.1).abs() < 1.,
+        "not one row: {skip:?} {close:?}"
+    );
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    assert_eq!(*answers.closed.borrow(), 1, "Return did not close");
+    assert_eq!(*answers.skipped.borrow(), 0, "Return skipped the hooks");
 }

@@ -453,15 +453,14 @@ pub enum Request {
     /// once it has ended — and answered by [`Update::CommitReads`]. Numbered in the commit-box
     /// lane: the next ask supersedes it, and an answer superseded is never drawn.
     CommitReads,
-    /// What amending `HEAD` would replace (`ops::amend_consequence`), its message and amend's
-    /// staged list laid out with `status`'s unstaged one (`LocalChanges::amending`), read on
-    /// the local lane after the writes asked before it while Amend is ticked (R6.3, R6.4,
-    /// R10.3), answered by [`Update::Amending`]. Numbered in the amending lane, so the next
-    /// status asking again, or [`Request::StopAmending`], ends the read before — its walk and
-    /// its `git` read. `status` is the window's own, shared.
+    /// Amend's staged list against `HEAD`'s parent laid out with `status`'s unstaged one
+    /// (`LocalChanges::amending`), and `HEAD`'s message, read on the local lane after the writes
+    /// asked before it while Amend is ticked (R6.3, R10.3), answered by [`Update::Amending`]:
+    /// the overlay the lists draw over `status`. What an amend costs is never read here — it is
+    /// read at the press, in the job that runs it (rule 3 of the redesign). Numbered in the
+    /// amending lane, so the next status asking again ends the read before — its `git` read.
+    /// `status` is the window's own, shared.
     Amending { status: Arc<LocalChanges> },
-    /// Ends the amend read in flight, and asks nothing: Amend unticked.
-    StopAmending,
     /// Whether `name`, typed in Create Branch, can be a new branch's: git's `check-ref-format
     /// --branch`, then the ref looked up (staging-and-commit R11.3), read on the local lane and
     /// answered by [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's
@@ -532,7 +531,7 @@ impl Request {
             | Self::DiscardLinesConsequence { .. }
             | Self::StopCounting => &[QueryLane::DiscardCount],
             Self::CommitReads => &[QueryLane::CommitBox],
-            Self::Amending { .. } | Self::StopAmending => &[QueryLane::Amending],
+            Self::Amending { .. } => &[QueryLane::Amending],
             Self::CheckBranchName { .. } => &[QueryLane::BranchName],
             Self::CheckoutConsequence { .. } => &[QueryLane::CheckoutCount],
             Self::ListRemotes
@@ -714,6 +713,9 @@ pub enum Update {
         id: OperationId,
         ending: WriteEnding,
         read_again: ReadAgain,
+        /// A confirmed amend's token git's failure handed back unspent, for the Git Error
+        /// dialog's skip (R1.1, R10.5); none for every other ending.
+        unspent: super::Unspent,
     },
     /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
     /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
@@ -754,8 +756,8 @@ pub enum Update {
     },
     /// What the commit box reads beside a commit, as the latest ask read it.
     CommitReads(Box<CommitReads>),
-    /// What amending `HEAD` would replace and amend's lists, read for `status`: the latest
-    /// ask's, while Amend is ticked.
+    /// Amend's lists and `HEAD`'s message, read for `status`: the latest ask's, while Amend is
+    /// ticked.
     Amending {
         status: Arc<LocalChanges>,
         read: Box<AmendRead>,
@@ -898,14 +900,11 @@ pub struct CommitReads {
     pub recent: Result<Vec<String>, String>,
 }
 
-/// What amending `HEAD` would replace, read for the status it was asked with (R6.3, R6.4,
-/// R10.3, R10.6): each part, or why it failed as display text.
+/// Amend's staged list, read for the status it was asked with (R6.3, R10.3): each part, or why
+/// it failed as display text. What the amend costs is not among it: that is read at the press.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmendRead {
-    /// What the amend button confirms: `HEAD`, whether a remote has it, whether git will log
-    /// the move.
-    pub consequence: Result<Consequence, String>,
-    /// `HEAD`'s message, which ticking Amend fills an empty draft with.
+    /// `HEAD`'s message, which ticking Amend fills an empty, untouched draft with (C7).
     pub message: Result<String, String>,
     /// The lists while amending: Unstaged as the status lists it, Staged as amend's staged
     /// list against `HEAD`'s parent (`LocalChanges::amending`) — or why amend's staged list

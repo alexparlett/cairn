@@ -5895,16 +5895,15 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 
 /// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
 /// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
-/// and presses the button that accepts it (staging-and-commit R1.1): the confirmation dialog,
-/// the commit box — its amend button drawn with the line it confirms, and the skip of a
-/// hook that failed an amend, drawn with the prompt the amend was confirmed with — and the
-/// Create Branch dialog, whose Create and Checkout (or Return) with Discard chosen is the
-/// acknowledgement (the user's decision of 2026-10-10, B2): the radio chosen plus the press,
-/// as in Fork, the token built from the `Consequence` the engine computed for it. A row whose
-/// file no longer names the constructor fails.
+/// and presses the button that accepts it (staging-and-commit R1.1): the confirmation dialog —
+/// an amend that must be confirmed among what it confirms (R10.6, C1) — and the Create Branch
+/// dialog, whose Create and Checkout (or Return) with Discard chosen is the acknowledgement
+/// (the user's decision of 2026-10-10, B2): the radio chosen plus the press, as in Fork, the
+/// token built from the `Consequence` the engine computed for it. The commit box left the roster
+/// in phase 18: an amend git logs and no remote has takes no token, and any other is confirmed
+/// in the dialog. A row whose file no longer names the constructor fails.
 const CONFIRMATION_SURFACES: &[&str] = &[
     "crates/cairn-ui/src/confirm_dialog.rs",
-    "crates/cairn-ui/src/commit_box.rs",
     "crates/cairn-ui/src/create_branch_dialog.rs",
 ];
 
@@ -5957,11 +5956,123 @@ const CONFIRMED_RECORD: (&str, &str, &str) = (
 /// a confirmed amend's token back unspent when git failed with `HEAD` unmoved, so the skip
 /// amends without asking again (R1.1, option (a) of 2026-10-10) — the one variant, and the one
 /// field, allowed to (`ENGINE_ERROR_TOKEN`, held by
-/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`).
+/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`); and, added by phase 18, the two
+/// that carry that token on to the skip (R10.5, the user's answer of 2026-10-10): the local
+/// lane's `Unspent`, on the write's ending to the window — whose `Clone` carries none, so one
+/// token is never two — and the window's Git Error state, `GitError`, which keeps it until the
+/// skip spends it or Close lets it go, each in one field alone (`WINDOW_TOKEN_FIELDS`, held by
+/// `the_window_holds_a_token_only_for_the_git_errors_skip`).
 const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
     ("crates/cairn-app/src/worker/local_lane.rs", "LocalWrite"),
+    ("crates/cairn-app/src/worker/local_lane.rs", "Unspent"),
+    ("crates/cairn-app/src/commit_box_state.rs", "GitError"),
     ("crates/cairn-git/src/error.rs", "Error"),
 ];
+
+/// The window's holders of a confirmed amend's unspent token, each by its file, its type and the
+/// one field it may hold the token in (staging-and-commit R1.1, R10.5): the lane's carrier and
+/// the Git Error state.
+const WINDOW_TOKEN_FIELDS: &[(&str, &str, &str)] = &[
+    (
+        "crates/cairn-app/src/worker/local_lane.rs",
+        "Unspent",
+        "token: Option<Box<Confirmed>>,",
+    ),
+    (
+        "crates/cairn-app/src/commit_box_state.rs",
+        "GitError",
+        "unspent: Option<Confirmed>,",
+    ),
+];
+
+/// Where the declaration of `ty` in `code` names `Confirmed` other than as exactly `field`, once,
+/// or is not declared at all.
+fn holder_field_violations(code: &str, ty: &str, field: &str) -> Vec<String> {
+    let Some(declaration) = cairn_guards::type_declarations(code)
+        .into_iter()
+        .find(|declaration| declaration.name == ty)
+    else {
+        return vec![format!("`{ty}` is not declared")];
+    };
+    let holding: Vec<&str> = declaration
+        .body
+        .lines()
+        .filter(|line| !mentions_crate(line, CONFIRMED_TYPE).is_empty())
+        .map(str::trim)
+        .collect();
+    match holding.as_slice() {
+        [only] if *only == field => Vec::new(),
+        _ => vec![format!(
+            "`{ty}` names `{CONFIRMED_TYPE}` as {holding:?}; it holds one token, as `{field}` alone"
+        )],
+    }
+}
+
+/// The window keeps a confirmed amend's unspent token in two places and nowhere else, one field
+/// each: the lane's `Unspent`, which carries it on the write's ending, and the Git Error state,
+/// which keeps it for the skip (R1.1's option (a), the user's answer of 2026-10-10). Their
+/// `CONFIRMED_HOLDERS` rows excuse the types; this pins the one field in each.
+#[test]
+fn the_window_holds_a_token_only_for_the_git_errors_skip() {
+    for (file, ty, field) in WINDOW_TOKEN_FIELDS {
+        let (_, source) = rust_sources("crates/cairn-app/src")
+            .into_iter()
+            .find(|(path, _)| path == Path::new(file))
+            .unwrap_or_else(|| panic!("{file} is gone; CONFIRMED_HOLDERS and this pin name it"));
+        let code = code_without_test_modules(&code_without_strings(&source));
+        let found = holder_field_violations(&code, ty, field);
+        assert!(found.is_empty(), "{file}: {found:?}");
+        assert!(
+            CONFIRMED_HOLDERS
+                .iter()
+                .any(|(row, holder)| row == file && holder == ty),
+            "{ty} in {file} is pinned but not on CONFIRMED_HOLDERS"
+        );
+    }
+}
+
+#[test]
+fn the_window_token_field_matcher_catches_the_shapes_it_claims() {
+    let field = "unspent: Option<Confirmed>,";
+    let accepted =
+        "pub struct GitError {\n    pub serial: u64,\n    unspent: Option<Confirmed>,\n}\n";
+    assert_eq!(
+        holder_field_violations(accepted, "GitError", field),
+        Vec::<String>::new(),
+        "the accepted shape"
+    );
+    for (shape, code) in [
+        (
+            "a second token",
+            "pub struct GitError {\n    unspent: Option<Confirmed>,\n    again: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "the field renamed",
+            "pub struct GitError {\n    kept: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "many tokens",
+            "pub struct GitError {\n    unspent: Vec<Confirmed>,\n}\n",
+        ),
+        (
+            "the field made public",
+            "pub struct GitError {\n    pub unspent: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "none at all",
+            "pub struct GitError {\n    serial: u64,\n}\n",
+        ),
+        (
+            "the type gone",
+            "pub struct Other {\n    unspent: Option<Confirmed>,\n}\n",
+        ),
+    ] {
+        assert!(
+            !holder_field_violations(code, "GitError", field).is_empty(),
+            "{shape} was not caught"
+        );
+    }
+}
 
 /// The engine's error file, and the one variant and field of its `Error` that may hold a
 /// `Confirmed`: a confirmed amend's token handed back unspent.

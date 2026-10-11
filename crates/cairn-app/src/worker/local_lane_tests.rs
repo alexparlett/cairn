@@ -305,6 +305,7 @@ fn ending_of(seen: &[Update], id: OperationId) -> (WriteEnding, ReadAgain) {
                 id: ended,
                 ending,
                 read_again,
+                ..
             } if *ended == id => Some((ending.clone(), *read_again)),
             _ => None,
         })
@@ -1325,6 +1326,16 @@ fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog()
     match ending_of(&seen, recoverable) {
         (WriteEnding::Done(done), ReadAgain::Everything) => {
             assert_eq!(done.acknowledged, None, "a prompt recorded with none shown");
+            // Phase 18, step 6: the way back is the commit the run answered it replaced; and
+            // C35, read again once git was reaped, it still asks nothing.
+            assert_eq!(done.replaced, Some(committed));
+            assert!(
+                done.cost_after
+                    .as_ref()
+                    .is_some_and(|after| !after.needs_confirming()),
+                "{:?}",
+                done.cost_after
+            );
         }
         other => panic!("the recoverable amend ended {other:?}"),
     }
@@ -1365,10 +1376,115 @@ fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog()
     );
     let seen = until_ended(&mut updates, confirmed);
     match ending_of(&seen, confirmed) {
-        (WriteEnding::Done(done), _) => assert_eq!(done.acknowledged, Some(prompt)),
+        (WriteEnding::Done(done), _) => {
+            assert_eq!(done.acknowledged, Some(prompt));
+            assert_eq!(done.replaced, Some(amended));
+            assert_eq!(
+                done.cost_after, None,
+                "a confirmed amend reads nothing after"
+            );
+        }
         other => panic!("the confirmed amend ended {other:?}"),
     }
     assert_ne!(head_commit(&fixture.path), amended);
+    drop(handle);
+}
+
+/// R1.1's option (a), the user's answer of 2026-10-10, through the lane: a confirmed amend a
+/// `pre-commit` hook fails, `HEAD` unmoved, ends git's failure and carries its token back unspent
+/// on the ending, for the window's Git Error state; the skip run with that token amends, and its
+/// ending carries none. Caught by: the token dropped by the lane (the skip asking again), or
+/// handed back on an ending that spent it.
+#[test]
+fn a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = to_commit("cairn-lane-amend-unspent", &["a", "b"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    let first = ask(&handle, commit());
+    until_ended(&mut updates, first);
+    let committed = head_commit(&fixture.path);
+    std::fs::create_dir_all(fixture.path.join(".git/refs/remotes/origin"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(
+        fixture.path.join(".git/refs/remotes/origin/main"),
+        format!("{committed}\n"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    staged(&handle, &mut updates, &["b"]);
+    let pressed = ask(
+        &handle,
+        LocalWrite::AmendAtPress {
+            message: "amended".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let seen = until_ended(&mut updates, pressed);
+    let consequence = match ending_of(&seen, pressed) {
+        (WriteEnding::NeedsConfirming { consequence }, _) => consequence,
+        other => panic!("the published amend ended {other:?}"),
+    };
+    let hook = fixture.path.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(fixture.path.join(".git/hooks")).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(&hook, "#!/bin/sh\necho refused >&2\nexit 1\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let amend = |confirmed, skip_hooks| LocalWrite::Amend {
+        confirmed,
+        message: "amended".to_owned(),
+        skip_hooks,
+    };
+    let failed = ask(&handle, amend(Confirmed::by_user(consequence), false));
+    let seen = until_ended(&mut updates, failed);
+    let mut unspent = seen
+        .into_iter()
+        .find_map(|update| match update {
+            Update::WriteEnded {
+                id,
+                ending,
+                unspent,
+                ..
+            } if id == failed => {
+                assert!(
+                    matches!(
+                        ending,
+                        WriteEnding::Failed {
+                            command: Some(_),
+                            ..
+                        }
+                    ),
+                    "{ending:?}"
+                );
+                Some(unspent)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{failed:?} did not end"));
+    let token = unspent
+        .take()
+        .unwrap_or_else(|| panic!("the token was not handed back"));
+    assert_eq!(head_commit(&fixture.path), committed);
+    let skipped = ask(&handle, amend(token, true));
+    let seen = until_ended(&mut updates, skipped);
+    let mut spent = seen
+        .into_iter()
+        .find_map(|update| match update {
+            Update::WriteEnded {
+                id,
+                ending,
+                unspent,
+                ..
+            } if id == skipped => {
+                assert!(matches!(ending, WriteEnding::Done(_)), "{ending:?}");
+                Some(unspent)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{skipped:?} did not end"));
+    assert!(spent.take().is_none(), "a spent token came back");
+    assert_ne!(head_commit(&fixture.path), committed);
     drop(handle);
 }
 
@@ -1648,13 +1764,13 @@ fn status_now(handle: &RepositoryHandle, updates: &mut Updates) -> Arc<cairn_mod
     }
 }
 
-/// Staging-and-commit R6.7, R6.3, R6.4 and R10 through the real boundary: the commit box's
-/// reads answer no operation, no message prepared, and the branch's messages newest first, the
-/// last commit's among them; and an amend's read answers `HEAD` — the commit the message is read
-/// from — no remote having it, `HEAD`'s message, and amend's lists over the status asked with:
-/// the file `HEAD` added and the one staged since in Staged, the first commit's file in
-/// neither. Caught by: a read run on the UI thread's terms (an answer missing), the message
-/// of another commit than the one the consequence names, or lists against `HEAD`.
+/// Staging-and-commit R6.7, R6.3 and R10 through the real boundary: the commit box's reads
+/// answer no operation, no message prepared, and the branch's messages newest first, the last
+/// commit's among them; and amend's read answers `HEAD`'s message and amend's lists over the
+/// status asked with: the file `HEAD` added and the one staged since in Staged, the first
+/// commit's file in neither — and, C14 and rule 3, reads nothing of what the amend costs: no
+/// `git config` read of `core.logAllRefUpdates` runs for it. Caught by: a read run on the UI
+/// thread's terms (an answer missing), lists against `HEAD`, or the cost read on a status.
 #[test]
 fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
     let fixture = to_commit("cairn-lane-box-reads", &["a", "b", "c"]);
@@ -1689,21 +1805,30 @@ fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
 
     staged(&handle, &mut updates, &["c"]);
     let status = status_now(&handle, &mut updates);
+    let logged = |updates: &mut Updates| {
+        handle.submit(Request::CommandLog);
+        let seen = collect_until(updates, |u| matches!(u, Update::CommandLog { .. }));
+        match seen.into_iter().last() {
+            Some(Update::CommandLog { records }) => records,
+            other => panic!("no command log: {other:?}"),
+        }
+    };
+    let before = logged(&mut updates).len();
     handle.submit(Request::Amending { status });
     let seen = collect_until(&mut updates, |u| matches!(u, Update::Amending { .. }));
     let Some(Update::Amending { read, .. }) = seen.into_iter().last() else {
         panic!("no amend read");
     };
-    let head = std::fs::read_to_string(fixture.path.join(".git/refs/heads/main"))
-        .unwrap_or_else(|error| panic!("{error}"));
-    let consequence = read.consequence.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        consequence.amended().map(|oid| oid.to_string()),
-        Some(head.trim().to_owned())
-    );
+    let ran: Vec<Vec<String>> = logged(&mut updates)
+        .into_iter()
+        .skip(before)
+        .map(|record| record.arguments)
+        .collect();
+    assert!(!ran.is_empty(), "amend's staged list ran no git");
     assert!(
-        !consequence.needs_confirming(),
-        "no remote has HEAD, and git logs it"
+        ran.iter()
+            .all(|arguments| !arguments.iter().any(|argument| argument == "config")),
+        "amend's read asked what the amend costs: {ran:?}"
     );
     assert_eq!(read.message.as_deref(), Ok("second\n\nwith a body\n"));
     let lists = read.lists.unwrap_or_else(|error| panic!("{error}"));

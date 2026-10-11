@@ -220,8 +220,11 @@ fn done(id: OperationId) -> Update {
             acknowledged: None,
             locks_before: Vec::new(),
             locks_after: Vec::new(),
+            replaced: None,
+            cost_after: None,
         }),
         read_again: crate::worker::ReadAgain::Everything,
+        unspent: crate::worker::Unspent::none(),
     }
 }
 
@@ -767,6 +770,7 @@ fn failed(id: OperationId) -> Update {
             ),
         },
         read_again: crate::worker::ReadAgain::Everything,
+        unspent: crate::worker::Unspent::none(),
     }
 }
 

@@ -180,6 +180,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             id,
             ending,
             read_again,
+            mut unspent,
         } => {
             // The window closing asks nothing more of the worker.
             let asking: &dyn Fn(Request) = if worker.closing {
@@ -187,7 +188,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             } else {
                 worker.submit
             };
-            crate::commit_box_pane::write_ended(id, &ending, view, asking);
+            crate::commit_box_pane::write_ended(id, &ending, &mut unspent, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
             // A write that never started is named as it was asked (the user's decision N), and
             // a destructive one quotes the prompt it was asked with however it ended (R12.1).
@@ -243,16 +244,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // drawn at once or once a filter's rows are here (R9). What either lets go of is freed
         // on a worker.
         Update::Status { changes } => {
-            // While Amend is ticked, the lists drawn are amend's over this status, asked for it
-            // (R10.3); otherwise the status's own.
-            let amending = !worker.closing
-                && crate::commit_box_pane::status_arrived_amending(&changes, view, worker.submit);
+            // Every status lands in the lists' state; while Amend is ticked it asks amend's lists
+            // over it, its overlay (R10.3, review M3).
             let mut local = view.local.state;
-            let asked = if amending {
-                Vec::new()
-            } else {
-                local.write().status_arrived(Arc::clone(&changes))
-            };
+            let asked = local.write().status_arrived(Arc::clone(&changes));
             let replaced = refreshed.write().status_arrived(changes);
             for request in asked {
                 if !worker.closing || matches!(request, Request::Retire(_)) {
@@ -1026,6 +1021,7 @@ mod tests {
                     message: "nothing selected".to_owned(),
                 },
                 read_again,
+                unspent: crate::worker::Unspent::none(),
             },
         ]
     }

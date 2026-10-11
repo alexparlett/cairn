@@ -171,6 +171,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
                 output: ScrubbedLines::scrubbing("https://ada:ghp_TOKEN@example.com/r refused"),
             },
             read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     open(&mut test);
@@ -246,6 +247,7 @@ fn remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_conf
             id: stranded,
             ending: failed_on_the_lock(),
             read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     ] {
         apply(&mut test, view, &submitted, update);
@@ -280,8 +282,11 @@ fn remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_conf
                 acknowledged: None,
                 locks_before: Vec::new(),
                 locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
             }),
             read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
 
@@ -430,6 +435,7 @@ fn a_write_refused_before_it_started_keeps_its_name() {
                 message: "Not run: the repository was closing.".to_owned(),
             },
             read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     open(&mut test);
@@ -483,6 +489,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
                 locks: Vec::new(),
             },
             read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     // Create Branch's discard, which git failed.
@@ -506,6 +513,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
                 output: ScrubbedLines::scrubbing("fatal: a branch named 'topic' already exists"),
             },
             read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     // A removal asked and never run: the repository was closing.
@@ -526,6 +534,7 @@ fn a_destructive_write_that_did_not_succeed_still_quotes_its_prompt() {
                 message: "Not run: the repository was closing.".to_owned(),
             },
             read_again: crate::worker::ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
 
@@ -569,7 +578,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             },
         );
     });
-    // An amend's asked state, as `local_writes::ask` keeps one: its replaced commit.
+    // An amend's asked state names no commit: its way back is what its run answered (phase 18).
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
     let mut activity = view.activity;
     test.run_in(|| {
@@ -578,7 +587,6 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             what: "amend".to_owned(),
             name: "Amend".to_owned(),
             awaited: "the amend to finish",
-            replaces: Some(replaced),
             cancellable: true,
             prompt: None,
         });
@@ -594,8 +602,11 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
                 acknowledged: Some("Replaces cdcdcdc 'old'.".to_owned()),
                 locks_before: Vec::new(),
                 locks_after: Vec::new(),
+                replaced: Some(replaced),
+                cost_after: None,
             }),
             read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     open(&mut test);

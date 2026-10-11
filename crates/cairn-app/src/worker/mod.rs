@@ -42,7 +42,7 @@ pub use discovery::Discovery;
 pub(crate) use expand_all::EXPAND_ALL_LINES;
 #[cfg(test)]
 pub use local_lane::Done;
-pub use local_lane::{LocalWrite, OperationId, ReadAgain, UnstageTarget, WriteEnding};
+pub use local_lane::{LocalWrite, OperationId, ReadAgain, Unspent, UnstageTarget, WriteEnding};
 pub use output_flow::OutputReceipt;
 #[cfg(test)]
 pub use pool::Updates;

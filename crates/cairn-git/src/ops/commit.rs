@@ -54,10 +54,12 @@
 //!
 //! **The token-free amend's window.** [`amend_unconfirmed`] decides the amend is recoverable from
 //! what it reads at the press, and git then runs the hooks before it updates the ref: in that
-//! window a push of `HEAD`, or a checkout, from a terminal changes what git amends or whether a
-//! remote has it, and the amend is reported made all the same. The replaced commit stays in the
-//! reflog git writes, so Show Lost Commits still finds it; no check after the run says the
-//! commit was published meanwhile (stated in `docs/systems/staging.md`, "Residuals").
+//! window a push of `HEAD` from a terminal, or the reflog turned off, can make it not so. Once
+//! git is reaped the cost is read again for the replaced commit (`super::amend::amend_after`:
+//! the same walk, over the refs as they are now, and whether git's reflog holds a move away
+//! from it) and returned beside it ([`AmendAnswer::Amended`]), so the activity entry can say
+//! the amended commit was published meanwhile, or can't be recovered (R1.5, C35). It reports
+//! and does not prevent: nothing is undone.
 //!
 //! **While it runs** a commit is the one write that can be cancelled (R4.3): once git is
 //! running, [`CommitWatch::running`] is handed a [`CommitCancel`], which ends git's process
@@ -71,7 +73,7 @@
 
 use cairn_model::{AskpassToken, Confirmed, Consequence, Oid, ScrubbedLines};
 
-use super::amend::amend_consequence;
+use super::amend::{amend_after, amend_consequence};
 use super::local_write::{locks_around, locks_now};
 use super::{GitBinary, Invalidated, Performed, WriteAuthority};
 use crate::object_id::{model_id, object_id};
@@ -123,8 +125,17 @@ impl std::fmt::Debug for CommitWatch<'_> {
 /// `Consequence` answered for the confirmation dialog.
 #[derive(Debug)]
 pub enum AmendAnswer {
-    /// git logs it and no remote has `HEAD`: amended at once, asking nothing.
-    Amended(Performed),
+    /// git logs it and no remote has `HEAD`: amended at once, asking nothing. `replaced` is the
+    /// commit it replaced — the way back to it (R12.1) — and `after` what that amend turned out
+    /// to cost, read again once git was reaped (R1.5, C35): a remote that came to have
+    /// `replaced` while a hook ran, or a reflog git did not write, makes it a consequence that
+    /// would now need confirming (`Consequence::needs_confirming`). It reports and prevents
+    /// nothing. `None` where that read failed or was cancelled: the amend is made either way.
+    Amended {
+        performed: Performed,
+        replaced: Oid,
+        after: Option<Consequence>,
+    },
     /// A remote has `HEAD`, or git will keep no reflog: no git ran. Confirm this and run
     /// [`amend`] with the token.
     NeedsConfirming(Consequence),
@@ -181,6 +192,7 @@ pub fn amend_unconfirmed(
 ) -> Result<AmendAnswer, Error> {
     utf8_messages(git, repo, watch.cancel)?;
     let consequence = cost_now(git, repo, watch.cancel)?;
+    let cancel = watch.cancel;
     let replaced = match &consequence {
         Consequence::Amend { commit, .. } if !consequence.needs_confirming() => *commit,
         Consequence::Amend { .. }
@@ -202,13 +214,16 @@ pub fn amend_unconfirmed(
         watch,
         &made,
     )?;
-    Ok(AmendAnswer::Amended(
-        Performed::new(
-            format!("amended {}", replaced.short().as_str()),
-            everything_a_commit_moves(),
-        )
-        .with_locks(locks_around(repo, before)),
-    ))
+    let performed = Performed::new(
+        format!("amended {}", replaced.short().as_str()),
+        everything_a_commit_moves(),
+    )
+    .with_locks(locks_around(repo, before));
+    Ok(AmendAnswer::Amended {
+        performed,
+        replaced,
+        after: amend_after(repo, replaced, &cancel).ok(),
+    })
 }
 
 /// Amends `HEAD` with `message` and what is staged (module docs), once the `Consequence`

@@ -1,36 +1,32 @@
 //! The commit box under Local Changes' diff, and what its presses do (staging-and-commit R10):
 //! `cairn_ui::CommitBox` drawn from `commit_box_state`, each press asking the local lane — a
-//! commit, an amend under its confirmation, a cancel of the commit running — and each update the
-//! worker sends for the box applied here (`session::apply` hands them on).
+//! commit, an amend at the press, an amend under the dialog's confirmation, a cancel of the commit
+//! running — and each update the worker sends for the box applied here (`session::apply` hands
+//! them on).
 //!
 //! **What is asked, and where.** As the box is shown, and as each refresh's refs arrive while it
 //! is, the box's reads are asked (`Request::CommitReads`: the operation in progress, the message
 //! git prepared for the commit that concludes it, cleaned, and the recent messages), on the
-//! local lane after the writes asked before them.
-//! While Amend is ticked, each status that arrives asks what an amend would replace and amend's
-//! lists over that status (`Request::Amending`), in a lane of its own, so the next supersedes
-//! the last; the lists that answer are drawn as a status's are, and unticking Amend draws the
-//! status's own lists again. Nothing here waits: each is a submit.
+//! local lane after the writes asked before them. While Amend is ticked, Local Changes' lists ask
+//! amend's staged list over each status (`LocalChangesState`'s overlay, `Request::Amending`),
+//! which brings `HEAD`'s message with it; what an amend costs is never read before the press
+//! (rule 3 of the redesign, C14). Nothing here waits: each is a submit.
 //!
-//! **The seal.** An amend's token is built only by a confirmation surface (R1.1), never here. An
-//! amend that need not be confirmed — git logs it and no remote has it — is confirmed by the
-//! box's amend button or the commit chord — the commit box itself, `cairn_ui::AmendButton`, which
-//! hands its token to [`amend_confirmed`]; one a remote has, or one git keeps no reflog for
-//! (`Consequence::needs_confirming`), opens the confirmation dialog (`Confirming`) over the window
-//! first, by button or chord; and the skip of a hook that failed an amend is
-//! `cairn_ui::AmendSkip` in the Git Error dialog, which draws the prompt the amend was confirmed
-//! with and builds its token from that consequence — one press, no second dialog (the user's
-//! decision, 2026-10-09). The engine re-checks every token's consequence before git runs.
-//! Phase 18 rebuilds this on the engine's amend at the press (`LocalWrite::AmendAtPress`), which
-//! runs a recoverable amend with no token at all.
+//! **One button, one press** (R10.6, C1, C6): `Commit N Files`, or "Amend Last Commit" while
+//! Amend is ticked; the commit chord does exactly what the button does. Amend asks
+//! `LocalWrite::AmendAtPress`, whose job reads the cost and runs an amend git logs and no remote
+//! has at once, with no token; any other ends `WriteEnding::NeedsConfirming`, and the
+//! confirmation dialog, "Amend Commit", opens on it — its Cancel returning to the box unchanged,
+//! its Amend asking `LocalWrite::Amend` with the token the dialog built, the one confirmation
+//! surface for it. A failed commit or amend opens the Git Error dialog, whose skip asks the same
+//! message again with `--no-verify`, once: a confirmed amend's with the token its failure handed
+//! back (`GitError::take_unspent`, R1.1's option (a)), so nothing asks twice.
 
 use std::rc::Rc;
 
-use cairn_model::{
-    ChangeList, Confirmed, Consequence, OperationInProgress, ScrubbedLines, StagedAgainst,
-};
+use cairn_model::{ChangeList, HeadState, ScrubbedLines};
 use cairn_ui::accelerators::RecallStep;
-use cairn_ui::{Busy, CommitBox, CommitButton, GitErrorDialog, MainView};
+use cairn_ui::{AMEND_TITLE, Busy, CommitBox, CommitButton, GitErrorDialog, MainView};
 use freya::prelude::*;
 
 use crate::commit_box_state::{AskedCommit, compose_message, split_message};
@@ -39,11 +35,8 @@ use crate::local_changes_state::drawn_changes;
 use crate::local_writes;
 use crate::window::View;
 use crate::worker::{
-    AmendRead, CommitReads, LocalWrite, OperationId, Request, Retired, WriteEnding,
+    AmendRead, CommitReads, LocalWrite, OperationId, Request, Unspent, WriteEnding,
 };
-
-/// The confirmation dialog's title for an amend (R10.6).
-pub const AMEND_TITLE: &str = "Amend Commit";
 
 pub struct CommitBoxPane {
     view: View,
@@ -66,6 +59,38 @@ impl PartialEq for CommitBoxPane {
     }
 }
 
+/// What a commit asked is doing, drawn in the button's place (R10.4, C5): queued behind
+/// another write, in the one form every queued write uses; running; or cancelled until git is
+/// reaped.
+fn busy_of(asked: &AskedCommit, state: &crate::commit_box_state::CommitBox, view: View) -> Busy {
+    if state.is_cancelling() {
+        return Busy::Cancelling;
+    }
+    let writes = view.writes.read();
+    let running = writes.running();
+    if running.is_some_and(|running| running.id == asked.id) {
+        return Busy::Running {
+            verb: if asked.amend {
+                "Amending"
+            } else {
+                "Committing"
+            },
+            started: state.started(),
+        };
+    }
+    match running.or_else(|| writes.queued().find(|queued| queued.id != asked.id)) {
+        Some(ahead) => Busy::Waiting(format!("Waiting for {}…", ahead.awaited)),
+        None => Busy::Running {
+            verb: if asked.amend {
+                "Amending"
+            } else {
+                "Committing"
+            },
+            started: None,
+        },
+    }
+}
+
 impl Component for CommitBoxPane {
     fn render(&self) -> impl IntoElement {
         let view = self.view;
@@ -78,120 +103,62 @@ impl Component for CommitBoxPane {
                 submit(Request::CommitReads);
             }
         });
+        use_amend_confirmation(view, self.submit.clone());
 
         let state = commit.state.read();
-        let writes = view.writes.read();
         let refreshed = view.refreshed.read();
-        let operation = state.operation().cloned();
-        let stopped = operation
-            .as_ref()
-            .filter(|operation| operation.refuses_commit())
-            .map(|operation| {
-                format!(
-                    "Committing is unavailable while {} is in progress.",
-                    operation.name()
-                )
-            });
-        let merging = matches!(operation, Some(OperationInProgress::Merge));
-        let born = refreshed
-            .refs()
-            .is_some_and(|refs| !matches!(refs.head, cairn_model::HeadState::Unborn(_)));
+        let local = view.local.state.read();
+        let operation = state.operation().copied();
+        let stopped = operation.is_some_and(|operation| operation.refuses_commit());
+        let concluding = operation.is_some_and(|operation| operation.concluded_by_commit());
+        let head = refreshed.refs().map(|refs| &refs.head);
+        let born = head.is_some_and(|head| !matches!(head, HeadState::Unborn(_)));
+        let detached = head.is_some_and(|head| matches!(head, HeadState::Detached(_)));
         let amend_enabled = born && operation.is_none();
+        // One line at most (R10.8, rule 6): the operation in progress; or, while Amend is ticked
+        // and its staged list could not be read, that the lists show the status's own (R10.3);
+        // or a detached `HEAD`.
+        let line = match (operation, local.amend_unread()) {
+            (None, Some(why)) if state.is_amending() => Some(format!(
+                "Amend's staged list couldn't be read, so the lists show what is staged against \
+                 HEAD: {why}"
+            )),
+            (operation, _) => cairn_ui::operation_line(operation.as_ref(), detached),
+        };
 
-        let busy = state.asked().map(|asked| {
-            let running = writes
-                .running()
-                .is_some_and(|running| running.id == asked.id);
-            let verb = if asked.amend {
-                "Amending"
-            } else {
-                "Committing"
-            };
-            Busy {
-                what: if running {
-                    verb.to_owned()
-                } else {
-                    format!("{verb} (waiting)")
-                },
-                started: state.started().filter(|_| running),
-                cancellable: running,
-            }
-        });
-
-        let (button, amend_ok, note) = if state.is_amending() {
-            match state.amendable() {
-                None => (CommitButton::ReadingAmend, false, None),
-                Some(amendable) => {
-                    let note = amendable.lists_failed.as_ref().map(|why| {
-                        (
-                            format!(
-                                "Amend's staged list could not be read, so the lists show what \
-                                 is staged against HEAD: {why}"
-                            ),
-                            true,
-                        )
-                    });
-                    match &amendable.consequence {
-                        Ok(consequence) if consequence.needs_confirming() => (
-                            CommitButton::AmendAsking {
-                                serial: amendable.serial,
-                                consequence: consequence.clone(),
-                            },
-                            true,
-                            note,
-                        ),
-                        Ok(consequence) => (
-                            CommitButton::AmendInPlace {
-                                serial: amendable.serial,
-                                consequence: consequence.clone(),
-                            },
-                            true,
-                            note,
-                        ),
-                        Err(why) => (
-                            CommitButton::AmendUnreadable(why.clone()),
-                            false,
-                            Some((
-                                format!("What Amend would replace could not be read: {why}"),
-                                true,
-                            )),
-                        ),
-                    }
-                }
-            }
+        let busy = state.asked().map(|asked| busy_of(asked, &state, view));
+        let (button, enabled) = if state.is_amending() {
+            (CommitButton::Amend, true)
         } else {
-            let files = drawn_changes(&view.local.state.read()).len(ChangeList::Staged);
-            (CommitButton::Commit { files }, files > 0 || merging, None)
+            let files = drawn_changes(&local).len(ChangeList::Staged);
+            (CommitButton::Commit { files }, files > 0 || concluding)
         };
         let subject_given = !commit.subject.read().trim().is_empty();
-        // While a newer amend read is on its way the last one's consequence stays drawn, and the
-        // button waits for the new one: a press confirms only what was read last.
-        let ready = amend_ok
-            && subject_given
-            && state.asked().is_none()
-            && !(state.is_amending() && state.is_reading_amend());
+        let ready = enabled && subject_given && state.asked().is_none() && !stopped;
         let recent = state.recent().clone();
         let amending = state.is_amending();
-        drop((state, writes, refreshed));
+        drop((state, refreshed, local));
 
         let submit = self.submit.clone();
         let toggling = submit.clone();
         let pressing = submit.clone();
-        let confirming = submit.clone();
         let cancelling = submit.clone();
         CommitBox::new(commit.subject, commit.description)
             .amend(amending, amend_enabled)
             .button(button, ready)
             .busy(busy)
             .stopped(stopped)
-            .note(note)
+            .line(line)
             .recent(recent)
             .on_amend(move |on: bool| toggle_amend(on, view, toggling.as_deref()))
             .on_commit(move |()| pressed(view, pressing.clone()))
-            .on_confirmed(move |token: Confirmed| {
-                amend_confirmed(token, view, confirming.as_deref());
-            })
             .on_cancel(move |()| cancel(view, cancelling.as_deref()))
+            .on_edit(move |()| {
+                let mut state = view.local.commit.state;
+                if !state.peek().is_touched() || state.peek().recalled().is_some() {
+                    state.write().touch();
+                }
+            })
             .on_recall(move |at: usize| recall(at, view))
             .recall(Callback::new(move |step: RecallStep| {
                 recall_step(step, view)
@@ -208,12 +175,13 @@ fn submit_all(requests: Vec<Request>, submit: Option<&dyn Fn(Request)>) {
     }
 }
 
-/// Amend ticked or unticked (R10.3): the draft set aside or put back exactly, what an amend
-/// would replace asked over the latest status, or the status's own lists drawn again.
+/// Amend ticked or unticked (R10.3): the draft set aside or put back exactly, and amend's lists
+/// asked over the newest status, or the status's own drawn again.
 pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
     let commit = view.local.commit;
     let mut state = commit.state;
     let latest = view.refreshed.peek().local_changes().cloned();
+    let mut local = view.local.state;
     if on {
         if state.peek().is_amending() {
             return;
@@ -223,9 +191,8 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
             commit.description.peek().clone(),
         );
         state.write().tick_amend(&subject, &description);
-        if let (Some(status), Some(submit)) = (latest, submit) {
-            submit(Request::Amending { status });
-        }
+        let requests = local.write().amend_ticked(latest);
+        submit_all(requests, submit);
         return;
     }
     let Some((subject, description)) = state.write().untick_amend() else {
@@ -234,137 +201,108 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
     let (mut typed, mut body) = (commit.subject, commit.description);
     typed.set(subject);
     body.set(description);
-    if let Some(submit) = submit {
-        submit(Request::StopAmending);
-    }
-    // The lists while amending are let go of: the status's own are drawn again.
-    let drawn_amend =
-        drawn_changes(&view.local.state.peek()).staged_against() != StagedAgainst::Head;
-    if let (true, Some(status)) = (drawn_amend, latest) {
-        let mut local = view.local.state;
-        let requests = local.write().status_arrived(status);
-        submit_all(requests, submit);
-        crate::diff_actions::show_primary(view, submit, false);
-    }
+    let requests = local.write().amend_unticked(latest);
+    submit_all(requests, submit);
+    crate::diff_actions::show_primary(view, submit, false);
 }
 
-/// The commit button, or the commit chord heard in a field (R10.1, R7.3): commits what is
-/// staged; amending a commit a remote has, or one git keeps no reflog for, opens the confirmation
-/// dialog. Any other amend is confirmed by the box itself and comes through [`amend_confirmed`].
+/// The button, or the commit chord heard in a field (R10.1, R10.6, R7.3): commits what is
+/// staged, or — Amend ticked — asks the amend at the press, whose job reads what it costs and
+/// runs it, or ends asking for the dialog.
 pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let commit = view.local.commit;
-    let (amending, consequence) = {
+    let amending = {
         let state = commit.state.peek();
         if state.asked().is_some() {
             return;
         }
-        (
-            state.is_amending(),
-            state
-                .amendable()
-                .and_then(|amendable| amendable.consequence.as_ref().ok().cloned()),
-        )
+        state.is_amending()
     };
     let message = compose_message(&commit.subject.peek(), &commit.description.peek());
-    if amending {
-        if let Some(consequence) = consequence.filter(|c| c.needs_confirming()) {
-            open_amend_dialog(view, submit, &consequence, message, false);
-        }
-        return;
-    }
     if let Some(submit) = submit.as_deref() {
-        ask_commit(view, submit, message, false);
+        let write = if amending {
+            LocalWrite::AmendAtPress {
+                message: message.clone(),
+                skip_hooks: false,
+            }
+        } else {
+            LocalWrite::Commit {
+                message: message.clone(),
+                skip_hooks: false,
+            }
+        };
+        ask(view, submit, write, amending, message, false);
     }
 }
 
-fn ask_commit(view: View, submit: &dyn Fn(Request), message: String, skip_hooks: bool) {
-    let mut writes = view.writes;
-    let id = local_writes::ask(
-        &mut writes.write(),
-        submit,
-        LocalWrite::Commit {
-            message: message.clone(),
-            skip_hooks,
-        },
-    );
-    let mut state = view.local.commit.state;
-    state.write().commit_asked(AskedCommit {
-        id,
-        amend: false,
-        message,
-        skip_hooks,
-        confirmed_with: None,
-    });
-}
-
-/// The amend button confirmed in place (R10.6): the amend asked with the token the
-/// confirmation surface built and the draft as it stands.
-pub fn amend_confirmed(token: Confirmed, view: View, submit: Option<&dyn Fn(Request)>) {
-    let commit = view.local.commit;
-    if commit.state.peek().asked().is_some() {
-        return;
-    }
-    let message = compose_message(&commit.subject.peek(), &commit.description.peek());
-    if let Some(submit) = submit {
-        ask_amend(view, submit, token, message, false);
-    }
-}
-
-fn ask_amend(
+/// `write` asked, and drawn waiting until it starts.
+fn ask(
     view: View,
     submit: &dyn Fn(Request),
-    confirmed: Confirmed,
-    message: String,
-    skip_hooks: bool,
-) -> OperationId {
-    let confirmed_with = Some(Rc::new(confirmed.consequence().clone()));
-    let mut writes = view.writes;
-    let id = local_writes::ask(
-        &mut writes.write(),
-        submit,
-        LocalWrite::Amend {
-            confirmed,
-            message: message.clone(),
-            skip_hooks,
-        },
-    );
-    let mut state = view.local.commit.state;
-    state.write().commit_asked(AskedCommit {
-        id,
-        amend: true,
-        message,
-        skip_hooks,
-        confirmed_with,
-    });
-    id
-}
-
-/// The confirmation dialog over the window for an amend: its words and its button the
-/// consequence's, its token asking the amend of `message`.
-fn open_amend_dialog(
-    view: View,
-    submit: Option<Rc<dyn Fn(Request)>>,
-    consequence: &Consequence,
+    write: LocalWrite,
+    amend: bool,
     message: String,
     skip_hooks: bool,
 ) {
-    let mut confirming = view.confirming;
-    confirming.set(Some(Confirming::new(
-        AMEND_TITLE,
-        consequence.clone(),
-        move |token| {
-            if let Some(submit) = submit.as_deref() {
-                ask_amend(view, submit, token, message.clone(), skip_hooks);
-            }
-        },
-    )));
+    let mut writes = view.writes;
+    let id = local_writes::ask(&mut writes.write(), submit, write);
+    let mut state = view.local.commit.state;
+    state.write().commit_asked(AskedCommit {
+        id,
+        amend,
+        message,
+        skip_hooks,
+    });
 }
 
-/// Cancel (R10.4, R4.3): the running commit, never one still queued.
+/// The confirmation dialog over the window for an amend at the press that must be confirmed — a
+/// remote has `HEAD`, or git keeps no reflog (R10.6, C1) — opened as the box renders, which holds
+/// the submitter its answer needs: titled "Amend Commit", in the consequence's fixed sentences;
+/// its Amend asks the amend of the pressed message under the token it built, its Cancel leaves
+/// the box as it was.
+fn use_amend_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
+    use_side_effect(move || {
+        if !view.local.commit.state.read().is_confirming() {
+            return;
+        }
+        let mut state = view.local.commit.state;
+        let Some((consequence, asked)) = state.write().take_confirming() else {
+            return;
+        };
+        let Some(submit) = submit.clone() else {
+            return;
+        };
+        let mut confirming = view.confirming;
+        confirming.set(Some(Confirming::new(
+            AMEND_TITLE,
+            consequence,
+            move |token| {
+                let write = LocalWrite::Amend {
+                    confirmed: token,
+                    message: asked.message.clone(),
+                    skip_hooks: asked.skip_hooks,
+                };
+                ask(
+                    view,
+                    &*submit,
+                    write,
+                    true,
+                    asked.message.clone(),
+                    asked.skip_hooks,
+                );
+            },
+        )));
+    });
+}
+
+/// Cancel (R10.4, R4.3): the running commit, never one still queued; "Cancelling…" until git is
+/// reaped.
 pub fn cancel(view: View, submit: Option<&dyn Fn(Request)>) {
     let asked = view.local.commit.state.peek().asked().map(|asked| asked.id);
     let running = view.writes.peek().running().map(|running| running.id);
     if let (Some(asked), Some(submit)) = (asked.filter(|id| Some(*id) == running), submit) {
+        let mut state = view.local.commit.state;
+        state.write().cancel_asked();
         submit(Request::CancelWrite { id: asked });
     }
 }
@@ -431,7 +369,8 @@ fn draft_empty(view: View) -> bool {
 }
 
 /// What the box reads has arrived (R10.2, R10.8): kept, and the message git prepared, cleaned,
-/// filling an empty draft as a merge, a single cherry-pick or a single revert begins.
+/// filling an empty, untouched draft while a merge, a single cherry-pick or a single revert is
+/// in progress (C7).
 pub fn reads_arrived(reads: CommitReads, view: View) {
     let empty = draft_empty(view);
     let mut state = view.local.commit.state;
@@ -441,72 +380,34 @@ pub fn reads_arrived(reads: CommitReads, view: View) {
     }
 }
 
-/// What amending would replace has arrived for `status` (R10.3, R10.6): kept only while Amend is
-/// ticked — `HEAD`'s message filling an empty draft once, the amend's lists drawn, or the
-/// status's own when amend's staged list could not be read — and handed to a worker to free
-/// otherwise.
+/// Amend's lists arrived for `status` (R10.3): drawn by Local Changes' lists while Amend is
+/// ticked — or the status's own, where amend's staged list could not be read — and `HEAD`'s
+/// message filling an empty, untouched draft (C7); handed to a worker to free otherwise.
 pub fn amend_arrived(
     status: std::sync::Arc<cairn_model::LocalChanges>,
     read: AmendRead,
     view: View,
     submit: &dyn Fn(Request),
 ) {
-    let AmendRead {
-        consequence,
-        message,
-        lists,
-    } = read;
-    if !view.local.commit.state.peek().is_amending() {
-        submit(Request::Retire(Retired::amending(status, lists.ok())));
-        return;
-    }
-    let (lists, failed) = match lists {
-        Ok(lists) => (Some(lists), None),
-        Err(why) => (None, Some(why)),
-    };
-    let empty = draft_empty(view);
-    let mut state = view.local.commit.state;
-    let filling = state
-        .write()
-        .amend_arrived(consequence, message, failed, empty);
-    if let Some(message) = filling {
-        fill(view, &message);
+    let AmendRead { message, lists } = read;
+    if let Ok(message) = message {
+        let empty = draft_empty(view);
+        let filling = view
+            .local
+            .commit
+            .state
+            .peek()
+            .amend_message_arrived(message, empty);
+        if let Some(message) = filling {
+            fill(view, &message);
+        }
     }
     let mut local = view.local.state;
-    let requests = match lists {
-        Some(lists) => {
-            let mut requests = local.write().status_arrived(lists);
-            requests.push(Request::Retire(Retired::status(status)));
-            requests
-        }
-        // The status's own lists, if the amend's were drawn.
-        None if drawn_changes(&local.peek()).staged_against() != StagedAgainst::Head => {
-            local.write().status_arrived(status)
-        }
-        None => vec![Request::Retire(Retired::status(status))],
-    };
+    let requests = local.write().amend_arrived(status, lists);
     for request in requests {
         submit(request);
     }
     crate::diff_actions::show_primary(view, Some(submit), false);
-}
-
-/// A status arrived while Amend is ticked: what an amend would replace is asked over it, rather
-/// than the status drawn as it is. `false` when Amend is not ticked.
-pub fn status_arrived_amending(
-    status: &std::sync::Arc<cairn_model::LocalChanges>,
-    view: View,
-    submit: &dyn Fn(Request),
-) -> bool {
-    let mut state = view.local.commit.state;
-    if !state.peek().is_amending() {
-        return false;
-    }
-    state.write().amend_asked();
-    submit(Request::Amending {
-        status: std::sync::Arc::clone(status),
-    });
-    true
 }
 
 /// A refresh's refs arrived: what the box reads is asked again while Local Changes is shown.
@@ -530,10 +431,18 @@ pub fn write_output(id: OperationId, lines: &ScrubbedLines, view: View) {
     }
 }
 
-/// A write ended: when it is this box's commit — made, the draft cleared and Amend unticked
-/// (R10.3); failed by git, the Git Error dialog opened (R10.5); anything else said under the
-/// lists, the draft kept (R10.7).
-pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &dyn Fn(Request)) {
+/// A write ended: when it is this box's commit — made, the draft it took cleared and Amend
+/// unticked (R10.3); failed by git, the Git Error dialog opened (R10.5), with the token a
+/// confirmed amend's failure handed back; an amend at the press that must be confirmed, the
+/// dialog opened on its consequence (R10.6); anything else, the draft kept (R10.7) — a cancel
+/// opens nothing (rule 4).
+pub fn write_ended(
+    id: OperationId,
+    ending: &WriteEnding,
+    unspent: &mut Unspent,
+    view: View,
+    submit: &dyn Fn(Request),
+) {
     let mut state = view.local.commit.state;
     let Some(asked) = state.write().ended(id) else {
         return;
@@ -541,16 +450,21 @@ pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &d
     match ending {
         WriteEnding::Done(_) => {
             let was_amending = state.peek().is_amending();
-            state.write().made();
             // Only the draft the commit took: one typed while it ran is the next message.
             let commit = view.local.commit;
             let taken = compose_message(&commit.subject.peek(), &commit.description.peek())
                 == asked.message;
+            state.write().made(taken);
             if taken {
                 fill(view, "");
             }
             if was_amending {
-                submit(Request::StopAmending);
+                let latest = view.refreshed.peek().local_changes().cloned();
+                let mut local = view.local.state;
+                let requests = local.write().amend_unticked(latest);
+                for request in requests {
+                    submit(request);
+                }
             }
         }
         WriteEnding::Failed {
@@ -559,67 +473,70 @@ pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &d
             ..
         } => {
             let command = command.clone();
-            state.write().failed(asked, command, output);
+            state.write().failed(asked, command, output, unspent.take());
         }
-        // An amend at the press that must be confirmed: nothing asks one here yet (phase 18
-        // opens the dialog on it).
+        WriteEnding::NeedsConfirming { consequence } => {
+            state.write().needs_confirming(consequence.clone(), asked);
+        }
         WriteEnding::Failed { command: None, .. }
         | WriteEnding::Stale { .. }
         | WriteEnding::Refused { .. }
         | WriteEnding::Cancelled { .. }
-        | WriteEnding::NeedsConfirming { .. }
         | WriteEnding::Incomplete { .. }
         | WriteEnding::NotRun { .. } => {}
     }
 }
 
-/// The Git Error dialog, while one is open (R10.5): a failed amend's skip is the commit box's
-/// `AmendSkip`, confirming the amend's own consequence again; a commit's asks the same message
-/// with its hooks skipped.
+/// The Git Error dialog, while one is open (R10.5): its skip asks the failed commit or amend
+/// again with its hooks skipped; Close lets it go, and with it any token it kept.
 pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
-    let error = view.local.commit.state.read().error().cloned()?;
-    let dialog = GitErrorDialog::new(error.serial, error.command.clone(), error.lines.clone())
-        .key(DiffKey::U64(error.serial))
-        .skip(error.skip)
+    let (serial, command, lines, skip) = {
+        let state = view.local.commit.state.read();
+        let error = state.error()?;
+        (
+            error.serial,
+            error.command.clone(),
+            error.lines.clone(),
+            error.skip,
+        )
+    };
+    let dialog = GitErrorDialog::new(serial, command, lines)
+        .key(DiffKey::U64(serial))
+        .skip(skip)
         .on_close(move |()| {
             let mut state = view.local.commit.state;
             let _ = state.write().close_error();
-        });
-    let dialog = match error.failed.confirmed_with.clone().filter(|_| error.skip) {
-        Some(consequence) => {
-            let message = error.failed.message.clone();
-            dialog.skip_amend(consequence, move |token: Confirmed| {
-                skip_amend_hooks(token, message.clone(), view, submit.as_deref());
-            })
-        }
-        None => dialog.on_skip(move |()| skip_hooks(view, submit.clone())),
-    };
+        })
+        .on_skip(move |()| skip_hooks(view, submit.clone()));
     Some(dialog.into())
 }
 
-/// A failed commit's skip (R10.5): the same message asked again with its hooks skipped —
-/// `--no-verify` for that one commit alone.
+/// The Git Error dialog's skip (R10.5, C4): the same message asked again with `--no-verify` for
+/// that one commit or amend — a confirmed amend's under the token its failure handed back,
+/// asking nothing again; an amend at the press's at the press again, which reads its cost anew.
 pub fn skip_hooks(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let mut state = view.local.commit.state;
-    let Some(error) = state.write().close_error() else {
+    let Some(mut error) = state.write().close_error() else {
         return;
     };
-    if let (false, Some(submit)) = (error.failed.amend, submit.as_deref()) {
-        ask_commit(view, submit, error.failed.message, true);
-    }
-}
-
-/// A failed amend's skip (the user's decision, 2026-10-09): one press amends at once without
-/// hooks, under the token `AmendSkip` built from the consequence the amend was confirmed with.
-fn skip_amend_hooks(
-    token: Confirmed,
-    message: String,
-    view: View,
-    submit: Option<&dyn Fn(Request)>,
-) {
-    let mut state = view.local.commit.state;
-    let _ = state.write().close_error();
-    if let Some(submit) = submit {
-        ask_amend(view, submit, token, message, true);
-    }
+    let Some(submit) = submit.as_deref() else {
+        return;
+    };
+    let failed = error.failed.clone();
+    let write = match (failed.amend, error.take_unspent()) {
+        (false, _) => LocalWrite::Commit {
+            message: failed.message.clone(),
+            skip_hooks: true,
+        },
+        (true, Some(confirmed)) => LocalWrite::Amend {
+            confirmed,
+            message: failed.message.clone(),
+            skip_hooks: true,
+        },
+        (true, None) => LocalWrite::AmendAtPress {
+            message: failed.message.clone(),
+            skip_hooks: true,
+        },
+    };
+    ask(view, submit, write, failed.amend, failed.message, true);
 }

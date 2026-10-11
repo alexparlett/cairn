@@ -899,6 +899,7 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
                 message: "b.rs changed since it was read".to_owned(),
             },
             read_again: ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     assert!(
@@ -932,8 +933,11 @@ fn a_write_is_drawn_queued_running_and_stale_where_it_was_asked() {
                 acknowledged: None,
                 locks_before: Vec::new(),
                 locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
             }),
             read_again: ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
         },
     );
     assert!(

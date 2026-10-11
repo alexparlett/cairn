@@ -410,7 +410,7 @@ impl ActivityLog {
         self.push(Activity::new(
             ActivityKey::Write(asked.id),
             asked.name.clone(),
-            asked.replaces,
+            None,
             asked.cancellable,
         ));
     }
@@ -485,7 +485,12 @@ impl ActivityLog {
             return;
         };
         let (outcome, acknowledged) = match ending {
-            WriteEnding::Done(done) => (Outcome::Succeeded, done.acknowledged.clone()),
+            // An amend's way back is the commit its run answered it replaced (R12.1), never one
+            // read from the request: an amend at the press reads its commit as it runs.
+            WriteEnding::Done(done) => {
+                entry.replaces = done.replaced;
+                (Outcome::Succeeded, done.acknowledged.clone())
+            }
             WriteEnding::Incomplete { done, message, .. } => (
                 Outcome::PartlyDone(message.clone()),
                 done.acknowledged.clone(),
@@ -797,13 +802,12 @@ mod tests {
     use super::*;
     use crate::worker::Done;
 
-    fn asked(id: OperationId, what: &str, replaces: Option<Oid>) -> Asked {
+    fn asked(id: OperationId, what: &str) -> Asked {
         Asked {
             id,
             what: what.to_owned(),
             name: crate::status_text::capitalised(what),
             awaited: "the commit to finish",
-            replaces,
             cancellable: true,
             prompt: None,
         }
@@ -839,6 +843,8 @@ mod tests {
             acknowledged: acknowledged.map(str::to_owned),
             locks_before: Vec::new(),
             locks_after: Vec::new(),
+            replaced: None,
+            cost_after: None,
         })
     }
 
@@ -850,10 +856,10 @@ mod tests {
     fn each_operation_is_an_entry_with_its_git_its_prompt_and_its_way_back() {
         let mut log = ActivityLog::default();
         let (stage, amend) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        log.write_started(&asked(stage, "staging 1 file", None));
+        log.write_started(&asked(stage, "staging 1 file"));
         log.write_ended(stage, &done(None), None);
         let replaced = Oid::from_bytes(&[0xab; 20]).unwrap();
-        log.write_started(&asked(amend, "amend", Some(replaced)));
+        log.write_started(&asked(amend, "amend"));
         log.output(
             ActivityKey::Write(amend),
             &said(&["hook: \u{1b}[31mok\u{1b}[0m"]),
@@ -876,7 +882,16 @@ mod tests {
             )],
             false,
         );
-        log.write_ended(amend, &done(Some("Amend abababa? It replaces …")), None);
+        // The way back is what the run answered it replaced (phase 18): an amend at the press
+        // names no commit as it is asked.
+        let amended = match done(Some("Amend abababa? It replaces …")) {
+            WriteEnding::Done(done) => WriteEnding::Done(Done {
+                replaced: Some(replaced),
+                ..done
+            }),
+            other => other,
+        };
+        log.write_ended(amend, &amended, None);
         let (entries, _) = log.shown(false);
         assert_eq!(
             entries
@@ -905,7 +920,7 @@ mod tests {
 
         // An amend that failed points nowhere: nothing was replaced.
         let failed = OperationId::for_tests(3);
-        log.write_started(&asked(failed, "amend", Some(replaced)));
+        log.write_started(&asked(failed, "amend"));
         log.write_ended(
             failed,
             &WriteEnding::Failed {
@@ -930,7 +945,7 @@ mod tests {
         let mut log = ActivityLog::default();
         for n in 0..ACTIVITY_ENTRIES as u64 + 5 {
             let id = OperationId::for_tests(n);
-            log.write_started(&asked(id, &format!("write {n}"), None));
+            log.write_started(&asked(id, &format!("write {n}")));
             log.write_ended(id, &done(None), None);
         }
         assert_eq!(log.len(), ACTIVITY_ENTRIES);
@@ -939,7 +954,7 @@ mod tests {
             Some("Write 5")
         );
         let id = OperationId::for_tests(10_000);
-        log.write_started(&asked(id, "commit", None));
+        log.write_started(&asked(id, "commit"));
         let lines: Vec<String> = (0..ACTIVITY_LINES + 7)
             .map(|n| format!("line {n}"))
             .collect();
@@ -977,7 +992,7 @@ mod tests {
             .collect();
         for n in 0..40 {
             let id = OperationId::for_tests(n);
-            log.write_started(&asked(id, "commit", None));
+            log.write_started(&asked(id, "commit"));
             log.output(ActivityKey::Write(id), &said(&wide));
             log.ran(
                 ActivityKey::Write(id),
@@ -1013,7 +1028,7 @@ mod tests {
     fn a_running_operation_over_the_budget_keeps_its_latest_lines() {
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "commit", None));
+        log.write_started(&asked(id, "commit"));
         for n in 0..4_000 {
             let line = format!("{n:05}{}", "x".repeat(1_500));
             log.output(ActivityKey::Write(id), &said(&[&line]));
@@ -1035,8 +1050,8 @@ mod tests {
     fn closed_the_popover_builds_no_lines() {
         let mut log = ActivityLog::default();
         let (older, newer) = (OperationId::for_tests(1), OperationId::for_tests(2));
-        log.write_started(&asked(older, "commit", None));
-        log.write_started(&asked(newer, "commit", None));
+        log.write_started(&asked(older, "commit"));
+        log.write_started(&asked(newer, "commit"));
         for n in 0..30_000 {
             log.output(ActivityKey::Write(newer), &said(&[format!("line {n}")]));
         }
@@ -1068,7 +1083,7 @@ mod tests {
     fn a_long_line_is_kept_cut_with_the_diff_views_marker() {
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "commit", None));
+        log.write_started(&asked(id, "commit"));
         let long = format!("x{}", "é".repeat(128 * 1024));
         log.output(ActivityKey::Write(id), &said(&[&long]));
         let (entries, _) = log.shown(false);
@@ -1090,7 +1105,7 @@ mod tests {
     fn the_lock_offer_and_an_unclean_exit_are_kept() {
         let mut log = ActivityLog::default();
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "staging 1 file", None));
+        log.write_started(&asked(id, "staging 1 file"));
         log.ran(
             ActivityKey::Write(id),
             &[record(
@@ -1141,7 +1156,7 @@ mod tests {
         let mut log = ActivityLog::default();
         log.locks_at_open(&[PathBuf::from("/r/.git/index.lock")], true);
         let id = OperationId::for_tests(1);
-        log.write_started(&asked(id, "staging 1 file", None));
+        log.write_started(&asked(id, "staging 1 file"));
         log.ran(ActivityKey::Write(id), &[], true);
         let (older, newer) = (OperationId::for_tests(10), OperationId::for_tests(11));
         log.lock_asked(older, ActivityKey::Write(id));
@@ -1168,7 +1183,7 @@ mod tests {
         // The removal fails: offered still. It succeeds: offered nowhere.
         let removal = OperationId::for_tests(20);
         log.removal_asked(removal);
-        log.write_started(&asked(removal, "removing the stale lock", None));
+        log.write_started(&asked(removal, "removing the stale lock"));
         log.write_ended(
             removal,
             &WriteEnding::Refused {
@@ -1186,7 +1201,7 @@ mod tests {
         );
         let removal = OperationId::for_tests(21);
         log.removal_asked(removal);
-        log.write_started(&asked(removal, "removing the stale lock", None));
+        log.write_started(&asked(removal, "removing the stale lock"));
         log.write_ended(removal, &done(None), None);
         assert!(log.shown(false).0.iter().all(|entry| entry.lock.is_none()));
     }
@@ -1273,10 +1288,10 @@ mod tests {
     fn an_operation_whose_lines_were_let_go_says_so() {
         let mut log = ActivityLog::default();
         let quiet = OperationId::for_tests(1);
-        log.write_started(&asked(quiet, "commit", None));
+        log.write_started(&asked(quiet, "commit"));
         log.write_ended(quiet, &done(None), None);
         let old = OperationId::for_tests(2);
-        log.write_started(&asked(old, "commit", None));
+        log.write_started(&asked(old, "commit"));
         log.ran(
             ActivityKey::Write(old),
             &[record(
@@ -1288,7 +1303,7 @@ mod tests {
         );
         log.write_ended(old, &done(None), None);
         let new = OperationId::for_tests(3);
-        log.write_started(&asked(new, "commit", None));
+        log.write_started(&asked(new, "commit"));
         let wide: Vec<String> = (0..4_000)
             .map(|n| format!("{n:05}{}", "x".repeat(1_500)))
             .collect();

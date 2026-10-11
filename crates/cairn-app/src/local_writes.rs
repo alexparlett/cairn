@@ -23,8 +23,6 @@ pub struct Asked {
     /// What a wait behind it waits for: "the commit to finish", "the branch to be created"
     /// (`LocalWrite::awaited`).
     pub awaited: &'static str,
-    /// The commit it replaces — an amend's — which the activity popover points back to.
-    pub replaces: Option<cairn_model::Oid>,
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
     pub cancellable: bool,
     /// The prompt a destructive write's confirmation recorded, copied as it was asked
@@ -40,7 +38,6 @@ impl Asked {
             what: "a write".to_owned(),
             name: "A write".to_owned(),
             awaited: UNKNOWN_WRITE,
-            replaces: None,
             cancellable: false,
             prompt: None,
         }
@@ -70,7 +67,6 @@ impl LocalWrites {
             what: write.what(),
             name: write.name(),
             awaited: write.awaited(),
-            replaces: write.replaces(),
             cancellable: write.is_cancellable(),
             prompt: write.prompt(),
         });

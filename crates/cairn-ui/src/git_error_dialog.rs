@@ -1,10 +1,12 @@
-//! Fork's `Git Error` dialog for a commit that failed (staging-and-commit R10.5): the command
-//! and git's output — a hook's lines among it, ANSI sequences already stripped by the window —
-//! with `Skip pre-commit hooks and commit` offered only where git would run a `pre-commit` or
-//! `commit-msg` hook (R6.6), and `Close`. For an amend the skip is the commit box's
-//! `AmendSkip`, which draws the prompt the amend was confirmed with and builds the skipped
-//! amend's token from it; this file builds none. Escape and a press outside close it; nothing is the
-//! default, as in Fork (Tracker #2173). The draft is the window's, untouched by either answer.
+//! Fork's `Git Error` dialog for a commit or an amend that failed (staging-and-commit R10.5, C4):
+//! the command and git's output — a hook's lines among it, ANSI sequences already stripped by the
+//! window — and, in its footer in the platform's order, `Skip pre-commit hooks and commit` and
+//! `Close`, one button component for both ([`crate::answer_button`]), focus on Close so a Return
+//! pressed by habit never skips the hooks. The skip is offered on every failed commit or amend
+//! whose hooks were not skipped already, and answers once; what it runs — and, for an amend that
+//! was confirmed, the token it runs with — is the window's. No prompt text is drawn here, and
+//! no token is built. Escape and a press outside close it, as in Fork (Tracker #2173). The
+//! draft is the window's, untouched by either answer.
 //!
 //! The output can be as long as a hook makes it, so it is drawn through a virtualizing view —
 //! one row per line, only the rows in view built — never a `ScrollView`, and opens at its end,
@@ -18,9 +20,7 @@ use crate::accelerators::Os;
 use crate::answer_button::{AnswerColours, answer};
 use crate::button_order::ordered;
 
-use cairn_model::{Confirmed, Consequence};
-
-use crate::commit_box::{AmendSkip, SKIP_HOOKS_CAPTION};
+use crate::commit_box::SKIP_HOOKS_CAPTION;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 
 /// Fork's words.
@@ -41,8 +41,6 @@ pub struct GitErrorDialog {
     lines: Rc<Vec<String>>,
     skip: bool,
     on_skip: EventHandler<()>,
-    /// A failed amend's skip: the consequence it was confirmed with, and where the token goes.
-    skip_amend: Option<(Rc<Consequence>, EventHandler<Confirmed>)>,
     on_close: EventHandler<()>,
     platform: Os,
     key: DiffKey,
@@ -58,14 +56,13 @@ impl GitErrorDialog {
             lines,
             skip: false,
             on_skip: EventHandler::new(|()| {}),
-            skip_amend: None,
             on_close: EventHandler::new(|()| {}),
             platform: Os::current(),
             key: DiffKey::None,
         }
     }
 
-    /// Whether the skip is offered: only where a hook `--no-verify` skips exists (R10.5).
+    /// Whether the skip is offered: on every failure whose hooks were not skipped already (C4).
     pub fn skip(mut self, offered: bool) -> Self {
         self.skip = offered;
         self
@@ -74,19 +71,6 @@ impl GitErrorDialog {
     /// The skip was pressed: the same commit again, its hooks skipped this once.
     pub fn on_skip(mut self, on_skip: impl Into<EventHandler<()>>) -> Self {
         self.on_skip = on_skip.into();
-        self
-    }
-
-    /// A failed amend's skip, in place of the commit's (the user's decision of 2026-10-09):
-    /// one press amends at once without hooks, under a token built from `consequence` — the one
-    /// the amend was confirmed with — by the commit box's `AmendSkip`, which draws its prompt.
-    /// Offered whatever [`Self::skip`] says.
-    pub fn skip_amend(
-        mut self,
-        consequence: Rc<Consequence>,
-        on_confirmed: impl Into<EventHandler<Confirmed>>,
-    ) -> Self {
-        self.skip_amend = Some((consequence, on_confirmed.into()));
         self
     }
 
@@ -108,7 +92,6 @@ impl PartialEq for GitErrorDialog {
     fn eq(&self, other: &Self) -> bool {
         self.serial == other.serial
             && self.skip == other.skip
-            && self.skip_amend.is_some() == other.skip_amend.is_some()
             && self.platform == other.platform
             && self.key == other.key
     }
@@ -164,25 +147,22 @@ impl Component for GitErrorDialog {
         .width(Size::fill())
         .height(Size::px(OUTPUT_HEIGHT));
 
-        let mut actions: Vec<Element> = Vec::new();
-        let amend_skip = self.skip_amend.as_ref().map(|(consequence, on_confirmed)| {
-            let close = self.on_close.clone();
-            let on_confirmed = on_confirmed.clone();
-            AmendSkip::new(self.serial, consequence.clone()).on_confirmed(
-                move |token: Confirmed| {
-                    on_confirmed.call(token);
-                    close.call(());
-                },
-            )
-        });
-        if self.skip && amend_skip.is_none() {
-            actions.push(
-                Button::new()
-                    .on_press(move |_| skip())
-                    .child(SKIP_HOOKS_CAPTION)
-                    .into(),
-            );
-        }
+        let skip_id = use_a11y();
+        let colours_of_answers = AnswerColours::of_theme();
+        let actions: Vec<Element> = self
+            .skip
+            .then(|| {
+                answer(
+                    self.serial,
+                    skip_id,
+                    SKIP_HOOKS_CAPTION.to_owned(),
+                    false,
+                    &colours_of_answers,
+                    skip,
+                )
+            })
+            .into_iter()
+            .collect();
         let closing = close.clone();
         // In the platform's order (the user's decision E), Close in Cancel's place.
         let buttons = PopupButtons::new().children(ordered(
@@ -195,7 +175,7 @@ impl Component for GitErrorDialog {
                 close_id,
                 CLOSE_CAPTION.to_owned(),
                 true,
-                &AnswerColours::of_theme(),
+                &colours_of_answers,
                 closing,
             ),
         ));
@@ -232,8 +212,7 @@ impl Component for GitErrorDialog {
                                     .font_family(DIFF_FONT_FAMILY)
                                     .font_size(12.)
                                     .child(output),
-                            )
-                            .maybe_child(amend_skip),
+                            ),
                     )
                     .child(buttons),
             )

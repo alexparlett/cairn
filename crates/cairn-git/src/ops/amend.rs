@@ -79,6 +79,51 @@ pub fn amend_consequence(
             }
         },
     };
+    Ok(Consequence::Amend {
+        commit,
+        published: publication(repo, &snapshot, branch, &commit, cancel)?,
+        reflog: reflog(git, repo, branch.map(|branch| &branch.name), cancel)?,
+    })
+}
+
+/// What an amend run at the press turned out to cost, read again after git was reaped
+/// (staging-and-commit R1.5, C35, the user's ratification of 2026-10-10, option B): whether a
+/// remote now has `replaced` — the same walk [`amend_consequence`] ran, over the refs as they
+/// are now, a push made while a hook ran among them — and whether git logged the move away
+/// from it, read from the reflog itself: an entry whose old id is `replaced` in `HEAD`'s log or
+/// the current branch's ([`logged_away_from`]), which is what Show Lost Commits finds it by.
+/// It reports and does not prevent: the amend is made whatever this says.
+pub(super) fn amend_after(
+    repo: &Repository,
+    replaced: Oid,
+    cancel: &impl Cancel,
+) -> Result<Consequence, Error> {
+    let snapshot = repo.refs(cancel)?.snapshot;
+    let branch = match &snapshot.head {
+        HeadState::Branch(name) => snapshot.find(name),
+        HeadState::Detached(_) | HeadState::Unborn(_) => None,
+    };
+    let logged = logged_away_from(repo, &replaced, branch.map(|branch| &branch.name));
+    Ok(Consequence::Amend {
+        commit: replaced,
+        published: publication(repo, &snapshot, branch, &replaced, cancel)?,
+        reflog: if logged {
+            Reflog::Written
+        } else {
+            Reflog::NotWritten
+        },
+    })
+}
+
+/// Whether a remote has `commit` (module docs): the current branch's upstream, a
+/// remote-tracking ref that exists, reaching it; or else any remote-tracking ref.
+fn publication(
+    repo: &Repository,
+    snapshot: &cairn_model::RefsSnapshot,
+    branch: Option<&cairn_model::Ref>,
+    commit: &Oid,
+    cancel: &impl Cancel,
+) -> Result<Publication, Error> {
     let upstream = branch.and_then(|branch| match &branch.upstream {
         Some(Upstream::Exists {
             name,
@@ -87,30 +132,46 @@ pub fn amend_consequence(
         Some(Upstream::Exists { .. } | Upstream::Gone { .. }) | None => None,
     });
     let held_by_upstream = match &upstream {
-        Some((name, upstream)) => {
-            reaches(repo, &commit, [*upstream], cancel)?.then(|| name.clone())
-        }
+        Some((name, upstream)) => reaches(repo, commit, [*upstream], cancel)?.then(|| name.clone()),
         None => None,
     };
-    let published = match held_by_upstream {
+    Ok(match held_by_upstream {
         Some(name) => Publication::Upstream(name),
         None => {
             let remotes: Vec<Oid> = snapshot
                 .of_kind(RefKind::RemoteTracking)
                 .filter_map(|remote| remote.commit_id())
                 .collect();
-            if reaches(repo, &commit, remotes, cancel)? {
+            if reaches(repo, commit, remotes, cancel)? {
                 Publication::SomeRemote
             } else {
                 Publication::Unpublished
             }
         }
-    };
-    Ok(Consequence::Amend {
-        commit,
-        published,
-        reflog: reflog(git, repo, branch.map(|branch| &branch.name), cancel)?,
     })
+}
+
+/// Whether git logged a move away from `replaced` in `HEAD`'s reflog or, on a branch, the
+/// branch's: an entry whose old id is it. A log that cannot be read logged nothing.
+fn logged_away_from(repo: &Repository, replaced: &Oid, branch: Option<&RefName>) -> bool {
+    use std::io::BufRead as _;
+    let old = replaced.to_string();
+    let head_log = repo.git_dir().join("logs").join("HEAD");
+    let branch_log = branch.map(|branch| {
+        repo.inner()
+            .common_dir()
+            .join("logs")
+            .join(gix::path::from_bstr(branch.as_str().as_bytes().as_bstr()))
+    });
+    std::iter::once(head_log)
+        .chain(branch_log)
+        .filter_map(|log| std::fs::File::open(log).ok())
+        .any(|file| {
+            std::io::BufReader::new(file)
+                .split(b'\n')
+                .map_while(Result::ok)
+                .any(|entry| entry.split(|byte| *byte == b' ').next() == Some(old.as_bytes()))
+        })
 }
 
 /// Whether any of `hidden` reaches `commit`: whether the walk `commit --not <hidden>` yields

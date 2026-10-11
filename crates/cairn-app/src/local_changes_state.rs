@@ -14,6 +14,14 @@
 //! lists drawn are numbered ([`LocalChangesState::serial`]), so the primary's diff is asked again
 //! whenever they are replaced (`diff_actions::show_primary`).
 //!
+//! **Amend is an overlay over the status** (staging-and-commit R10.3, `review-code-app-ui.md`
+//! M3): every status lands here. While Amend is ticked, the lists drawn are amend's laid out
+//! over the newest status — Staged as amend's staged list against `HEAD`'s parent — read for it
+//! on the local lane (`Request::Amending`, which reads that list and `HEAD`'s message, never
+//! what the amend costs); until they arrive, the lists drawn before stay drawn, so the selection
+//! never moves through the status's own Staged list on the way. Where amend's staged list cannot
+//! be read, the status's own lists are drawn and the box says so.
+//!
 //! **The selection is the state's, and the state's alone** (staging-and-commit R8.1, rule 8):
 //! one [`LocalSelection`], or none, moved by the one rule of `next_selection` whenever other
 //! lists are drawn or the filter's rows change — as the status and the filter's answers arrive,
@@ -23,7 +31,7 @@
 
 use std::sync::{Arc, LazyLock};
 
-use cairn_model::{ChangeList, LocalChanges, MatchedRows, WorkingTreeStatus};
+use cairn_model::{ChangeList, LocalChanges, MatchedRows, StagedAgainst, WorkingTreeStatus};
 use cairn_ui::{ChangeCursor, LocalSelection, ShownFiles};
 use freya::prelude::*;
 
@@ -123,6 +131,16 @@ pub struct LocalChangesState {
     serial: u64,
     /// What is selected in the lists drawn (R8.1): `None` only when nothing is.
     selection: Option<LocalSelection>,
+    /// While Amend is ticked: amend's overlay (module docs).
+    amend: Option<AmendOverlay>,
+}
+
+/// Amend's overlay while Amend is ticked: the status amend's lists are being read over, and why
+/// the last read of amend's staged list failed, if it did.
+#[derive(Debug, Default)]
+struct AmendOverlay {
+    awaiting: Option<Arc<LocalChanges>>,
+    unread: Option<String>,
 }
 
 /// What [`drawn_changes`] hands back while nothing is drawn.
@@ -290,9 +308,95 @@ impl LocalChangesState {
             .collect()
     }
 
-    /// A status arrived: drawn at once with no filter on; with one, its rows asked first. Returns
-    /// what to submit: the filter's ask, and what is let go of, for a worker to free.
+    /// A status arrived: drawn at once with no filter on; with one, its rows asked first; while
+    /// Amend is ticked, amend's lists asked over it instead, the lists drawn kept meanwhile.
+    /// Returns what to submit: the filter's or the amend's ask, and what is let go of, for a
+    /// worker to free.
     pub fn status_arrived(&mut self, changes: Arc<LocalChanges>) -> Vec<Request> {
+        if let Some(overlay) = &mut self.amend {
+            let mut requests = vec![Request::Amending {
+                status: Arc::clone(&changes),
+            }];
+            requests.extend(overlay.awaiting.replace(changes).map(retire));
+            return requests;
+        }
+        self.lay_out(changes)
+    }
+
+    /// Amend ticked: amend's lists asked over `latest`, the newest status. Returns what to submit.
+    pub fn amend_ticked(&mut self, latest: Option<Arc<LocalChanges>>) -> Vec<Request> {
+        if self.amend.is_some() {
+            return Vec::new();
+        }
+        self.amend = Some(AmendOverlay::default());
+        latest
+            .map(|latest| self.status_arrived(latest))
+            .unwrap_or_default()
+    }
+
+    /// Amend unticked, or ended by a commit made: the overlay let go of, and `latest`'s own lists
+    /// drawn where amend's were. Returns what to submit.
+    pub fn amend_unticked(&mut self, latest: Option<Arc<LocalChanges>>) -> Vec<Request> {
+        let Some(overlay) = self.amend.take() else {
+            return Vec::new();
+        };
+        let mut requests: Vec<Request> = overlay.awaiting.map(retire).into_iter().collect();
+        let drawn_amend = self
+            .newest()
+            .is_some_and(|newest| newest.staged_against() != StagedAgainst::Head);
+        if let (true, Some(latest)) = (drawn_amend, latest) {
+            requests.extend(self.lay_out(latest));
+        }
+        requests
+    }
+
+    /// Amend's lists arrived for `status`: drawn when Amend is still ticked and `status` is the
+    /// newest asked — or, where amend's staged list could not be read, `status`'s own, the reason
+    /// kept for the box. Returns what to submit: what is let go of, the answer's holds among it.
+    pub fn amend_arrived(
+        &mut self,
+        status: Arc<LocalChanges>,
+        lists: Result<Arc<LocalChanges>, String>,
+    ) -> Vec<Request> {
+        let wanted = self.amend.as_ref().is_some_and(|overlay| {
+            overlay
+                .awaiting
+                .as_ref()
+                .is_some_and(|awaiting| Arc::ptr_eq(awaiting, &status))
+        });
+        if !wanted {
+            return vec![Request::Retire(Retired::amending(status, lists.ok()))];
+        }
+        let awaiting = self
+            .amend
+            .as_mut()
+            .and_then(|overlay| overlay.awaiting.take());
+        let mut requests: Vec<Request> = awaiting.map(retire).into_iter().collect();
+        let unread = match lists {
+            Ok(lists) => {
+                requests.push(retire(status));
+                requests.extend(self.lay_out(lists));
+                None
+            }
+            Err(why) => {
+                requests.extend(self.lay_out(status));
+                Some(why)
+            }
+        };
+        if let Some(overlay) = &mut self.amend {
+            overlay.unread = unread;
+        }
+        requests
+    }
+
+    /// Why amend's staged list could not be read, while Amend is ticked and the status's own
+    /// lists are drawn in its place (R10.3: a partial clone's missing blob).
+    pub fn amend_unread(&self) -> Option<&str> {
+        self.amend.as_ref()?.unread.as_deref()
+    }
+
+    /// `changes` laid out: drawn at once with no filter on; with one, its rows asked first.
+    fn lay_out(&mut self, changes: Arc<LocalChanges>) -> Vec<Request> {
         if self.text.is_empty() {
             let mut requests: Vec<Request> = self.pending.take().map(retire).into_iter().collect();
             self.answered.clear();

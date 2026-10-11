@@ -792,6 +792,8 @@ mod tests {
                 acknowledged: None,
                 locks_before: Vec::new(),
                 locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
             }),
         );
         writes.started(two);

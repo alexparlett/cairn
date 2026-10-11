@@ -157,13 +157,6 @@ pub enum LocalWrite {
     /// (`ops::amend_unconfirmed`); otherwise nothing runs and the ending answers the
     /// `Consequence` for the dialog ([`WriteEnding::NeedsConfirming`]), whose token then asks
     /// [`LocalWrite::Amend`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 18's commit box asks it as Amend is pressed"
-        )
-    )]
     AmendAtPress { message: String, skip_hooks: bool },
     /// The branch `name` put on `at`: Create Branch, unticked (staging-and-commit R11.3).
     CreateBranch { name: String, at: Oid },
@@ -428,29 +421,6 @@ impl LocalWrite {
         }
     }
 
-    /// The commit an amend replaces, which Show Lost Commits draws once it has (R12.1's way
-    /// back): `None` for every other write, and for an amend at the press, whose commit is read
-    /// as it runs (phase 20 brings its way back).
-    pub fn replaces(&self) -> Option<Oid> {
-        match self {
-            Self::Amend { confirmed, .. } => confirmed.consequence().amended(),
-            Self::AmendAtPress { .. } => None,
-            Self::StageLines { .. }
-            | Self::UnstageLines { .. }
-            | Self::StageFiles { .. }
-            | Self::UnstageFiles { .. }
-            | Self::StageAll { .. }
-            | Self::UnstageAll { .. }
-            | Self::DiscardLines(_)
-            | Self::DiscardFiles(_)
-            | Self::Commit { .. }
-            | Self::CreateBranch { .. }
-            | Self::CreateBranchAndCheckout { .. }
-            | Self::CreateBranchDiscarding(_)
-            | Self::RemoveLock(_) => None,
-        }
-    }
-
     /// What a wait behind it waits for — "Waiting for the commit to finish…" (the user's
     /// decision D, 2026-10-09), and "Waiting for the branch to be created…" (the user's decision
     /// of 2026-10-09 on phase 11's popover): a plain noun, or a gerund where the write has none,
@@ -516,17 +486,28 @@ impl LocalWrite {
                 confirmed,
                 message,
                 skip_hooks,
-            } => watch.commit(|commit| {
-                ops::amend(
-                    git,
-                    repo,
-                    confirmed,
-                    &message,
-                    hooks(skip_hooks),
-                    token,
-                    commit,
-                )
-            }),
+            } => {
+                // The commit the token names is the one replaced: the amend re-checks that
+                // `HEAD` is it before git runs, and reads after the reap that it was amended.
+                let replaced = confirmed.consequence().amended();
+                return watch
+                    .commit(|commit| {
+                        ops::amend(
+                            git,
+                            repo,
+                            confirmed,
+                            &message,
+                            hooks(skip_hooks),
+                            token,
+                            commit,
+                        )
+                    })
+                    .map(|performed| Ran::Amended {
+                        performed,
+                        replaced,
+                        after: None,
+                    });
+            }
             Self::CreateBranch { name, at } => ops::create_branch(git, repo, &name, at, token),
             Self::CreateBranchAndCheckout { name, at } => {
                 ops::create_branch_and_checkout(git, repo, &name, at, token)
@@ -551,7 +532,15 @@ impl LocalWrite {
                         )
                     })
                     .map(|answer| match answer {
-                        AmendAnswer::Amended(performed) => Ran::Performed(performed),
+                        AmendAnswer::Amended {
+                            performed,
+                            replaced,
+                            after,
+                        } => Ran::Amended {
+                            performed,
+                            replaced: Some(replaced),
+                            after,
+                        },
                         AmendAnswer::NeedsConfirming(consequence) => {
                             Ran::NeedsConfirming(consequence)
                         }
@@ -567,6 +556,14 @@ impl LocalWrite {
 #[derive(Debug)]
 enum Ran {
     Performed(Performed),
+    /// An amend made: the commit it replaced, as the run answered it — the way back the activity
+    /// popover offers (R12.1) — and, for one run at the press, what it turned out to cost, read
+    /// once git was reaped (R1.5, C35).
+    Amended {
+        performed: Performed,
+        replaced: Option<Oid>,
+        after: Option<Consequence>,
+    },
     NeedsConfirming(Consequence),
 }
 
@@ -686,6 +683,14 @@ pub struct Done {
     pub acknowledged: Option<String>,
     pub locks_before: Vec<PathBuf>,
     pub locks_after: Vec<PathBuf>,
+    /// The commit an amend replaced, as its run answered it: the way back into Show Lost
+    /// Commits the activity popover offers (R12.1). `None` for every other write.
+    pub replaced: Option<Oid>,
+    /// What an amend run at the press turned out to cost, read again once git was reaped
+    /// (R1.5, C35): where it would now need confirming — a remote came to have the replaced
+    /// commit, or git logged no move away from it — the activity entry says so (phase 20).
+    /// `None` for every other write, and where that read failed.
+    pub cost_after: Option<Box<Consequence>>,
 }
 
 impl Done {
@@ -695,7 +700,62 @@ impl Done {
             acknowledged: performed.acknowledged().map(str::to_owned),
             locks_before: performed.locks().before.clone(),
             locks_after: performed.locks().after.clone(),
+            replaced: None,
+            cost_after: None,
         }
+    }
+}
+
+/// A confirmed amend's token handed back unspent — git failed and `HEAD` is still the commit
+/// confirmed (`Error::AmendNotMade`, R1.1's option (a) as (a′)) — carried on the write's ending to
+/// the window's Git Error state, whose skip spends it without asking again (R10.5). Every other
+/// ending carries none. A clone carries none either, so one token is never two: the update is
+/// moved to the window, never copied on the way.
+pub struct Unspent {
+    token: Option<Box<Confirmed>>,
+}
+
+impl Unspent {
+    /// No token: every ending but a confirmed amend's that git refused before amending.
+    pub fn none() -> Self {
+        Self { token: None }
+    }
+
+    /// Holding `token`, as the lane hands one back: for a test of the window's skip.
+    #[cfg(test)]
+    pub fn holding(token: Confirmed) -> Self {
+        Self {
+            token: Some(Box::new(token)),
+        }
+    }
+
+    /// The token, taken: once.
+    pub fn take(&mut self) -> Option<Confirmed> {
+        self.token.take().map(|token| *token)
+    }
+}
+
+impl Clone for Unspent {
+    fn clone(&self) -> Self {
+        Self::none()
+    }
+}
+
+impl PartialEq for Unspent {
+    fn eq(&self, other: &Self) -> bool {
+        self.token.is_some() == other.token.is_some()
+    }
+}
+
+impl Eq for Unspent {}
+
+impl fmt::Debug for Unspent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.token.is_some() {
+            "Unspent(a token)"
+        } else {
+            "Unspent(none)"
+        })
     }
 }
 
@@ -712,32 +772,56 @@ impl WriteEnding {
         }
     }
 
-    /// How `outcome` ended, and what it left stale when it ran (wholly or in part). A failure
-    /// while no prompt could have been answered says so, as a fetch's does.
+    /// How `outcome` ended, what it left stale when it ran (wholly or in part), and the token a
+    /// confirmed amend git refused before amending hands back. A failure while no prompt could
+    /// have been answered says so, as a fetch's does.
     fn of(
         outcome: Result<Ran, Error>,
         prompting: &Result<(), String>,
-    ) -> (Self, Option<Invalidated>) {
+    ) -> (Self, Option<Invalidated>, Unspent) {
         let error = match outcome {
             Ok(Ran::Performed(performed)) => {
                 return (
                     Self::Done(Done::of(&performed)),
                     Some(performed.invalidated()),
+                    Unspent::none(),
+                );
+            }
+            Ok(Ran::Amended {
+                performed,
+                replaced,
+                after,
+            }) => {
+                let done = Done {
+                    replaced,
+                    cost_after: after.map(Box::new),
+                    ..Done::of(&performed)
+                };
+                return (
+                    Self::Done(done),
+                    Some(performed.invalidated()),
+                    Unspent::none(),
                 );
             }
             Ok(Ran::NeedsConfirming(consequence)) => {
                 return (
                     Self::NeedsConfirming { consequence },
                     Some(Invalidated::NOTHING),
+                    Unspent::none(),
                 );
             }
             // A confirmed amend git refused before amending hands its token back (R1.1's option
-            // (a)); the window keeps none yet — its skip builds one from the same consequence
-            // until phase 18's Git Error state holds this one — so it is let go of here, and the
-            // ending is git's failure's.
+            // (a)): carried to the window's Git Error state for its skip, the ending git's
+            // failure's.
             Err(Error::AmendNotMade { failure, unspent }) => {
-                drop(unspent);
-                *failure
+                let (ending, invalidated, _) = Self::of(Err(*failure), prompting);
+                return (
+                    ending,
+                    invalidated,
+                    Unspent {
+                        token: Some(unspent),
+                    },
+                );
             }
             Err(error) => error,
         };
@@ -822,6 +906,7 @@ impl WriteEnding {
                         message,
                     },
                     Some(performed.invalidated()),
+                    Unspent::none(),
                 );
             }
             _ => Self::Failed {
@@ -831,7 +916,7 @@ impl WriteEnding {
                 output: ScrubbedLines::new(),
             },
         };
-        (ending, None)
+        (ending, None, Unspent::none())
     }
 }
 
@@ -866,8 +951,8 @@ pub(super) enum LocalJob {
     /// What the commit box reads (staging-and-commit R10), in the lane's order, answered under
     /// its number in the commit-box lane; one superseded before it is answered is not sent.
     CommitReads { epoch: Epoch, cancel: Superseded },
-    /// What amending `HEAD` would replace and amend's lists over `status`, in the lane's order
-    /// (R6.3, R6.4, R10.3); a newer ask or `StopAmending` ends its walk and its `git` read.
+    /// Amend's lists over `status` and `HEAD`'s message, in the lane's order (R6.3, R10.3); a
+    /// newer ask ends its `git` read.
     Amending {
         status: Arc<LocalChanges>,
         epoch: Epoch,
@@ -1099,6 +1184,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                             ),
                         },
                         read_again: write.read_again(),
+                        unspent: Unspent::none(),
                     },
                 );
             }
@@ -1258,10 +1344,9 @@ fn commit_reads(git: &GitBinary, repo: &Repository, reading: &Counting<'_>) -> O
     })
 }
 
-/// What amending `HEAD` would replace, its message and amend's lists over `status` (R6.3,
-/// R6.4, R10.3), each part or its failure; `None` once `reading` is cancelled. The message is
-/// the commit the `Consequence` names, so the draft an amend fills is of the commit it
-/// replaces.
+/// Amend's lists over `status` and `HEAD`'s message (R6.3, R10.3), each part or its failure;
+/// `None` once `reading` is cancelled. What an amend costs is not read here: it is read at the
+/// press, in the job that runs it (`ops::amend_unconfirmed`, rule 3 of the redesign).
 fn amend_read(
     git: &GitBinary,
     repo: &Repository,
@@ -1272,16 +1357,12 @@ fn amend_read(
     if reading.is_cancelled() {
         return None;
     }
-    let consequence = ops::amend_consequence(git, repo, reading);
-    let message = match &consequence {
-        Ok(consequence) => match consequence.amended() {
-            Some(commit) => repo
-                .commit_details(&commit)
-                .map(|details| details.message)
-                .map_err(|error| error.to_string()),
-            None => Err("there is no commit to amend".to_owned()),
-        },
-        Err(error) => Err(error.to_string()),
+    let message = match repo.head_id() {
+        Some(head) => repo
+            .commit_details(&head)
+            .map(|details| details.message)
+            .map_err(|error| error.to_string()),
+        None => Err("there is no commit to amend".to_owned()),
     };
     let lists = repo
         .amend_parent()
@@ -1295,11 +1376,7 @@ fn amend_read(
         })
         .map(Arc::new)
         .map_err(|error| error.to_string());
-    (!reading.is_cancelled()).then_some(AmendRead {
-        consequence: consequence.map_err(|error| error.to_string()),
-        message,
-        lists,
-    })
+    (!reading.is_cancelled()).then_some(AmendRead { message, lists })
 }
 
 /// What the window reads again after a write (R4.5): what its `Invalidated` names when it ran,
@@ -1429,7 +1506,7 @@ fn run(
         },
     );
     drop(authorised);
-    let (ending, invalidated) = WriteEnding::of(outcome, &prompting);
+    let (ending, invalidated, unspent) = WriteEnding::of(outcome, &prompting);
     let read_again = after(commit, asked, invalidated);
     serving.outbox.send(
         None,
@@ -1446,6 +1523,7 @@ fn run(
                 id,
                 ending,
                 read_again,
+                unspent,
             },
         );
     });
@@ -1507,7 +1585,7 @@ mod tests {
         assert_eq!((began, fine), (Some(7), Ok(())));
         let (_, never) = token_and_prompting::<u8, &str>(None, &Err("no channel".to_owned()));
         assert_eq!(never, Err("no channel".to_owned()));
-        let (ending, _) = WriteEnding::of(Err(Error::NoPaths), &prompting);
+        let (ending, _, _) = WriteEnding::of(Err(Error::NoPaths), &prompting);
         let WriteEnding::Refused { message } = ending else {
             panic!("{ending:?}");
         };
@@ -1618,7 +1696,7 @@ mod tests {
             stderr: output.clone(),
             present_locks: Vec::new(),
         };
-        let (ending, _) = WriteEnding::of(Err(failed), &Err("no channel".to_owned()));
+        let (ending, _, _) = WriteEnding::of(Err(failed), &Err("no channel".to_owned()));
         let WriteEnding::Failed {
             message,
             output: kept,
@@ -1640,7 +1718,7 @@ mod tests {
             key: "remote.origin.url".to_owned(),
             value: "https://u:TOKEN@host/r".to_owned(),
         };
-        let (ending, _) = WriteEnding::of(Err(quoting), &Ok(()));
+        let (ending, _, _) = WriteEnding::of(Err(quoting), &Ok(()));
         let WriteEnding::Failed { message, .. } = ending else {
             panic!("{ending:?}");
         };
@@ -1871,7 +1949,7 @@ mod tests {
     #[test]
     fn every_ending_says_what_happened_and_what_to_read_again() {
         let lock = PathBuf::from("/r/.git/index.lock");
-        let (stale, read) = WriteEnding::of(
+        let (stale, read, _) = WriteEnding::of(
             Err(Error::ChangedSinceRead {
                 path: "src/a.rs".to_owned(),
             }),
@@ -1885,7 +1963,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let (cancelled, _) = WriteEnding::of(
+        let (cancelled, _, _) = WriteEnding::of(
             Err(Error::GitCancelled {
                 arguments: "commit".to_owned(),
                 stranded_locks: vec![lock.clone()],
@@ -1897,7 +1975,7 @@ mod tests {
             "{cancelled:?}"
         );
         assert_eq!(cancelled.locks(), std::slice::from_ref(&lock));
-        let (lost, _) = WriteEnding::of(
+        let (lost, _, _) = WriteEnding::of(
             Err(Error::GitUnwatched {
                 arguments: "commit".to_owned(),
                 source: std::io::Error::other("the pipe broke"),
@@ -1941,17 +2019,17 @@ mod tests {
             published: cairn_model::Publication::SomeRemote,
             reflog: cairn_model::Reflog::Written,
         };
-        let (asked, read) = WriteEnding::of(Ok(Ran::NeedsConfirming(amend.clone())), &Ok(()));
+        let (asked, read, _) = WriteEnding::of(Ok(Ran::NeedsConfirming(amend.clone())), &Ok(()));
         assert_eq!(asked, WriteEnding::NeedsConfirming { consequence: amend });
         assert_eq!(read, Some(Invalidated::NOTHING));
-        let (refused, _) = WriteEnding::of(Err(Error::NoPaths), &Err("no socket".to_owned()));
+        let (refused, _, _) = WriteEnding::of(Err(Error::NoPaths), &Err("no socket".to_owned()));
         match refused {
             WriteEnding::Refused { message } => {
                 assert!(message.contains("no socket"), "{message}");
             }
             other => panic!("{other:?}"),
         }
-        let (refused, _) = WriteEnding::of(
+        let (refused, _, _) = WriteEnding::of(
             Err(Error::CommitRefused {
                 why: cairn_git::CommitRefusal::InProgress(cairn_model::OperationInProgress::Rebase),
             }),
@@ -1961,12 +2039,12 @@ mod tests {
             matches!(&refused, WriteEnding::Refused { message } if message.contains("a rebase")),
             "{refused:?}"
         );
-        let (moved, _) = WriteEnding::of(Err(Error::AmendChangedSinceConfirmed), &Ok(()));
+        let (moved, _, _) = WriteEnding::of(Err(Error::AmendChangedSinceConfirmed), &Ok(()));
         assert!(
             matches!(&moved, WriteEnding::Stale { path, .. } if path == "HEAD"),
             "{moved:?}"
         );
-        let (early, _) = WriteEnding::of(Err(Error::CommitCancelledBeforeRunning), &Ok(()));
+        let (early, _, _) = WriteEnding::of(Err(Error::CommitCancelledBeforeRunning), &Ok(()));
         assert!(
             matches!(&early, WriteEnding::Cancelled { message, locks } if message.contains("before git ran") && locks.is_empty()),
             "a commit cancelled before git ran was not a cancel: {early:?}"

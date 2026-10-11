@@ -789,15 +789,25 @@ fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
     let replaced = repo.commit("one");
     repo.write("a.txt", b"b\n");
     repo.git(&["add", "a.txt"]);
-    let performed = match ok(
+    let before = ok(consequence(&repo), "the cost before");
+    let (performed, answered, after) = match ok(
         amend_at_press(&repo, "one, amended", Hooks::Run),
         "the press",
     ) {
-        AmendAnswer::Amended(performed) => performed,
+        AmendAnswer::Amended {
+            performed,
+            replaced,
+            after,
+        } => (performed, replaced, after),
         AmendAnswer::NeedsConfirming(consequence) => {
             panic!("a recoverable amend asked to be confirmed: {consequence:?}")
         }
     };
+    // Phase 18, step 6: the replaced commit is the answer's, not the request's; and C35's
+    // untouched case: read again after the run, it costs what it cost at the press.
+    assert_eq!(answered, replaced);
+    assert_eq!(after.as_ref(), Some(&before));
+    assert!(after.is_some_and(|after| !after.needs_confirming()));
     assert_eq!(
         performed.acknowledged(),
         None,
@@ -822,7 +832,9 @@ fn an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run() {
         let index = std::fs::read(repo.path().join(".git/index")).unwrap_or_default();
         let consequence = match ok(amend_at_press(repo, "amended", Hooks::Run), what) {
             AmendAnswer::NeedsConfirming(consequence) => consequence,
-            AmendAnswer::Amended(performed) => panic!("{what}: amended unconfirmed: {performed:?}"),
+            AmendAnswer::Amended { performed, .. } => {
+                panic!("{what}: amended unconfirmed: {performed:?}")
+            }
         };
         assert_eq!(repo.rev("HEAD"), head, "{what}");
         assert_eq!(
@@ -905,9 +917,87 @@ fn an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run() {
             amend_at_press(&main, "main, amended", Hooks::Run),
             "the main worktree"
         ),
-        AmendAnswer::Amended(_)
+        AmendAnswer::Amended { .. }
     ));
     let _ = std::fs::remove_file(include);
+}
+
+/// C35, the token-free amend's window (R1.5, the user's ratification of 2026-10-10, option B): an
+/// amend the press found recoverable is read again once git is reaped. A `pre-commit` hook that
+/// moves a remote-tracking ref onto the commit being replaced — standing in for a push from a
+/// terminal while the hook runs — makes the answer say a remote has it; one that turns the reflog
+/// off and removes the logs makes it say git logged nothing, as the reflog then shows. Either
+/// would now need confirming; the amend is made all the same. Caught by: the cost answered from
+/// the press's read, or a re-read taken before git was reaped.
+#[test]
+fn an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped() {
+    let amended =
+        |repo: &Repo, what: &str| match ok(amend_at_press(repo, "amended", Hooks::Run), what) {
+            AmendAnswer::Amended {
+                replaced, after, ..
+            } => (replaced, after),
+            AmendAnswer::NeedsConfirming(consequence) => {
+                panic!("{what}: the press asked to confirm: {consequence:?}")
+            }
+        };
+
+    // Pushed while the hook ran: a remote-tracking ref put on the commit being replaced.
+    let pushed = identified("c35-pushed");
+    pushed.write("a.txt", b"a\n");
+    let replaced = pushed.commit("one");
+    pushed.write("a.txt", b"b\n");
+    pushed.git(&["add", "a.txt"]);
+    hook(
+        &pushed,
+        ".git/hooks",
+        "pre-commit",
+        "git update-ref refs/remotes/origin/main HEAD\n",
+        0o755,
+    );
+    let (answered, after) = amended(&pushed, "pushed meanwhile");
+    assert_eq!(answered, replaced);
+    assert_eq!(pushed.git(&["log", "--format=%s"]), "amended\n", "not made");
+    let after = after.unwrap_or_else(|| panic!("nothing read after the run"));
+    assert_eq!(
+        after,
+        Consequence::Amend {
+            commit: replaced,
+            published: Publication::SomeRemote,
+            reflog: Reflog::Written,
+        }
+    );
+    assert!(after.needs_confirming());
+
+    // The reflog turned off while the hook ran: set false, and the logs git would append to gone.
+    let unlogged = identified("c35-unlogged");
+    unlogged.write("a.txt", b"a\n");
+    let replaced = unlogged.commit("one");
+    unlogged.config("core.logAllRefUpdates", "false");
+    unlogged.write("a.txt", b"b\n");
+    unlogged.git(&["add", "a.txt"]);
+    hook(
+        &unlogged,
+        ".git/hooks",
+        "pre-commit",
+        "rm -rf \"$(git rev-parse --git-dir)/logs\"\n",
+        0o755,
+    );
+    let (answered, after) = amended(&unlogged, "the reflog turned off meanwhile");
+    assert_eq!(answered, replaced);
+    assert!(
+        !logged_a_move_from(&unlogged, &replaced),
+        "git logged it after all: the fixture is wrong"
+    );
+    let after = after.unwrap_or_else(|| panic!("nothing read after the run"));
+    assert_eq!(
+        after,
+        Consequence::Amend {
+            commit: replaced,
+            published: Publication::Unpublished,
+            reflog: Reflog::NotWritten,
+        }
+    );
+    assert!(after.needs_confirming());
 }
 
 // --- R6.4: the reflog, each arm against what git then writes ---
@@ -1812,7 +1902,7 @@ fn cancelled_at(repo: &Repo, marker: &std::path::Path, amend: bool) -> Result<bo
                 None,
                 watch,
             )
-            .map(|answer| matches!(answer, AmendAnswer::Amended(_)))
+            .map(|answer| matches!(answer, AmendAnswer::Amended { .. }))
         } else {
             ops::commit(
                 committer(),
@@ -2081,7 +2171,7 @@ fn a_commit_git_says_it_made_with_head_elsewhere_is_unconfirmed() {
             amend_at_press(&repo, "three, amended", Hooks::Run),
             "the amend"
         ),
-        AmendAnswer::Amended(_)
+        AmendAnswer::Amended { .. }
     ));
     assert_eq!(repo.git(&["log", "--format=%s"]), "three, amended\none\n");
 }
@@ -2099,7 +2189,10 @@ fn an_amend_that_makes_the_same_commit_is_made() {
     for _ in 0..50 {
         let before = repo.rev("HEAD");
         let answer = amend_at_press(&repo, "same\n", Hooks::Run);
-        assert!(matches!(answer, Ok(AmendAnswer::Amended(_))), "{answer:?}");
+        assert!(
+            matches!(answer, Ok(AmendAnswer::Amended { .. })),
+            "{answer:?}"
+        );
         if repo.rev("HEAD") == before {
             return;
         }

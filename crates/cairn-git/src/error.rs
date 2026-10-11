@@ -364,26 +364,26 @@ pub enum Error {
     /// A write verb was refused before any `git` ran, because what it was asked to do is
     /// not something it does (`docs/prd/staging-and-commit.md` R3): `why` says what, for
     /// the caller to show. Nothing was written.
-    #[error("{path}: {why}; nothing was written")]
+    #[error("{path}: {why}")]
     Refused { path: String, why: Refusal },
 
     /// A verb of files was given no path at all. Nothing was written, and for a discard no
     /// confirmation can be made: a prompt that counts nothing is refused before one is
     /// offered.
-    #[error("no path was given; nothing was written")]
+    #[error("no path was given")]
     NoPaths,
 
     /// What a patch was built from moved after it was read (R3.7): the index entry, or for
     /// a discard the working-tree file, is no longer the side the drawn diff names. The
     /// patch was not applied — `git apply` could otherwise land it at an offset, on lines
     /// the user never saw — and nothing was written; the remedy is to read the diff again.
-    #[error("{path} changed after its diff was read; nothing was written")]
+    #[error("{path} changed after its diff was read")]
     ChangedSinceRead { path: String },
 
     /// What a destructive operation's `Consequence` names moved between the confirmation
     /// and the run (R1.4): a file edited, replaced or removed, an entry restaged. The
     /// operation refused, writing nothing — an outcome of its own, never git's failure.
-    #[error("{path} changed since you confirmed; nothing was discarded")]
+    #[error("{path} changed since you confirmed")]
     ChangedSinceConfirmed { path: String },
 
     /// A discard of files ran but did not discard every file it was confirmed for: a `git`
@@ -409,25 +409,25 @@ pub enum Error {
     /// Create Branch's discard before its checkout was refused before any confirmation or any
     /// `git` ran (`docs/prd/staging-and-commit.md` R11.3): `why` says what, for the caller to
     /// show. Nothing was written.
-    #[error("{why}; nothing was written")]
+    #[error("{why}")]
     CheckoutRefused { why: CheckoutRefusal },
 
     /// What Create Branch's Discard was confirmed for moved between the press and the run
     /// (R1.4; the user's decision of 2026-10-10): `HEAD`, the commit or the name — nothing else
     /// is compared. The checkout refused, writing nothing — an outcome of its own, never git's
     /// failure.
-    #[error("{what}; nothing was discarded")]
+    #[error("{what}")]
     CheckoutChangedSinceConfirmed { what: CheckoutMoved },
 
     /// A commit or an amend was refused before any `git` ran (`docs/prd/staging-and-commit.md`
     /// R6.1, R6.3, R6.9): `why` says what, for the caller to show. Nothing was written.
-    #[error("{why}; nothing was committed")]
+    #[error("{why}")]
     CommitRefused { why: CommitRefusal },
 
     /// What an amend's `Consequence` names moved between the confirmation and the run
     /// (R1.4): `HEAD` is another commit, a remote has it now, or the reflog setting changed.
     /// The amend refused, writing nothing — an outcome of its own, never git's failure.
-    #[error("HEAD changed since you confirmed the amend; nothing was amended")]
+    #[error("HEAD changed since you confirmed the amend")]
     AmendChangedSinceConfirmed,
 
     /// A confirmed amend git ran and failed before amending — a hook refused it, say — so `HEAD`
@@ -482,7 +482,7 @@ pub enum Error {
     /// The lock a removal was confirmed for was removed, replaced or written since the
     /// confirmation — its size, its time or the file itself differs (R1.4, R12.4). Nothing was
     /// removed: the lock now there may be a running git's.
-    #[error("{path} changed since you confirmed; nothing was removed")]
+    #[error("{path} changed since you confirmed")]
     LockChangedSinceConfirmed { path: String },
 
     /// The lock could not be removed: the filesystem refused.
@@ -495,7 +495,7 @@ pub enum Error {
 
     /// A commit or an amend was cancelled before its `git` started — while what it checks
     /// first was still being read. Nothing was written.
-    #[error("the commit was cancelled before git ran; nothing was written")]
+    #[error("the commit was cancelled before git ran")]
     CommitCancelledBeforeRunning,
 
     /// The remote's configuration could not be read — `git config` failed, was

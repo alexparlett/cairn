@@ -78,6 +78,17 @@ fn no_git_running(repo: &Repository) -> Result<(), Error> {
     }
 }
 
+/// When `repo`'s `<gitdir>/index.lock` was last changed, if one is there as a plain file: the
+/// leftover lock as a state of the repository (staging-and-commit R12.4, F6), read by one `stat`
+/// on every refresh, which writes nothing. `None` when there is none — or what is there is not
+/// a plain file, or cannot be looked at: nothing the removal would offer to remove.
+pub fn index_lock_changed(repo: &Repository) -> Option<SystemTime> {
+    look(&index_lock(repo))
+        .ok()
+        .flatten()
+        .map(|seen| seen.modified)
+}
+
 /// What removing `repo`'s `index.lock` would destroy, for its confirmation: the lock's path,
 /// its age as of now, and what identifies it. Refused — [`Error::LockRefused`] — when there is
 /// no lock, when it is not a plain file, or while Cairn runs a `git` in the repository, so the
@@ -200,6 +211,36 @@ mod tests {
 
     fn open(dir: &Scratch) -> Repository {
         SharedRepository::discover(dir.path()).unwrap().to_worker()
+    }
+
+    /// C30's state: the leftover lock is read as its time while `<gitdir>/index.lock` is a plain
+    /// file, and as nothing once it is gone, is a directory, or stands only in the work tree.
+    /// The look removes nothing. Caught by: a look at the work tree's file, a directory read as
+    /// a lock, or the lock's time not the file's.
+    #[test]
+    fn the_leftover_lock_is_its_time_while_it_is_a_file_and_nothing_otherwise() {
+        let dir = scratch();
+        let repo = open(&dir);
+        let lock = dir.path().join(".git/index.lock");
+        std::fs::write(dir.path().join("index.lock"), b"a file in the work tree").unwrap();
+        assert_eq!(index_lock_changed(&repo), None);
+        std::fs::write(&lock, b"").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(index_lock_changed(&repo), Some(old));
+        assert!(lock.exists(), "the look removed the lock");
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        assert_eq!(
+            index_lock_changed(&repo),
+            None,
+            "a directory read as a lock"
+        );
     }
 
     /// C20's removal half: the lock confirmed is removed — exactly `<gitdir>/index.lock`,

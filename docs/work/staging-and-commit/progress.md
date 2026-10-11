@@ -3,6 +3,29 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-11 — phase 17's QA fixes (packet mode)
+
+The coordinator's adjudication (`qa-p17/adjudication.md`): FIX NOW 1, 2, 3 (the sentence) and 5;
+CARRY 3's guard-tier pin to the teardown list; dismissed 4 ("a bare key other than the three" is
+Backspace, Delete and Enter, the two sets iterated together, and the line is unchanged).
+
+- **#1 (critical)**: `a_working_tree_answer_is_keyed_to_its_text_and_a_committed_one_is_not`
+  (`worker/diff_tests.rs`, through the real boundary): the same working-tree query over the same
+  text answers one nonzero content twice, the file rewritten another, and a committed file's
+  answer 0. Written first, it failed on the committed half; the diff lane now keys
+  `FileTarget::WorkingTree` answers alone, both variants named; the comment and the root
+  `CLAUDE.md`'s "hashed once per working-tree answer" say so. Dropping the keying fails its
+  nonzero assertion.
+- **#2**: `only_the_lanes_holder_lets_go_of_it` (`diff_state/working.rs`): the commit's file in
+  flight keeps the lane through `let_go_of_working` and a conflicted path chosen, and the path in
+  flight keeps it through the file's options moving with the Commit tab shown. With
+  `let_go_of_lane`'s holder check removed it fails.
+- **#3**: the root `CLAUDE.md`'s modifier invariant names the two unit tests that pin the
+  resolver's reading of `chord_heard_in` and gives the guard-tier gap to `qa-checklist`'s item
+  11; the guard-tier pin is on state.md's teardown list.
+- **#5**: the root `CLAUDE.md`'s L22 summary lists Return and ⌘S, or Enter, Ctrl+S and
+  Ctrl+Shift+S.
+
 ## 2026-10-10 — phase 17 built (packet mode)
 
 What shipped is state.md's "Phase 17". Notes for the record:

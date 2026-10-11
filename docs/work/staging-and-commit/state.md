@@ -43,7 +43,7 @@ the user's answers to its six questions (2026-10-10), full gate green; see "Phas
 is the coordinator's. Phase 16 (one selection) built in packet mode, full gate green, neither
 stopping rule triggered; see "Phase 16" below. QA is the coordinator's. Phase 17 (one file's
 diff) built in packet mode, full gate green, neither stopping rule triggered, nothing for the
-user's sign-off; see "Phase 17" below. QA is the coordinator's.**
+user's sign-off; QA adjudicated and its fixes applied; see "Phase 17" below.**
 
 ## The redesign (2026-10-10)
 
@@ -115,8 +115,8 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   same commit. (4) The line selection keeps to its text — `ShownDiff::keyed(&asked)` hashes
   the question (the `FileQuery`: path, side, options), the context and the whole answer
   (paths, modes, ids, both sides' lines, the exact and whitespace-ignoring ranges) on the diff
-  thread for every file answer, `ShownDiff::content` the number; `LineDrag` records the content
-  (in place of the answer number), the gesture is handed it, `GestureAct::content` carries it,
+  thread for every working-tree answer, `ShownDiff::content` the number; `LineDrag` records
+  the content (in place of the answer number), the gesture is handed it, `GestureAct::content` carries it,
   `on_gesture` refuses an act whose content is not drawn; `session::apply`'s `lines_follow`
   lets a finished selection go when a re-read of the same question draws other content, and
   `LineDrag::cleared_by_a_change` makes the bar say `cairn_ui::SELECTION_CLEARED` ("The file
@@ -165,8 +165,8 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   sentence on `together_wanted`. Net: the code commit −1,519 lines (1,134 in, 2,653 out).
 - **Decided here**: (a) the narrowed Return is a rule of the table (`chord_heard_in`) rather
   than a scope split, so one action keeps one list of chords and one scope, the rule naming its
-  one exception; (b) every file answer is keyed, the Changes tab's too — one file, bounded by
-  R2.6's ceilings, a second pass on the diff thread; (c) the content hashes the whole answer,
+  one exception; (b) every file answer was keyed, the Changes tab's too — narrowed by QA item 1
+  to working-tree answers alone, the only ones a gesture reads; (c) the content hashes the whole answer,
   not the rows drawn, so a byte changed outside the context clears the selection too ("the
   file changed" — conservative, never a stale selection); the intra-line highlights and the
   function context are left out, being drawn from the text; (d) the notice is said only when the
@@ -179,7 +179,10 @@ requirement it touches; phases 13, 15, 17, 18, 19 and 20 amended to match):
   scope); Ctrl+S was no chord of another action on Linux (the pin's "two actions sharing a
   chord" check passes over the whole table).
 - **Carried**: none new. **To teardown**: H2 (one pointer-drag primitive), already on the one list.
-  QA is the coordinator's (not run here).
+- **QA (2026-10-11), fixed**: #1 working-tree answers alone keyed, pinned at the boundary
+  (`a_working_tree_answer_is_keyed_to_its_text_and_a_committed_one_is_not`); #2
+  `only_the_lanes_holder_lets_go_of_it`; #3 the resolver's residual stated in the root
+  `CLAUDE.md` (its guard-tier pin on the teardown list); #5 the L22 summary. Dismissed: 4.
 
 ## Phase 16 of the rebuild, one selection (2026-10-10)
 
@@ -568,6 +571,11 @@ commented, not filed again.
 
 - **From phase 16** (review-code-app-ui.md H2, file as an issue): one pointer-drag primitive for
   the lists' drag and the diff's line drag — phase 16 left the drag's lifecycle as it was.
+- **From phase 17's QA** (item 3, file as an issue): hold the resolver's reading of
+  `accelerators::chord_heard_in` at the guard tier — a guard requirement that `resolve_key_on`'s
+  body names `chord_heard_in`, or a pin-placement roster row for
+  `every_chord_resolves_to_its_action_in_its_scope_only` — where today two unit tests pin it and
+  the root `CLAUDE.md` states the gap as `qa-checklist`'s item 11.
 - **From phase 13's QA** (file as issues): a `post-commit` hook that makes a commit leaves a made
   commit reported `CommitUnconfirmed` (its child's first parent is Cairn's commit) — robust only by
   reading `HEAD`'s reflog for git's own `commit:` entry, which needs the reflog on (item 10); and
@@ -1569,7 +1577,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 14 Create Branch | built in packet mode after its stopping rule was decided (2026-10-10), full gate green; QA the coordinator's |
 | 15 the discard prompts | built in packet mode after the user's answers (2026-10-10), QA fixes applied, full gate green |
 | 16 one selection | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 4 and 6 applied, 3 and 5 carried to phase 17, full gate green |
-| 17 one file's diff | built in packet mode, neither stopping rule triggered, full gate green; QA the coordinator's |
+| 17 one file's diff | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 2, 3 and 5 applied, 3's guard-tier pin carried to teardown, full gate green |
 | 18 the commit box | planned |
 | 19 one home for each message | planned — F7 decided (2026-10-10) |
 | 20 the Activity Manager | planned |

@@ -99,6 +99,15 @@ pub(super) fn sentence(error: &Error) -> String {
             LockRefusal::GitRunning(_) => "Cairn is running git in this repository".to_owned(),
             LockRefusal::NotWhatWasConfirmed => not_what_was_confirmed(),
         },
+        // A working-tree file a stage's or a discard's check could not read, or a file's diff
+        // that could not be made: its path C-quoted, never the engine's text (phase 19's QA
+        // item 7).
+        Error::ReadWorkingTree { path, source } => {
+            format!("{} could not be read ({source})", shown_path(path))
+        }
+        Error::DiffFile { path, source } => {
+            format!("{} could not be read ({source})", shown_path(path))
+        }
         Error::LockNotRemoved { path, source } => {
             format!("{} could not be removed ({source})", shown_path(path))
         }
@@ -201,6 +210,20 @@ mod tests {
                 why: Refusal::NotAFile,
             });
             assert_eq!(said, format!("{shown} is not a file."));
+            let said = sentence(&Error::ReadWorkingTree {
+                path: path.to_owned(),
+                source: std::io::Error::other("denied"),
+            });
+            assert_eq!(said, format!("{shown} could not be read (denied)."));
+            assert!(
+                !said.contains('\n') && !said.contains('\u{202e}'),
+                "{said:?}"
+            );
+            let said = sentence(&Error::DiffFile {
+                path: path.to_owned(),
+                source: Box::new(std::io::Error::other("corrupt")),
+            });
+            assert_eq!(said, format!("{shown} could not be read (corrupt)."));
         }
         assert_eq!(sentence(&Error::NoPaths), "No file was given.");
         assert_eq!(

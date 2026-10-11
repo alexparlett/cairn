@@ -77,7 +77,7 @@ impl Component for LockBanner {
             let left = changed
                 .checked_add(LOCK_STALE_AFTER)
                 .and_then(|at| at.duration_since(SystemTime::now()).ok())
-                .unwrap_or(LOCK_STALE_AFTER);
+                .unwrap_or(Duration::ZERO);
             spawn(async move {
                 Timer::after(left).await;
                 stale.set(true);

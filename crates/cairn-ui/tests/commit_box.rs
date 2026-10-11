@@ -240,6 +240,25 @@ fn a_commit_asked_stands_in_the_buttons_place() {
     click(&mut test, CANCEL_COMMIT_CAPTION);
     assert_eq!(*reports.cancels.borrow(), 1);
 
+    // Asked and not yet started: its verb alone, no Cancel (phase 18's QA item 6).
+    let (test, _) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "x",
+        false,
+        None,
+        Some(Busy::Running {
+            verb: "Committing",
+            started: None,
+        }),
+    );
+    let shown = labels(&test);
+    assert!(shown.iter().any(|l| l == "Committing"), "{shown:?}");
+    assert!(
+        !shown.iter().any(|l| l == CANCEL_COMMIT_CAPTION),
+        "{shown:?}"
+    );
+
     let (test, _) = launch(
         true,
         CommitButton::Amend,

@@ -172,8 +172,8 @@ pub enum Busy {
     /// Queued behind another write: "Waiting for the commit to finish…", the one form every
     /// queued write uses.
     Waiting(String),
-    /// Running: "Committing" or "Amending", the time since git started beside it once it has,
-    /// and Cancel.
+    /// Running: "Committing" or "Amending", and once git has started, the time since and Cancel;
+    /// before then — the lane busy with a read — its verb alone.
     Running {
         verb: &'static str,
         started: Option<Instant>,
@@ -566,14 +566,19 @@ fn busy_place(busy: Busy, on_cancel: EventHandler<()>) -> Element {
     match busy {
         Busy::Waiting(text) => said(text),
         Busy::Cancelling => said(CANCELLING.to_owned()),
-        Busy::Running { verb, started } => rect()
+        // Not yet started: its verb alone, since a Cancel would reach nothing (R4.3).
+        Busy::Running {
+            verb,
+            started: None,
+        } => said(verb.to_owned()),
+        Busy::Running {
+            verb,
+            started: Some(started),
+        } => rect()
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(8.)
-            .child(match started {
-                Some(started) => Elapsed { verb, started }.into_element(),
-                None => said(verb.to_owned()),
-            })
+            .child(Elapsed { verb, started }.into_element())
             .child(control(
                 CANCEL_COMMIT_CAPTION.to_owned(),
                 CANCEL_COMMIT_CAPTION.to_owned(),

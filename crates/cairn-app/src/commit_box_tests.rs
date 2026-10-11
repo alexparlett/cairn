@@ -1148,10 +1148,18 @@ fn a_failed_amends_skip_amends_once_without_asking_again() {
         &submitted,
         Update::WriteStarted { id: confirmed },
     );
+    // The token handed back is told from any the window could build afresh: it names another
+    // commit, so its prompt is its own (phase 18's QA item 7).
+    let handed_back = amend_consequence_of(
+        0xcd,
+        Publication::Upstream(RefName::new("refs/remotes/origin/main")),
+        Reflog::Written,
+    );
+    let handed_back_prompt = handed_back.prompt();
+    assert_ne!(handed_back_prompt, prompt);
     let mut failure = failed(confirmed, "git commit -q --amend -F -", "lint failed");
     if let Update::WriteEnded { unspent, .. } = &mut failure {
-        *unspent =
-            crate::worker::Unspent::holding(cairn_model::Confirmed::by_user(consequence.clone()));
+        *unspent = crate::worker::Unspent::holding(cairn_model::Confirmed::by_user(handed_back));
     }
     apply(&mut test, view, &submitted, failure);
     assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
@@ -1163,8 +1171,9 @@ fn a_failed_amends_skip_amends_once_without_asking_again() {
         [
             "amend at the press \"Fix the parser\" skip=false".to_owned(),
             format!("amend \"Fix the parser\" skip=false confirming {prompt:?}"),
-            format!("amend \"Fix the parser\" skip=true confirming {prompt:?}"),
-        ]
+            format!("amend \"Fix the parser\" skip=true confirming {handed_back_prompt:?}"),
+        ],
+        "the skip spent another token than the one handed back"
     );
     assert!(
         view.confirming.peek().is_none(),
@@ -1250,5 +1259,113 @@ fn a_cancel_while_the_commit_is_queued_asks_nothing() {
     assert_eq!(
         count(&submitted, |r| matches!(r, Request::CancelWrite { .. })),
         0
+    );
+}
+
+/// Phase 18's QA item 1: an amend at the press that ends asking to be confirmed never replaces a
+/// confirmation already open — a discard's, opened while the amend's cost was read — which stays
+/// drawn, the amend's waiting; once that one is answered, "Amend Commit" opens. Caught by: a
+/// dialog swapped under the person's pointer, its acknowledgement then another prompt's.
+#[test]
+fn the_amend_dialog_waits_for_a_confirmation_already_open() {
+    let (mut test, view, submitted) = opened();
+    set(&mut test, view.local.commit.subject, "Fix the parser");
+    click(&mut test, AMEND_CAPTION);
+    click(&mut test, AMEND_BUTTON_CAPTION);
+    let id = writes(&submitted)[0].0;
+    let mut confirming = view.confirming;
+    test.run_in(|| {
+        confirming.set(Some(crate::confirming::Confirming::new(
+            "Discard Changes",
+            amend_consequence_of(0xcd, Publication::SomeRemote, Reflog::Written),
+            |_| {},
+        )));
+    });
+    settle(&mut test);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::NeedsConfirming {
+                consequence: amend_consequence(Publication::SomeRemote),
+            },
+            read_again: crate::worker::ReadAgain::Everything,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    assert!(drawn(&test, "Discard Changes"), "{:?}", labels(&test));
+    assert!(
+        !drawn(&test, cairn_ui::AMEND_TITLE),
+        "the open confirmation was replaced"
+    );
+    assert!(view.local.commit.state.peek().is_confirming());
+    click_last(&mut test, "Cancel");
+    assert!(drawn(&test, cairn_ui::AMEND_TITLE), "{:?}", labels(&test));
+    assert!(!view.local.commit.state.peek().is_confirming());
+}
+
+/// Phase 18's QA item 6: a commit asked while the lane is busy with no write — a read — is drawn
+/// without a Cancel nothing would hear, and "Waiting for" names only a write ahead of it, never
+/// one asked after it. Caught by: a dead Cancel, or a queued stage behind the commit named as
+/// what it waits for.
+#[test]
+fn a_queued_commit_offers_no_dead_cancel_and_waits_only_on_writes_ahead() {
+    let (mut test, view, submitted) = opened();
+    set(&mut test, view.local.commit.subject, "Queued");
+    click(&mut test, "Commit 1 File");
+    assert!(
+        !drawn(&test, CANCEL_COMMIT_CAPTION),
+        "a Cancel offered before the commit ran: {:?}",
+        labels(&test)
+    );
+    // A stage asked after the commit, queued behind it.
+    press_row(&mut test, "a.rs", 0);
+    crate::window::tests::press_chord(&mut test, cairn_ui::accelerators::Action::StageOrUnstage);
+    settle(&mut test);
+    assert_eq!(writes(&submitted).len(), 2, "{:?}", writes(&submitted));
+    assert!(
+        !labels(&test).iter().any(|l| l.starts_with("Waiting for")),
+        "a write behind the commit named as what it waits for: {:?}",
+        labels(&test)
+    );
+    assert!(!drawn(&test, CANCEL_COMMIT_CAPTION));
+}
+
+/// The coordinator's ruling under rule 4 (phase 18's QA item 8): on a detached `HEAD` the
+/// detached line wins over amend's unread one, since it says what the press will do. Caught by:
+/// the unread line drawn in its place.
+#[test]
+fn the_detached_line_wins_over_amends_unread_one() {
+    let (mut test, view, submitted) = opened();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::Refs {
+            snapshot: Arc::new(RefsSnapshot {
+                refs: Vec::new(),
+                head: HeadState::Detached(oid(0xab)),
+                stashes: Vec::new(),
+                unreadable: 0,
+            }),
+            reopen: false,
+        },
+    );
+    click(&mut test, AMEND_CAPTION);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        amend_read(&submitted, Err("git diff-index failed: missing blob")),
+    );
+    assert!(drawn(&test, cairn_ui::DETACHED_LINE), "{:?}", labels(&test));
+    assert!(
+        !labels(&test)
+            .iter()
+            .any(|l| l.starts_with("Amend's staged list couldn't be read")),
+        "{:?}",
+        labels(&test)
     );
 }

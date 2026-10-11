@@ -59,33 +59,38 @@ impl PartialEq for CommitBoxPane {
     }
 }
 
-/// What a commit asked is doing, drawn in the button's place (R10.4, C5): queued behind
-/// another write, in the one form every queued write uses; running; or cancelled until git is
-/// reaped.
+/// What a commit asked is doing, drawn in the button's place (R10.4, C5): queued behind a write
+/// ahead of it — the one running, or one asked before it — in the one form every queued write
+/// uses; running; or cancelled until git is reaped. Asked with no write ahead and not yet
+/// started (the lane busy with a read), it is drawn by its verb alone, no Cancel offered until
+/// git runs (phase 18's QA item 6).
 fn busy_of(asked: &AskedCommit, state: &crate::commit_box_state::CommitBox, view: View) -> Busy {
     if state.is_cancelling() {
         return Busy::Cancelling;
     }
+    let verb = if asked.amend {
+        "Amending"
+    } else {
+        "Committing"
+    };
     let writes = view.writes.read();
     let running = writes.running();
     if running.is_some_and(|running| running.id == asked.id) {
         return Busy::Running {
-            verb: if asked.amend {
-                "Amending"
-            } else {
-                "Committing"
-            },
+            verb,
             started: state.started(),
         };
     }
-    match running.or_else(|| writes.queued().find(|queued| queued.id != asked.id)) {
+    let ahead = running.or_else(|| {
+        writes
+            .queued()
+            .take_while(|queued| queued.id != asked.id)
+            .next()
+    });
+    match ahead {
         Some(ahead) => Busy::Waiting(format!("Waiting for {}…", ahead.awaited)),
         None => Busy::Running {
-            verb: if asked.amend {
-                "Amending"
-            } else {
-                "Committing"
-            },
+            verb,
             started: None,
         },
     }
@@ -119,7 +124,9 @@ impl Component for CommitBoxPane {
         // and its staged list could not be read, that the lists show the status's own (R10.3);
         // or an unborn branch, where Amend is greyed; or a detached `HEAD`.
         let line = match (operation, local.amend_unread()) {
-            (None, Some(why)) if state.is_amending() => Some(format!(
+            // The detached line wins: it says what the press will do (the coordinator's ruling
+            // under rule 4, phase 18's QA item 8).
+            (None, Some(why)) if state.is_amending() && !detached => Some(format!(
                 "Amend's staged list couldn't be read, so the lists show what is staged against \
                  HEAD: {why}"
             )),
@@ -264,7 +271,10 @@ fn ask(
 /// the box as it was.
 fn use_amend_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     use_side_effect(move || {
-        if !view.local.commit.state.read().is_confirming() {
+        // Read so the effect runs again once a confirmation already open is answered: one open
+        // is never replaced, its acknowledgement then another prompt's (phase 18's QA item 1).
+        let open = view.confirming.read().is_some();
+        if open || !view.local.commit.state.read().is_confirming() {
             return;
         }
         let mut state = view.local.commit.state;

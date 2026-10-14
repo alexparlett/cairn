@@ -1,14 +1,41 @@
 ---
-status: in-flight
+status: shipped
 packet: staging-and-commit
 opened: 2026-10-07
+shipped: 2026-10-14
 ---
 
 # PRD — Staging and commit
 
-**In flight. Authoritative while it is.** The packet's work directory is
-`docs/work/staging-and-commit/`; its decisions and rejected alternatives are that
-directory's `brainstorm.md`, L1-L26. Requirements below cite them by id.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For how
+the write verbs, the stale check, the sealed discards, commit and amend work now, read
+`docs/systems/staging.md`; Local Changes' actions, its one selection, the staging gesture
+and the commit box, `docs/systems/local-changes.md`; the local write lane, where an ending
+goes, the leftover lock and the activity popover (Fork's Activity Manager),
+`docs/systems/git-processes.md`; Show Lost Commits and Create Branch,
+`docs/systems/history-graph.md`; the inverted patches, `docs/systems/diff.md`; and the
+roster a local write inherits, `docs/systems/credentials.md`. Those are the living truth
+and this is not; the invariants it added are in the root `CLAUDE.md`, each with its twin.
+Requirements R1-R14 and acceptance criteria C1-C35 were met at the second merge bar
+(2026-10-14), each against a test that decides it; C21 was met by `#[ignore]`d reporters
+on the bench machine, by reading, not asserting — stage 68.9 ms, unstage 68.9 ms, discard
+51.5 ms and commit 52.5 ms against 93 / 93 / 76 / 87 ms, no frame over 16.7 ms — and its
+numbers are kept in `docs/research/staging-and-commit/measured.md`.
+
+Amendments made in flight are marked inline, dated, where they changed a requirement —
+most of them the redesign of 2026-10-10 described below. Nothing below was descoped. What
+the packet left is filed: the "Out of scope" items not another packet's as #90-#104 (a
+hook reading `/dev/tty` was already #86); the independent review's refactors the rebuild
+did not take as #105-#115; and what its QA left as #116-#133 (among them the nested
+repository Create Branch's Discard deletes, #126). #41 (a view of the commands Cairn ran)
+is met by the activity popover, and #46 (credentials in retained stderr) by scrubbing in
+the runner; #47, #48, #66 and #87 carry comments on what this packet changed for them.
+Fork's "Stash and reapply" is in packet 5b's brief. The packet's work directory — the
+brainstorm (L1-L26), `state.md`, `progress.md`, the phase docs and the `qa-checklist.md`
+this file names below — was deleted at teardown; git history holds it, its decisions are
+in `docs/design/ui.md`, `docs/design/engine.md`, `docs/design/diff.md`,
+`docs/design/concurrency.md` and `docs/design/processes.md`, and the "L" ids and the
+work-directory paths below are to that history.
 
 Design frame: `docs/design/ui.md` (Local Changes, the staging gesture, the commit
 box, the confirmation dialog, Show Lost Commits, the activity popover),

@@ -3,6 +3,115 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-14 — the merge bar (phase 21)
+
+**The review.** Seven fresh reviewers, on a different model from the implementer's, over `git diff
+main...e246478`: `qa-checklist`, `destructive-ops-reviewer`, `responsiveness-reviewer`,
+`gate-integrity-reviewer`, two test-coverage auditors over the acceptance criteria (C1-C17 and
+C18-C35), and a storyboard-and-dismissal audit of the built window against the redesign's
+storyboards and of every dismissal logged in this file. C21's numbers were measured separately, on
+fresh bench clones (below). A fresh `qa-confirm` adjudicated the raw findings.
+
+**The adjudication: 11 of 25 confirmed, none critical** (three duplicates merged: the C17 note with
+qa-checklist's Show-files VERIFY; qa-checklist's anchor items with its round-1 list; the
+storyboard audit's D1-D4 into one). Every confirmed item is fixed on this branch, test first where
+it names a test:
+
+1. The inherited roster's comment called `GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` its only `GIT_*` names,
+   false since the identity variables joined (and so did `credentials.md`'s L5); reworded (8d79825).
+2. Create Branch's refusal or wait was capped at two lines with an ellipsis, against rule 6 and
+   R14.7; drawn whole and wrapped (9f81c85), pinned by
+   `a_long_refusal_is_drawn_whole_and_wrapped` (a 300-character refusal, uncapped and taller than
+   two lines; red against the capped label).
+3. "Show files" clipped a path wider than the dialog; its rows now keep their words whole and the
+   list scrolls sideways with `end_room`, as Local Changes and the Git Error output do (aab7ab4),
+   pinned by `show_files_lists_a_path_wider_than_the_dialog_whole_and_scrolls_to_it` (red against
+   the old row: "the path is 476 wide, held to the dialog");
+   `show_files_over_50000_paths_builds_one_viewport` still passes.
+5. Three stale test anchors in `git-processes.md` and `local-changes.md` (9c182b4).
+8. `CLAUDE.md`'s `Updates::next` residual and `Update::into_retired`'s doc now name the superseded
+   consequences and commit-box reads freed on the UI thread, bounded by what was asked (9c182b4).
+12. C26's window test through a real refresh: the window over a real worker, `worker::StagedFile`
+   (a file staged through the lane, then edited in its working tree), through `Request::Refresh`
+   twice on `session.rs`'s pump pattern —
+   `a_line_selection_survives_a_real_refresh_of_the_same_text_and_clears_once_otherwise` (0ab8753).
+   Mutation probe, in an isolated worktree: `ShownDiff::keyed` hashing the question without the
+   answer turns it red ("other text drew the same key").
+13. C30's "never a retry": after the lock's removal no write starts but the removal, and the path
+   the refused stage named is still unstaged in the status read after (8199889).
+15. Operation names as Fork's rows were observed (`fork-activity-result-lines-2026-10-11.md`):
+   "Stage 1 File", "Unstage 2 Files", "Commit 2 files" (the count committed, which the commit box
+   now hands the write; "Commit" alone for a merge concluded with nothing staged), "Discard
+   Changes", "Fetch 'origin'"; buttons and dialog titles unchanged; PRD R14.2 and rule 5's brief
+   carry dated notes (4c92575). Pinned by `each_write_is_named_in_forks_imperative_form`,
+   `each_operation_is_named_in_forks_imperative_form` and the commit box's write descriptions
+   (`files=1`, `files=0` for the concluded merge).
+17. The dismissals D1-D4 annotated above: phase 16's 3 and 5, the merge bar's Probe 7, phase 11's
+   qa-checklist #2 and responsiveness #7 moot (the code their reasons named was removed by the
+   redesign); phases 12's and 13's dismissals by number noted as reasoned in scratchpad
+   adjudications that were not kept.
+
+**Dismissed by the adjudication, with reasons:** the activity popover's row name and header cut
+at the edge (a name and a status line, not a refusal, reason or prompt, and Fork's own rows are cut
+there); PRD C19's `files_drawn_together_build_one_viewport` (named only to record that it went with
+its view); `a_repository_trusted_less_than_fully_is_left_to_gits_discovery` (pre-existing on main,
+outside this diff); `hunk_at`/`hunk_rows` and the rows-page additions (tested in
+`row_selection.rs` and `history.rs`); the teardown list's review-code-engine M1 (listed, across a
+line break); C21 missing from progress.md (measured separately, below); C31 met by type, not guard
+(the PRD row accepts a type: `ScrubbedLine` is built only by the `Scrubber`); S2 and S3 (decided:
+R12.4's recorded alignment, and the user's 2026-10-09 ratification); destructive-ops' three NOTEs
+(the user's B2 decision, git parity, and `AmendChangedSinceConfirmed`'s re-check);
+responsiveness' NOTEs 2-4 (bounded by `OUTPUT_LINES`, `ACTIVITY_ENTRIES` or a press, as stated);
+gate-integrity found nothing.
+
+**Every acceptance criterion: C1-C35 met.** C1-C20, C22, C24, C25 and C27-C35 met as the auditors
+found them (C9's environment arm by the environment tests; C17 with its Show-files note, fixed as
+item 3; C22 by review; C31 by type); C26 met once its window test through a real refresh landed
+(item 12); C30's no-retry now asserted (item 13); C23 met by the full gate at this entry's tip; C21
+met, its numbers below.
+
+**C21, measured at e246478** (host: 16 cores, 60 GiB, `/tmp` tmpfs, git 2.56.0; three runs, each on
+a fresh `GIT_OPTIONAL_LOCKS=0 git clone --no-local --no-hardlinks --no-checkout` of the bench onto
+tmpfs, `maintenance.auto=false`, `gc.auto=0`, detached at `c999cef531e`, no commit-graph, clean,
+deleted after; per run `measures_the_first_page_with_show_lost_commits` (read only, first), then
+`window_check::writes_check` (release, `--ignored`), then `cairn_write_costs`; the bench's
+`.git` mtime unchanged, 2026-10-08 20:35:34.129917376 +0100, before and after):
+
+| Measure | Bar | Run 1 | Run 2 | Run 3 | Median of runs | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| Stage, press to refreshed lists (median of 7) | 93 ms | 69.1 | 68.6 | 68.9 | 68.9 | pass |
+| Unstage | 93 ms | 68.9 | 68.6 | 69.3 | 68.9 | pass |
+| Discard (from the confirmation's press) | 76 ms | 51.5 | 51.3 | 51.6 | 51.5 | pass |
+| Commit | 87 ms | 52.5 | 52.4 | 69.1 | 52.5 | pass |
+| Slowest frame while the four writes landed | 16.7 ms | 1.35 | 1.55 | 1.20 | 1.35 | pass |
+| Slowest frame while any hook ran (closed/open worst) | 16.7 ms | 4.93 | 4.75 | 4.30 | 4.75 | pass |
+| Frames over 16.7 ms, any phase | 0 | 0 | 0 | 0 | 0 | pass |
+| Show Lost Commits' first page, toggle to drawn (window) | recorded | 17.5 | 17.5 | 18.1 | 17.5 | recorded |
+| Show Lost Commits' first page, engine (`lost=true`) | recorded | 7.39 | 7.40 | 7.40 | 7.40 | recorded |
+| Amend's press-time read, `ops::amend_consequence` | recorded | 0.58 | 0.55 | 0.58 | 0.58 | recorded |
+
+Run 3's commit, 69.1 ms, is the one-status-read-higher level (about 17 ms) seen in phases 11, 12
+and 20, still under its bar. In full, per run:
+
+- Run 1 (clone 33 s): hooks' slowest frame closed / open — 50 ms lines 1.21 / 1.43, a 20,000-line
+  flood 3.29 / 4.93, five 200 KiB lines 2.96 / 1.35; hover over a 10,000-line diff 0.27 ms, drag
+  0.95 ms; 1,000 files selected, the primary drawn 20.4 ms from the selection (slowest frame 0.72);
+  open 260.9 ms (slowest frame 6.65); Show Lost Commits' window frame 0.86 ms at its slowest. Engine:
+  first page `lost=false` 7.39 ms [7.35-7.69], `lost=true` 7.39 [7.35-7.44], 64 rows; the whole walk
+  2277 / 2340 ms. `cairn_write_costs`: stage lines 29.92 ms, unstage lines 30.14, discard lines
+  13.74 (its consequence 13.37), commit 11.46; amend's press-time read 0.58 ms (`amend_staged`
+  2.52; per status while Amend is ticked 3.10).
+- Run 2: hooks 1.05 / 1.51, 3.27 / 4.75, 2.64 / 1.34; hover 0.41, drag 1.04; 1,000 files 37.3 ms
+  (slowest frame 0.53); open 43.8 ms (6.92); Show Lost Commits' frame 0.78. Engine: first page
+  7.40 / 7.40 ms; whole walk 2282 / 2266 ms. Costs: stage 29.81, unstage 29.80, discard 13.71
+  (13.31), commit 11.85; amend's read 0.55 (2.33; 2.87).
+- Run 3: hooks 1.20 / 1.62, 3.46 / 4.30, 2.61 / 1.41; hover 0.44, drag 1.07; 1,000 files 38.3 ms
+  (0.80); open 43.8 ms (6.74); Show Lost Commits' frame 1.42. Engine: first page 7.38 / 7.40 ms;
+  whole walk 2277 / 2320 ms. Costs: stage 29.64, unstage 29.51, discard 13.64 (13.42), commit
+  11.73; amend's read 0.58 (2.61; 3.18).
+
+Teardown (the PRD's stamp, `docs/work/` removed, the issues filed) is a separate session's.
+
 ## 2026-10-11 — phase 20's QA fixes, part 2: Fork's result lines and the lines' scroll (packet mode)
 
 The user chose to check Fork first-hand; the observation is saved in full as
@@ -222,7 +331,9 @@ The coordinator's adjudication (`qa-p16/adjudication.md`): FIX NOW 1, 4 and 6; C
 phase 17 (written into its doc); dismissed 2 (the two lists' rows are only ever written as a
 pair, so Staged waiting beside Unstaged answered cannot happen), 3 (the together branch acts on
 exactly the diffs drawn, the user's 2026-10-09 decision, and goes in phase 17) and 5 (the range
-rebuild is a stated residual; the together re-run goes in phase 17).
+rebuild is a stated residual; the together re-run goes in phase 17). (Annotated at the merge bar,
+2026-10-14: 3 and 5 are moot — the together view, `Request::Together` and `StackedDiff`, was
+removed in phase 17, and nothing it held is left unguarded.)
 
 - **#1**: `nothing_is_acted_on_while_the_filters_rows_are_on_their_way`
   (`local_changes_actions_tests.rs`): a path selected, `filter("x")` leaving the lists waiting,
@@ -386,7 +497,8 @@ open and teardown lists.
 
 The coordinator's adjudication (`qa-p13/adjudication.md`): FIX NOW 1, 2(a), 3, 5, 6, 7, 8, 11;
 CARRY 4 and 9 (phase 18), 12 (teardown); FILE 10 and the gc note (state.md's list); USER 2(b).
-Dismissed by the adjudication: 13, 14, 15, 16.
+Dismissed by the adjudication: 13, 14, 15, 16. (Annotated at the merge bar, 2026-10-14: their
+reasons are in the scratchpad adjudication, `qa-p13/`, which was not kept.)
 
 - **#1** test first: `a_commit_git_made_then_failed_after_is_reported_made`, git wrapped to exit
   128 after its success, failed on the code (`GitFailed`), then passed with
@@ -453,8 +565,9 @@ for the record:
 
 ## 2026-10-10 — phase 12's QA fixes (packet mode)
 
-The coordinator's adjudication confirmed 13 findings (3 dismissed: #3, #9, #14). Fixed, test
-first where a bug:
+The coordinator's adjudication confirmed 13 findings (3 dismissed: #3, #9, #14; annotated at the
+merge bar, 2026-10-14: their reasons are in the scratchpad adjudication, `qa-p12/`, which was not
+kept). Fixed, test first where a bug:
 
 - **#1** escapes stripped after the scrub could rebuild a credential (`https\x07://u:T@h`,
   `https:\x1b[0m//u:T@h`): `strip_ansi` moved into `cairn_model` beside the `Scrubber`, which now
@@ -626,7 +739,8 @@ callback is asked again with the measured height, the popover not rendered again
 narrow glyphs, whose estimate runs long, sits on its measured height too, and now pins that
 direction (`a_prompt_shown_whole_sits_on_its_measured_height_not_its_estimate`, failing with the
 estimate alone, "git's first line 72 px below a prompt 60 px tall"). Dismissed; no code change. The
-probe's edit was reverted.
+probe's edit was reverted. (Annotated at the merge bar, 2026-10-14: moot — Show All and both tests
+named here were removed by F3, the confirmed prompt now drawn whole and wrapped.)
 
 **C21, measured on the tip** (`writes_check`, release, warm; each run on a fresh `--no-hardlinks`
 tmpfs clone of the bench at `c999cef531e`, `maintenance.auto=false`, `gc.auto=0`, no commit-graph,
@@ -686,13 +800,16 @@ adjudications):
 
 - qa-checklist #2, a fetch progress line's token tail in the title bar: the network lane scrubs
   every progress line with one `Scrubber` across the whole fetch, so a URL cut across two reads is
-  scrubbed before it leaves the lane; the window's pass is a second.
+  scrubbed before it leaves the lane; the window's pass is a second. (Annotated 2026-10-14: moot
+  — scrubbing moved into the engine's `process/pipes.rs` in phase 12, C31; no `Scrubber` is used
+  in `cairn-app`.)
 - responsiveness #6, the root re-rendered per activity write: bounded by `ACTIVITY_ENTRIES`, only
   while the popover is open, and not new — the commit box's Git Error dialog read the same state.
 - qa-checklist #5, the popover's deep `PartialEq`: required, since `shown()` builds a new `Rc` each
   render; bounded by 200 entries, the lines compared by pointer first.
 - responsiveness #7, finished records scrubbed again on the UI thread: a deliberate second pass,
-  once per operation's end over its own records, linear.
+  once per operation's end over its own records, linear. (Annotated 2026-10-14: moot — no
+  UI-thread pass remains since scrubbing moved to `process/pipes.rs`, C31.)
 - TC13, no test that command lines are scrubbed: a commit's arguments are fixed literals and a
   branch's carry no `://`, so the scrub is defence in depth a test decides nothing reachable for.
 - TC14, the commit-graph date route: decided by the fixture's distinct dates; the route deleted is a

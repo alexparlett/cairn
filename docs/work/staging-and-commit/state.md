@@ -1800,5 +1800,5 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 17 one file's diff | built in packet mode, neither stopping rule triggered; QA adjudicated, fixes 1, 2, 3 and 5 applied, 3's guard-tier pin carried to teardown, full gate green |
 | 18 the commit box | built in packet mode, stopping rule not triggered, full gate green; QA the coordinator's |
 | 19 one home for each message | built in packet mode, stopping rule not triggered; QA adjudicated, fix-now items 1-4, 6-10 fixed at d1207eb, full gate green |
-| 20 the Activity Manager | built in packet mode, steps 0-2 and 4-6, full gate green; stopping rule triggered for the result lines (with the user); QA the coordinator's |
-| 21 QA | planned — the merge bar over the whole packet |
+| 20 the Activity Manager | done — built in packet mode, steps 0-2 and 4-6; stopping rule triggered for the result lines (with the user); QA adjudicated, fixes applied, full gate green |
+| 21 QA | merge bar passed, pending teardown — seven reviewers, 11 of 25 findings confirmed (none critical) and fixed, C1-C35 met, C21 re-measured on fresh bench clones, full gate green (2026-10-14; progress.md) |

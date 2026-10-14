@@ -14,13 +14,10 @@ commit's details and its changed files in the detail pane's Commit tab, with a
 file's diff opened in place under its row, and in its Changes tab a filtered file
 list beside one file's diff, unified or side by side, or two commits compared
 ("The detail pane" and "The diff view", below); and, in the Local Changes view, the path
-chosen in its Unstaged or Staged list beside its working-tree diff (`local-changes.md`);
-nothing stages anything yet — the patch emitter, and since
-`staging-and-commit` phase 02 the stage, unstage and discard patches built on it
-(`action_patch`, "Stage, unstage and discard", below), still ship with no caller,
-deliberately (program decision L2 in `docs/work/daily-loop/brainstorm.md`): their
-round trips against real `git apply` are what make the write verbs a feature rather
-than a rewrite. Which paths of a working
+chosen in its Unstaged or Staged list beside its working-tree diff (`local-changes.md`),
+whose lines are staged, unstaged and discarded through the patches the emitter builds
+(`action_patch`, "Stage, unstage and discard", below; the write verbs are `staging.md`'s),
+each held to its round trip against real `git apply`. Which paths of a working
 tree changed — status — is not here (`status.md`): the working-tree query answers one path it
 is given, and Local Changes gives it the path chosen in its lists. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
@@ -100,7 +97,7 @@ zero, which is how the lines are indexed, and `one_based()` is the number a gutt
 and a hunk header show. Having one type rather than two coordinate systems is what
 keeps the off-by-one out of the header arithmetic.
 
-**The mode change is an item of its own** (`staging-and-commit` R2.4, L17d): a
+**The mode change is an item of its own** (`staging-and-commit` R2.4): a
 `Selection` holds it apart from the lines (`select_mode`, `unselect_mode`,
 `holds_mode`), as `git add -p` asks it apart. Nothing else selects it —
 `with_every_change` and `select_change` select lines — so a selection of lines
@@ -832,7 +829,7 @@ empty tree and a file where `HEAD` had a directory. The same suite runs on git
 
 #### A staged rename or copy is paired as `git diff --cached` pairs it
 
-`staging-and-commit` R2.6, L18. Plumbing reads no `diff.renames`, and a pathspec of
+`staging-and-commit` R2.6. Plumbing reads no `diff.renames`, and a pathspec of
 one path pairs nothing — `git diff --cached -- <new>` itself shows a staged rename as
 an addition (`git_diff_cached_of_one_path_pairs_nothing`) — so the staged side
 decides the pair over the whole index first. `crate::reads::staged_pairing` runs
@@ -1112,7 +1109,7 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
   wrong id there is a lie a three-way apply could act on.
   `the_index_line_follows_gits_own_rule`, `a_partial_selection_claims_no_blob_id`.
 - **Every path line is C-quoted exactly as git's `quote_c_style` writes it**
-  (`staging-and-commit` R2.5, L17e; `crates/cairn-model/src/c_quote.rs`): unquoted
+  (`staging-and-commit` R2.5; `crates/cairn-model/src/c_quote.rs`): unquoted
   when nothing in it needs quoting, otherwise in double quotes with `"` and `\`
   escaped, BEL, BS, TAB, LF, VT, FF and CR as their letters, and every other control
   byte, DEL and every byte above `0x7f` as a three-digit octal escape — git's
@@ -1146,13 +1143,13 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
 ## Stage, unstage and discard
 
 `action_patch(PatchAction, &FileDiff, &Selection)`
-(`crates/cairn-model/src/action_patch.rs`, `staging-and-commit` R2.1-R2.3, L17) is
+(`crates/cairn-model/src/action_patch.rs`, `staging-and-commit` R2.1-R2.3) is
 what each of the three actions emits, over the diff the selection was made on: one
 forward rule, `emit_patch`, given the diff as drawn to **stage** (the unstaged or
 untracked diff, applied with `git apply --cached`), and the diff **inverted** to
 **unstage** (the staged diff, `git apply --cached`) and to **discard** (the unstaged
 or untracked diff, `git apply` on the working tree). No patch is ever applied with
-`-R` (L17a).
+`-R`.
 
 **The inversion** is three pure functions. `TextDiff::inverted` swaps the sides and
 each change's spans; `Selection::inverted` swaps the removed and added sets (a
@@ -1186,7 +1183,7 @@ selection of none of its lines would otherwise hold whole, as a deletion) or a t
 whose content did not move (`a_selection_of_nothing_makes_no_patch_by_any_action`). An
 empty file is staged, unstaged or discarded by its file verb.
 
-**Whole-file only** (R2.3, L17c): a deletion on either side and a type change make no
+**Whole-file only** (R2.3): a deletion on either side and a type change make no
 patch for part of themselves — the empty patch, as a selection of nothing makes —
 decided on the diff AS DRAWN, before any inversion; every state that is not text
 (binary, an LFS pointer, past the limits, a submodule, a conflicted path,
@@ -1196,7 +1193,7 @@ unsupported) makes no patch at all, by any action. Each is its file verb's, whol
 headers when the mode is selected and nothing otherwise.
 
 **Part of an added file** — untracked, newly staged, or intent-to-add — is not
-whole-file only (L17b): its lines stage as a `new file mode` patch of the lines
+whole-file only (R2.3): its lines stage as a `new file mode` patch of the lines
 selected, and discard (or unstage) as a partial deletion, which the forward rule
 writes as a modification, the file kept; all of it undone is the file deleted.
 `part_of_an_added_file_is_staged_new_and_discarded_as_a_modification`. **A `new file
@@ -1207,7 +1204,7 @@ and leaves a real entry holding the lines selected
 the same rule as an untracked one.
 
 **Unstaging or discarding lines of a rename or a copy changes content only, at the
-path it now has** (R2.6, L17c): the patch names the new path on both sides and
+path it now has** (R2.6): the patch names the new path on both sides and
 carries no `rename from`, so the index keeps the rename and the lines go back.
 `unstaging_lines_of_a_rename_or_a_copy_changes_content_at_its_new_path`.
 
@@ -1507,8 +1504,7 @@ once (`Asking::Working`), and a changes query supersedes it with the rest
 kept only when it names exactly the query the path chosen is asked as now
 (`DiffState::working_arrived`).
 `DiffState` records which holds it as one value (`lane`, a `LaneHolder` — `File`, `Working` or
-`Expansion` — taken by `take_lane` and let go of by its holder alone; staging-and-commit phase
-17, the code review's H1), and the one
+`Expansion` — taken by `take_lane` and let go of by its holder alone), and the one
 that lost it while its answer was awaited is asked again, whole, as its tab is shown: the
 Changes tab's effect asks `reask_file` when `file_needs_asking`, the Commit tab's body
 asks `reask_expansion` when `expansion_needs_asking`, so neither waits for good on an
@@ -2180,7 +2176,7 @@ stop, matched by its physical position, since Option turns `1` into `¡` on macO
 turns `.` into `>`), or by a primary pointer press.
 
 A chord is spelled for a person in one place, from this data: `accelerators::chord_name(action,
-os)` (`crates/cairn-ui/src/accelerators/chord_names.rs`, the user's decision of 2026-10-09)
+os)` (`crates/cairn-ui/src/accelerators/chord_names.rs`, the user's decision)
 renders an action's first chord as Fork's own lists write it — on Linux Fork's Windows form,
 `Ctrl+Alt+Shift+S`, held keys in that order joined by `+`; on macOS the symbols run together,
 `⌘⌥⇧S`, `⌘Return`, `⌫` — and `None` for a press or an action with none
@@ -2220,7 +2216,7 @@ does for every chord here, and F5 is bound by no Linux desktop nor by any other 
 keeps alternates for staging — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
 discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. In Fork's diff Return
 does nothing and ⌘S or Ctrl+S stages the whole selection (observed in Fork for Windows 2.21.1,
-`lc3`, `lc4`; staging-and-commit R7.3 as amended 2026-10-10), so the stage's bare Return is
+`lc3`, `lc4`; staging-and-commit R7.3), so the stage's bare Return is
 heard from the file lists alone. No chord is listed twice on one platform, within one list or
 across two actions, whatever their scopes; and every chord holds a modifier but a function
 key's (F5) and, in `LocalChanges` alone, a bare Backspace or Delete, and in
@@ -2257,16 +2253,16 @@ and the extending press selects a second commit to compare ("Comparing two commi
 The staging, commit and Show Lost Commits chords are in the table, each heard in its own
 scope only — so with the commit box focused, only the commit chord resolves
 (`in_the_commit_box_only_the_commit_chord_resolves`) — and are acted on by the views that
-hear those scopes; until a view hears a scope, its chords resolve and do nothing — today
-no view hears `LocalChanges`, `LocalChangesLists`, `CommitBox` or `History`, and no list
-reads the range press, so a Local Changes list does not yet toggle a path on the extending
-press. The history
+hear those scopes: Local Changes' lists and diff (`LocalChanges`, `LocalChangesLists`;
+`local-changes.md`), the commit box's fields (`CommitBox`, through `text_field_in`, below)
+and the history list (`History`, `HistoryList::on_action`), whose Local Changes lists toggle
+a path on the extending press and select a range on the range press. The history
 list and the file lists leave the window's and the detail pane's chords alone, so Ctrl+↓ is
 "next change", never "next commit" (`an_accelerators_chord_does_not_move_the_selection`);
 another view's chord is theirs to read, so Shift+↓, the list selection's extension in Local
 Changes, moves the history list, the Changes tab's files, the Commit tab and the diff as ↓
 does (`another_views_chord_is_the_history_lists_arrow` and its siblings in
-`crates/cairn-ui/tests/`, the user's decision of 2026-10-09).
+`crates/cairn-ui/tests/`, the user's decision).
 Pinned by `the_table_is_forks_chords_and_no_others` (the whole table, every list spelled out
 per platform), `every_chord_resolves_to_its_action_in_its_scope_only` (every chord of every
 list), the pin above, `the_command_key_is_the_platforms_own`,
@@ -2317,11 +2313,11 @@ both rendered by the consequence itself, and its button builds the `Confirmed` t
 that value — the first file on the confirmation-surface roster. It is modal to the keyboard
 and to assistive technology (`a11y_modal`: Tab and Shift-Tab move between its two answers
 only), focus starts on Cancel — a deliberate deviation from Fork, which styles Discard the
-default (L8) — Escape and a press outside it cancel, and once answered it ignores every
+default — Escape and a press outside it cancel, and once answered it ignores every
 later press, so one acknowledgement builds one token
 (`crates/cairn-ui/tests/confirm_dialog.rs`). Its buttons, and every dialog's — the Git Error
 dialog's, Create Branch's, the credential prompt's — sit in the platform's order
-(`cairn_ui::button_order::ordered`, the user's decision E, 2026-10-09): on Linux the primary
+(`cairn_ui::button_order::ordered`, the user's decision): on Linux the primary
 first and Cancel or Close last, as Fork for Windows; on macOS Cancel first and the primary
 last, as Fork for macOS; each dialog draws in this build's platform unless a test names
 another (`.platform(Os)`), and a confirmation's focus is on Cancel on both

@@ -923,10 +923,11 @@ date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags
 the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
 with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
 
-Since phase 11 (the user's decision A) each reflog tip is read once, its date taken with its
+Each reflog tip is read once, its date taken with its
 kind (`reflogs::reflog_tips` hands the walk the dates, `walk::open_dated`), and every tip's
 date — a ref's or a reflog's — is the commit-graph's where the graph holds it, as git's own walk
-takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back:
+takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back against a walk that read each tip twice and dated it from its
+object ("before"):
 with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
 pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
 1,000 entries 7.8 ms and 2.8 ms; 200 local branches each with a 50-entry log (10,000 ids),
@@ -935,7 +936,7 @@ moves a ref — pays the same again, since each reads every log; in the window t
 page is drawn 18.2 ms after the press on the clone's own reflog (`writes_check`).
 
 Turning it on or off is a reopen (`Request::OpenHistory`'s `lost`, the window's
-`View::show_lost`, kept for the session and off as the window opens — the user's decision D):
+`View::show_lost`, kept for the session and off as the window opens):
 the history lane opens the walk as the open asked, and a later reopen — a refresh that finds the
 refs moved — asks as the toggle stands
 (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
@@ -946,7 +947,7 @@ Commits", at the right end of the "Graph and subject" heading's cell — laid ov
 every heading stays over its column and no row loses width — ticked while on, its tooltip the
 chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
 `accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
-`the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`; the user's decision B). The list
+`the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
 keeps the keyboard through the reopen: it gives way to the opening sentence until the reopened
 walk's first page arrives, and takes focus again as it is drawn, so the chord is heard again
 with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
@@ -958,15 +959,14 @@ that gains a ref is reached at the reopen that follows and drawn as any other.
 ### Create Branch
 
 The way back to a lost commit — or to any — is Fork's Create Branch dialog
-(`crates/cairn-ui/src/create_branch_dialog.rs`, `crates/cairn-app/src/create_branch.rs`; the
-user's decisions of 2026-10-09 and 2026-10-10; evidence
+(`crates/cairn-ui/src/create_branch_dialog.rs`, `crates/cairn-app/src/create_branch.rs`; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md` and
 `fork-observed-2026-10-10.md`), opened by `New Branch…` in
 any commit row's context menu, a lost row's too, a stash's row offering none
 (`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
 right-click selecting its row first unless it lands in the selection already made, either of a
-compared pair (the user's decision C, 2026-10-09;
-`a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in`) — or at
+compared pair
+(`a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in`) — or at
 `HEAD` by Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), heard anywhere
 (`Action::NewBranch`, `create_branch::open_at_head`): `HEAD`'s commit as the last refresh read
 it, its subject the row's where `History::labelled_position` finds it loaded, nothing opened
@@ -982,16 +982,15 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
   the local lane, `Repository::branch_name`): the button is enabled only for an answer of
   "free" to the text shown, and a refusal is said inside the dialog, in the buttons' row,
   left of them, behind the warning triangle (`RefGlyph::Gone`), never in the Git Error dialog
-  (the user's decision B, 2026-10-09) — the engine's typed answer worded by the dialog
+  — the engine's typed answer worded by the dialog
   (`cairn_ui::name_refusal`, `refusals_are_worded_by_the_view`): "Branch <name> already exists",
   git's reason for a name it does not take, git's words for a name a branch's directory holds
   (`'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'`, either way round), or "A
-  branch name can't contain '@{'", said before git is asked (decision F;
-  `a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
-  on the local lane, the same place names what it waits for (`LocalWrite::awaited`) — "Waiting
-  for the commit to finish…", "Waiting for the branch to be created…" (the user's decision of
-  2026-10-09), the running write's or else the first queued (decision D;
-  `a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
+  branch name can't contain '@{'", said before git is asked
+  (`a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
+  on the local lane, the same place names what it waits for by its one name
+  (`create_branch::waiting`) — "Waiting for Commit 1 file…" — the running write's or else the
+  first queued (`a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
   `a_name_check_waiting_behind_a_write_says_which_write`)
   (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`,
   `a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`,
@@ -1001,14 +1000,13 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
 - "Local changes:" is drawn while the box is ticked and a tracked path is staged, unstaged or
   conflicted (`WorkingTreeStatus::has_tracked_changes`, searched among every entry, never read
   from the first): Fork's three in Fork's order — "Don't change", "Stash and reapply" greyed with
-  "Comes with stashing." beside it until packet 5b builds stashing, and "Discard", Fork's ⚠
+  "Comes with stashing." beside it, since Cairn does not stash, and "Discard", Fork's ⚠
   beside it while it is chosen; each opening starts on "Don't change"
   (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`,
   `local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`,
   `local_changes_are_forks_three_in_forks_order_stash_greyed_and_a_chosen_discard_warned`).
   The button reads "Create and Checkout" whatever is chosen.
-- **The dialog is a confirmation surface** (on the seal guard's `CONFIRMATION_SURFACES`; the
-  user's decision of 2026-10-10, B2): while Discard is chosen the engine is asked what it would
+- **The dialog is a confirmation surface** (on the seal guard's `CONFIRMATION_SURFACES`): while Discard is chosen the engine is asked what it would
   be confirmed as for the name shown (`Request::CheckoutConsequence`, the checkout-count lane,
   asked again as the name changes, the newest ask's answer alone kept), and the button waits for
   it; then Create and Checkout — or Return — IS the acknowledgement, the radio chosen plus the

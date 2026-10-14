@@ -15,7 +15,8 @@ a thread, stdout is handed over as it arrives or, for a read alone, collected
 under a ceiling, stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
 kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
 seconds. The version probe, fetch and the local write verbs — staging,
-unstaging and discarding lines and files (`docs/systems/staging.md`) — run on it
+unstaging and discarding lines and files, committing, amending and creating a branch
+(`docs/systems/staging.md`) — run on it
 like everything else; the paths the first two ran on before are gone, and a guard
 keeps them gone. Each open
 repository keeps a registry of the invocations running in it, which closing
@@ -24,8 +25,9 @@ application, `git` is found once, as it starts; a fetch runs in the network
 lane, which refuses a second; every local write runs in the local write lane,
 one at a time in the order asked, with an askpass token of its own whose
 prompt the window shows ("The local write lane"); closing the window closes
-its repository, once the local write it is running has ended; and the worker
-answers the log as values, which no view draws yet (issue #41).
+its repository, once the local write it is running has ended; and each
+operation's own records of the log reach the window as it ends, drawn in the
+activity popover ("The activity popover").
 
 Where a residual below says **accepted by the user on 2026-10-02** (or a later
 date), the user reviewed it and kept the behaviour as stated; where it
@@ -224,14 +226,16 @@ destroy: each takes a `cairn_model::Confirmed` by value. The token carries the
 `cairn_model::Consequence` the engine computed — what the operation will destroy
 — and the prompt rendered from it (`Consequence::prompt`), is neither `Clone` nor
 `Copy`, and is built only by `Confirmed::by_user`, whose callers in production
-code are the guard's confirmation-surface roster (empty until the confirmation
-dialog and the commit box exist); `Performed::destructive` spends it, recording
+code are the guard's confirmation-surface roster (`CONFIRMATION_SURFACES`: the
+confirmation dialog, `cairn_ui::ConfirmDialog`, and Create Branch's dialog, whose
+press is its Discard's confirmation); `Performed::destructive` spends it, recording
 its prompt on the operation's `Performed` (R1.6). Which functions take it is the
 guard's destructive-operation roster: every function of `crates/cairn-git/src`
 naming `Confirmed` is in `ops/`, on the roster or the record, and takes it by
 value (`destructive_operations_are_sealed_behind_the_confirmation_token`). Its rows
-today are `ops::discard_lines` and `ops::discard_files` (`ops/discard.rs`), which
-replaced the placeholder `describe_destructive`; the roster is never empty, and the
+are `ops::discard_lines` and `ops::discard_files` (`ops/discard.rs`), `ops::amend`
+(`ops/commit.rs`), `ops::remove_index_lock` (`ops/remove_lock.rs`) and
+`ops::create_branch_discarding` (`ops/checkout.rs`); the roster is never empty, and the
 guard asserts it.
 
 Every local write verb is built as a write too, in one place
@@ -275,11 +279,11 @@ be exactly the scaffold plus its line.
 gets:
 
 - the `INHERITED` roster, copied from the parent when present — among it,
-  since staging-and-commit R5.2, `GNUPGHOME`, `DISPLAY`, `WAYLAND_DISPLAY` and
-  `XAUTHORITY`, so a signing pinentry reaches the desktop (L11, #18), and
+  `GNUPGHOME`, `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY`, so a signing
+  pinentry reaches the desktop (staging-and-commit R5.2, #18), and
   `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
   `GIT_COMMITTER_EMAIL` and `EMAIL`, so a commit is by the identity the user's
-  terminal has, a direnv one included (L26); never `GIT_AUTHOR_DATE` or
+  terminal has, a direnv one included (R6.8); never `GIT_AUTHOR_DATE` or
   `GIT_COMMITTER_DATE`, which would stamp every commit with a stale date. Each
   is a deliberate leak, with its reason beside it in `environment.rs`; a local
   write's hooks, filters and signing programs see this environment too. The
@@ -1020,7 +1024,7 @@ it, but on a close nobody may be left to show them, and the next write in
 that repository fails on them with git's own "File exists" message (issue
 #44).
 
-Two questions the registry answers outside a close (staging-and-commit phase 11):
+Two questions the registry answers outside a close:
 `Repository::running_invocations` — how many `git` Cairn runs in the repository now, on any
 thread, reads and writes alike (what git detached from its group, auto-maintenance or the
 fsmonitor daemon, is not Cairn's and is not counted) — which `Remove index.lock…` is offered
@@ -1171,9 +1175,9 @@ and, where git kept no reflog, that it can't be recovered) — it reports, preve
 opens no dialog (C35; `an_amend_pushed_while_it_ran_says_so_in_its_entry`,
 `an_amend_reports_what_it_turned_out_to_cost_only_where_it_would_now_be_confirmed`).
 
-The user's decisions of 2026-10-09 on it, as built:
+The user's decisions on it, as built:
 
-- **It hangs from the status box** (A). The window reads the box's laid-out place as Freya
+- **It hangs from the status box**. The window reads the box's laid-out place as Freya
   lays it out — the `on_sized` event of the rect around it (`SizedEventData::area`, global
   coordinates, the mechanism Freya's own `Attached` uses), kept by `ActivityLog::set_anchor`
   only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
@@ -1183,25 +1187,18 @@ The user's decisions of 2026-10-09 on it, as built:
   `the_panel_hangs_under_the_box_inside_the_window`,
   `the_popover_hangs_from_the_status_box_inside_the_window`,
   `the_popover_hangs_under_the_status_box`).
-- **Keys do nothing while it is open but close it** (I): it is the lowest rung of the one
+- **Keys do nothing while it is open but close it**: it is the lowest rung of the one
   modal state ("Where an ending goes", below), so `shortcuts::keys_inert` answers yes while it
   is open, and the window's chords (`shortcuts::act`), Local Changes' list intents, the history
   list's presses and the Show Lost Commits action ask it; the panel is `a11y_modal`, pulling
   focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
   A dialog opened over it is drawn alone, and the popover is drawn again once that is
   answered.
-- **Keys do nothing while it is open but close it** (I): it is the lowest rung of the one
-  modal state ("Where an ending goes", below), so `shortcuts::keys_inert` answers yes while it
-  is open, and the window's chords (`shortcuts::act`), Local Changes' list intents, the history
-  list's presses and the Show Lost Commits action ask it; the panel is `a11y_modal`, pulling
-  focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
-  A dialog opened over it is drawn alone, and the popover is drawn again once that is
-  answered.
-- **Each `$ git …` line pastes into a terminal** (L): every argument written as a POSIX shell
+- **Each `$ git …` line pastes into a terminal**: every argument written as a POSIX shell
   needs it — bare when it is all ASCII letters, digits and `-_./:,+=@%`, otherwise in single
   quotes with an embedded `'` written `'\''`, an empty one `''` (`activity::shell_quoted`;
   `each_argument_is_quoted_as_a_shell_reads_it_back`, which has `sh` read the line back).
-- **A write that never started keeps its name** (N): one ended before it started — not run, the
+- **A write that never started keeps its name**: one ended before it started — not run, the
   repository closing — is named as it was asked, from the writes the window kept queued
   (`a_write_refused_before_it_started_keeps_its_name`).
 - **An amend that must be confirmed leaves no entry**: it ran nothing, and the amend confirmed
@@ -1237,7 +1234,7 @@ lane), `no_update_of_a_fetch_carries_a_token_its_git_wrote` (a real fetch throug
 `the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept) and
 `the_status_box_opens_the_operations_with_their_git_and_no_token` (the popover in the window).
 
-**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations; each
+**Bounded, and session only** (R12.3): at most `ACTIVITY_ENTRIES` operations; each
 operation's lines one `crate::output_tail::OutputTail` — the one bounded tail, `OUTPUT_LINES`
 lines and `OUTPUT_BYTES` bytes, its oldest whole lines let go of — headed "Earlier output not
 kept." (`cairn_ui::EARLIER_NOT_KEPT`) once its own tail or the lane's let older lines go; and
@@ -1265,7 +1262,7 @@ commit box). A fetch's progress draws the root again by design: the status box s
 line.
 
 **An operation's name** is spelled as Fork's Activity Manager row names it, observed
-first-hand (`fork-activity-result-lines-2026-10-11.md`; PRD R14.2, amended 2026-10-14), and is
+first-hand (`fork-activity-result-lines-2026-10-11.md`; PRD R14.2), and is
 the only wording of it: the status box, a wait ("Waiting for Commit 1 file…"), the closing
 banner, the "Couldn't <name>" dialog, a prompt's title and the popover all say it.
 `LocalWrite::name` — "Stage 1 File", "Unstage 2 Files" (title case), "Commit 2 files" (lower
@@ -1277,7 +1274,7 @@ Changes", with no count, "Discard lines of a.rs", "Amend", "Remove index.lock");
 `each_operation_is_named_in_forks_imperative_form`. A write ended before it started keeps the name it was
 asked under; "A write" is said only of one the window never asked.
 
-**Output on its way to the window** (phase 05's QA item 3, phase 12's QA #15 and #16): the
+**Output on its way to the window**: the
 runner hands a commit's stdout and stderr, and a fetch's stderr, on a read of a pipe at a time,
 as whole scrubbed lines (`Invocation::lines`). The lane never sends lines: it puts each read into
 a tap (`worker::OutputTap`) — one per write, made as the write starts, so a wake the window has
@@ -1567,14 +1564,15 @@ which is a length of time, is waited out.
   committing what is staged; `a_cancel_reaches_the_running_commit_it_names_and_nothing_else`,
   `a_cancel_before_git_runs_is_kept_for_the_commit_it_names`).
 - **A commit's output** (R6.5). Each line a running commit's `git` or one of its
-  hooks writes, stdout's and stderr's alike, reaches the window as
-  `Update::WriteOutput { id, line }` as it arrives. The commit box keeps its own
-  commit's lines, a bounded tail, for the Git Error dialog a failure opens
+  hooks writes, stdout's and stderr's alike, reaches the window through the write's
+  tap (`Update::WriteOutput { id, tap }`, "Output on its way to the window", above).
+  The commit box keeps its own commit's lines, a bounded tail, for the Git Error dialog a failure opens
   (`docs/systems/local-changes.md`, "The commit box"); a failure git reports carries
   the command that ran and git's own words beside its message
   (`WriteEnding::Failed`'s `command` and `output`), which the dialog shows when
   nothing streamed.
-- **Amend pressed is one job** (staging-and-commit R6.4, rules 2 and 3 of the redesign).
+- **Amend pressed is one job** (staging-and-commit R6.4; rules 2 and 3 of
+  `docs/research/staging-and-commit/redesign-decisions-2026-10-10.md`).
   `LocalWrite::AmendAtPress` runs `ops::amend_unconfirmed` as a commit runs — cancellable,
   quiet behind — which reads what the amend costs and, in the same job, amends where git logs
   it and no remote has `HEAD`, ending `Done` with no prompt, or runs no git and ends
@@ -1583,7 +1581,8 @@ which is a length of time, is waited out.
   The commit box asks it on Amend Last Commit's press and the commit chord. An amend made ends
   `Done` naming the commit it replaced (`Done::replaced`, from the run's answer, never the
   request: the activity popover's way back) and, for one at the press, what it cost read again
-  once git was reaped (`Done::cost_after`, C35; its wording in the entry is phase 20's). A
+  once git was reaped (`Done::cost_after`, C35; its wording in the entry is "What an
+  entry says beyond its result", above). A
   confirmed amend git refused before amending ends git's failure and carries its token back
   unspent on `Update::WriteEnded`'s `unspent` (`worker::Unspent`, whose clone carries none), for
   the Git Error dialog's skip (`a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`).
@@ -1605,9 +1604,10 @@ which is a length of time, is waited out.
   Pinned by
   `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
   (`worker/local_lane_tests.rs`).
-- **Prompts during a write** (R5.1, L11). Every write begins a channel operation
-  of its own, under the name the window gives it (`Channel::begin_for`, "Commit",
-  "Staging 1 file"; a fetch's under its remote), and runs with its token, retired
+- **Prompts during a write** (R5.1). Every write begins a channel operation
+  of its own, under the write's one name (`Channel::begin_for`, `LocalWrite::name`:
+  "Commit 2 files", "Stage 1 File"; a fetch's under its remote), and runs with its
+  token, retired
   before its ending is sent, so a hook, a signing program or an LFS filter it runs
   can ask through the helper. The acceptor reads which operation a helper's token
   was issued for and sends it on the prompt (`Update::Prompt`'s `asking`), so the
@@ -1717,7 +1717,7 @@ registry, and its reap is bounded by `CLOSE_BOUND` with the rest
 A close ends any read and any fetch in flight without asking. A local write it
 waits for instead, saying so; a second close request after
 `worker::CLOSE_PATIENCE` closes the window anyway, as for a worker that has
-stopped answering, and never ends the write (the user's decision of 2026-10-09,
+stopped answering, and never ends the write (the user's decision,
 keeping R4.9): the write's `git` is left to run on, orphaned, with nobody
 reading its pipes — it finishes, or its next write to a pipe ends it with
 `SIGPIPE` — and a lock it leaves is found by the next open's stat, its banner

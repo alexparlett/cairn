@@ -199,7 +199,8 @@ never enters `cairn-git` and never enters application state.
   rather than before is pinned on the runner, against a stub that takes
   300 ms to remove its lock (`a_cancelled_write_lists_its_locks_only_once_it_is_reaped`
   in `ops/authority.rs`), since no fixture can hold a real git mid ref-write
-  at the instant of a cancel. A cancel opens nothing in the window (staging-and-commit R14.5): the worker hands
+  at the instant of a cancel. A cancel opens nothing in the window
+  (`docs/prd/staging-and-commit.md` R14.5): the worker hands
   on `Update::FetchCancelled { remote }` alone (`every_outcome_names_how_the_fetch_ended`,
   `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`,
   `a_cancelled_fetch_opens_nothing_and_a_failed_one_its_git_error`), and a stranded
@@ -596,14 +597,15 @@ must not reopen by accident, each with the reason that locked it.
   (`http_proxy`, `https_proxy`/`HTTPS_PROXY`, `all_proxy`/`ALL_PROXY`,
   `no_proxy`/`NO_PROXY`; not `HTTP_PROXY`, which curl ignores), the CA bundle
   (OpenSSL's `SSL_CERT_FILE` and `SSL_CERT_DIR`, and git's own
-  `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, the roster's only `GIT_*` names until
-  staging-and-commit's identity variables joined them;
+  `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, which the identity variables join as the
+  roster's `GIT_*` names;
   not `CURL_CA_BUNDLE`, which the curl tool reads and libcurl does not)
   and Kerberos (`KRB5CCNAME`, `KRB5_CONFIG`) — each with its reason beside it
   and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Of
-  what #18 left open, staging-and-commit decided the rest: `GNUPGHOME`,
+  what #18 left open, the staging-and-commit packet decided the rest: `GNUPGHOME`,
   `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` joined the roster for a signing
-  pinentry, beside the identity variables (L11, L26; `docs/systems/git-processes.md`,
+  pinentry, beside the identity variables (`docs/prd/staging-and-commit.md` R5.2;
+  `docs/systems/git-processes.md`,
   "The environment"), and `GIT_EDITOR` is pinned to `false`. Issue
   #22 decided a user-set askpass program is not an exception (D2, amended),
   and holds the future setting that would make one.

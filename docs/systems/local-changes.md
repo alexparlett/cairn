@@ -103,7 +103,7 @@ The diff shown is the selection's primary's (staging-and-commit R8.1, rule 8; "T
 below): never chosen on its own, but derived from the primary and the lists drawn and asked by
 one function (`diff_actions::show_primary`) whenever the selection or the lists move. It is
 asked through the working-tree query as its list says (R9.3, `diff_actions::working_query`), and
-it is the one diff drawn however many paths are selected (R8.1 as amended 2026-10-10, L1;
+it is the one diff drawn however many paths are selected (R8.1 as amended 2026-10-10, the redesign's L1;
 observed in Fork for Windows, `lc2`): the primary's — the file clicked first — with everything
 one file's diff has, Load Diff, the mode row, previous and next change and the gesture, under its
 own bar, which counts nothing (the user's answer of 2026-10-10: the lists' highlighted rows show
@@ -127,8 +127,8 @@ file-diff lane: whichever asks takes it, and the others are asked again, whole, 
 is shown (`working_needs_asking`, `reask_working`; `diff.md`, "The file-diff lane is shared").
 Who holds the lane is one value (`DiffState::lane`, a `LaneHolder`: `File`, `Working` or
 `Expansion`), taken by one call (`take_lane`) and let go of by its holder alone
-(`let_go_of_lane`), never a flag per holder that each other holder must reset (the code review's
-H1).
+(`let_go_of_lane`), never a flag per holder that each other holder must reset
+(`docs/research/staging-and-commit/review-code-app-ui.md`, H1).
 A change of the settings with Local Changes shown asks its path again at once and the others
 when their tab is shown (`Asking::Working`). A changes query supersedes the lane whoever holds
 it.
@@ -196,7 +196,7 @@ every row of their list, named without walking it), so the next file's diff is a
 status that shows the write arrives — whose own turn of the rule then changes nothing — and as
 each status and each filter answer arrives, with none leaving. Whoever moved the files — a
 stage, a commit made in a terminal (observed `lc5`: f5 committed, f6 selected), a filter — it
-is the same rule. The filter prunes the selection to the rows it shows (L3), so nothing hidden
+is the same rule. The filter prunes the selection to the rows it shows (the redesign's L3), so nothing hidden
 is ever acted on; while the filter's first rows are on their way the selection is left as it
 was, and nothing is acted on meanwhile, since an action takes only the rows shown.
 
@@ -251,7 +251,7 @@ hides, a conflicted one among them, is never staged or unstaged unseen; nothing 
 filter's rows are on their way. Their paths are gathered on the local lane, never on the UI
 thread, which copies at most the filter's row indices.
 
-**After a stage or an unstage** (R8.3, L5) the selection moves by the rule above, the acted
+**After a stage or an unstage** (R8.3, the redesign's L5) the selection moves by the rule above, the acted
 paths leaving — the row that slides into the first acted row's place, else the nearest above it
 (observed `lc4`: f2 and f4 staged, f3 selected) — and its diff is asked at once; with none left,
 nothing is selected. After Stage All or Unstage All a selection in that list goes, and one in
@@ -302,11 +302,12 @@ resolved — and is never discarded. As in Fork, nothing more is said before it 
 user's decision, 2026-10-09): staging it is the one way Cairn resolves a conflict, and Cairn
 offers no way back to the conflicted state — git's own `git checkout -m <path>` is it.
 
-**While a dialog is open** — a confirmation or a credential prompt — nothing the lists or the
-diff report is acted on, and the window's chords are inert (`shortcuts::act`). A credential
-prompt that arrives while a confirmation is open (a write running behind it asked for a secret)
-sets the confirmation aside, kept unanswered, and the confirmation is drawn again once the
-prompt is answered or refused (`window::window`).
+**While a dialog is open** — a credential prompt, a confirmation, a Git Error or "Couldn't
+<name>", Create Branch, or the activity popover, whichever the one modal state puts on top
+(`crate::modal`) — nothing the lists or the diff report is acted on, and the window's chords are
+inert (`shortcuts::keys_inert`). A credential prompt that arrives while a confirmation is open
+(a write running behind it asked for a secret) is drawn over it, the confirmation kept
+unanswered and undrawn, and drawn again once the prompt is answered or refused.
 
 **The diff hears the same chords but Return** (`Scope::LocalChanges`; R7.3 as amended
 2026-10-10, C25): on the lines a drag across it selected ("The diff's staging gesture", below),
@@ -354,7 +355,7 @@ are drawn at its top right, counted (`Stage 2 Lines`, `Unstage 1 Line`, `Discard
 whose confirmation's button reads `Discard 2 Lines`; the user's decision, 2026-10-09), and
 the chords act on it too.
 
-**A selection belongs to the text it was made over** (R9.6, L4, C26 — a deviation from Fork,
+**A selection belongs to the text it was made over** (R9.6, the redesign's L4, C26 — a deviation from Fork,
 which drops it on every refresh, observed `ln2`). Every working-tree answer is keyed on the diff
 thread with the question it answers (`ShownDiff::keyed` with the `FileQuery` — the path, the side
 and the options — in `worker/diff_lane.rs`): its content (`ShownDiff::content`) is a hash of that
@@ -385,7 +386,8 @@ the selection — `LocalWrite::StageLines` from the unstaged or untracked diff, 
 the staged one, applied by the engine's patch (`staging.md`); the selection then goes. A
 discard is refused in the view for a submodule or a conflict (`cairn_ui::no_discard`); every
 line of a new file is the file — its discard deletes it — so it asks what discarding the file
-would lose (`Request::DiscardConsequence`, the files' route, phase 03's `WholeFileOnly`);
+would lose (`Request::DiscardConsequence`, the files' route, since the engine refuses it as lines,
+`Refusal::WholeFileOnly`);
 otherwise it asks what discarding the lines would lose (`Request::DiscardLinesConsequence`,
 `ops::discard_lines_consequence` on the local lane, after the writes asked before it, not read
 once a newer ask superseded it), and the answer opens the confirmation, whose token asks
@@ -407,9 +409,9 @@ before 50, negative past it, red past 70 (`subject_count`) — and the `≡` tha
 Commit Messages; a description in IBM Plex Mono with a ruler at column 72; `Amend` at the left;
 and one button at the right — `Commit N Files` (`commit_caption`: plain `Commit` with none), or
 Fork's "Amend Last Commit" while Amend is ticked (`AMEND_BUTTON_CAPTION`, the user's answer of
-2026-10-10) — with nothing under it (R10.6, C6); the commit chord presses it, in every state. At
-most one line is drawn, over the fields, wrapped and never cut (`operation_line`, R10.8, C8,
-rule 6).
+2026-10-10) — with nothing under it (R10.6, the redesign's C6); the commit chord presses it, in every state. At
+most one line is drawn, over the fields, wrapped and never cut (`operation_line`, R10.8, the redesign's C8
+and rule 6).
 
 **The draft is the window's** (R10.7). The subject and the description are two `State<String>`s
 kept by `LocalChangesView::commit` for the window's life, bound two ways to the fields — so a
@@ -421,7 +423,7 @@ commit chord (⌘Return, Ctrl+Enter) presses the button without a new line, the 
 reach the window, and no list or staging chord fires (R7.3 as amended). Tab moves from the
 subject to the description. A key that changes either field's text is the person's edit
 (`CommitBox::on_edit`, heard through the field's validator), and so is a recalled message: the
-draft is then theirs (`commit_box_state::CommitBox::touch`). **One rule fills it** (C7, Fork's
+draft is then theirs (`commit_box_state::CommitBox::touch`). **One rule fills it** (the redesign's C7, Fork's
 developer's rule, Tracker #61): `HEAD`'s message as Amend is ticked, and a merge's, single
 cherry-pick's or revert's message, go only into an empty draft the person has not touched — so a
 fill the person cleared stays cleared. A commit made clears the draft it took, untouched again;
@@ -442,7 +444,7 @@ thread.
 line and the description when there is one (`compose_message`; git's own cleanup is git's,
 R6.1). The button needs a subject (Fork's rule) and something staged, or a merge, single
 cherry-pick or revert in progress, which it concludes. **While it is asked** the button's place
-says what it is doing (`cairn_ui::Busy`, R10.4, C5): queued behind another write, "Waiting for
+says what it is doing (`cairn_ui::Busy`, R10.4, the redesign's C5): queued behind another write, "Waiting for
 <that write's one name>…" ("Waiting for Stage 1 File…") — the one form every wait uses; running,
 "Committing 0:03" (or "Amending"), redrawn each second by a task of its own line's scope
 (`Elapsed`, on `async-io`'s timer; freya drops a scope's tasks as it unmounts), with a Cancel that
@@ -462,7 +464,7 @@ streamed, the output the engine kept — with ANSI sequences and control charact
 In its footer, in the platform's order, are `Skip pre-commit hooks and commit` and Close — and
 `Remove index.lock…` where git could not create the lock — one button component for all
 (`answer_button`), focus on Close — the skip offered on every failed
-commit or amend (C4: Cairn keeps no model of which hooks git would run, and where no hook ran
+commit or amend (the redesign's C4: Cairn keeps no model of which hooks git would run, and where no hook ran
 the skip fails the same way again, harmlessly) and never for one whose hooks were already
 skipped. It answers once, asking the same message again with `--no-verify` for that one commit
 or amend: a commit's as a commit; a confirmed amend's under the token its failure handed back —
@@ -472,12 +474,12 @@ user's answer of 2026-10-10) — so nothing asks twice; an amend at the press's 
 which reads its cost anew. No prompt is drawn in the dialog. The next commit runs its hooks.
 Close, Escape or a press outside closes it. The window's chords and Local Changes' actions are
 inert while it is open, as under a confirmation. A refusal, a stale amend, a failure beneath git
-or a commit not run opens "Couldn't Commit" (or "Couldn't Amend …") with its sentence, the
-window's endings' dialog; a cancel opens nothing.
+or a commit not run opens "Couldn't <its name>" ("Couldn't Commit 1 file", "Couldn't Amend")
+with its sentence, the window's endings' dialog; a cancel opens nothing.
 
-**Amend** (R10.3, R10.6, C1, L12). Ticking it sets the draft aside, with whether the person had
-touched it, and makes amend's staged list an overlay over the lists (`LocalChangesState`, the
-review's M3): every status still lands in the lists' state, and while Amend is ticked each asks
+**Amend** (R10.3, R10.6, the redesign's C1, PRD L12). Ticking it sets the draft aside, with whether the person had
+touched it, and makes amend's staged list an overlay over the lists (`LocalChangesState`;
+`docs/research/staging-and-commit/review-code-app-ui.md`, M3): every status still lands in the lists' state, and while Amend is ticked each asks
 amend's lists over it (`Request::Amending`, on the local lane, numbered in the amending lane):
 Unstaged as the status lists it and Staged as amend's staged list against `HEAD`'s parent
 (`LocalChanges::amending`, laid out on the lane), with `HEAD`'s message. Until they arrive the
@@ -511,14 +513,14 @@ box opens the confirmation dialog (`use_amend_confirmation`, the box holding the
 answer needs) — once any confirmation already open is answered, never replacing it — titled "Amend Commit" (`AMEND_TITLE`), its words the consequence's fixed sentences
 — "3f2a1c9 is already on origin/main. Amending it rewrites history others may have.", "3f2a1c9
 can't be recovered after this: this repository keeps no reflog." — and its button "Amend", the
-one confirmation surface for it (`CONFIRMATION_SURFACES`; the commit box left it in phase 18):
+one confirmation surface for it (`CONFIRMATION_SURFACES`; the commit box builds no token):
 Cancel returns to the box unchanged, and Amend asks `LocalWrite::Amend` of the message pressed,
 under the token it built, which the engine re-checks before git runs. A commit made — or an
 amend — clears the draft only where it still holds the message it took, so a draft typed while
 it ran is kept; an amend unticks Amend. The way back to the replaced commit is the one its run
 answered (`Done::replaced`), never one read from the request.
 
-**An operation in progress** (R10.8, L25, C3, C8): with a merge, a single cherry-pick or a single
+**An operation in progress** (R10.8, PRD L25, the redesign's C3 and C8): with a merge, a single cherry-pick or a single
 revert, an empty, untouched draft is filled with git's `MERGE_MSG` as git's own editor session
 would leave it under the repository's `commit.cleanup` and comment character (R6.10: under the
 default, no `# Conflicts:` block and no scissors section), so what it shows is what is committed
@@ -574,11 +576,10 @@ typed, the arrows are the editor's.
   (no cost read for amend's lists, C14),
   `amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog` (the replaced
   commit and the cost read after the reap on the ending),
-  `a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`; the seal's window rows,
-  `the_window_holds_a_token_only_for_the_git_errors_skip` (`crates/cairn-guards`);
+  `a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip`,
   `a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again` (its
-  command and output, and the hook run again on the next commit),
-  `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:
+  command and output, and the hook run again on the next commit); the seal's window rows,
+  `the_window_holds_a_token_only_for_the_git_errors_skip` (`crates/cairn-guards`); the model:
   `amending_lists_amends_staged_list_beside_the_status_unstaged_one`,
   `an_amend_says_why_it_is_confirmed_in_fixed_sentences`,
   `only_an_amend_git_logs_and_no_remote_has_runs_unconfirmed`; the engine:
@@ -648,7 +649,9 @@ typed, the arrows are the editor's.
   window over a real worker, `worker::StagedFile`'s a.rs edited in its working tree: a
   `Request::Refresh` of the same text keeps the selection, one after an edit clears it with one
   notice, each answer keyed by the diff thread itself),
-  `a_renames_source_row_unstages_its_lines_at_the_new_path`; the prompt's one sentence
+  `a_renames_source_row_unstages_its_lines_at_the_new_path`; through the real boundary
+  (`worker/local_lane_tests.rs`), `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the
+  prompt's one sentence
   frame, `a_discard_of_files_asks_in_the_one_sentence_frame`,
   `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted` and
   `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`
@@ -765,18 +768,17 @@ typed, the arrows are the editor's.
   the user's decision, 2026-10-09; evidence in
   `docs/research/staging-and-commit/fork-merge-and-amend-evidence.md`); Fork's limit setting, monospace toggle, Wrap paragraph at ruler, spell
   checking, autocomplete, commit template, `prepare-commit-msg` and AI drafts, sign-off, Commit
-  and Push and the ⌘⇧A amend chord are not built (Commit and Push waits on push, L9). The ruler
-  stands at column 72 of IBM Plex Mono's advance after the field's margin. Fork shows a commit's
-  output live in its Activity Manager; Cairn shows it in the Git Error dialog when the commit
-  fails, and draws no activity log beside the box.
-- The amend button, and the commit chord while amending, confirm in place only where no remote
-  has `HEAD`; a commit a remote has goes through the confirmation dialog first, where Fork for
+  and Push and the ⌘⇧A amend chord are not built (Commit and Push waits on push, PRD L9). The ruler
+  stands at column 72 of IBM Plex Mono's advance after the field's margin.
+- Amend Last Commit, and the commit chord while amending, amend at once where git logs the amend
+  and no remote has `HEAD`; a commit a remote has, or one git keeps no reflog for, goes through
+  the confirmation dialog first, where Fork for
   Windows warns that the commit is already pushed (its exact words are not recorded).
 - A double press acts on its row alone, since its first press makes the row the selection (the
   user's decision, 2026-10-09).
 - A finished line selection survives a refresh that re-reads the diff's text unchanged, where
   Fork's is dropped by every refresh (observed `ln2`); one the text changed under is let go of
-  with "The file changed — line selection cleared." in the bar (R9.6, L4, the user's kept
+  with "The file changed — line selection cleared." in the bar (R9.6, the redesign's L4, the user's kept
   deviation).
 - Fork's floating actions sit at the chunk's top right; Cairn's also stand at the list's top while
   the chunk's top is scrolled above it, so a tall chunk's actions stay in reach. A selection's
@@ -814,12 +816,12 @@ typed, the arrows are the editor's.
 - A submodule's row offers no discard (Fork's Discard Submodule Changes) and says why; a
   nested repository among untracked rows is left as it is, where Fork deletes it and its
   history (the user's decision of 2026-10-10); the confirmation's default is Cancel
-  (staging-and-commit L8, L24).
+  (PRD L8, L24).
 - The confirmation opens at the press, "Counting…", where Fork's opens once it has its words,
   and a refusal while counting is the same dialog, "Couldn't Discard Changes" (the redesign's
   rules 3 and 4).
 - Ignore Whitespace is disabled in Local Changes and the diff drawn is always the exact one,
-  where Fork lets it hide changes it then stages (L6).
+  where Fork lets it hide changes it then stages (R8.5, PRD L6).
 - The submodule's badge is a shape of Cairn's drawing (a box in a box); Fork's own submodule
   icon is not recorded.
 - The count beside Local Changes is the distinct paths status lists (R9.2's wording), where

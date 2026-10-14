@@ -5,7 +5,7 @@ in `crates/cairn-git/src/ops/`, the stale check before every patch, the
 confirmation each discard and an amend are sealed behind, and what the commit box
 reads beside them. As-built: everything here is code that exists, with the test
 that pins each rule named beside it. The commitment is
-`docs/prd/staging-and-commit.md` (R1, R3, R6; in flight); the patches the verbs carry
+`docs/prd/staging-and-commit.md` (R1, R3, R6); the patches the verbs carry
 are the model's (`docs/systems/diff.md`, "Stage, unstage and discard"); how every
 `git` process is built and run, and the local write lane each verb runs on, is
 `docs/systems/git-processes.md`.
@@ -24,7 +24,7 @@ invocation in one place (`ops/local_write.rs`'s `run`), run with git's global
 `--literal-pathspecs` before the verb — never the `GIT_LITERAL_PATHSPECS`
 variable — its input on stdin, and the lock files under the git directories
 listed before it starts and after it is over, on its `Performed`
-(`Performed::locks`, R3.8). A local write is not cancelled (R4.3), and takes an
+(`Performed::locks`, R3.8). These verbs are not cancelled (R4.3), and each takes an
 askpass token where its caller has one.
 
 | Verb | `git` after `--literal-pathspecs` | stdin | Destructive |
@@ -39,7 +39,7 @@ askpass token where its caller has one.
 | `discard_files` | `restore --worktree --pathspec-from-file=- --pathspec-file-nul`, then `clean -f -q -- <paths>` | the tracked paths; nothing | yes |
 | `create_branch` | `branch -- <name> <commit>`, the commit by its full id | nothing | no |
 | `create_branch_and_checkout` | `checkout -q -b <name> <commit> --` | nothing | no |
-| `create_branch_discarding` | `checkout -q -f -b <name> <commit> --`, the name and commit the confirmation names | nothing | yes |
+| `create_branch_discarding` | `checkout -q --no-track -f -b <name> <commit> --`, the name and commit the confirmation names | nothing | yes |
 
 Pinned against a `git` that records its argv, environment and stdin and then
 runs the real one (`ops/recording_stub.rs`):
@@ -130,9 +130,8 @@ is pinned against real git on the host's git and, through
   submodule's change in place — its checkout on the moved commit, the edits inside it, and a
   staged change of its commit listed again as unstaged — while it discards the rest; over a
   conflicted path with no operation in progress git discards the conflict
-  (`a_submodules_change_survives_the_discard_and_a_conflict_is_discarded`; the user's decision
-  on phase 14's stopping rule, evidence
-  `docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`). During a merge,
+  (`a_submodules_change_survives_the_discard_and_a_conflict_is_discarded`; the user's decision,
+  evidence `docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`). During a merge,
   a rebase, a cherry-pick, a revert or `git am` it is refused before git runs —
   `CheckoutRefusal::InProgress`, both when the consequence is read and again before the run —
   since git's forced checkout abandons the operation without a word, a merge's `MERGE_HEAD` and
@@ -230,9 +229,8 @@ did not move — when anything it names moved (R1.4).
   directory (`a_nested_repository_is_refused_before_any_confirmation`); and a path
   with no unstaged change, since staged changes are never discarded
   (`staged_changes_are_never_discarded`, R3.6).
-- **The prompt** is one sentence frame (PRD R1.2, the redesign's D2; staging-and-commit
-  phase 15), rendered by `Consequence::prompt`: the question naming what is discarded, the
-  worst loss only when it is worse than changes, then "You can't undo this." — for files
+- **The prompt** is one sentence frame (PRD R1.2, the redesign's D2), rendered by
+  `Consequence::prompt`: the question naming what is discarded, the worst loss only when it is worse than changes, then "You can't undo this." — for files
   "Discard all changes in src/main.rs?" or "Discard all changes in 31 files?", with "2
   untracked files will be deleted." whenever an untracked file is among them, its button
   "Discard Changes in 31 Files"; for lines "Discard 2 changed lines in src/main.rs?", the
@@ -261,7 +259,7 @@ did not move — when anything it names moved (R1.4).
   `a_list_past_the_bound_is_split_and_every_path_kept_in_order`). An
   intent-to-add file's index blob is the empty one, so `git restore` leaves it
   empty with its entry in place, `git status` still listing it as added, as the user's own
-  `git restore` does — checked on the host's git and both floors (N3, phase 15) — and its
+  `git restore` does — checked on the host's git and both floors — and its
   consequence names it so (`FileLoss::Emptied`,
   `an_intent_to_add_files_discard_empties_it_and_says_so`).
 - The `Performed` records the prompt the user accepted (R1.6).
@@ -300,7 +298,7 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   `utf8_is_named_as_git_names_it`).
 - **Hooks run as git runs them.** `Hooks::Skip` — `--no-verify`, which skips
   `pre-commit` and `commit-msg` and nothing else — is passed only for the skip a failed
-  commit or amend offers, which it offers on every failure (R10.5 as C4 amended it): Cairn
+  commit or amend offers, which it offers on every failure (R10.5 as the redesign's C4 amended it): Cairn
   keeps no model of which hooks git would run, so a `core.hooksPath` git resolves, or a hook
   declared in configuration, is git's to find
   (`a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits`). A
@@ -319,7 +317,7 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   `a_commit_cancelled_before_git_runs_writes_nothing`) — is handed an
   `ops::CommitCancel` as git starts, which ends git's process group as a fetch's
   cancel does, and is given every line git or a hook writes as it arrives.
-- **Made is read from `HEAD`** (R4.7; phase 12's QA item #10). After git is reaped `HEAD` is
+- **Made is read from `HEAD`** (R4.7). After git is reaped `HEAD` is
   read again: a commit was made when `HEAD` is a commit whose first parent is the `HEAD` it
   ran on (none, on an unborn branch); an amend, when `HEAD`'s parents are the replaced
   commit's, as the object names them (a shallow boundary's included). So a commit or an amend
@@ -340,7 +338,7 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   git's exit decides.
 - **What it invalidates:** the refs, the index (a hook may stage) and the objects.
 
-**The operation in progress** (R6.9, L25) is `Repository::operation_in_progress`
+**The operation in progress** (R6.9, PRD L25) is `Repository::operation_in_progress`
 (`crates/cairn-git/src/operation_in_progress.rs`), the files git's `wt_status`
 reads — `MERGE_HEAD`, `rebase-apply/` (`applying` in it for `git am`), `rebase-merge/`,
 `CHERRY_PICK_HEAD`, `REVERT_HEAD` and the sequencer's next command — rather than gix's
@@ -466,7 +464,7 @@ what the consequence names, and the skip's run re-checks it; a refusal before gi
 cancel hands none back (`a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends`).
 The local lane carries the returned token to the window on the write's ending
 (`worker::Unspent`), whose Git Error state keeps it for the skip, which spends it without asking
-again (staging-and-commit phase 18).
+again.
 
 **What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
 `c999cef531e`, 13 remote-tracking refs, release build, warm; the
@@ -478,7 +476,7 @@ tip — 1.1-1.3 s, which is git's own walk without a commit-graph (`git -c
 core.commitGraph=false rev-list -1 HEAD --not --remotes`, 1.14 s; 0.08 s with the
 graph, which the walk does not read so it can be cancelled at every object). Where the
 repository has a commit-graph holding `HEAD` and every remote tip the check reads, the graph
-answers alone (`crate::history::walk::reaches_through_graph`, phase 11): a walk down from the
+answers alone (`crate::history::walk::reaches_through_graph`): a walk down from the
 remote tips through the graph's parents that never descends below `HEAD`'s generation, as git's
 own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for that detached
 `HEAD` 20,000 commits behind on the bench clone with a graph written, against 1.2 s by the
@@ -486,13 +484,12 @@ object walk and git's 10 ms
 (`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
 at the press, again in a confirmed amend's re-check, and again once an amend at the press is
-made (C35) — never on a status, since phase 18
-(phase 09's QA item 9, measured and not split: 0.14 ms for the consequence and 2.6 ms for
-amend's staged list with `HEAD` at a remote tip).
+made (C35) — never on a status (with `HEAD` at a remote tip the consequence costs 0.14 ms,
+and amend's staged list, which a status does read while Amend is ticked, 2.6 ms).
 
 **`Remove index.lock…`** (R12.4): `ops::remove_lock_consequence` and the destructive
 `ops::remove_index_lock` (`src/ops/remove_lock.rs`), the one mutation not made by git —
-`docs/systems/git-processes.md`, "The activity popover".
+`docs/systems/git-processes.md`, "The leftover lock".
 
 ## Residuals
 
@@ -532,7 +529,8 @@ amend's staged list with `HEAD` at a remote tip).
   once git is reaped the cost is read again for the replaced commit (`amend_after`, in
   `src/ops/amend.rs`) — the same walk over the refs as they are now, and whether `HEAD`'s or the
   branch's reflog holds a move away from it — and returned beside it on
-  `AmendAnswer::Amended { performed, replaced, after }`, `after` a `Consequence::Amend` whose
+  `AmendAnswer::Amended { performed, replaced, after }`, `after` a `Consequence::Amend` (none
+  where that read failed or was cancelled; the amend is made either way) whose
   `needs_confirming` says whether the amend would now have needed confirming
   (`an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped`: a remote-tracking ref
   moved onto it by a `pre-commit` hook answers published, the reflog removed by one under
@@ -540,8 +538,10 @@ amend's staged list with `HEAD` at a remote tip).
   an untouched amend answers as its cost did). That read runs under `CommitWatch::closing` — the
   repository's close alone, never the write's Cancel — so an amend git made after a cancel was
   pressed still answers it (`an_amend_cancelled_after_git_made_it_still_reports_what_it_cost`).
-  Nothing is undone and no dialog opens; the
-  activity entry's wording is phase 20's.
+  Nothing is undone and no dialog opens; the operation's activity entry says it once
+  (`Consequence::amend_reported`: "Amended 3f2a1c9, which was pushed to origin/main while the
+  amend ran. Sharing the amended commit needs a force push.", or that git kept no reflog of it;
+  `docs/systems/git-processes.md`, "The activity popover").
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
   does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the
@@ -566,11 +566,10 @@ amend's staged list with `HEAD` at a remote tip).
 - Create Branch's Discard deletes an untracked nested repository — a folder holding its own
   `.git` — at a path the commit holds a file at, its history with it, silently, as Fork's
   Discard does: git's forced checkout removes it and exits 0, and nothing refuses it or names
-  it first. The user knowingly accepted Fork's behaviour here (2026-10-10, phase 14's QA DO#1;
+  it first. The user knowingly accepted Fork's behaviour here (2026-10-10;
   PRD R11.3); pinned by git's own result on the host and both floors
   (`an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`), so a
-  change of mind — refusing such a repository, or naming it — is a visible decision, filed to
-  revisit at teardown.
+  change of mind — refusing such a repository, or naming it — is a visible decision.
 - A commit or amend left running by a second close can still die of `SIGPIPE` at a
   line its hook writes.
 - A hook owned by another user counts when the group's or others' execute bit is

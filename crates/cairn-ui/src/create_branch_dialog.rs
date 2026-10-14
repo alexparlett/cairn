@@ -428,11 +428,10 @@ impl Component for CreateBranchDialog {
                     .clone()
                     .or_else(|| self.waiting.clone())
                     .map(|reason| {
+                        // Wrapped, never cut (rule 6, R14.7).
                         label()
                             .text(reason)
                             .width(Size::flex(1.))
-                            .max_lines(2)
-                            .text_overflow(TextOverflow::Ellipsis)
                             .font_size(12.)
                             .color(colours.text_secondary)
                     }),

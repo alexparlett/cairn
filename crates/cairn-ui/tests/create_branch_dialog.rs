@@ -348,6 +348,56 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
     );
 }
 
+/// Rule 6 and R14.7: a refusal is never cut — git's words for a ref it cannot lock run long,
+/// and the dialog draws them whole, wrapped beside the buttons, as the discard dialog draws its
+/// prompt (merge bar, phase 21, item 2). Caught by: the refusal capped at a line count or cut to
+/// an ellipsis.
+#[test]
+fn a_long_refusal_is_drawn_whole_and_wrapped() {
+    let shown = Shown {
+        ready: false,
+        checkout: false,
+        local: None,
+        waiting: None,
+    };
+    let short = "Branch topic already exists";
+    let (test, _) = launch(shown, Some(short));
+    let one_line = area_of(&test, short).height();
+
+    let long = format!(
+        "cannot lock ref 'refs/heads/{0}/{1}': 'refs/heads/{0}' exists; cannot create \
+         'refs/heads/{0}/{1}', since a branch of that name already stands where this one's \
+         folder would have to be created",
+        "release-candidate-for-the-parser-rewrite-of-the-quarter",
+        "fix-the-parser-on-windows-line-endings-and-tabs",
+    );
+    assert!(long.len() > 280, "{}", long.len());
+    let (test, _) = launch(shown, Some(&long));
+    let (capped, overflow) = test
+        .find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == long)
+                .map(|label| (label.max_lines, label.text_style_data.text_overflow.clone()))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the refusal is not drawn whole; labels: {:?}",
+                labels(&test)
+            )
+        });
+    assert_eq!(capped, None, "the refusal is capped at a line count");
+    assert!(
+        !matches!(overflow, Some(TextOverflow::Ellipsis)),
+        "the refusal is cut to an ellipsis"
+    );
+    let said = area_of(&test, &long);
+    assert!(
+        said.height() > 2.5 * one_line,
+        "the refusal is {} high, a line is {one_line}: it is not wrapped whole",
+        said.height()
+    );
+}
+
 /// The user's decision D (2026-10-09): while the name's check waits behind a running write, the
 /// dialog says so where a refusal goes, beside the buttons — with no warning glyph, since
 /// nothing is refused — and a refusal, when there is one, is said instead. Caught by: the

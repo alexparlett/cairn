@@ -186,8 +186,8 @@ const INHERITED: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     // git's own spelling of the same two, overriding `http.sslCAInfo` and
-    // `http.sslCAPath` (git-config(1)); the only `GIT_*` names on the roster,
-    // and they name a CA bundle and nothing else.
+    // `http.sslCAPath` (git-config(1)); they name a CA bundle and nothing else
+    // (the identity variables below are the roster's other `GIT_*` names).
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
     // Kerberos, for a remote authenticated over GSSAPI: the credential cache

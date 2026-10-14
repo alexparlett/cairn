@@ -596,7 +596,8 @@ must not reopen by accident, each with the reason that locked it.
   (`http_proxy`, `https_proxy`/`HTTPS_PROXY`, `all_proxy`/`ALL_PROXY`,
   `no_proxy`/`NO_PROXY`; not `HTTP_PROXY`, which curl ignores), the CA bundle
   (OpenSSL's `SSL_CERT_FILE` and `SSL_CERT_DIR`, and git's own
-  `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, the only `GIT_*` names on the roster;
+  `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, the roster's only `GIT_*` names until
+  staging-and-commit's identity variables joined them;
   not `CURL_CA_BUNDLE`, which the curl tool reads and libcurl does not)
   and Kerberos (`KRB5CCNAME`, `KRB5_CONFIG`) — each with its reason beside it
   and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Of

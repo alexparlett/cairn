@@ -1423,8 +1423,8 @@ start, and the next fetch, whenever it is asked for, starts cancelled (issue
 Pinned, G15:
 `a_second_fetch_while_one_runs_is_refused_with_a_reason` (through the
 boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_fetch_in_flight`
-(`network_lane.rs`), `a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched`
-(`session.rs`: `the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing`) and
+(`network_lane.rs`), `the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing`
+(`session.rs`) and
 `fetch_is_greyed_while_a_fetch_is_in_flight` (`window.rs`, headless).
 
 ## The local write lane
@@ -1466,7 +1466,7 @@ which is a length of time, is waited out.
   (`worker/local_lane_tests.rs`: five stages asked while the first's `git add` is
   still held — each ask returning before it finishes — start and end in order, the
   stale one dropped)
-  and `writes_are_queued_in_order_until_each_starts_and_end_with_their_locks`
+  and `writes_are_queued_in_order_until_each_starts`
   (`local_writes.rs`).
 - **What a discard would lose, in the lane's order** (staging-and-commit R8.4).
   `Request::DiscardConsequence { asked, paths }` — what Local Changes asks before it

@@ -775,9 +775,10 @@ pub enum Update {
 impl Update {
     /// What a superseded answer holds that is worth a worker's freeing, handed over unread: a
     /// change set, a file's prepared diff, Expand All's batch, a refs snapshot, ahead/behind,
-    /// a status. `None` for everything else — a page of rows, a filter's indices, a failure
-    /// — which is small, or (a fetch's and a prompt's news) carries no epoch and is never
-    /// superseded. No arm defaults, so a new update does not compile until it is placed.
+    /// a status. `None` for everything else — a page of rows, a filter's indices, a failure, or
+    /// a superseded consequence or commit-box read (a discard's bounded by the selection's
+    /// paths) — which is small or bounded by what was asked, or (a fetch's and a prompt's
+    /// news) carries no epoch and is never superseded. No arm defaults, so a new update does not compile until it is placed.
     pub(super) fn into_retired(self) -> Option<Retired> {
         match self {
             Self::Changes { changes, .. } => Retired::of(Some(Arc::new(changes)), Vec::new()),

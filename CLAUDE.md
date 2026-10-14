@@ -1389,8 +1389,10 @@ Project invariants:
     `Request::Retire`: `Updates::next`
     (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
     `Update::into_retired` does not retire — a page of rows, a filter's index
-    list, a failure — each bounded by a page or by the change set's file list or
-    the refs snapshot's ref list. (`session::reload_if`, which freed the whole
+    list, a failure, or a superseded consequence or commit-box read (a discard's
+    bounded by the selection's paths) — each bounded by a page, by the change
+    set's file list or the refs snapshot's ref list, or by the selection it was
+    asked for, once per supersede and never per frame. (`session::reload_if`, which freed the whole
     history on the UI thread when a fetch moved refs, is gone: a reopen retires it.)
 
   Whether the virtualizing view really builds only what its viewport shows is

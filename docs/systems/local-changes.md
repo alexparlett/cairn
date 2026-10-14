@@ -580,7 +580,8 @@ typed, the arrows are the editor's.
   command and output, and the hook run again on the next commit),
   `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:
   `amending_lists_amends_staged_list_beside_the_status_unstaged_one`,
-  `an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog`; the engine:
+  `an_amend_says_why_it_is_confirmed_in_fixed_sentences`,
+  `only_an_amend_git_logs_and_no_remote_has_runs_unconfirmed`; the engine:
   `a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent`
   (`crates/cairn-git/tests/diff/working_tree.rs`); the table:
   `only_a_bare_arrow_steps_through_the_recent_messages`.

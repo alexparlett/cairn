@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use cairn_git::ops::{Askpass, GitBinary};
 use cairn_git::{CancelSignal, ContentOptions, Repository, WorkingTreeDiff};
 use cairn_model::{
-    CommandExit, Confirmed, FileDiff, RepoPath, Secret, Selection, StagedChange, StatusEntry,
-    WorkingTreeStatus,
+    ChangeList, CommandExit, Confirmed, FileDiff, RepoPath, Secret, Selection, StagedChange,
+    StatusEntry, WorkingTreeStatus,
 };
 
 use super::Reply;
@@ -1066,12 +1066,42 @@ fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation(
     );
     assert!(!lock.exists(), "the lock is still there");
     handle.submit(Request::RefreshStatus);
-    let seen = collect_until(&mut updates, |update| {
+    let refreshed = collect_until(&mut updates, |update| {
         matches!(update, Update::IndexLock { .. })
     });
     assert!(
-        matches!(seen.last(), Some(Update::IndexLock { changed: None })),
-        "{seen:?}"
+        matches!(refreshed.last(), Some(Update::IndexLock { changed: None })),
+        "{refreshed:?}"
+    );
+    let read = collect_until(&mut updates, |update| {
+        matches!(update, Update::Status { .. })
+    });
+    // C30, never a retry (merge bar, phase 21, item 13): the removal is followed by a refresh,
+    // never by the refused write run again — no write starts but the removal itself, and the
+    // stage the lock refused has not happened: `a` is still listed unstaged, never staged.
+    let started: Vec<OperationId> = seen
+        .iter()
+        .chain(&refreshed)
+        .chain(&read)
+        .filter_map(|update| match update {
+            Update::WriteStarted { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        started,
+        vec![removed],
+        "a write ran again after the removal"
+    );
+    let Some(Update::Status { changes }) = read.last() else {
+        panic!("no status after the removal: {read:?}");
+    };
+    let a = RepoPath::from("a");
+    assert!(
+        changes.row_of(ChangeList::Unstaged, &a).is_some()
+            && changes.row_of(ChangeList::Staged, &a).is_none(),
+        "the refused stage ran after the removal: {:?}",
+        changes.status()
     );
     // And the stage now runs.
     let id = ask(&handle, stage(&["a"]));

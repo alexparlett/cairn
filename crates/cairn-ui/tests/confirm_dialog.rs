@@ -413,6 +413,56 @@ fn show_files_discloses_each_file_and_what_happens_to_it() {
     }
 }
 
+/// Rule 6 (merge bar, phase 21, item 3): a path wider than the dialog is listed whole, its row
+/// as wide as its words and the list scrolling sideways to it, as every other list of paths
+/// does — never cut at the dialog's edge. Caught by: a row held to the list's width, the path
+/// squeezed into what is left beside its loss.
+#[test]
+fn show_files_lists_a_path_wider_than_the_dialog_whole_and_scrolls_to_it() {
+    let long = format!("src/{}/deep.rs", "a-folder-whose-name-runs-on/".repeat(12));
+    let Consequence::DiscardFiles { mut files } = three_files() else {
+        unreachable!()
+    };
+    files[0].path = RepoPath::from(long.as_str());
+    let (mut test, _) = launch(Consequence::DiscardFiles { files });
+    let disclosure = centre_of(&test, SHOW_FILES_CAPTION);
+    test.click_cursor(disclosure);
+    test.sync_and_update();
+    test.sync_and_update();
+    let area_of = |test: &TestingRunner, text: &str| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no label reads {text:?}; labels: {:?}", labels(test)))
+    };
+    let dialog = area_of(&test, SHOW_FILES_CAPTION);
+    let path = area_of(&test, &long);
+    let what = area_of(&test, "4 lines");
+    assert!(
+        path.width() > 600.,
+        "the path is {} wide, held to the dialog: {path:?}",
+        path.width()
+    );
+    assert!(
+        what.min_x() >= path.max_x(),
+        "its loss at {what:?} is drawn over the path at {path:?}"
+    );
+    // Scrolled sideways, the row moves under the viewport and its loss comes into view.
+    test.scroll(
+        (f64::from(dialog.min_x() + 40.), f64::from(path.center().y)),
+        (-(f64::from(path.width()) * 2.), 0.),
+    );
+    test.sync_and_update();
+    test.sync_and_update();
+    let scrolled = area_of(&test, &long);
+    assert!(
+        scrolled.min_x() < path.min_x() - 100.,
+        "the list does not scroll sideways: the path was at {path:?}, now {scrolled:?}"
+    );
+}
+
 /// C17's viewport twin, and the root `CLAUDE.md`'s virtualization invariant: "Show files" over
 /// a discard of 50,000 files builds one viewport of rows, at the top and scrolled to the end,
 /// the last file there. Caught by: a list that builds a row per file.

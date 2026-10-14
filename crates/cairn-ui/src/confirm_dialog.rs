@@ -192,22 +192,19 @@ impl PartialEq for ShownFiles {
 }
 
 /// One row of "Show files": the path, and what happens to it, read by index as it is built.
+/// The row is as wide as its words, never cut (rule 6): a path wider than the dialog scrolls
+/// the list sideways, as every other list of paths does. An index past the list's own rows
+/// (the end room) builds an empty row.
 fn shown_file(item: VirtualItem, files: &ShownFiles) -> Element {
     let (path, what) = files.0.listed_file(item.index).unwrap_or_default();
     rect()
         .key(item.index)
-        .width(Size::fill())
+        .min_width(Size::fill())
         .height(Size::px(item.size))
         .horizontal()
         .padding(Gaps::new(0., 6., 0., 6.))
         .spacing(12.)
-        .child(
-            label()
-                .text(path)
-                .max_lines(1)
-                .width(Size::flex(1.))
-                .font_size(13.),
-        )
+        .child(label().text(path).max_lines(1).font_size(13.))
         .child(label().text(what).max_lines(1).font_size(13.))
         .into()
 }
@@ -339,13 +336,15 @@ impl Component for ConfirmDialog {
                     .child(label().text(SHOW_FILES_CAPTION).font_size(13.)),
             );
             if open {
+                // Room for the horizontal scrollbar after the last row (`end_room`).
+                let length = crate::end_room::with_end_room(listed, SHOWN_FILE_HEIGHT);
                 column = column.child(
                     VirtualScrollView::new_with_data(ShownFiles(consequence), shown_file)
-                        .length(listed)
+                        .length(length)
                         .item_size(SHOWN_FILE_HEIGHT)
                         .width(Size::fill())
                         .height(Size::px(
-                            SHOWN_FILES_HEIGHT.min(SHOWN_FILE_HEIGHT * listed as f32),
+                            SHOWN_FILES_HEIGHT.min(SHOWN_FILE_HEIGHT * length as f32),
                         )),
                 );
             }

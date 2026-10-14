@@ -16,7 +16,7 @@ through the worker boundary in `crates/cairn-app/src/worker/`. The application
 opens the repository named on its command line (or the working directory), draws
 its history as a virtualized graph with lanes, edges and four columns, pages as
 you scroll, and does all of it off the UI thread. It can fetch its default
-remote — the one `git` verb built so far, with git's own progress, a cancel,
+remote, with git's own progress, a cancel,
 and a credential dialog fed by the askpass helper (`docs/systems/credentials.md`).
 Every `git` process runs on one runner in `cairn-git`'s private `process/`
 module (`docs/systems/git-processes.md`): `git` is found once, as the
@@ -87,105 +87,51 @@ whose base no ref reaches (its changes shown), say they are not in the graph.
 Local Changes is Fork's view in the main region (`docs/systems/local-changes.md`):
 a filter answered on a worker over Unstaged above Staged behind a splitter, each a virtualized
 list of paths in Fork's natural order with Fork's badges, told apart by shape, laid out on the
-refresh thread as the status is read, a path with both
-changes in both; the first path chosen as the view opens and its staged, unstaged or untracked
-diff asked through the working-tree query by its list, in the file-diff lane the Changes tab
-and the files opened in place share, and drawn under the diff view's bar for that exact query
-alone; a conflicted path's notice in place of a diff. Its selection is one value with a
-primary — the file clicked first, as Fork shows it — and an anchor (⌘- or Ctrl-click,
-Shift-click, Shift+↑/↓), owned by the lists' state, the diff derived from the primary; one pure
-rule (`next_selection`) moves it after an action and as each status and filter's rows arrive —
-the paths still shown kept, else the row that took the first one's place, a filter pruning it to
-the rows it shows — never from a render effect. Its lists act on files as Fork's do, every
-route on the selection wherever focus is: staged or unstaged by Fork's five routes — a double
-press, the table's chords on a focused list or the diff, a drag from one list dropped on the
-other (tracked by the lists, so it survives its row, the list it would drop on scrolling at its
-edges), each list's button (greyed while the selection is in the other list; both read Stage
-All and Unstage All while Shift is held on Linux, ⌥ on macOS) and the small double chevrons, ⇊
-in Unstaged and ⇈ in Staged, and the context menu; a discard on the unstaged side only, never of a submodule, a conflict or
-a nested repository — a mixed selection discarding the rest, one line saying what is left, and
-one of nothing else greyed with its reason — its confirmation opened at the press, "Counting…",
-while the engine counts on the local lane what it would lose, then drawn from it in one sentence
-frame with Show files, or made "Couldn't Discard Changes" by the engine's refusal; a conflicted row staged whole by `git add`; and the diff always the exact one. The diff is the primary's
-alone however many paths are selected, as Fork's is — the file clicked first, under its own bar,
-counting nothing — and "No file selected" with none; from it, with no lines selected, ⌘S or
-Ctrl+S stages the whole selection and Return does nothing, Return staging from the lists alone.
-Over the diff is Fork's staging gesture, in Local Changes alone: a hovered
-chunk outlined, floating Stage and Discard Changes… (Unstage over the staged diff), a
-drag-selection across lines — tracked by the list, so it survives the rows it scrolls past, side
-by side kept to its column — narrowing them and the chords to its lines, a mode change's own row,
-every line of a new file discarded as the file; a finished line selection belongs to the text it
-was made over (`ShownDiff::content`, a hash of the question and every byte of the answer, built
-on the diff thread), so a refresh that re-reads the file unchanged keeps it and one that reads
-other text lets it go, the bar saying "The file changed — line selection cleared." until the next
-key or press. Under the diff is Fork's commit box: a subject
-with its characters-left counter and Recent Commit Messages (a menu, and ↑/↓ in an empty or
-recalled subject), a description with a ruler at column 72, the draft the window's for its life,
-one button — `Commit N Files`, or "Amend Last Commit" while Amend is ticked, nothing under it,
-the commit chord pressing it in every state — and Amend, which sets the draft aside and draws
-amend's staged list in Staged as an overlay over each status (diffed against `HEAD`'s parent and
-unstaged back to it); an amend's cost read only at its press, in the job that runs it, an amend
-git logs and no remote has run at once, and any other opening the confirmation dialog, "Amend
-Commit", Cancel returning to the box unchanged; one fill rule — `HEAD`'s message, or a merge's,
-single cherry-pick's or revert's `MERGE_MSG` as git's editor session leaves it, goes only into an
-empty draft the person has not touched; a commit asked drawn in the button's place — "Waiting for
-…", "Committing 0:03" with Cancel, "Cancelling…" — a cancel opening nothing; a failed commit or
-amend opening Fork's Git Error dialog over its output, ANSI stripped, its footer's skip offered on
-every failure and run once, a confirmed amend's under the token its failure handed back; and one
-line at most over the fields, wrapped — the operation in progress (a rebase, `git am` or a
-sequence disabling the box and naming git's command) or a detached `HEAD`
-(`docs/systems/local-changes.md`, "The commit box"). The engine
-(`docs/systems/staging.md`): lines and files staged and unstaged through git's own verbs,
-each patch checked against the index and the file before it applies, and the two discards —
-lines, and whole files with untracked ones deleted — sealed behind a confirmation the engine
-computes and re-checks; and commit and amend through `git commit -F -`, the message byte for
-byte as git's own `-F` stores it, the commit made read from `HEAD` after git is reaped — a
-cancelled commit git had made reported made, and one git made and then failed after reported
-made with git's words — and a merge, a single cherry-pick or a single
-revert concluded by it; an amend's cost read when it is pressed, in the job that runs it, an
-amend git logs and no remote has run at once with no token (`ops::amend_unconfirmed`, which
-answers the commit it replaced and, read again once git is reaped, whether a remote came to have
-it or git logged no move away from it) and any other answered for the dialog and run under its
-token (`ops::amend`), its `Consequence` naming
-`HEAD`, the remote ref that has it and whether git will log it, `core.logAllRefUpdates` and
-`i18n.commitEncoding` as `git config` answers them; refused during a rebase, `git am` or a
-sequence, naming git's command, with the last ten messages, the operation's cleaned message
-(`git stripspace`, as git's editor session would leave it under the repository's
-`commit.cleanup` and comment character) and amend's staged list read beside it; and the worker runs
-them on a local write lane of its own
-(`docs/systems/git-processes.md`, "The local write lane"): one at a time in the order asked,
-each with an askpass token whose prompt the window shows titled by its own operation, a status
-read across a write never drawn, the read after each write what it left stale, a commit
-cancellable by its id, a write git refused for a lock that stood throughout it run again a
-second later, twice at most, and a close that waits on the write running, its banner naming it.
-Every ending has one home (`docs/systems/git-processes.md`, "Where an ending goes"): progress
-in the title bar's status box — a spinner and the operation's one name once it has run 250 ms,
-" · N waiting", a fetch's progress line — success and a cancel nothing, git's failure Fork's
-Git Error dialog, and a refusal found while it ran "Couldn't <name>" with one sentence and
-"Nothing was changed.", never a line under the lists; one modal state decides which dialog is
-drawn and that the keys are inert. A leftover `<gitdir>/index.lock` is a state of the
-repository ("The leftover lock"): stated on every refresh, a banner while it is there, no git of
-Cairn's runs or waits and it is ten seconds old, and `Remove index.lock…` there and in a Git
-Error git refused for it, its consequence read at the press, confirmed as "Remove Stale Lock"
-and re-checked before it removes exactly that file — the one mutation Cairn makes without
-`git`. The title bar's status box opens Fork's Activity
-Manager (`docs/systems/git-processes.md`, "The activity popover"), hung from the box, the
-window's keys inert while it is open: the session's writes and
-fetches, newest first, each row its one name, Fork's result line as Fork draws it ("staged",
-"unstaged", "discarded", "Switched to branch 'topic'", "Fetched 1 branch", "Already up to date",
-"<verb> failed", "cancelled", none for a commit), its time and ⚠ on a failure; the one
-selected its word — running, succeeded, failed, cancelled — with its time and duration, a failure's
-or a cancel's one sentence, the prompt it confirmed whole only once it ran (Create Branch's
-Discard saying what it did instead, and an amend whose replaced commit was pushed while it ran
-saying so), "Show in Lost Commits" for an amend, and one append-only list of every `git` it ran
-— each argument quoted as a shell reads it — and what that said, each command's ending in one
-form; every line of git's scrubbed of a URL's userinfo once, by the engine's runner as it splits
-git's output into whole lines (`cairn_model::ScrubbedLines`), before anything keeps it. A running
-operation's output reaches the window through one bounded tail per write that the window drains
-on a wake, the latest kept; the popover is a child of the window that alone reads the log, and
-the commit box keeps its commit's output in a state no render reads.
-Nothing else mutates a repository, and there is no repository picker: one
-repository, named on the command line.
+refresh thread as the status is read; one selection with a primary — the file clicked first,
+whose staged, unstaged or untracked diff alone is drawn, asked in the file-diff lane the Changes
+tab shares — and an anchor (⌘- or Ctrl-click, Shift-click, Shift+↑/↓), moved after each action
+and as each status and filter's rows arrive by one pure rule (`next_selection`), never from a
+render effect. Its files are staged and unstaged by Fork's five routes — a double press, the
+table's chords, a drag dropped on the other list, each list's button and double chevron (Stage
+All and Unstage All with Shift held on Linux, ⌥ on macOS) and the context menu — and discarded
+on the unstaged side alone, never a submodule, a conflict or a nested repository; a conflicted
+row stages whole. Over the diff is Fork's staging gesture: a hovered chunk's Stage and Discard
+Changes… (Unstage over the staged diff), a drag-selection narrowing them to its lines, a mode
+change its own row, each selection belonging to the text it was made over
+(`ShownDiff::content`). Under the diff is Fork's commit box: a subject with its counter and
+Recent Commit Messages, a description with a ruler at column 72, one button — `Commit N Files`,
+or "Amend Last Commit" while Amend is ticked, which draws amend's staged list in Staged against
+`HEAD`'s parent — an operation's `MERGE_MSG` filling only an untouched empty draft, as git's
+editor would leave it, and one line naming a rebase, `git am` or sequence that disables the box,
+or a detached `HEAD`. The engine (`docs/systems/staging.md`) stages and unstages files, lines and
+mode changes through git's own verbs, each patch checked against the index and the file before
+it applies; discards lines and whole files, untracked ones deleted, behind a confirmation the
+engine computes and re-checks — opened at the press, "Counting…" while the local lane counts
+what would be lost, then one sentence with Show files; and commits and amends through `git
+commit -F -`, the message on stdin, concluding a merge, a single cherry-pick or a single revert
+and refusing during a rebase, `git am` or a sequence — an amend git logs and no remote has run at
+once (`ops::amend_unconfirmed`), any other confirmed as "Amend Commit" (`ops::amend`). Show Lost
+Commits walks every reflog entry of `HEAD` and each local branch too, the commits no ref reaches
+dimmed, and Fork's Create Branch dialog — `New Branch…` on a row, or Fork's chord at `HEAD` —
+creates a branch at a commit and checks it out when asked, its "Discard" Fork's forced checkout
+behind the dialog's own press (`docs/systems/history-graph.md`, "Show Lost Commits" and "Create
+Branch"). Every write to the index, the working tree and a local ref runs on the worker's local
+write lane (`docs/systems/git-processes.md`, "The local write lane"): one at a time in the order
+asked, each with an askpass token whose prompt names its operation, a status read across a write
+never drawn, a commit cancellable, a write git refused for a lock that stood throughout it run
+again, and a close that waits on the write running. Every ending has one home ("Where an ending
+goes"): progress in the title bar's status box once an operation has run 250 ms, success and a
+cancel nothing, git's failure Fork's Git Error dialog over its output with its skip, a refusal
+"Couldn't <name>" in one sentence — one modal state deciding which dialog is drawn and that the
+keys are inert. A leftover `<gitdir>/index.lock` is a state of the repository ("The leftover
+lock"): a banner once it is ten seconds old and no git of Cairn's runs or waits, and `Remove
+index.lock…`, confirmed and re-checked, the one mutation Cairn makes without `git`. The status
+box opens Fork's Activity Manager ("The activity popover"): the session's writes and fetches,
+newest first, each its one name and Fork's result line, the selected one's word, time, duration,
+confirmed prompt and every `git` it ran with what that said — every line of git's diagnostic
+output scrubbed of a URL's userinfo by the engine's runner before anything keeps it
+(`cairn_model::ScrubbedLines`). There is no repository picker: one repository, named on the
+command line.
 
 ## Repo map
 
@@ -203,7 +149,7 @@ the only form git's text crosses into the application in, filled only by a scrub
 bounded by letting go of whole oldest lines with a plain `older_dropped` (`src/scrub.rs`,
 staging-and-commit R4.10, R12.2) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk (from `HEAD`, given commits, or a refs snapshot: every ref, each row labelled, each stash whose base is walked a row of its own, merged in by `src/history/stream.rs`; with Show Lost Commits, every reflog entry of `HEAD` and each local branch too, each log read whole by git's rules (`src/history/reflogs.rs`), the commits no ref reaches marked as the walk goes (`src/history/reach.rs`)), the refs snapshot and each branch's upstream (`src/refs.rs`, `src/refs/`), ahead and behind (`src/ahead_behind.rs`), the ref-storage refusal at open (`src/ref_storage.rs`; `docs/systems/refs.md`), the working tree's status (`src/status.rs`, asked of `git status` through `src/reads/`; `docs/systems/status.md`), and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process — reading git's output once, as whole lines split by one line type for stdout and stderr (`pipes::Lines`), each scrubbed as it is split and kept in a tail of whole lines (R4.10) — and collects under a ceiling only for a read (`collect` and `finish_within` exist on `Invocation<Read>` alone, pinned by `the_bounded_output_helpers_exist_on_a_read_alone`), and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch` (not destructive, so it takes no `Confirmed`), and the local write verbs (`docs/systems/staging.md`): `stage_lines` and `unstage_lines` (`git apply --cached`), `stage_files` (`git add`) and `unstage_files` (`git reset -q`, or `git rm --cached -f -q` out of a root commit's amend) in `src/ops/stage.rs`, and the destructive `discard_lines` (`git apply`) and `discard_files` (`git restore --worktree`, then `git clean -f -q --` in batches of `CLEAN_ARGUMENT_BYTES`) in `src/ops/discard.rs`, each taking `Confirmed` and beside the builder of its `Consequence` — every verb run with `--literal-pathspecs` before it (`src/ops/local_write.rs`), each patch checked against the index (gix) and the file first (`src/ops/fresh_state.rs`) — and `commit`, `amend_unconfirmed` — an amend git logs and no remote has, run at once with no token, answering the commit it replaced and its cost read again after the reap (`AmendAnswer::Amended`, `amend_after` in `src/ops/amend.rs`), or the `Consequence` answered for any other (`AmendAnswer::NeedsConfirming`) — and the destructive `amend` (`git commit -q [--amend] -F -`, the message on stdin, no `--literal-pathspecs`) in `src/ops/commit.rs`, each reading `HEAD` after git is reaped to say whether it was made, amend taking `Confirmed` from `amend_consequence` (`src/ops/amend.rs`: `HEAD`, whether a remote has it, whether git will log it); `create_branch` (`git branch -- <name> <commit>`, `src/ops/branch.rs`) and, in `src/ops/checkout.rs`, `create_branch_and_checkout` (`git checkout -q -b`) and the destructive `create_branch_discarding` (Fork's `git checkout -q --no-track -f -b`, taking `Confirmed` from `checkout_discarding_consequence` — the branch, the commit and `HEAD`, nothing predicted of what git deletes, an operation in progress refused before git runs — and re-checking `HEAD`, the commit and the name alone), Create Branch's verbs and Show Lost Commits' way back; `ops::remove_index_lock` and its
-`remove_lock_consequence` (`src/ops/remove_lock.rs`), the one mutation made without `git`; with `Repository::branch_name` (`src/branch_names.rs`) asking whether a name can be a new branch's as `git branch` and `git checkout -b` take it — refusing one a branch has or one a branch's directory holds, the refusal typed (`cairn_model::NameRefusal`) and worded by the view; beside them the reads the commit box needs — the operation in progress as git's status reads it and the message git prepared for the commit that concludes it, as git's editor leaves it (`src/operation_in_progress.rs`: `operation_in_progress`, `prepared_message`), the last ten messages (`src/recent_messages.rs`), and amend's staged list and the parent it is against (`src/diff/amend.rs`: `amend_staged`, `amend_parent`), one file of which `WorkingTreeDiff::Amending` diffs — and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file, with `staged_pairing` beside it, `git diff-index --cached --raw` over the whole index, the rename or copy the user's `git diff --cached` pairs a path into, and `staged_since`, the same over the index against `HEAD`'s parent, amend's staged list; `hash_object`, `git hash-object --path=<p> -- <p>` without `-w`, a working-tree file's id in git's form, for a discard's stale check; `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads, and `commit_encoding`, `log_all_ref_updates`, `commit_cleanup` and `comment_char_is_auto`, the same read for what a commit and an amend will (`src/reads/config.rs`); `as_the_editor_leaves`, `git stripspace` (`--strip-comments`, `--comment-lines` or no option), a merge's, cherry-pick's or revert's `MERGE_MSG` as git's editor session leaves it under `commit.cleanup` and the comment character git reads (`src/reads/stripspace.rs`); `status`, `git status --porcelain=v2 -z` — read again with `--untracked-files=all` only where the first answer collapsed an untracked directory, so git itself reads `status.showUntrackedFiles` — the working tree's status, which gix answers differently wherever status is hard; and `stash_changes`, `git stash show --raw`, what a stash changed, its untracked files paired with the rest as only git pairs them, git reading `stash.showIncludeUntracked` itself. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+`remove_lock_consequence` (`src/ops/remove_lock.rs`), the one mutation made without `git`; with `Repository::branch_name` (`src/branch_names.rs`) asking whether a name can be a new branch's as `git branch` and `git checkout -b` take it — refusing one a branch has or one a branch's directory holds, the refusal typed (`cairn_model::NameRefusal`) and worded by the view; beside them the reads the commit box needs — the operation in progress as git's status reads it and the message git prepared for the commit that concludes it, as git's editor leaves it (`src/operation_in_progress.rs`: `operation_in_progress`, `prepared_message`), the last ten messages (`src/recent_messages.rs`), and amend's staged list and the parent it is against (`src/diff/amend.rs`: `amend_staged`, `amend_parent`), one file of which `WorkingTreeDiff::Amending` diffs — and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file, with `staged_pairing` beside it, `git diff-index --cached --raw` over the whole index, the rename or copy the user's `git diff --cached` pairs a path into, and `staged_since`, the same over the index against `HEAD`'s parent, amend's staged list; `hash_object`, `git hash-object --path=<p> -- <p>` without `-w`, a working-tree file's id in git's form, for a discard's stale check; `branch_name`, `git check-ref-format --branch`, the name git takes a new branch's as (`@{-N}` resolved) or its refusal, behind `Repository::branch_name`; `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads, and `commit_encoding`, `log_all_ref_updates`, `commit_cleanup` and `comment_char_is_auto`, the same read for what a commit and an amend will (`src/reads/config.rs`); `as_the_editor_leaves`, `git stripspace` (`--strip-comments`, `--comment-lines` or no option), a merge's, cherry-pick's or revert's `MERGE_MSG` as git's editor session leaves it under `commit.cleanup` and the comment character git reads (`src/reads/stripspace.rs`); `status`, `git status --porcelain=v2 -z` — read again with `--untracked-files=all` only where the first answer collapsed an untracked directory, so git itself reads `status.showUntrackedFiles` — the working tree's status, which gix answers differently wherever status is hard; and `stash_changes`, `git stash show --raw`, what a stash changed, its untracked files paired with the rest as only git pairs them, git reading `stash.showIncludeUntracked` itself. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the diff settings — context, ignore-whitespace and side-by-side shared by every diff view, Entire File the Changes tab's and Local Changes', never a file opened in place, `src/diff_palette.rs` the diff's colour tokens and typeface, `src/commit_tab.rs` the Commit tab and `src/expansion.rs` where each file opened in place under its row falls in that tab's one list; `src/ref_chips.rs` a row's chips — which, in what order, compacted, and built only as far as the column's edge — and `src/ref_glyphs.rs` their glyphs, painted as shapes; `src/status_box.rs` the title bar's status box, and the operations running in it, each shown once it has run `PROGRESS_AFTER` (250 ms) by a timer task of its line's scope; `src/lock_banner.rs` the leftover lock's banner (`LockBanner`), which waits out a lock younger than `LOCK_STALE_AFTER` on the same kind of timer, and offers `Remove index.lock…`; `src/sidebar.rs` the sidebar — Local Changes and All Commits, its filter box, and its one virtualized list of sections, folders and refs, each row drawn from the snapshot by index (`drawn_row`); `src/local_changes.rs` Local Changes' filter field and its Unstaged and Staged lists, each virtualized, each row a badge and a path read by index, each heading its Stage or Unstage button and its double chevron, every press, chord, drop and menu choice reported as a `ListIntent`, with `src/list_selection.rs` the selection (`LocalSelection`: its list, its paths, its primary — the file clicked first — and its anchor; what a toggle, a range and the paths kept leave) and the nearest row left after an action, `src/local_changes_drag.rs` the drag between the lists, kept by the lists rather than a row, and `src/local_changes_menu.rs` the context menu and why a selection offers no discard (`NoDiscard`); `src/end_room.rs` the empty rows after a list's last, so the horizontal scrollbar Freya draws over a list's bottom never covers it; `src/text_field.rs` the one key policy every text field is built with (`text_field`, `text_field_in`, and the commit box's subject, `text_field_recalling`, which offers a bare ↑ or ↓ — `accelerators::recall_step` — to the box first); `src/confirm_dialog.rs` the confirmation a destructive operation waits on — opened at the press, "Counting…" with its button greyed (`DialogAnswer`), then a `Consequence`'s prompt and button, the line of what a mixed selection leaves and Show files over a virtualized list of each file and what happens to it, or the refusal "Couldn't <title>" with Close alone; focus on Cancel, modal, the token built on its button; `src/commit_box.rs` the commit box (`CommitBox`, `CommitButton` — `Commit N Files` or "Amend Last Commit", the commit chord pressing it — Fork's counter, the Amend toggle reporting its toggled state, what stands in the button's place while a commit is asked, `Busy`, and its timer, the one line over the fields, `operation_line`, and each edit reported, `CommitBox::on_edit`), building no token, and `src/git_error_dialog.rs` Fork's Git Error dialog — and the same component titled "Couldn't <name>" (`couldnt_title`), its one sentence and no Error Details, a partly done discard's files behind Show files — its output through a virtualizing view, its skip, `Remove index.lock…` and Close in its footer; `src/edge_scroll.rs` the edge auto-scroll of a drag over a virtualized list, the drag tracked by the list and paced by `async-io`'s timer, and ended by a press heard while it is on (its release lost outside the window) or the window losing focus; `src/staging_gesture.rs` the diff's staging gesture (`Gesture`, `LineDrag`, `ModeRow`) — a hovered chunk's outline and floating actions, a drag-selection's tint, one layer laid over the recycled rows, the drag heard by the view's root — which a diff view draws only when handed one, each selection keyed to the content of the diff it was made over; `src/check_box.rs` the one check box (Amend, Show Lost Commits, "Check out after create"); `src/accelerators/chord_names.rs` a chord spelled for a tooltip from the table; `src/button_order.rs` where every dialog's buttons sit on each platform (the primary first on Linux, last on macOS), and `src/answer_button.rs` the answer a risky dialog opens focused on (Cancel, Close); `src/activity_popover.rs` Fork's Activity Manager (`ActivityPopover`, `ActivityEntry`,
 `ActivityLine`, `ActivityStatus` — the four words), each row its name, result line, time and ⚠ or
@@ -216,7 +162,7 @@ the one bounded tail of git's output (`OutputTail`, `OUTPUT_LINES`, `OUTPUT_BYTE
 uses — the lanes' taps, the commit box's output and each activity entry's lines — and
 `worker/output_tap.rs` a running operation's output on its way to the window: one shared tail per
 write (and one for the fetch) the window drains on a wake, at most one wake waiting (`OutputTap`);
-`src/confirming.rs` the confirmation the window keeps open (`View::confirming`: counting, the `Consequence` or the engine's refusal, and where its token goes, never a token), drawn over everything with a context-menu host at the window's root; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits, and tells the window which write it is finishing; `src/window_check.rs` is C14's window check, an `#[ignore]`d measurement of the real window over the bench repository. |
+`src/confirming.rs` the confirmation the window keeps open (`View::confirming`: counting, the `Consequence` or the engine's refusal, and where its token goes, never a token), drawn over everything with a context-menu host at the window's root; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits, and tells the window which write it is finishing; `src/window_check.rs` holds the window checks, `#[ignore]`d measurements of the real window over the bench repository — the history's and the diff's, and the writes' costs (`writes_check`, over a writable clone of it). |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -315,7 +261,7 @@ copy is a different version from the fork that links.
   checkout -q -b <name> <commit> --` (`ops::create_branch_and_checkout`) and Fork's `git
   checkout -q --no-track -f -b <name> <commit> --` (the destructive
   `ops::create_branch_discarding`, Create Branch's "Discard"). **One mutation is
-  made without `git`, because git has no verb for it** (staging-and-commit R12.4, L23, D1 as
+  made without `git`, because git has no verb for it** (staging-and-commit R12.4, D1 as
   amended): `ops::remove_index_lock`, `Remove index.lock…`, removes exactly
   `<gitdir>/index.lock` with `std::fs::remove_file`, in `ops/` alone, after re-checking that
   Cairn runs no `git` in the repository and that the lock is the file the user confirmed — its
@@ -330,16 +276,18 @@ copy is a different version from the fork that links.
   of it (`reads::working_tree_patch`: `git diff-index --cached`, `git
   diff-files`, `git diff --no-index`, with `reads::staged_pairing`, `git diff-index
   --cached --raw` over the whole index, pairing a staged rename as `git diff --cached`
-  does), and a working-tree file's id in git's form for a discard's stale check
+  does, and `reads::staged_since`, the same against `HEAD`'s parent: amend's staged list),
+  and a working-tree file's id in git's form for a discard's stale check
   (`reads::hash_object`, `git hash-object --path=<p> -- <p>`, never `-w`), and whether git
   takes a name as a branch's (`reads::branch_name`, `git check-ref-format --branch`, which
   resolves `@{-N}` as `git branch` and `git checkout -b` do) — each a question only git can
   answer — and the configuration a git about to run will read — the
-  remote's that fetch's refspec check decides on, and the `core.logAllRefUpdates` and
-  `i18n.commitEncoding` a commit and an amend depend on — where gix's reading of a linked
+  remote's that fetch's refspec check decides on, and the `core.logAllRefUpdates`,
+  `i18n.commitEncoding`, `commit.cleanup` and comment character a commit and an amend depend
+  on — where gix's reading of a linked
   worktree's `includeIf`, of the system file and of trust is not git's
-  (`reads::fetch_settings`, `reads::commit_encoding`, `reads::log_all_ref_updates`: `git
-  config`), and a merge's message as git's editor session leaves it, git reading the comment
+  (`reads::fetch_settings`, `reads::commit_encoding`, `reads::log_all_ref_updates`,
+  `reads::commit_cleanup`, `reads::comment_char_is_auto`: `git config`), and a merge's message as git's editor session leaves it, git reading the comment
   character (`reads::as_the_editor_leaves`), and the working tree's status, where
   gix's answer differs from git's on renames past its limit, conflicted paths,
   sparse checkouts and a lying fsmonitor hook, and gix would start clean filters
@@ -363,9 +311,9 @@ copy is a different version from the fork that links.
   `reads/config.rs`, with `reads::commit_cleanup` and `reads::comment_char_is_auto`); and, for
   a merge's, a cherry-pick's or a revert's message, `git stripspace` with `--strip-comments`,
   `--comment-lines` or no option, the message on stdin (`reads::as_the_editor_leaves`,
-  2026-10-10, accepted by the user, C2, and made git's editor under every `commit.cleanup` and
-  comment character by the coordinator's parity ruling: git's editor cleans its own commentary,
-  which `git commit -F` would keep, and only git knows the comment character it reads); and, for
+  accepted by the user on 2026-10-10, staging-and-commit R6.10: git's editor cleans its own
+  commentary under every `commit.cleanup` and comment character, which `git commit -F` would
+  keep, and only git knows the comment character it reads); and, for
   a stash's changes, `git stash show --raw -z --no-abbrev --no-color
   --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`
   (`reads::stash_changes`, 2026-10-07, accepted by the user: with
@@ -429,7 +377,7 @@ copy is a different version from the fork that links.
   are sealed behind `cairn_model::Confirmed`.** The token's only constructor
   takes the engine-computed `cairn_model::Consequence` — what the operation will
   destroy — and renders the prompt from it, so a code path cannot reach a
-  discard, an amend or a hard reset without having put those words in front of a
+  discard, a confirmed amend, a forced checkout or the lock's removal without having put those words in front of a
   human, the operation re-checks exactly what they were told, and the operation
   log quotes them afterwards.
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
@@ -539,7 +487,7 @@ Project invariants:
   enums, `UnifiedRow` and `SideBySideRow`, are held to the same matcher over the
   same files by `every_view_of_a_diff_row_names_every_kind_of_row` (self-test
   `the_diff_row_matcher_catches_the_shapes_it_claims`, every shape spelled for
-  both enums), since phase 07 brought their second reader; the residuals are
+  both enums), since each has more than one reader; the residuals are
   `DiffContent`'s (a helper handing out one kind of row and read partially, or a
   `type` alias for either enum, is `qa-checklist`'s).
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
@@ -574,8 +522,8 @@ Project invariants:
   `the_bounded_output_helpers_exist_on_a_read_alone`, which stops compiling
   when either helper is given to a write, stays in code under no `cfg` or
   `ignore` (staging-and-commit R4.8; matcher `bounded_helper_violations`,
-  self-test `the_bounded_output_helper_check_catches_the_shapes_it_claims`) (self-test
-  `the_runner_matcher_catches_the_shapes_it_claims`, and
+  self-test `the_bounded_output_helper_check_catches_the_shapes_it_claims`; the twin's
+  self-tests `the_runner_matcher_catches_the_shapes_it_claims` and
   `the_unguarded_routes_to_a_process_now_fail_a_twin` over the four routes
   `docs/research/process-manager/runner-and-worker-as-built.md` section 3
   found unguarded); and `the_retired_runner_is_gone` — the runner
@@ -644,7 +592,7 @@ Project invariants:
   `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
-- **Only `cairn-git/src/ops/` changes the filesystem** (staging-and-commit R12.5, L23): no
+- **Only `cairn-git/src/ops/` changes the filesystem** (staging-and-commit R12.5): no
   production file outside it removes, writes, renames, creates, links or changes the
   permissions, ownership, length or times of a file or directory, beyond an exceptions roster
   for what writes outside any repository, and `ops/` itself makes exactly one such write.
@@ -673,9 +621,11 @@ Project invariants:
   through a dependency's API (a crate that writes files, `nix`'s unistd), a `File` or
   `OpenOptions` reached through a type alias declared in another crate, a macro, a method
   call on a `File` that writes (`write_all` on one opened by a name it does not hold), or a
-  kind of write the rosters do not name is not seen; and the one deletion `ops/` makes removes
+  kind of write the rosters do not name is not seen; whether each
+  `FILESYSTEM_MUTATION_EXCEPTIONS` row really writes only outside any repository, and its
+  reason is still true, is a judgement; and the one deletion `ops/` makes removes
   a file another program may take between the re-check and the removal (stated in
-  `docs/systems/git-processes.md`, "The activity popover").
+  `docs/systems/git-processes.md`, "The leftover lock").
 - **Every `git` subprocess runs with an environment Cairn built, and that
   environment always sets `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force`,
   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false` and points `GIT_ASKPASS`
@@ -767,8 +717,8 @@ Project invariants:
   application state.** The one type that holds a credential is
   `cairn_model::Secret`: no `Debug`, `Display`, `Clone` or serialisation, no
   derive at all, one accessor (`expose_secret`), and a `zeroize`-wrapped
-  buffer so the drop clears memory with writes the compiler may not remove
-  (credential-prompts L11). Primary enforcement is the type: `{:?}` and `{}`
+  buffer so the drop clears memory with writes the compiler may not remove.
+  Primary enforcement is the type: `{:?}` and `{}`
   on it, a `#[derive(Debug)]` container of it and `.clone()` do not compile,
   pinned by the `compile_fail` doctests in `crates/cairn-model/src/secret.rs`
   (which is why the full gate has a `test-doc` step). Twin against what the
@@ -823,124 +773,124 @@ Project invariants:
   beside git's words read by the application with `to_string` rather than `shown`.
 - **Destructive operations take `cairn_model::Confirmed` by value, the token
   carries the `Consequence` the engine computed and the prompt rendered from it,
-  and only a confirmation surface builds one.** Primary enforcement is the type:
-  `Confirmed`'s two fields are private, it is neither `Clone` nor `Copy`, and its
-  one constructor, `Confirmed::by_user`, takes a `Consequence` alone and renders
-  the prompt from it (`Consequence::prompt`, beside the type in
-  `crates/cairn-model/src/consequence.rs`), pinned by the `compile_fail` doctests
-  in `crates/cairn-model/src/confirm.rs` — `.clone()`, a copy, the constructor
-  given text, a literal, `Default` and a conversion from text each refused, each
-  the passing scaffold plus one line. Twin against what the compiler cannot
-  refuse: `destructive_operations_are_sealed_behind_the_confirmation_token`
+  only a confirmation surface builds one, and every operation re-checks its
+  `Consequence` against the repository before it runs** (staging-and-commit R1).
+  Primary enforcement is the type: `Confirmed`'s two fields are private, it is
+  neither `Clone` nor `Copy`, and its one constructor, `Confirmed::by_user`, takes a
+  `Consequence` alone and renders the prompt from it (`Consequence::prompt`, beside
+  the type in `crates/cairn-model/src/consequence.rs`), pinned by the `compile_fail`
+  doctests in `crates/cairn-model/src/confirm.rs` — `.clone()`, a copy, the
+  constructor given text, a literal, `Default` and a conversion from text each
+  refused, each the passing scaffold plus one line. Twin against what the compiler
+  cannot refuse: `destructive_operations_are_sealed_behind_the_confirmation_token`
   (matcher self-test `the_confirmation_seal_matchers_catch_the_shapes_they_claim`,
   matchers `function_signatures`, `takes_by_value`, `names_a_path_into`,
   `opens_an_impl_naming` and `impl_headers` in `crates/cairn-guards/src/lib.rs`),
-  each part with a nonzero-files assertion: the token's file keeps exactly its two
-  private fields, derives or implements none of `Clone`, `Copy`, `Default`,
-  `Deserialize`, `Decode`, `From`, `TryFrom` or `FromStr`, opens one impl block
-  (attributes ahead of an `impl` on its line stepped over), declares exactly the
-  functions `pub fn by_user`, `pub fn consequence` and `pub fn prompt` — no other,
-  private, `const` or restricted one — and no `const`, `static`, `macro_rules!` or
-  `mod` item, names `by_user` once and builds the token once, and keeps its
-  doctests; the `Consequence`'s file (`consequence.rs`) derives or implements none
-  of `Default`, `Deserialize`, `Decode`, `From`, `TryFrom` or `FromStr` for it or a
-  part, opens one impl block, `impl Consequence`, and renders the prompt there;
-  the **destructive-operation roster** (`DESTRUCTIVE_OPERATIONS`, file and
-  function) — every function in `crates/cairn-git/src`'s production code whose
-  signature names `Confirmed` is in `ops/`, is on the roster or is the record that
-  spends the token (`CONFIRMED_RECORD`: `destructive` in `Performed`'s inherent
-  impl in `ops/mod.rs`, excused by that place and not by its name), and takes it
-  as exactly one by-value parameter, never behind a reference, an `Option`, a
-  bound or in the return; every row names a function that exists; no `pub`
-  function in `ops/` takes a `Consequence` without the token; and no type in any
-  crate's production code — the application's worker scan asserted — keeps a
-  `Confirmed` in a field outside `CONFIRMED_HOLDERS` (a token held in a type
-  reaches an operation behind a reference; each row a file and the one type in it
-  it excuses, failing when that type is gone or no longer holds a token, so a
-  second holder in the same file fails too; its rows:
-  `crates/cairn-app/src/worker/local_lane.rs`'s `LocalWrite`, which carries a
-  destructive write's token to the local lane that spends it by value — a type
-  that holds a `LocalWrite`, such as `Request` or the lane's job, is not
-  followed, and is the review's (`destructive-ops-reviewer`'s check 12) — and
-  `crates/cairn-git/src/error.rs`'s `Error`, whose `AmendNotMade { failure, unspent }`
-  hands a confirmed amend's token back unspent when git failed with `HEAD` unmoved, so the
-  skip amends without asking again (staging-and-commit R1.1, option (a) as (a′): git's index
-  refresh and tree objects written before a hook runs are its own bookkeeping, outside the
-  `Consequence`), its one variant and field pinned by
-  `the_engine_error_holds_a_token_only_as_an_unspent_amend` (self-test
-  `the_engine_error_token_matcher_catches_the_shapes_it_claims`) — a type that holds an
-  `Error` is not followed, and that a token comes back only when the amend was not made is
-  `destructive-ops-reviewer`'s — and the two that carry that token on to the Git Error dialog's
-  skip (staging-and-commit phase 18, the user's answer of 2026-10-10): the local lane's
-  `Unspent` (`crates/cairn-app/src/worker/local_lane.rs`), on the write's ending, whose `Clone`
-  carries none, and the window's Git Error state, `GitError`
-  (`crates/cairn-app/src/commit_box_state.rs`), which keeps it until the skip spends it or Close
-  lets it go, each in one field alone, pinned by
-  `the_window_holds_a_token_only_for_the_git_errors_skip` (`WINDOW_TOKEN_FIELDS`, self-test
-  `the_window_token_field_matcher_catches_the_shapes_it_claims`) — that an update carrying one is
-  moved to the window and never copied on the way is the review's — and a type may name the token only as the
-  argument of a callback it holds, spelled exactly as one of `TOKEN_CALLBACKS`,
-  `EventHandler<Confirmed>` and `dyn Fn(Confirmed)` (or `FnMut`, `FnOnce`), the
-  confirmation dialog's handler and the window's continuation, which are handed a
-  token to spend and keep none — ratified by the user on 2026-10-09; a callback
-  that returns one or takes it beside other arguments still counts as a holder,
-  and no production file declares a type, trait or alias named `EventHandler`,
-  `Fn`, `FnMut` or `FnOnce` or imports another item under one of those names
-  (`token_callback_shadow_violations`), so the trusted spellings mean the toolkit's
-  handler and the language's closures; residual, `destructive-ops-reviewer`'s: a
-  callback that stashes the token it is handed in a cell it captured keeps one
-  unseen, its check 11); and the roster is never empty, asserted (the user's decision,
-  2026-10-08), its rows today `ops::discard_lines` and `ops::discard_files`
-  (`crates/cairn-git/src/ops/discard.rs`), which replaced the placeholder,
-  `ops::amend` (`crates/cairn-git/src/ops/commit.rs`, the amend a remote has or git keeps no
-  reflog for — staging-and-commit R1.5 as amended; `ops::amend_unconfirmed` beside it takes no
-  token and is off the roster, because what it runs is recoverable: it runs only an amend git
-  logs and no remote has, the replaced commit staying in the reflog Show Lost Commits reads, and
-  answers any other's `Consequence` without running git, its choice `Consequence::needs_confirming`
-  — that it decides so is `destructive-ops-reviewer`'s) and `ops::create_branch_discarding`
-  (`crates/cairn-git/src/ops/checkout.rs`, Create Branch's "Discard", Fork's forced checkout,
-  the one operation that discards a staged change — staging-and-commit R3.6's stated
-  exception) and
-  `ops::remove_index_lock` (`crates/cairn-git/src/ops/remove_lock.rs`, `Remove index.lock…`,
-  R12.4);
-  the **confirmation-surface roster** (`CONFIRMATION_SURFACES`, staging-and-commit
-  R1.1: the confirmation dialog, `crates/cairn-ui/src/confirm_dialog.rs`, which
-  draws the `Consequence` and builds the token from it on its button — an amend that must be
-  confirmed (`Consequence::needs_confirming`) among what it confirms, titled "Amend Commit"; the
-  commit box left the roster in staging-and-commit phase 18, building no token: an amend git
-  logs and no remote has takes none; and the Create Branch dialog,
-  `crates/cairn-ui/src/create_branch_dialog.rs`, whose Create and Checkout — or Return in its
-  name field — with Discard chosen builds the token from the `Consequence` the engine computed
-  for the name and commit shown, the user's decision of 2026-10-10, B2: no second dialog asks
-  again, so the acknowledgement is the radio chosen plus the press, as in Fork, and the prompt is
-  never drawn — that the dialog builds it only then, and from that consequence, is
-  `destructive-ops-reviewer`'s) — no production file of any crate
-  but the guards, `confirm.rs` aside, names `by_user` unless it is on the roster,
-  and every row does, so a helper "for tests" outside a `#[cfg(test)]` module, an
-  alias's `T::by_user` and a stored `Confirmed::by_user` all fail, and the scan is
-  required to have read `cairn-ui`'s and `cairn-app`'s `src/`; no production
-  file outside `cairn-model` and `cairn-git` (`CONSEQUENCE_BUILDERS`) spells a
-  path into a `Consequence` or names its parts (`DiscardedFile`, `FileLoss`,
-  `Publication`, `Reflog`), so the render crates hold one and ask it for its words but never
-  build one; and nowhere, `src/` or `tests/`, does a file but the type's own open
-  an impl naming `Confirmed`, `Consequence` or its parts, or rename one (`use ..
-  as`, or a `type` alias wherever it follows another item). Residual review
-  obligations, `destructive-ops-reviewer`'s: whether a `Consequence` is
-  computed rightly from the repository and re-checked against it before the
-  operation runs (R1.4); that an operation derives every target — each path, each
-  line — from `confirmed.consequence()`, never from a parameter beside it; whether
-  a prompt that IS rendered from it is honest and sufficient; which operations are
-  destructive at all (an operation left off the roster that takes no token is not
-  seen); a roster surface building the token from anything but the `Consequence`
-  it drew — or, for the Create Branch dialog, which draws none (B2), from anything but
-  the engine's `Consequence` for the name and commit it shows, on Discard chosen plus
-  the press; and, since `Consequence` is `Clone`, a surface building two tokens from
-  one acknowledgement. `qa-checklist`'s: the matchers read spellings, so a token
-  reached through a macro, a closure in `ops/` taking one, and a public function
-  in `cairn-model` or `cairn-git` that builds a `Consequence` from values its
-  caller passes — through which a render crate could forge one without spelling a
-  path into it — are not seen. Test code (test modules, `#[cfg(test)]` module
-  files, `tests/`) may build tokens, since it cannot ship.
+  each part with a nonzero-files assertion:
+  - *The types.* The token's file keeps exactly its two private fields, derives or
+    implements none of `Clone`, `Copy`, `Default`, `Deserialize`, `Decode`, `From`,
+    `TryFrom` or `FromStr`, opens one impl block (attributes ahead of an `impl` on its
+    line stepped over), declares exactly `pub fn by_user`, `pub fn consequence` and
+    `pub fn prompt` — no other, private, `const` or restricted function — and no
+    `const`, `static`, `macro_rules!` or `mod` item, names `by_user` once, builds the
+    token once and keeps its doctests. `consequence.rs` derives or implements none of
+    `Default`, `Deserialize`, `Decode`, `From`, `TryFrom` or `FromStr` for any of
+    `CONSEQUENCE_TYPES` (`Consequence`, `DiscardedFile`, `FileLoss`, `Publication`,
+    `Reflog`), opens one impl block, `impl Consequence`, and renders the prompt there.
+    Nowhere, `src/` or `tests/`, does another file open an impl naming `Confirmed` or
+    one of `CONSEQUENCE_TYPES`, or rename one (`use .. as`, or a `type` alias wherever
+    it follows another item); and no production file outside `CONSEQUENCE_BUILDERS`
+    (`cairn-model`, `cairn-git`) spells a path into a `Consequence` or names its parts,
+    so the render crates hold one and ask it for its words — `Consequence::needs_confirming`,
+    `Consequence::listed_file` — but never build one.
+  - *The destructive-operation roster* (`DESTRUCTIVE_OPERATIONS`, file and function).
+    Every function in `crates/cairn-git/src`'s production code whose signature names
+    `Confirmed` is in `ops/`, is on the roster or is the record that spends the token
+    (`CONFIRMED_RECORD`: `destructive` in `Performed`'s inherent impl in `ops/mod.rs`,
+    excused by that place and not by its name), and takes it as exactly one by-value
+    parameter, never behind a reference, an `Option`, a bound or in the return; every
+    row names a function that exists; no `pub` function in `ops/` takes a
+    `Consequence` without the token; and the roster is never empty, asserted (the
+    user's decision, 2026-10-08). Its rows: `ops::discard_lines` and
+    `ops::discard_files` (`ops/discard.rs`); `ops::amend` (`ops/commit.rs`), the amend
+    a remote has or git keeps no reflog for (staging-and-commit R1.5);
+    `ops::create_branch_discarding` (`ops/checkout.rs`), Create Branch's "Discard",
+    Fork's forced checkout, the one operation that discards a staged change
+    (staging-and-commit R3.6's stated exception); and `ops::remove_index_lock`
+    (`ops/remove_lock.rs`, `Remove index.lock…`, R12.4). `ops::amend_unconfirmed`
+    takes no token and is off the roster because what it runs is recoverable: only an
+    amend git logs and no remote has, the replaced commit staying in the reflog Show
+    Lost Commits reads, answering any other's `Consequence` without running git — its
+    choice `Consequence::needs_confirming`.
+  - *The holders* (`CONFIRMED_HOLDERS`, each row a production file and the one type in
+    it it excuses, failing when that type is gone or no longer holds a token, so a
+    second holder in the same file fails too): no type in any crate's production code —
+    the application's worker scan asserted — keeps a `Confirmed` in a field outside it,
+    since a token held in a type reaches an operation behind a reference. Its rows:
+    `worker/local_lane.rs`'s `LocalWrite`, which carries a destructive write's token to
+    the local lane that spends it by value; `crates/cairn-git/src/error.rs`'s `Error`,
+    whose `AmendNotMade { failure, unspent }` hands a confirmed amend's token back when
+    git failed with `HEAD` unmoved, so the Git Error dialog's skip amends without asking
+    again (staging-and-commit R1.1, R10.5: git's index refresh and the tree objects it
+    writes before a hook runs are its own bookkeeping, outside the `Consequence`), that
+    one variant and field pinned by
+    `the_engine_error_holds_a_token_only_as_an_unspent_amend` (self-test
+    `the_engine_error_token_matcher_catches_the_shapes_it_claims`); and the two that
+    carry that token on to the skip — the local lane's `Unspent`
+    (`worker/local_lane.rs`), on the write's ending, whose `Clone` carries none, and the
+    window's Git Error state, `GitError` (`crates/cairn-app/src/commit_box_state.rs`),
+    which keeps it until the skip spends it or Close lets it go — each in the one field
+    `WINDOW_TOKEN_FIELDS` names, pinned by
+    `the_window_holds_a_token_only_for_the_git_errors_skip` (self-test
+    `the_window_token_field_matcher_catches_the_shapes_it_claims`). A type may otherwise
+    name the token only as the argument of a callback it holds, spelled exactly as one
+    of `TOKEN_CALLBACKS` — `EventHandler<Confirmed>` and `dyn Fn(Confirmed)` (or
+    `FnMut`, `FnOnce`), the confirmation dialog's handler and the window's
+    continuation, handed a token to spend and keeping none (ratified by the user on
+    2026-10-09); a callback that returns one or takes it beside other arguments still
+    counts as a holder, and no production file declares a type, trait or alias named
+    `EventHandler`, `Fn`, `FnMut` or `FnOnce` or imports another item under one of those
+    names (`token_callback_shadow_violations`), so the trusted spellings mean the
+    toolkit's handler and the language's closures.
+  - *The confirmation-surface roster* (`CONFIRMATION_SURFACES`, staging-and-commit
+    R1.1). No production file of any crate but the guards, `confirm.rs` aside, names
+    `by_user` unless it is on the roster, and every row does, so a helper "for tests"
+    outside a `#[cfg(test)]` module, an alias's `T::by_user` and a stored
+    `Confirmed::by_user` all fail, and the scan is required to have read `cairn-ui`'s
+    and `cairn-app`'s `src/`. Its rows: the confirmation dialog
+    (`crates/cairn-ui/src/confirm_dialog.rs`), which draws the `Consequence` and builds
+    the token from it on its button — a discard, a lock's removal, and an amend that
+    must be confirmed (`Consequence::needs_confirming`), titled "Amend Commit"; and the
+    Create Branch dialog (`crates/cairn-ui/src/create_branch_dialog.rs`), whose Create
+    and Checkout — or Return in its name field — with Discard chosen builds the token
+    from the `Consequence` the engine computed for the name and commit shown (the
+    user's decision of 2026-10-10: no second dialog asks again, so the acknowledgement
+    is the radio chosen plus the press, as in Fork, and the prompt is never drawn). The
+    commit box is not a surface: it builds no token, an amend git logs and no remote has
+    taking none and any other confirmed in the dialog.
+
+  Residual review obligations, `destructive-ops-reviewer`'s: whether a `Consequence`
+  is computed rightly from the repository and re-checked against it, not against a
+  copy the window kept, before the operation runs (R1.4); that an operation derives
+  every target — each path, each line — from `confirmed.consequence()`, never from a
+  parameter beside it; whether a prompt rendered from it is honest and sufficient;
+  which operations are destructive at all (an operation left off the roster that takes
+  no token is not seen — today `ops::amend_unconfirmed`, whose read-then-run order and
+  `needs_confirming` predicate are its check 13); a surface building the token from
+  anything but the `Consequence` it drew — or, for the Create Branch dialog, which
+  draws none, from anything but the engine's `Consequence` for the name and commit it
+  shows, on Discard chosen plus the press — and, since `Consequence` is `Clone`, a
+  surface building two tokens from one acknowledgement; a type that holds a
+  `LocalWrite` (`Request`, the lane's job) or an `Error`, which the holder check does
+  not follow (its check 12), that a token comes back only when the amend was not made,
+  and that an update carrying one is moved to the window and never copied on the way;
+  and a callback that stashes the token it is handed in a cell it captured (its check
+  11). `qa-checklist`'s: the matchers read spellings, so a token reached through a
+  macro, a closure in `ops/` taking one, and a public function in `cairn-model` or
+  `cairn-git` that builds a `Consequence` from values its caller passes — through
+  which a render crate could forge one without spelling a path into it — are not
+  seen. Test code (test modules, `#[cfg(test)]` module files, `tests/`) may build
+  tokens, since it cannot ship.
 - **No `unsafe`, anywhere.** Twin: `unsafe_code = "forbid"` in the workspace lint
   table (compiler tier, so it cannot be locally overridden).
 - **Shipping code never panics on a path a user can reach**: `unwrap`, `expect`,
@@ -1100,9 +1050,9 @@ Project invariants:
 
 - **No component names a literal modifier** (decision D5, PRD R8.3). Every
   keyboard shortcut is an `Action` mapped to a list of distinct chords per
-  platform (`accelerators::chords`, staging-and-commit L22: Fork keeps alternates,
-  stage on Return and ⌘S, or Enter, Ctrl+S and Ctrl+Shift+S, discard on Backspace,
-  Delete and Ctrl+Shift+D), and
+  platform (`accelerators::chords`, staging-and-commit R7.2: Fork keeps alternates —
+  stage on Return or ⌘S on macOS, Enter, Ctrl+S or Ctrl+Shift+S on Linux; discard on
+  Backspace or ⇧⌘D, and Backspace, Delete or Ctrl+Shift+D), and
   to the scope it is heard in — each chord its action's scope but the stage's bare
   Return, heard from the file lists alone (`accelerators::chord_heard_in`) — in the
   accelerator table,
@@ -1419,7 +1369,9 @@ Project invariants:
   `a_folder_of_10000_branches_open_builds_one_viewport` (folders over a flat list stay
   virtualized; `crates/cairn-ui/tests/sidebar.rs`), and for Local Changes' two lists,
   `a_status_of_50000_paths_builds_one_viewport_filtered_or_not` (50,000 rows in Unstaged and
-  25,000 in Staged, top, deep and end, filtered and not; `crates/cairn-ui/tests/local_changes.rs`),
+  25,000 in Staged, top, deep and end, filtered and not; `crates/cairn-ui/tests/local_changes.rs`)
+  and, with every one of those rows selected and the held keys handed in,
+  `a_status_of_50000_paths_all_selected_builds_one_viewport`,
   and for a failed commit's output in the Git Error dialog,
   `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered` (100,000 lines,
   opened at its end; `crates/cairn-ui/tests/commit_box.rs`), the window keeping at most its
@@ -1435,14 +1387,17 @@ Project invariants:
   (`crates/cairn-ui/tests/confirm_dialog.rs`, each row read from the consequence by index,
   `Consequence::listed_file`, top and end) —
   hold the other lists to the same, and so do the staging gesture's twins
-  (staging-and-commit C19, `crates/cairn-ui/tests/staging_gesture.rs`):
+  (`crates/cairn-ui/tests/staging_gesture.rs`):
   `the_gesture_builds_one_viewport_over_a_10000_line_diff` (a 10,000-line diff with the
   gesture hovered and a selection made, top, deep and end, the layer drawing at most its
   two actions), with
   `a_drag_across_unmounted_rows_selects_every_line_between_its_ends` holding a drag whole
-  across the rows it unmounts. They count
+  across the rows it unmounts. Show Lost Commits' rows are history rows, held by the
+  history list's twins. They count
   rows built, not work done: whether per-frame work grows with scroll depth while
-  that count stays flat stays `responsiveness-reviewer`'s.
+  that count stays flat stays `responsiveness-reviewer`'s, and so does the one virtualized
+  list no twin renders: the "Couldn't <name>" dialog's Show files, a partly done discard's
+  files (`crates/cairn-ui/src/git_error_dialog.rs`).
 
 ## Conventions
 
@@ -1547,13 +1502,15 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   down when the work merges.
 - `docs/systems/` — as-built descriptions, written when a system exists.
   `history-graph.md`: how the history view reads, lays out and draws a
-  repository today, with the twin that pins each rule. `credentials.md`: the
+  repository today, with the twin that pins each rule, and Show Lost Commits and
+  Create Branch. `credentials.md`: the
   askpass helper and its channel, fetch end to end, and the decisions the
   packet locked. `git-processes.md`: where every `git` process is built, the
   read/write seal, the environment each kind of invocation runs with, the
   runner — its pipes, how an invocation is cancelled, and what it reports —
   each repository's registry and command log, and, in the application, `git`
-  found once, the network lane and its refusal, and closing.
+  found once, the network lane and its refusal, the local write lane, where an
+  ending goes, the activity popover, the leftover lock, and closing.
   `refs.md`: the refs snapshot, the five rules that make gix's refs git's,
   upstreams, the stash list, ahead and behind, and the ref storages refused at
   open. `status.md`: the working tree's status — what `git status` lists, the
@@ -1561,9 +1518,10 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   Changes view — its two lists laid out over a status on a worker, the filter, a
   path chosen and its working-tree diff drawn for that path alone, how the
   path chosen follows each refresh, its actions, the staging gesture and the commit box. `staging.md`: the engine's write verbs —
-  staging, unstaging and discarding lines and files, their arguments, the stale
-  check before every patch, and the discards sealed behind a confirmation and
-  re-checked before they run. `diff.md`: how a change to a file is described — one exact answer, its hunk,
+  staging, unstaging and discarding lines and files, committing and amending, their
+  arguments, the stale check before every patch, the discards and an amend sealed
+  behind a confirmation and re-checked before they run, and what the commit box
+  reads. `diff.md`: how a change to a file is described — one exact answer, its hunk,
   row and patch projections, the reference applier that checks the emitter,
   and the engine queries that fill it from a repository; the diff thread and
   its lanes; the detail pane, its Commit and Changes tabs, files opened in
@@ -1572,5 +1530,7 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 - `docs/research/<slug>/` — the evidence behind decisions, kept after teardown;
   `docs/research/diff-engine/c14-measured.md` is Cairn's measured diff and
   window numbers on the bench repository, against git's own in
-  `measured-baseline.md` beside it, and `docs/research/refs-and-status/measured.md`
-  its refs, status, retained-row and window numbers on the same repository.
+  `measured-baseline.md` beside it, `docs/research/refs-and-status/measured.md`
+  its refs, status, retained-row and window numbers on the same repository, and
+  `docs/research/staging-and-commit/measured.md` its stage, unstage, discard and
+  commit costs against git's own in `measured-baseline.md` beside it.

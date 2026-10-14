@@ -152,8 +152,13 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     handled in `crates/cairn-ui/tests/` (unscanned); in the one chord-name module
     (`CHORD_NAMES`), a name put together there from single-key literals rather than
     from the chord the table lists — the guard sees each literal is one held key's
-    name, not that the name follows the table's chord; and whether a new chord is
-    right for each platform and clear of the desktop's and Fork's.
+    name, not that the name follows the table's chord; that the resolver
+    (`resolve_key_on`) still reads each chord's scope through
+    `accelerators::chord_heard_in` rather than its action's — the guard's pin reads the
+    table's rows, and only the table's unit tests
+    (`every_chord_resolves_to_its_action_in_its_scope_only`,
+    `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`) pin the resolver; and
+    whether a new chord is right for each platform and clear of the desktop's and Fork's.
 12. **Scrubbing git's diagnostic output** (any diff under `crates/cairn-git/src/process/`,
     `crates/cairn-git/src/ops/` or `crates/cairn-git/src/error.rs`, any diff naming
     `ScrubbedLines`, `ScrubbedLine`, `Scrubber`, `strip_ansi` or `Error::shown`, or any new

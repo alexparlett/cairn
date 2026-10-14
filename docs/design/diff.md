@@ -105,7 +105,8 @@ by construction, and with whitespace ignored the view says that some changes are
 hidden; in Local Changes, where the gestures are, the setting is disabled and the
 exact diff is drawn (`ui.md`, "Staging gestures"). Display context, expansion and
 side-by-side change what is drawn and never what the emitter reads. Spec:
-`docs/prd/staging-and-commit.md` R2, R3. Evidence:
+`docs/prd/staging-and-commit.md` R2, R3. As built: `docs/systems/diff.md` and
+`docs/systems/staging.md`. Evidence:
 `docs/research/staging-and-commit/patch-mechanics-spike.md` and
 `git-write-verbs.md` beside it.
 

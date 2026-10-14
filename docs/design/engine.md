@@ -123,7 +123,7 @@ implied.
   made by `git`.
 
 Fetch, in the network lane, sits beside them (`credentials.md`). Spec:
-`docs/prd/staging-and-commit.md` R3, R6. Evidence, each verb run on git 2.30.9,
+`docs/prd/staging-and-commit.md` R3, R6. As built: `docs/systems/staging.md`. Evidence, each verb run on git 2.30.9,
 2.32.7 and 2.56.0: `docs/research/staging-and-commit/git-write-verbs.md`.
 
 Reads go to gitoxide because reads are what a GUI does constantly, and its
@@ -418,4 +418,4 @@ Unstaging a staged version the working tree no longer holds leaves that blob
 unreachable; Fork does not confirm it and neither does Cairn, a residual that
 stays `destructive-ops-reviewer`'s. No destructive operation takes a backup first:
 what a confirmation protects is said in `feature-inventory.md`, "Recovery". Spec:
-`docs/prd/staging-and-commit.md` R1.
+`docs/prd/staging-and-commit.md` R1. As built: `docs/systems/staging.md`, "Discards, sealed".

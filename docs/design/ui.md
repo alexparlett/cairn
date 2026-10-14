@@ -237,7 +237,7 @@ one, so every drawn change maps to lines a patch can carry; the shared setting i
 left as it was and still applies in the other tabs. A gesture produces a
 selection, and the patch is built from the exact diff, never the displayed one
 (`diff.md`, "Selections and patches"). Spec: `docs/prd/staging-and-commit.md` R8,
-R9.
+R9. As built: `docs/systems/local-changes.md`.
 
 ### Discard
 
@@ -326,7 +326,8 @@ found; it runs once with `--no-verify`, never asks again, and is the only way to
 skip hooks, as in Fork; the draft stays. Not in the box, as in Fork: an author
 override, empty commits, an up-front skip-hooks, and sign-off or signing as
 controls — git's own configuration for both is honoured. Commit and Push belongs
-with push, and is designed with it. Spec: `docs/prd/staging-and-commit.md` R10.
+with push, and is designed with it. Spec: `docs/prd/staging-and-commit.md` R10. As built:
+`docs/systems/local-changes.md`, "The commit box", and `docs/systems/staging.md`.
 
 ### Show Lost Commits
 
@@ -339,7 +340,8 @@ date in a lighter grey, their lanes, edges and chips in their own colours
 (`history-graph.md`, "What it walks"); Fork's reaches every reflog. An amended-away or
 reset-away commit is found there, until git expires its entry (`gc.reflogExpireUnreachable`,
 30 days by default). As in Fork, there is no list of reflog entries. Spec:
-`docs/prd/staging-and-commit.md` R11.
+`docs/prd/staging-and-commit.md` R11. As built: `docs/systems/history-graph.md`, "Show Lost
+Commits".
 
 ### Create Branch
 
@@ -363,7 +365,8 @@ While git is in the middle of a merge, a rebase, a cherry-pick, a revert or `git
 forced checkout would abandon without a word, Discard is refused in the refusal row — "A merge
 is in progress. Finish or abort it first." — the button disabled while it is chosen. A Git
 Error, or a refusal, opens over the dialog, which stays as it was left beneath it. Checking out a branch is
-otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3.
+otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3. As
+built: `docs/systems/history-graph.md`, "Create Branch".
 
 ### Activity
 
@@ -378,7 +381,8 @@ confirmed, and an amend's entry offers "Show in Lost Commits", which turns the m
 on and selects the old commit. Credentials in a URL are removed from every line of
 git's before anything keeps it. When the log grows past its bound the oldest whole
 entries go. Nothing in it outlives the window, as in Fork. Spec:
-`docs/prd/staging-and-commit.md` R12.
+`docs/prd/staging-and-commit.md` R12. As built: `docs/systems/git-processes.md`, "The activity
+popover".
 
 ### The leftover lock
 
@@ -393,7 +397,8 @@ twice, as Fork retries, before it is reported; its Git Error then carries the sa
 `Remove index.lock…` beside Close, as Fork's does. Either way the removal is
 confirmed — "Remove Stale Lock", naming the lock's age and size and that another
 program may still own it — and is followed by a refresh, never by a retry of the
-write. Spec: `docs/prd/staging-and-commit.md` R12.4.
+write. Spec: `docs/prd/staging-and-commit.md` R12.4. As built: `docs/systems/git-processes.md`,
+"The leftover lock".
 
 ## Palette and type
 

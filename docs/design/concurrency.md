@@ -134,4 +134,5 @@ local writes through the repository thread. Evidence:
 `docs/research/process-manager/consumer-invocations.md` (what each operation
 locks), `docs/research/process-manager/precedent-study.md` (how other clients
 serialise) and `docs/research/staging-and-commit/write-path-as-built.md`. Specs:
-`docs/prd/process-manager.md` R7, `docs/prd/staging-and-commit.md` R4.
+`docs/prd/process-manager.md` R7, `docs/prd/staging-and-commit.md` R4. As built:
+`docs/systems/git-processes.md`, "The local write lane".

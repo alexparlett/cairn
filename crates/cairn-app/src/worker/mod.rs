@@ -48,6 +48,8 @@ pub use local_lane::Done;
 pub use local_lane::{
     Failure, LocalWrite, OperationId, ReadAgain, ResultLines, Unspent, UnstageTarget, WriteEnding,
 };
+#[cfg(test)]
+pub(crate) use local_lane_tests::StagedFile;
 pub use output_tap::OutputTap;
 #[cfg(test)]
 pub use pool::Updates;

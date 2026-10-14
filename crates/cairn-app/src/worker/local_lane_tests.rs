@@ -228,6 +228,50 @@ fn real_open(
     }
 }
 
+/// An unborn repository whose `path` git has staged as `text` — through the local lane, as a
+/// stage asked of the window is — for the window's tests through a real refresh, which may not
+/// wait themselves (C26's window test; merge bar, phase 21, item 12). Its working tree is the
+/// test's to write, so the path's unstaged diff is whatever the test makes it.
+pub(crate) struct StagedFile {
+    fixture: UnbornRepository,
+    home: Home,
+    runtime: RuntimeDir,
+}
+
+impl StagedFile {
+    pub(crate) fn new(name: &str, path: &str, text: &str) -> Self {
+        let staged = Self {
+            fixture: UnbornRepository::new(&format!("{name}-{}", std::process::id())),
+            home: Home::new(),
+            runtime: RuntimeDir::new(),
+        };
+        staged.write(path, text);
+        let (handle, mut updates, _reply) =
+            real_boundary(&staged.fixture.path, (&staged.home, &staged.runtime));
+        let id = ask(&handle, stage(&[path]));
+        let seen = until_ended(&mut updates, id);
+        assert!(
+            matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+            "staging {path}: {seen:?}"
+        );
+        drop(handle);
+        staged
+    }
+
+    /// The boundary over the repository, its first update — what it opened — still to read.
+    pub(crate) fn open(&self) -> (RepositoryHandle, Updates) {
+        let (handle, updates, _reply) = real_open(&self.fixture.path, (&self.home, &self.runtime));
+        (handle, updates)
+    }
+
+    /// Writes `text` to `path` in the working tree.
+    pub(crate) fn write(&self, path: &str, text: &str) {
+        let at = self.fixture.path.join(path);
+        std::fs::write(&at, text)
+            .unwrap_or_else(|error| panic!("writing {}: {error}", at.display()));
+    }
+}
+
 /// An unborn repository named `name` whose working tree holds each of `files`, untracked.
 fn with_files(name: &str, files: &[&str]) -> UnbornRepository {
     let fixture = UnbornRepository::new(&format!("{name}-{}", std::process::id()));

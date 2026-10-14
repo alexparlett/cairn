@@ -643,7 +643,12 @@ typed, the arrows are the editor's.
   selection and the selection moved to the row in the first acted row's place),
   `a_line_selection_is_kept_across_a_refresh_of_the_same_text_and_cleared_once_otherwise` (C26
   through the window: a refresh's status, the re-read asked and answered, the same text and
-  then other text), `a_renames_source_row_unstages_its_lines_at_the_new_path`; the prompt's one sentence
+  then other text) and its twin through a real refresh,
+  `a_line_selection_survives_a_real_refresh_of_the_same_text_and_clears_once_otherwise` (the
+  window over a real worker, `worker::StagedFile`'s a.rs edited in its working tree: a
+  `Request::Refresh` of the same text keeps the selection, one after an edit clears it with one
+  notice, each answer keyed by the diff thread itself),
+  `a_renames_source_row_unstages_its_lines_at_the_new_path`; the prompt's one sentence
   frame, `a_discard_of_files_asks_in_the_one_sentence_frame`,
   `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted` and
   `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`

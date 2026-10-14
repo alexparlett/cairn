@@ -906,3 +906,148 @@ fn a_line_selection_is_kept_across_a_refresh_of_the_same_text_and_cleared_once_o
     );
     assert_eq!(lines_asked(&submitted).len(), 1, "{:?}", submitted.borrow());
 }
+
+/// Forty lines, `line {n}`, each of `edits` reading `{word} {n}` instead.
+fn forty_lines_text(edits: &[u32], word: &str) -> String {
+    (0..40)
+        .map(|n| {
+            if edits.contains(&n) {
+                format!("{word} {n}\n")
+            } else {
+                format!("line {n}\n")
+            }
+        })
+        .collect()
+}
+
+/// Hands the worker what the window asked and applies what it answers, until `done` holds of
+/// the window and what arrived; returns what arrived. The waiting is the worker's
+/// (`next_update`), never this file's.
+fn pump(
+    test: &mut TestingRunner,
+    view: View,
+    submitted: &Submitted,
+    worker: (
+        &crate::worker::RepositoryHandle,
+        &mut crate::worker::Updates,
+    ),
+    done: impl Fn(&TestingRunner, &[Update]) -> bool,
+) -> Vec<Update> {
+    let (handle, updates) = worker;
+    let mut seen = Vec::new();
+    loop {
+        let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+        for request in asked {
+            handle.submit(request);
+        }
+        if done(test, &seen) {
+            return seen;
+        }
+        let update = crate::worker::next_update(updates);
+        seen.push(update.clone());
+        apply(test, view, submitted, update);
+    }
+}
+
+/// Whether the primary's diff drawn has a line reading `line` on its new side.
+fn drawn_reads(view: View, line: &str) -> bool {
+    view.diff
+        .peek()
+        .shown_working()
+        .and_then(ShownDiff::text)
+        .is_some_and(|(text, _)| text.new_lines().iter().any(|new| new.text() == line))
+}
+
+/// Whether a working-tree diff arrived after the last status in `seen`.
+fn read_again_after_a_status(seen: &[Update]) -> bool {
+    seen.iter()
+        .rposition(|update| matches!(update, Update::Status { .. }))
+        .is_some_and(|status| {
+            seen[status..]
+                .iter()
+                .any(|update| matches!(update, Update::FileDiff { .. }))
+        })
+}
+
+/// C26 through a real refresh (merge bar, phase 21, item 12): the window over a real worker,
+/// a.rs staged as forty lines and two of them edited in the working tree. A line selected in
+/// its unstaged diff is kept across a `Request::Refresh` whose status and re-read diff are the
+/// same text — the answer keyed by the diff thread itself — and, once a.rs is edited again and
+/// refreshed, let go of, "The file changed — line selection cleared." said exactly once.
+/// Caught by: a working-tree answer keyed to its query rather than its text, end to end
+/// through the real diff lane (the selection then outlives the edit, or is dropped by every
+/// refresh).
+#[test]
+fn a_line_selection_survives_a_real_refresh_of_the_same_text_and_clears_once_otherwise() {
+    let repository = crate::worker::StagedFile::new("cairn-c26-window", "a.rs", &{
+        forty_lines_text(&[], "line")
+    });
+    repository.write("a.rs", &forty_lines_text(&[4, 30], "EDIT"));
+    let (handle, mut updates) = repository.open();
+    let (mut test, view, submitted) = launch();
+    let caption = lines_caption(GestureVerb::Stage, 1);
+
+    handle.submit(Request::Refresh);
+    pump(
+        &mut test,
+        view,
+        &submitted,
+        (&handle, &mut updates),
+        |_, seen| {
+            seen.iter()
+                .any(|update| matches!(update, Update::Status { .. }))
+        },
+    );
+    open_local_changes(&mut test);
+    pump(
+        &mut test,
+        view,
+        &submitted,
+        (&handle, &mut updates),
+        |_, _| drawn_content(view) != 0,
+    );
+    settle(&mut test);
+    select_line_4(&mut test, 0.);
+    assert!(labels(&test).contains(&caption), "{:?}", labels(&test));
+    let first = drawn_content(view);
+
+    // Refreshed with a.rs untouched: the same text, re-read through the diff lane.
+    handle.submit(Request::Refresh);
+    pump(
+        &mut test,
+        view,
+        &submitted,
+        (&handle, &mut updates),
+        |_, seen| read_again_after_a_status(seen),
+    );
+    settle(&mut test);
+    assert_eq!(drawn_content(view), first, "the same text drew another");
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&caption),
+        "a refresh of the same text dropped it: {drawn:?}"
+    );
+    assert!(!drawn.iter().any(|l| l == SELECTION_CLEARED), "{drawn:?}");
+
+    // Edited, then refreshed: other text, so the selection goes, said once.
+    repository.write("a.rs", &forty_lines_text(&[4, 31], "EDITED"));
+    handle.submit(Request::Refresh);
+    pump(
+        &mut test,
+        view,
+        &submitted,
+        (&handle, &mut updates),
+        |_, seen| read_again_after_a_status(seen) && drawn_reads(view, "EDITED 31"),
+    );
+    assert_ne!(drawn_content(view), first, "other text drew the same key");
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(!drawn.contains(&caption), "kept over other text: {drawn:?}");
+    assert_eq!(
+        drawn.iter().filter(|l| *l == SELECTION_CLEARED).count(),
+        1,
+        "{drawn:?}"
+    );
+    assert_eq!(view.local.lines.peek().selected(drawn_content(view)), None);
+    drop(handle);
+}

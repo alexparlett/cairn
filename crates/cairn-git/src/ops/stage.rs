@@ -18,7 +18,8 @@
 //! exact, and a patch that does not apply as it is must not be made to. `apply.ignoreWhitespace`
 //! is left to the user: measured on git 2.30.9, 2.32.7 and 2.56.0 over 400 selections, it
 //! changes nothing a fresh patch stages — it matters only where the index moved under a
-//! patch's context, which the stale check refuses first (`progress.md`, phase 03).
+//! patch's context, which the stale check refuses first (`docs/prd/staging-and-commit.md`,
+//! "Out of scope").
 //!
 //! **The stale check** (R3.7, L17f): before git runs, the index entry is read again with
 //! gix and must be the side the patch was built from — for a stage, the diff's old id and

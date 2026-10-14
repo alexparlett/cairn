@@ -28,7 +28,7 @@ use crate::{FileMode, Oid, Patch, RefName, RepoPath, Selection};
 /// One variant per destructive operation of R1.5. Discarding files and
 /// deleting untracked files share [`Consequence::DiscardFiles`]: Fork confirms
 /// a selection of both in one dialog, with one prompt naming each kind
-/// (`brainstorm.md` L8), and one prompt is one confirmation.
+/// (`docs/prd/staging-and-commit.md` R3, L8), and one prompt is one confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Consequence {
     /// Selected lines of one path's unstaged change, and its mode change when

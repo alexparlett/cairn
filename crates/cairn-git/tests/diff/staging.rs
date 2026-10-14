@@ -919,8 +919,8 @@ fn lines_of_an_untracked_file_stage_and_discard_as_git_says() {
 }
 
 /// C3: an intent-to-add entry, whose unstaged diff is a new file — so its stage is a `new
-/// file mode` patch applied over the intent-to-add entry, which is state.md's open question,
-/// answered on every git here (see also `a_new_file_patch_applies_over_an_intent_to_add_entry`).
+/// file mode` patch applied over the intent-to-add entry, which the packet left open until it
+/// was answered on every git here (see also `a_new_file_patch_applies_over_an_intent_to_add_entry`).
 #[test]
 fn lines_of_an_intent_to_add_file_stage_and_discard_as_git_says() {
     let mut case = Case::new("intent to add", b"new.txt");
@@ -1229,7 +1229,7 @@ fn lines_of_awkwardly_named_files_stage_unstage_and_discard_as_git_says() {
     }
 }
 
-/// state.md's open question, settled: a `new file mode` patch of part of a file applies over
+/// The packet's open question, settled: a `new file mode` patch of part of a file applies over
 /// an intent-to-add entry, on every git, and leaves a real entry holding the lines selected.
 #[test]
 fn a_new_file_patch_applies_over_an_intent_to_add_entry() {

@@ -569,7 +569,7 @@ and amend's staged list, which a status does read while Amend is ticked, 2.6 ms)
   it first. The user knowingly accepted Fork's behaviour here (2026-10-10;
   PRD R11.3); pinned by git's own result on the host and both floors
   (`an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it`), so a
-  change of mind — refusing such a repository, or naming it — is a visible decision.
+  change of mind — refusing such a repository, or naming it — is a visible decision, open as #126.
 - A commit or amend left running by a second close can still die of `SIGPIPE` at a
   line its hook writes.
 - A hook owned by another user counts when the group's or others' execute bit is

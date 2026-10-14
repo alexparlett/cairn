@@ -68,7 +68,7 @@ use crate::{Cancel, ContentOptions, Error, Refusal, Repository, WorkingTreeDiff}
 /// NUL and its pointer. Half of Linux's smallest `ARG_MAX` (32 pages, 128 KiB), a sixteenth
 /// of macOS's 1 MiB and a thirty-second of the 2 MiB measured on the machine this was built
 /// on, where `git clean` took 1.5 MiB of 100-byte paths and the kernel refused 1.9 MiB with
-/// `E2BIG` (`progress.md`, phase 03): the rest of `ARG_MAX` is the environment's and the
+/// `E2BIG` when this bound was chosen: the rest of `ARG_MAX` is the environment's and the
 /// other arguments'. A path is at most `PATH_MAX`, 4 KiB, so one always fits.
 pub const CLEAN_ARGUMENT_BYTES: usize = 64 * 1024;
 

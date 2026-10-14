@@ -440,7 +440,7 @@ fn a_submodules_change_survives_the_discard_and_a_conflict_is_discarded() {
 /// commit holds a file at is deleted, its history with it, silently, exactly as Fork's Discard
 /// deletes it; no refusal and no extra line. This asserts git's own result (exit 0, the folder
 /// and its `.git` gone, the commit's file in its place), so changing it — refusing such a
-/// repository, or naming it — is a visible decision (state.md's teardown list: "revisit").
+/// repository, or naming it — is a visible decision (#126).
 /// Caught by: a refusal added before git runs, or git on this version keeping the repository.
 #[test]
 fn an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it() {

@@ -35,7 +35,7 @@ pub const PROGRESS_AFTER: Duration = Duration::from_millis(250);
 pub struct Running {
     /// Which operation this is: another is another line, with its own wait.
     pub serial: u64,
-    /// Its one name: "Commit", "Stage 2 files", "Fetch origin".
+    /// Its one name: "Commit 1 file", "Stage 2 Files", "Fetch 'origin'".
     pub name: String,
     pub started: Instant,
     /// The writes queued behind it.
@@ -44,8 +44,8 @@ pub struct Running {
     pub progress: Option<String>,
 }
 
-/// What the status box says of `running`: "Commit · 1 waiting", "Fetch origin  Receiving
-/// objects: 40%".
+/// What the status box says of `running`: "Commit 1 file · 1 waiting", "Fetch 'origin'
+/// Receiving objects: 40%".
 pub fn running_text(running: &Running) -> String {
     let mut text = running.name.clone();
     if running.waiting > 0 {

@@ -188,7 +188,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     click_lowest(&mut test, CLOSE_CAPTION);
     open(&mut test);
     for text in [
-        "Stage 1 file",
+        "Stage 1 File",
         "$ git --literal-pathspecs add https://example.com/r",
         "hint: https://example.com/r refused",
         "exit code 1",
@@ -451,7 +451,7 @@ fn a_write_refused_before_it_started_keeps_its_name() {
     );
     // R14.3: closing is a refusal found while it waited — "Couldn't <its name>".
     assert!(
-        drawn(&test, "Couldn't Stage 2 files"),
+        drawn(&test, "Couldn't Stage 2 Files"),
         "{:?}",
         labels(&test)
     );
@@ -460,7 +460,7 @@ fn a_write_refused_before_it_started_keeps_its_name() {
         "The repository was closing. Nothing was changed."
     ));
     open(&mut test);
-    assert!(drawn(&test, "Stage 2 files"), "{:?}", labels(&test));
+    assert!(drawn(&test, "Stage 2 Files"), "{:?}", labels(&test));
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
@@ -649,6 +649,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             &LocalWrite::Commit {
                 message: "amend stand-in".to_owned(),
                 skip_hooks: false,
+                files: 1,
             },
         );
     });
@@ -873,6 +874,7 @@ fn the_activity_manager_draws_forks_rows_and_header() {
     let commit = LocalWrite::Commit {
         message: "m".to_owned(),
         skip_hooks: false,
+        files: 1,
     };
     let cancelled = started(&mut test, view, &submitted, &commit);
     apply(
@@ -984,7 +986,7 @@ fn the_activity_manager_draws_forks_rows_and_header() {
             .map(|entry| entry.name.clone())
             .collect()
     });
-    assert_eq!(ended.first().map(String::as_str), Some("Commit"));
+    assert_eq!(ended.first().map(String::as_str), Some("Commit 1 file"));
     let mut log = view.activity.log;
     test.run_in(|| {
         let key = log.peek().key_at(0);
@@ -1125,6 +1127,7 @@ fn a_running_entry_opens_at_its_end_and_does_not_follow() {
         &LocalWrite::Commit {
             message: "m".to_owned(),
             skip_hooks: false,
+            files: 1,
         },
     );
     let lines = |range: std::ops::Range<usize>| {

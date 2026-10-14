@@ -76,6 +76,10 @@ stages from the diff; each activity row carries Fork's result line. Kept as the 
    under the file lists.
 5. **One name per operation.** Fork's imperative name ("Stage 2 files", "Commit", "Create
    branch 'x'") everywhere it appears. Four status words: running, succeeded, failed, cancelled.
+   (Note 2026-10-14, the coordinator's application of Fork observed first-hand,
+   `fork-activity-result-lines-2026-10-11.md`: the examples are spelled as Fork's rows spell
+   them — "Stage 2 Files", "Commit 2 files", "Discard Changes", "Create branch 'x'", "Fetch
+   'origin'"; PRD R14.2 carries the amendment.)
 6. **Short text, never cut.** Never cut off text you need to read; make it short instead. Never
    repeat what's already on screen. Per-file detail goes behind "Show files".
 7. **Let git decide.** Run git and show its refusal, rather than predicting what git would do.

@@ -38,7 +38,7 @@ pub const CLOSE_CAPTION: &str = "Close";
 /// observed `lk2`), and on the leftover lock's banner.
 pub const REMOVE_LOCK_CAPTION: &str = "Remove index.lock…";
 
-/// The title of a refusal found while `name` ran (F2): "Couldn't Discard 3 files".
+/// The title of a refusal found while `name` ran (F2): "Couldn't Discard Changes".
 pub fn couldnt_title(name: &str) -> String {
     format!("Couldn't {name}")
 }

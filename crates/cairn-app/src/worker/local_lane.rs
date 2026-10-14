@@ -155,8 +155,13 @@ pub enum LocalWrite {
     /// The files the confirmation names, discarded, untracked ones deleted.
     DiscardFiles(Confirmed),
     /// What is staged, committed with `message` (R6.1); `skip_hooks` only from the hook
-    /// failure's skip (R10.5).
-    Commit { message: String, skip_hooks: bool },
+    /// failure's skip (R10.5). `files` is how many files were staged when it was asked — the
+    /// count its name says, as Fork's "Commit 2 files" does — and nothing else reads it.
+    Commit {
+        message: String,
+        skip_hooks: bool,
+        files: usize,
+    },
     /// `HEAD` amended with `message` and what is staged (R6.2), under the confirmation of the
     /// `Consequence` the dialog drew.
     Amend {
@@ -261,19 +266,21 @@ impl LocalWrite {
         }
     }
 
-    /// Its one name (R14.2, rule 5), in Fork's imperative form as its Activity Manager names an
-    /// operation ("Fetch origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7):
-    /// "Stage 1 file", "Stage lines of a.rs", "Unstage 2 files", "Discard 3 files", "Commit",
-    /// "Amend", "Create branch 'topic'", "Remove index.lock". A destructive write's is its
-    /// confirmation's (`Consequence::name`). The only wording of the write: the status box, a
-    /// wait ("Waiting for Commit…"), the closing line, the "Couldn't <name>" dialog, the askpass
-    /// prompt's title and the activity popover all say this.
+    /// Its one name (R14.2, rule 5), as Fork's Activity Manager names the operation, observed
+    /// first-hand (`fork-activity-result-lines-2026-10-11.md`): "Stage 1 File", "Unstage 2
+    /// Files" (title case), "Commit 2 files" (lower case, the count committed), "Discard
+    /// Changes" (no count), "Amend", "Create branch 'topic'" — and, where Fork draws no row,
+    /// "Stage lines of a.rs" and "Remove index.lock" (R12.1's deviation). A destructive
+    /// write's is its confirmation's (`Consequence::name`). The only wording of the write: the
+    /// status box, a wait ("Waiting for Commit 1 file…"), the closing line, the "Couldn't
+    /// <name>" dialog, the askpass prompt's title and the activity popover all say this.
     pub fn name(&self) -> String {
+        // Fork's Stage and Unstage say "File" in title case, its Commit "file" in lower case.
         let files = |count: usize| {
             if count == 1 {
-                "1 file".to_owned()
+                "1 File".to_owned()
             } else {
-                format!("{count} files")
+                format!("{count} Files")
             }
         };
         match self {
@@ -305,7 +312,10 @@ impl LocalWrite {
                         .map_or(changes.len(ChangeList::Staged), Vec::len)
                 )
             ),
-            Self::Commit { .. } => "Commit".to_owned(),
+            // A merge concluded with nothing staged commits no file: the button's own "Commit".
+            Self::Commit { files: 0, .. } => "Commit".to_owned(),
+            Self::Commit { files: 1, .. } => "Commit 1 file".to_owned(),
+            Self::Commit { files, .. } => format!("Commit {files} files"),
             Self::AmendAtPress { .. } => "Amend".to_owned(),
             Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
                 format!("Create branch '{name}'")
@@ -441,9 +451,11 @@ impl LocalWrite {
             Self::Commit {
                 message,
                 skip_hooks,
+                files,
             } => Self::Commit {
                 message: message.clone(),
                 skip_hooks: *skip_hooks,
+                files: *files,
             },
             Self::AmendAtPress {
                 message,
@@ -529,6 +541,7 @@ impl LocalWrite {
             Self::Commit {
                 message,
                 skip_hooks,
+                files: _,
             } => watch.commit(|commit| {
                 ops::commit(git, repo, &message, hooks(skip_hooks), token, commit)
             }),
@@ -1731,17 +1744,32 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA (Fork-settled): each write is named in the activity popover in Fork's
-    /// imperative form, as its Activity Manager names an operation ("Fetch origin", "Create
-    /// branch 'develop'"), a destructive one by its confirmation. Caught by: the progress
-    /// phrase ("staging 1 file") drawn as an operation's name.
+    /// Phase 11's QA (Fork-settled), and Fork's rows as observed first-hand on 2026-10-11
+    /// (`fork-activity-result-lines-2026-10-11.md`; merge bar, phase 21, item 15): each write is
+    /// named in the activity popover as Fork's Activity Manager names it — "Stage 1 File" and
+    /// "Unstage 2 Files" in title case, "Commit 1 file" and "Commit 2 files" in lower case with
+    /// the count committed, "Discard Changes" with none, "Create branch 'develop'" — a
+    /// destructive one by its confirmation. Caught by: the progress phrase ("staging 1 file")
+    /// drawn as an operation's name, or a spelling Fork's rows do not use.
     #[test]
     fn each_write_is_named_in_forks_imperative_form() {
         use cairn_model::Consequence;
         let paths = |n: usize| (0..n).map(|i| RepoPath::new(format!("{i}.rs"))).collect();
         assert_eq!(
             LocalWrite::StageFiles { paths: paths(1) }.name(),
-            "Stage 1 file"
+            "Stage 1 File"
+        );
+        assert_eq!(
+            LocalWrite::StageFiles { paths: paths(2) }.name(),
+            "Stage 2 Files"
+        );
+        assert_eq!(
+            LocalWrite::UnstageFiles {
+                paths: paths(1),
+                to: UnstageTarget::Head,
+            }
+            .name(),
+            "Unstage 1 File"
         );
         assert_eq!(
             LocalWrite::UnstageFiles {
@@ -1749,15 +1777,23 @@ mod tests {
                 to: UnstageTarget::Head,
             }
             .name(),
-            "Unstage 2 files"
+            "Unstage 2 Files"
         );
+        for (files, named) in [(0, "Commit"), (1, "Commit 1 file"), (2, "Commit 2 files")] {
+            assert_eq!(
+                LocalWrite::Commit {
+                    message: "m".to_owned(),
+                    skip_hooks: false,
+                    files,
+                }
+                .name(),
+                named
+            );
+        }
+        let discard = Consequence::DiscardFiles { files: Vec::new() };
         assert_eq!(
-            LocalWrite::Commit {
-                message: "m".to_owned(),
-                skip_hooks: false,
-            }
-            .name(),
-            "Commit"
+            LocalWrite::DiscardFiles(Confirmed::by_user(discard)).name(),
+            "Discard Changes"
         );
         assert_eq!(
             LocalWrite::CreateBranch {
@@ -1820,6 +1856,7 @@ mod tests {
                 LocalWrite::Commit {
                     message: "m".to_owned(),
                     skip_hooks: false,
+                    files: 1,
                 },
                 None,
                 "commit",
@@ -2177,6 +2214,7 @@ mod tests {
         let commit = LocalWrite::Commit {
             message: "x".to_owned(),
             skip_hooks: false,
+            files: 1,
         };
         assert!(commit.is_commit());
         assert_eq!(commit.read_again(), ReadAgain::Everything);

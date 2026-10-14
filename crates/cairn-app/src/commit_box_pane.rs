@@ -238,10 +238,17 @@ pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
             LocalWrite::Commit {
                 message: message.clone(),
                 skip_hooks: false,
+                files: staged_files(view),
             }
         };
         ask(view, submit, write, amending, message, false);
     }
+}
+
+/// How many files a commit asked now commits — what is staged, as the button counts it — for
+/// its name ("Commit 2 files", Fork's row).
+fn staged_files(view: View) -> usize {
+    drawn_changes(&view.local.state.peek()).len(ChangeList::Staged)
 }
 
 /// `write` asked, and drawn waiting until it starts.
@@ -555,6 +562,7 @@ pub fn skip_hooks(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
         (false, _) => LocalWrite::Commit {
             message: failed.message.clone(),
             skip_hooks: true,
+            files: staged_files(view),
         },
         (true, Some(confirmed)) => LocalWrite::Amend {
             confirmed,

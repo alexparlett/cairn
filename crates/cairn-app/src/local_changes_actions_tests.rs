@@ -797,13 +797,13 @@ fn a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered() {
     prompt.set(Some(PromptView {
         id: PromptId::for_tests(4),
         text: "Enter passphrase for key '/k': ".to_owned(),
-        asking: Some("Stage 1 file".to_owned()),
+        asking: Some("Stage 1 File".to_owned()),
     }));
     settle(&mut test);
     assert!(
         labels(&test)
             .iter()
-            .any(|t| t == "Stage 1 file is asking for a credential"),
+            .any(|t| t == "Stage 1 File is asking for a credential"),
         "{:?}",
         labels(&test)
     );
@@ -907,7 +907,7 @@ fn a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog() {
     );
     let shown = labels(&test);
     assert!(
-        shown.iter().any(|t| t == "Couldn't Stage 2 files"),
+        shown.iter().any(|t| t == "Couldn't Stage 2 Files"),
         "{shown:?}"
     );
     assert!(

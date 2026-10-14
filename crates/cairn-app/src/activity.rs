@@ -164,7 +164,7 @@ impl Activity {
                 failed: Some("fetch failed".to_owned()),
                 cancelled: Some("cancelled".to_owned()),
             },
-            ..Self::new(key, format!("Fetch {remote}"), cancellable)
+            ..Self::new(key, format!("Fetch '{remote}'"), cancellable)
         }
     }
 
@@ -845,7 +845,7 @@ mod tests {
                 failed: Some("stage failed".to_owned()),
                 cancelled: None,
             },
-            ..asked(stage, "Stage 1 file")
+            ..asked(stage, "Stage 1 File")
         });
         log.ran(
             ActivityKey::Write(stage),
@@ -892,7 +892,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Amend", "Stage 1 file"]
+            ["Amend", "Stage 1 File"]
         );
         let amended = &entries[0];
         assert_eq!(amended.status, ActivityStatus::Succeeded);
@@ -932,7 +932,7 @@ mod tests {
                 failed: Some("stage failed".to_owned()),
                 cancelled: None,
             },
-            ..asked(refused, "Stage 1 file")
+            ..asked(refused, "Stage 1 File")
         });
         log.write_ended(refused, &failed("git refused it.", Some("git add")), None);
         // An amend that failed points nowhere: nothing was replaced.
@@ -1013,7 +1013,7 @@ mod tests {
             let id = OperationId::for_tests(n as u64);
             log.write_started(&Asked {
                 prompt: Some(prompt.to_owned()),
-                ..asked(id, "Discard 1 file")
+                ..asked(id, "Discard Changes")
             });
             log.write_ended(id, ending, None);
             let (entries, _) = log.shown();
@@ -1170,7 +1170,7 @@ mod tests {
         let expected: Vec<String> = (12 - fit..12)
             .rev()
             .map(|n| format!("Commit {n}"))
-            .chain(std::iter::once("Fetch origin".to_owned()))
+            .chain(std::iter::once("Fetch 'origin'".to_owned()))
             .collect();
         assert_eq!(
             names, expected,
@@ -1245,6 +1245,7 @@ mod tests {
             results: crate::worker::LocalWrite::Commit {
                 message: "m".to_owned(),
                 skip_hooks: false,
+                files: 1,
             }
             .result_lines(),
             ..asked(id, "Commit")
@@ -1379,7 +1380,7 @@ mod tests {
     fn every_ending_is_one_of_four_words() {
         let mut log = ActivityLog::default();
         let refused = OperationId::for_tests(1);
-        log.write_started(&asked(refused, "Stage 1 file"));
+        log.write_started(&asked(refused, "Stage 1 File"));
         log.write_ended(
             refused,
             &WriteEnding::Refused {

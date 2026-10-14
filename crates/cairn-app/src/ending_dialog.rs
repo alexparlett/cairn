@@ -208,7 +208,7 @@ mod tests {
     /// path drawn raw.
     #[test]
     fn every_ending_has_exactly_one_home() {
-        let name = "Stage 2 files";
+        let name = "Stage 2 Files";
         assert_eq!(of_write(name, &WriteEnding::Done(done())), None);
         assert_eq!(
             of_write(
@@ -246,7 +246,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(stale.title, "Couldn't Stage 2 files");
+        assert_eq!(stale.title, "Couldn't Stage 2 Files");
         assert_eq!(
             stale.sentence,
             "a changed after its diff was read. Nothing was changed."
@@ -265,7 +265,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(beneath.title, "Couldn't Stage 2 files");
+        assert_eq!(beneath.title, "Couldn't Stage 2 Files");
         assert!(
             !beneath.sentence.contains(NOTHING_CHANGED),
             "{}",
@@ -273,7 +273,7 @@ mod tests {
         );
 
         let partly = of_write(
-            "Discard 3 files",
+            "Discard Changes",
             &WriteEnding::Incomplete {
                 done: done(),
                 kept: vec!["a\nb".to_owned(), "c".to_owned()],
@@ -282,7 +282,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(partly.title, "Couldn't Discard 3 files");
+        assert_eq!(partly.title, "Couldn't Discard Changes");
         assert_eq!(
             partly.files.as_deref().map(Vec::as_slice),
             Some([r#""a\nb""#.to_owned(), "c".to_owned()].as_slice())
@@ -325,8 +325,8 @@ mod tests {
     #[test]
     fn endings_wait_their_turn() {
         let mut endings = Endings::default();
-        endings.push(couldnt("Stage 1 file", "one.".to_owned()));
-        endings.push(couldnt("Stage 1 file", "two.".to_owned()));
+        endings.push(couldnt("Stage 1 File", "one.".to_owned()));
+        endings.push(couldnt("Stage 1 File", "two.".to_owned()));
         let first = endings.shown().map(|shown| shown.serial).unwrap();
         assert_eq!(
             endings.shown().map(|shown| shown.sentence.as_str()),

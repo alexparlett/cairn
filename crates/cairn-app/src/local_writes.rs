@@ -15,7 +15,7 @@ use crate::worker::{LocalWrite, OperationId, Request, ResultLines};
 pub struct Asked {
     pub id: OperationId,
     /// Its one name (`LocalWrite::name`, R14.2, rule 5), in Fork's imperative form: the status
-    /// box, a wait ("Waiting for Commit…"), the closing line, the "Couldn't <name>" dialog and
+    /// box, a wait ("Waiting for Commit 1 file…"), the closing line, the "Couldn't <name>" dialog and
     /// the activity popover all say this.
     pub name: String,
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
@@ -176,7 +176,7 @@ mod tests {
         writes.started(ids[0]);
         assert_eq!(
             writes.running().map(|asked| asked.name.as_str()),
-            Some("Stage 1 file")
+            Some("Stage 1 File")
         );
         assert!(writes.running_since().is_some());
         assert_eq!(
@@ -211,7 +211,7 @@ mod tests {
         writes.closing();
         assert_eq!(
             writes.closing_on().map(|asked| asked.name.as_str()),
-            Some("Stage 1 file")
+            Some("Stage 1 File")
         );
         writes.ended(id);
         assert_eq!(

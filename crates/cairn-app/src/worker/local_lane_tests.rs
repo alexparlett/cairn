@@ -317,6 +317,7 @@ fn commit() -> LocalWrite {
     LocalWrite::Commit {
         message: "the subject\n\nthe body\n".to_owned(),
         skip_hooks: false,
+        files: 1,
     }
 }
 
@@ -1001,6 +1002,7 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
         LocalWrite::Commit {
             message: "past the hook\n".to_owned(),
             skip_hooks: true,
+            files: 1,
         },
     );
     let seen = until_ended(&mut updates, skipped);
@@ -1315,7 +1317,7 @@ fn a_prompt_a_stages_hook_raises_is_shown_and_answered() {
     let (handle, mut updates, reply) = real_boundary(&fixture.path, (&home, &runtime));
 
     let id = ask(&handle, stage(&["a"]));
-    let seen = answer_next_prompt(&mut updates, &reply, "correct horse", "Stage 1 file");
+    let seen = answer_next_prompt(&mut updates, &reply, "correct horse", "Stage 1 File");
     assert!(
         lane_news(&seen).contains(&Lane::Started(id)),
         "the prompt came before the write started: {seen:?}"
@@ -1393,7 +1395,7 @@ fn a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs() {
     });
     until_pids(&stub, "fetches", 1);
     let id = ask(&handle, commit());
-    answer_next_prompt(&mut updates, &reply, "battery staple", "Commit");
+    answer_next_prompt(&mut updates, &reply, "battery staple", "Commit 1 file");
     let seen = until_ended(&mut updates, id);
     assert!(
         matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
@@ -1961,6 +1963,7 @@ fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
             LocalWrite::Commit {
                 message: message.to_owned(),
                 skip_hooks: false,
+                files: 1,
             },
         );
         let seen = until_ended(&mut updates, id);

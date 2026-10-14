@@ -443,7 +443,7 @@ line and the description when there is one (`compose_message`; git's own cleanup
 R6.1). The button needs a subject (Fork's rule) and something staged, or a merge, single
 cherry-pick or revert in progress, which it concludes. **While it is asked** the button's place
 says what it is doing (`cairn_ui::Busy`, R10.4, C5): queued behind another write, "Waiting for
-<that write's one name>…" ("Waiting for Stage 1 file…") — the one form every wait uses; running,
+<that write's one name>…" ("Waiting for Stage 1 File…") — the one form every wait uses; running,
 "Committing 0:03" (or "Amending"), redrawn each second by a task of its own line's scope
 (`Elapsed`, on `async-io`'s timer; freya drops a scope's tasks as it unmounts), with a Cancel that
 asks `Request::CancelWrite` for that commit's id — never for one still queued (R4.3); asked with

@@ -1054,6 +1054,16 @@ Evidence: `brief-feedback-and-activity.md` §3, `review-ux-activity-and-chrome.m
   people apart from its command, output and lock paths, and the engine's error text is never
   drawn as it stands; the engine says why once, and the view adds at most one tail, "Nothing
   was changed.", true of every refusal.
+  (Amended 2026-10-14, the coordinator's application of Fork observed first-hand,
+  `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`, at the merge bar:
+  the names are spelled as Fork's Activity Manager rows spell them — "Stage 1 File", "Stage 2
+  Files", "Unstage 2 Files" in title case; "Commit 1 file", "Commit 2 files" in lower case,
+  counting the files committed ("Commit" alone for a merge concluded with nothing staged, which
+  Fork was not observed doing); "Discard Changes", with no count; "Amend"; "Create branch
+  'topic'"; "Fetch 'origin'", the remote quoted. "Stage lines of a.rs", "Discard lines of a.rs"
+  and "Remove index.lock" keep Cairn's spelling: Fork draws no row for them (R12.1's named
+  deviation). Buttons and dialog titles — "Commit 3 Files", "Discard Changes in 3 Files" — are
+  captions, not names, and are unchanged. So N's refused write reads "Stage 2 Files".)
 - R14.3 A git failure opens Fork's Git Error dialog — its title, its sentence, `Error Details:`,
   the command and git's output — for every operation the person started. A refusal Cairn finds
   while running (a stale patch, a file changed since it was confirmed, `HEAD` moved before an

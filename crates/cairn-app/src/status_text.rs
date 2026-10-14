@@ -4,7 +4,7 @@ use crate::history_state::{Progress, Status};
 use crate::local_writes::LocalWrites;
 
 /// What the window says while it waits on a local write to close (staging-and-commit R4.9, R14.2):
-/// "Closing after Commit finishes. Close again to quit now." — the write by its one name, and
+/// "Closing after Commit 1 file finishes. Close again to quit now." — the write by its one name, and
 /// what a second close past the window's patience does: closes the window with the write still
 /// running, unwatched (the user's decision 12). `None` when it is not closing, or no write runs.
 pub fn closing_line(writes: &LocalWrites) -> Option<String> {
@@ -57,6 +57,7 @@ mod tests {
             &LocalWrite::Commit {
                 message: "m".to_owned(),
                 skip_hooks: false,
+                files: 1,
             },
         );
         writes.started(id);
@@ -64,7 +65,7 @@ mod tests {
         writes.closing();
         assert_eq!(
             closing_line(&writes).as_deref(),
-            Some("Closing after Commit finishes. Close again to quit now.")
+            Some("Closing after Commit 1 file finishes. Close again to quit now.")
         );
     }
 

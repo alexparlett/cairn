@@ -160,7 +160,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
             let mut endings = view.endings;
             endings.write().push(crate::ending_dialog::of_failure(
-                &format!("Fetch {remote}"),
+                &format!("Fetch '{remote}'"),
                 &failure,
             ));
             fetch.set(FetchStatus::Failed { remote });

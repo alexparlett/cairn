@@ -167,7 +167,8 @@ fn describe(write: &LocalWrite) -> String {
         LocalWrite::Commit {
             message,
             skip_hooks,
-        } => format!("commit {message:?} skip={skip_hooks}"),
+            files,
+        } => format!("commit {message:?} skip={skip_hooks} files={files}"),
         LocalWrite::Amend {
             confirmed,
             message,
@@ -617,7 +618,7 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     let asked = writes(&submitted);
     assert_eq!(
         asked.iter().map(|(_, w)| w.as_str()).collect::<Vec<_>>(),
-        ["commit \"Fix the parser\\n\\nTwice.\" skip=false"]
+        ["commit \"Fix the parser\\n\\nTwice.\" skip=false files=1"]
     );
     let id = asked[0].0;
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
@@ -658,7 +659,7 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     assert_eq!(asked.len(), 2);
     assert_eq!(
         asked[1].1,
-        "commit \"Fix the parser\\n\\nTwice.\" skip=true"
+        "commit \"Fix the parser\\n\\nTwice.\" skip=true files=1"
     );
     let skipped = asked[1].0;
     apply(
@@ -679,7 +680,7 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     let asked = writes(&submitted);
     assert_eq!(asked.len(), 3);
     assert_eq!(
-        asked[2].1, "commit \"Next\" skip=false",
+        asked[2].1, "commit \"Next\" skip=false files=1",
         "the skip outlived its commit"
     );
 }
@@ -846,7 +847,7 @@ fn cancel_reaches_only_the_running_commit() {
     click(&mut test, "Commit 1 File");
     let commit = writes(&submitted)[1].0;
     assert!(
-        drawn(&test, "Waiting for Stage 1 file…"),
+        drawn(&test, "Waiting for Stage 1 File…"),
         "{:?}",
         labels(&test)
     );
@@ -949,7 +950,7 @@ fn a_merge_fills_the_draft_with_the_cleaned_message_and_disables_amend() {
             .iter()
             .map(|(_, w)| w.clone())
             .collect::<Vec<_>>(),
-        [format!("commit {cleaned:?} skip=false")]
+        [format!("commit {cleaned:?} skip=false files=0")]
     );
 }
 
@@ -1024,7 +1025,7 @@ fn during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it() {
             .iter()
             .map(|(_, w)| w.clone())
             .collect::<Vec<_>>(),
-        ["commit \"The picked change\" skip=false"]
+        ["commit \"The picked change\" skip=false files=1"]
     );
 }
 

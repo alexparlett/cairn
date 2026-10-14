@@ -450,7 +450,7 @@ fn the_new_branch_chord_opens_create_branch_at_head() {
 
 /// The user's decision D (2026-10-09), worded by R14.1 and R14.2 (rule 5, one name per
 /// operation): while the name's check waits behind a running write on the local lane, the
-/// dialog names that write beside its buttons by its one name ("Waiting for Commit…"), and says
+/// dialog names that write beside its buttons by its one name ("Waiting for Commit 1 file…"), and says
 /// nothing more once
 /// the answer for the text shown arrives, or while no write runs. Caught by: the wait left
 /// unsaid, another write named, or the line kept after the answer.
@@ -491,14 +491,15 @@ fn a_name_check_waiting_behind_a_write_says_which_write() {
             LocalWrite::Commit {
                 message: "m".to_owned(),
                 skip_hooks: false,
+                files: 1,
             },
-            "Waiting for Commit…",
+            "Waiting for Commit 1 file…",
         ),
         (
             LocalWrite::StageFiles {
                 paths: vec![RepoPath::from("a.rs")],
             },
-            "Waiting for Stage 1 file…",
+            "Waiting for Stage 1 File…",
         ),
         (
             LocalWrite::CreateBranchAndCheckout {

@@ -1264,13 +1264,17 @@ while it is open (`a_streamed_line_never_draws_the_window_again`, a commit asked
 commit box). A fetch's progress draws the root again by design: the status box shows its latest
 line.
 
-**An operation's name** is Fork's imperative form, as its Activity Manager names one ("Fetch
-origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7), and the only wording of
-it: the status box, a wait ("Waiting for Commit…"), the closing banner, the "Couldn't <name>"
-dialog, a prompt's title and the popover all say it. `LocalWrite::name` — "Stage
-1 file", "Stage lines of a.rs", "Unstage 2 files", "Commit", "Create branch 'topic'" — and, for a
-destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "Discard lines of
-a.rs", "Amend", "Remove index.lock"). A write ended before it started keeps the name it was
+**An operation's name** is spelled as Fork's Activity Manager row names it, observed
+first-hand (`fork-activity-result-lines-2026-10-11.md`; PRD R14.2, amended 2026-10-14), and is
+the only wording of it: the status box, a wait ("Waiting for Commit 1 file…"), the closing
+banner, the "Couldn't <name>" dialog, a prompt's title and the popover all say it.
+`LocalWrite::name` — "Stage 1 File", "Unstage 2 Files" (title case), "Commit 2 files" (lower
+case, the count committed, which the commit box hands the write; "Commit" alone for a merge
+concluded with nothing staged), "Create branch 'topic'", and "Stage lines of a.rs" where Fork
+draws no row — and, for a destructive write, its confirmation's (`Consequence::name`: "Discard
+Changes", with no count, "Discard lines of a.rs", "Amend", "Remove index.lock"); a fetch is
+"Fetch 'origin'". Pinned by `each_write_is_named_in_forks_imperative_form` and
+`each_operation_is_named_in_forks_imperative_form`. A write ended before it started keeps the name it was
 asked under; "A write" is said only of one the window never asked.
 
 **Output on its way to the window** (phase 05's QA item 3, phase 12's QA #15 and #16): the

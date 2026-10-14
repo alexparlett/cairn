@@ -425,7 +425,7 @@ never enters `cairn-git` and never enters application state.
 - **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
   `fetch_state.rs`). A "Fetch <remote>" button for the default remote, greyed from the press
   (`FetchStatus::Starting`) until the fetch ends (`fetch_is_greyed_while_a_fetch_is_in_flight`);
-  its progress in the title bar's status box — "Fetch origin" and git's latest progress line,
+  its progress in the title bar's status box — "Fetch 'origin'" and git's latest progress line,
   once it has run 250 ms (`the_status_box_is_handed_what_runs_by_its_one_name`,
   `the_status_box_shows_an_operation_only_once_it_has_run_250_ms`); its failure in Fork's Git
   Error dialog, the command and git's whole output with Fork's sentence, or "Couldn't Fetch

@@ -1532,7 +1532,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id: crate::worker::PromptId::for_tests(2),
                 text: "Enter passphrase for key '/k': ".to_owned(),
-                asking: Some("Stage 1 file".to_owned()),
+                asking: Some("Stage 1 File".to_owned()),
             }),
         );
         let id = crate::worker::OperationId::for_tests(11);
@@ -1549,7 +1549,7 @@ pub(crate) mod tests {
         assert!(
             shown
                 .iter()
-                .any(|t| t == "Stage 1 file is asking for a credential"),
+                .any(|t| t == "Stage 1 File is asking for a credential"),
             "the dialog does not name the write: {shown:?}"
         );
         assert!(
@@ -1563,7 +1563,7 @@ pub(crate) mod tests {
         assert!(
             shown
                 .iter()
-                .any(|t| t == "Closing after Stage 1 file finishes. Close again to quit now."),
+                .any(|t| t == "Closing after Stage 1 File finishes. Close again to quit now."),
             "the close does not say which write it waits on: {shown:?}"
         );
     }
@@ -1601,8 +1601,8 @@ pub(crate) mod tests {
         assert_eq!(
             shown,
             [
-                "Stage 1 file · 1 waiting",
-                "Fetch origin  Receiving objects: 40%"
+                "Stage 1 File · 1 waiting",
+                "Fetch 'origin'  Receiving objects: 40%"
             ]
         );
     }

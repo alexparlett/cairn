@@ -400,9 +400,9 @@ impl Consequence {
     }
 
     /// What the operation is called where its run is listed — the activity popover — in Fork's
-    /// imperative form, as its Activity Manager names one ("Fetch origin", "Create branch
-    /// 'develop'"; `fork-staging-and-commit.md` §7): "Discard lines of a.rs", "Discard 3
-    /// files", "Amend", "Create branch 'topic'", "Remove index.lock".
+    /// imperative form, as its Activity Manager names one ("Fetch 'origin'", "Create branch
+    /// 'side'"; `fork-activity-result-lines-2026-10-11.md`): "Discard lines of a.rs", "Discard
+    /// Changes", "Amend", "Create branch 'topic'", "Remove index.lock".
     pub fn name(&self) -> String {
         match self {
             Self::DiscardLines {
@@ -416,9 +416,8 @@ impl Consequence {
                 chunk: _,
                 patch: _,
             } => format!("Discard lines of {}", quoted(path.as_bytes())),
-            Self::DiscardFiles { files } => {
-                format!("Discard {}", counted(files.len(), "file", "files"))
-            }
+            // Fork's row names no count (§2), unlike its dialog's title.
+            Self::DiscardFiles { files: _ } => "Discard Changes".to_owned(),
             Self::Amend { .. } => "Amend".to_owned(),
             Self::CheckoutDiscarding {
                 branch,
@@ -1363,7 +1362,9 @@ mod tests {
     }
 
     /// Phase 11's QA: each operation's name, in Fork's imperative form, as the activity
-    /// popover lists it; a path quoted as git quotes it, so a name cannot rewrite the list.
+    /// popover lists it; a path quoted as git quotes it, so a name cannot rewrite the list. A
+    /// discard of files is Fork's "Discard Changes", with no count, however many files
+    /// (`fork-activity-result-lines-2026-10-11.md` §2; merge bar, phase 21, item 15).
     #[test]
     fn each_operation_is_named_in_forks_imperative_form() {
         assert_eq!(
@@ -1377,11 +1378,11 @@ mod tests {
         let one = Consequence::DiscardFiles {
             files: vec![modified("a.rs", Some(1))],
         };
-        assert_eq!(one.name(), "Discard 1 file");
+        assert_eq!(one.name(), "Discard Changes");
         let two = Consequence::DiscardFiles {
             files: vec![modified("a.rs", Some(1)), modified("b.rs", None)],
         };
-        assert_eq!(two.name(), "Discard 2 files");
+        assert_eq!(two.name(), "Discard Changes");
         assert_eq!(checkout().name(), "Create branch 'topic'");
         assert_eq!(
             lock("/r/.git/index.lock", Duration::ZERO, 0).name(),

@@ -22,12 +22,12 @@ use freya::prelude::*;
 use freya_testing::TestingRunner;
 
 use crate::diff::state::DiffState;
+use crate::history::ref_find::{FIND_PAGE_ROWS, finding_text, no_commit_text, not_in_graph_text};
 use crate::history::state::Progress;
 use crate::local_changes::pane::READING_STATUS;
 use crate::operations::fetch::FetchStatus;
 use crate::refresh::state::RefreshState;
 use crate::session::{self, Worker};
-use crate::sidebar::ref_find::{FIND_PAGE_ROWS, finding_text, no_commit_text, not_in_graph_text};
 use crate::sidebar::state::{SIDEBAR_WIDTH, SidebarView};
 use crate::window::{PANE_HEIGHT, View, window};
 use crate::worker::{Comparison, Request, Update};

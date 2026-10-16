@@ -470,7 +470,7 @@ fn find_through_the_boundary(
     let started = Instant::now();
     handle.submit(Request::FindRow {
         target,
-        rows: crate::sidebar::ref_find::FIND_PAGE_ROWS,
+        rows: crate::history::ref_find::FIND_PAGE_ROWS,
     });
     let deadline = Instant::now() + Duration::from_secs(600);
     let found = loop {
@@ -617,7 +617,7 @@ fn measures_a_find_through_the_boundary() {
     let began = Instant::now();
     handle.submit(Request::FindRow {
         target,
-        rows: crate::sidebar::ref_find::FIND_PAGE_ROWS,
+        rows: crate::history::ref_find::FIND_PAGE_ROWS,
     });
     while began.elapsed() < halfway {
         if let Some(Update::Rows { rows, .. }) =

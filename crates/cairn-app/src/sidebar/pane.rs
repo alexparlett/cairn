@@ -9,7 +9,7 @@ use cairn_model::{LocalChanges, SidebarRow, WorkingTreeStatus};
 use cairn_ui::{MainView, Sidebar};
 use freya::prelude::*;
 
-use crate::sidebar::ref_find;
+use crate::history::ref_find;
 use crate::window::View;
 use crate::worker::{Refreshed, Request};
 

@@ -748,7 +748,7 @@ impl Component for ActivityLayer {
 /// The way back from an amend (R12.1, F4): Show Lost Commits turned on, if it is not, and the
 /// replaced commit found in the history and selected, as a ref's press finds its row.
 fn show_in_lost_commits(commit: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
-    crate::sidebar::ref_find::find_commit(commit, commit.short().as_str().to_owned(), view, submit);
+    crate::history::ref_find::find_commit(commit, commit.short().as_str().to_owned(), view, submit);
     // After the find: the reopen asks it again of the walk that draws lost commits.
     if !*view.show_lost.peek() {
         crate::history::lost_commits::toggle(view, submit);

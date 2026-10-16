@@ -31,5 +31,5 @@ pub fn toggle(view: View, submit: Option<&dyn Fn(Request)>) {
     showing.set(lost);
     crate::session::reopen_history(view.rows, view.progress, lost, submit);
     // A find looking in the history it replaced looks in the new one.
-    crate::sidebar::ref_find::reopened(view, Some(submit));
+    crate::history::ref_find::reopened(view, Some(submit));
 }

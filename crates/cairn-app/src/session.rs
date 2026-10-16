@@ -60,11 +60,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             };
             progress.write().appended(widest, complete, loaded, held);
             // A find in the sidebar looks through the rows that arrived (R8.5).
-            crate::sidebar::ref_find::pages_arrived(view, Some(worker.submit));
+            crate::history::ref_find::pages_arrived(view, Some(worker.submit));
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
-            crate::sidebar::ref_find::failed(view);
+            crate::history::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
@@ -265,7 +265,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if reopen && !worker.closing {
                 reopen_history(rows, progress, *view.show_lost.peek(), worker.submit);
                 // A find looking in the history it replaced looks in the new one.
-                crate::sidebar::ref_find::reopened(view, Some(worker.submit));
+                crate::history::ref_find::reopened(view, Some(worker.submit));
             }
         }
         Update::AheadBehind { counts } => {

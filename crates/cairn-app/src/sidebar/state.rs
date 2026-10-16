@@ -17,7 +17,7 @@ use cairn_model::{Disclosure, HeadState, RefsSnapshot, SidebarRow, SidebarSectio
 use cairn_ui::{MainView, SidebarRefs, SidebarTarget, current_branch};
 use freya::prelude::*;
 
-use crate::sidebar::ref_find::Find;
+use crate::history::ref_find::Find;
 use crate::worker::{Request, Retired};
 
 /// The sidebar's share of the window, in pixels, until it is dragged.

@@ -1663,7 +1663,7 @@ runs on the UI thread:
    The window, told as the first close is asked (`Closing::when_requested`),
    says in its closing banner which write it waits on, by its one name, and that
    closing again quits now: "Closing after Commit finishes. Close again to quit
-   now." (`status_text::closing_line`).
+   now." (`local_writes::closing_line`).
    Then it calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
    `CLOSE_BOUND` for their reaps. Past the fetch's cancel the registry is the
@@ -1733,7 +1733,7 @@ Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
 commit's `git` and its hook alive, until the test releases it; then its ending,
 the queued write `NotRun`, and the stream's end), `the_window_is_told_once_as_the_first_close_is_asked`
 (`closing.rs`), `the_window_names_the_write_it_waits_on_and_its_prompt` (`window.rs`,
-headless) and `the_closing_line_names_the_write_by_its_one_name` (`history/status_text.rs`).
+headless) and `the_closing_line_names_the_write_by_its_one_name` (`operations/local_writes.rs`).
 
 What a close costs is the registry's: a write that outlasts the grace is
 `SIGKILL`ed and may strand its lock files; a cancel opens nothing, so a

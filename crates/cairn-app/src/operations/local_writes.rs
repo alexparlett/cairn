@@ -127,6 +127,19 @@ impl LocalWrites {
     }
 }
 
+/// What the window says while it waits on a local write to close (staging-and-commit R4.9, R14.2):
+/// "Closing after Commit 1 file finishes. Close again to quit now." — the write by its one name, and
+/// what a second close past the window's patience does: closes the window with the write still
+/// running, unwatched (the user's decision 12). `None` when it is not closing, or no write runs.
+pub fn closing_line(writes: &LocalWrites) -> Option<String> {
+    writes.closing_on().map(|asked| {
+        format!(
+            "Closing after {} finishes. Close again to quit now.",
+            asked.name
+        )
+    })
+}
+
 /// Asks for `write`: a fresh id, the write kept as queued, and the request submitted — one
 /// atomic increment and one send, so nothing here waits.
 pub fn ask(writes: &mut LocalWrites, submit: &dyn Fn(Request), write: LocalWrite) -> OperationId {
@@ -218,6 +231,32 @@ mod tests {
             writes.closing_on(),
             None,
             "waiting on a write that has ended"
+        );
+    }
+
+    /// C11 with the redesign's words (R4.9, R14.2): the closing line names the write by its one
+    /// name, only once the window has asked to close and only while it runs. Caught by: the old
+    /// phrase ("Finishing commit…"), or a line while nothing is waited on.
+    #[test]
+    fn the_closing_line_names_the_write_by_its_one_name() {
+        use crate::worker::{LocalWrite, OperationId};
+        let mut writes = LocalWrites::default();
+        assert_eq!(closing_line(&writes), None);
+        let id = OperationId::for_tests(3);
+        writes.asked(
+            id,
+            &LocalWrite::Commit {
+                message: "m".to_owned(),
+                skip_hooks: false,
+                files: 1,
+            },
+        );
+        writes.started(id);
+        assert_eq!(closing_line(&writes), None, "not closing");
+        writes.closing();
+        assert_eq!(
+            closing_line(&writes).as_deref(),
+            Some("Closing after Commit 1 file finishes. Close again to quit now.")
         );
     }
 }

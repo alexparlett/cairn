@@ -82,7 +82,7 @@ The list is a `VirtualScrollView` over the rows, so it builds one viewport whate
 snapshot holds: 50,000 refs with every folder open, or one folder of 10,000 branches
 opened, build only the rows on screen (twins below).
 
-## Pressing an entry (`crates/cairn-app/src/sidebar/ref_find.rs`)
+## Pressing an entry (`crates/cairn-app/src/history/ref_find.rs`)
 
 A section's or folder's row opens or closes it and asks the rows again. A ref, a detached
 `HEAD` or a stash selects its row and brings it into view (`selection::choose`,

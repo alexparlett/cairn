@@ -13,6 +13,7 @@ use freya::prelude::*;
 
 use crate::detail::pane::DetailPane;
 use crate::diff::state::DiffState;
+use crate::history::ref_find;
 use crate::history::selection::Pair;
 use crate::history::state::{Progress, Status};
 use crate::history::{selection, status_text};
@@ -21,10 +22,9 @@ use crate::local_changes::state::LocalChangesView;
 use crate::modal::Modal;
 use crate::operations::confirming::Confirming;
 use crate::operations::fetch::{FetchStatus, PromptView};
-use crate::operations::local_writes::LocalWrites;
+use crate::operations::local_writes::{self, LocalWrites};
 use crate::refresh::state::RefreshState;
 use crate::sidebar::pane::SidebarPane;
-use crate::sidebar::ref_find;
 use crate::sidebar::state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, shortcuts};
@@ -135,7 +135,7 @@ pub fn window(
     let prompt = view.prompt.read().clone();
     let confirming = view.confirming.read().clone();
     // The one banner about the window: which write it waits on to close (R4.9, R14.6).
-    let closing_on = status_text::closing_line(&view.writes.read());
+    let closing_on = local_writes::closing_line(&view.writes.read());
     let hearing = submit.clone();
     let erring = submit.clone();
     let ending = submit.clone();

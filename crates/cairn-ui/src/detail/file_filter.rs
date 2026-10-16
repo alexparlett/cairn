@@ -1,5 +1,5 @@
-//! The Changes tab's filter over a change set's files (PRD R5.4): which files a filter's text
-//! leaves in the list, and the list's rows as the files they show.
+//! The Changes tab's filter over a change set's files: which files a filter's text leaves in
+//! the list, and the list's rows as the files they show.
 //!
 //! **A list operation, run where it may take its time.** Matching is a pass over every path,
 //! and a commit can touch 55,184 of them, so `cairn_model::ChangeSet::files_matching` is not
@@ -54,8 +54,8 @@ impl ShownFiles {
     }
 
     /// The row that shows the first file at or after the change set's file `index` — the
-    /// number of rows when none does: where a file the list no longer shows had its place
-    /// (staging-and-commit R8.3, L5). A search, like [`Self::row_of`]; none while `Waiting`.
+    /// number of rows when none does: where a file the list no longer shows had its place. A
+    /// search, like [`Self::row_of`]; none while `Waiting`.
     pub fn row_from(&self, index: usize) -> usize {
         match self {
             Self::All => index,

@@ -89,8 +89,8 @@ fn generated() -> String {
     )
 }
 
-/// PRD product rule: the dialog names the remote and shows the URL git is
-/// authenticating against — the prompt text itself, not a stored nickname.
+/// The dialog names the remote and shows the URL git is authenticating
+/// against — the prompt text itself, not a stored nickname.
 #[test]
 fn a_password_prompt_names_the_remote_and_the_url_and_masks_what_is_typed() {
     let text: &'static str = Box::leak(format!("Password for '{URL}': ").into_boxed_str());

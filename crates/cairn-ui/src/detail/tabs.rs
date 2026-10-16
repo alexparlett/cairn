@@ -1,6 +1,6 @@
-//! The detail pane's strip: its tabs, and the control that collapses the pane (PRD R5.1,
-//! R5.2). Fork draws the tabs as text with no count on either (decision L9); the strip stays
-//! when the pane collapses, so the pane can be opened again from where it went.
+//! The detail pane's strip: its tabs, and the control that collapses the pane. Fork draws
+//! the tabs as text with no count on either; the strip stays when the pane collapses, so
+//! the pane can be opened again from where it went.
 
 use freya::prelude::*;
 
@@ -9,7 +9,7 @@ pub const DETAIL_STRIP_HEIGHT: f32 = 30.0;
 
 const TAB_FONT_SIZE: f32 = 12.0;
 
-/// The detail pane's tabs. Commit is the default (R5.2); a File Tree tab is issue #31.
+/// The detail pane's tabs. Commit is the default; a File Tree tab is issue #31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailTab {
     #[default]
@@ -60,7 +60,7 @@ impl DetailTabs {
     }
 
     /// A tab that cannot be shown now, drawn disabled and pressed for nothing: the Commit tab
-    /// while two commits are selected (R7.3; Fork's Windows build disables it, Finding 7).
+    /// while two commits are selected, as Fork's Windows build disables it.
     pub fn unavailable(mut self, unavailable: Option<DetailTab>) -> Self {
         self.unavailable = unavailable;
         self

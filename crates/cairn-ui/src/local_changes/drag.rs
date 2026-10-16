@@ -1,5 +1,5 @@
-//! A drag of paths from one of Local Changes' lists to the other (staging-and-commit R8.2):
-//! Fork stages a file dragged from Unstaged into Staged and unstages one dragged back.
+//! A drag of paths from one of Local Changes' lists to the other: Fork stages a file dragged
+//! from Unstaged into Staged and unstages one dragged back.
 //!
 //! **Tracked by the lists, never by a row.** A row is unmounted by its virtual list as it
 //! scrolls out, or replaced when a status arrives, and its listeners go with it; so the press

@@ -1,22 +1,21 @@
-//! Fork's `Git Error` dialog (staging-and-commit R10.5, R14.3, C4, C28), and the same dialog
-//! titled "Couldn't <name>" for a refusal found while an operation ran — the one home of every
-//! ending that is not a success or a cancel (rule 4).
+//! Fork's `Git Error` dialog, and the same dialog titled "Couldn't <name>" for a refusal found
+//! while an operation ran — the one home of every ending that is not a success or a cancel.
 //!
-//! A git failure draws Fork's title and sentence (or the ending's own, for a commit git made and
-//! then failed), `Error Details:`, the command and git's output — a hook's lines among it, ANSI
-//! sequences already stripped by the window. A refusal draws its one sentence and no Error
-//! Details, since no git failed; a discard that left files as they were says so in one sentence,
-//! the files behind Show files. The footer, in the platform's order, holds Close and, where they
-//! are offered, `Skip pre-commit hooks and commit` (a failed commit or amend) and `Remove
-//! index.lock…` (a write git refused for the lock, R12.4, observed `lk2`), one button component
-//! for all ([`crate::dialogs::answer_button`]), focus on Close so a Return pressed by habit never skips
+//! A git failure draws Fork's title and sentence (or the ending's own, for a commit git made
+//! and then failed), `Error Details:`, the command and git's output — a hook's lines among it,
+//! ANSI sequences already stripped by the window. A refusal draws its one sentence and no Error
+//! Details, since no git failed; a discard that left files as they were says so in one
+//! sentence, the files behind Show files. The footer, in the platform's order, holds Close and,
+//! where they are offered, `Skip pre-commit hooks and commit` (a failed commit or amend) and
+//! `Remove index.lock…` (a write git refused for the lock), one button component for all
+//! ([`crate::dialogs::answer_button`]), focus on Close so a Return pressed by habit never skips
 //! the hooks or removes a lock. Each answers once; what it runs is the window's. No prompt text
-//! is drawn here, and no token is built. Escape and a press outside close it, as in Fork (Tracker
-//! #2173).
+//! is drawn here, and no token is built. Escape and a press outside close it, as in Fork
+//! (Tracker #2173).
 //!
 //! The output and the files can be as long as git makes them, so each is drawn through a
 //! virtualizing view — one row per line, only the rows in view built — never a `ScrollView`; the
-//! output opens at its end, where a failing hook says why (Fork's Windows 2.15).
+//! output opens at its end, where a failing hook says why, as Fork for Windows opens it.
 
 use std::rc::Rc;
 
@@ -34,11 +33,11 @@ pub const GIT_ERROR_TITLE: &str = "Git Error";
 pub const GIT_ERROR_TEXT: &str = "An unexpected error occurred while performing the git request.";
 pub const ERROR_DETAILS: &str = "Error Details:";
 pub const CLOSE_CAPTION: &str = "Close";
-/// The lock's removal offered beside Close where git could not create `index.lock` (R12.4, Fork
-/// observed `lk2`), and on the leftover lock's banner.
+/// The lock's removal offered beside Close where git could not create `index.lock`, as Fork
+/// offers it, and on the leftover lock's banner.
 pub const REMOVE_LOCK_CAPTION: &str = "Remove index.lock…";
 
-/// The title of a refusal found while `name` ran (F2): "Couldn't Discard Changes".
+/// The title of a refusal found while `name` ran: "Couldn't Discard Changes".
 pub fn couldnt_title(name: &str) -> String {
     format!("Couldn't {name}")
 }
@@ -89,7 +88,7 @@ impl GitErrorDialog {
     }
 
     /// "Couldn't <name>": a refusal found while `name` ran, in one `sentence`, with no Error
-    /// Details (F2).
+    /// Details.
     pub fn couldnt(serial: u64, name: &str, sentence: impl Into<String>) -> Self {
         Self {
             title: couldnt_title(name),
@@ -123,7 +122,7 @@ impl GitErrorDialog {
         self
     }
 
-    /// Whether the skip is offered: on every failure whose hooks were not skipped already (C4).
+    /// Whether the skip is offered: on every failure whose hooks were not skipped already.
     pub fn skip(mut self, offered: bool) -> Self {
         self.skip = offered;
         self
@@ -135,7 +134,7 @@ impl GitErrorDialog {
         self
     }
 
-    /// Whether `Remove index.lock…` is offered: git could not create the lock (R12.4).
+    /// Whether `Remove index.lock…` is offered: git could not create the lock.
     pub fn remove_lock(mut self, offered: bool) -> Self {
         self.remove_lock = offered;
         self
@@ -154,8 +153,7 @@ impl GitErrorDialog {
         self
     }
 
-    /// Which platform's button order to draw in (the user's decision E): this build's own
-    /// unless a test names another.
+    /// Which platform's button order to draw in: this build's own unless a test names another.
     pub fn platform(mut self, platform: Os) -> Self {
         self.platform = platform;
         self
@@ -317,12 +315,12 @@ impl Component for GitErrorDialog {
             ));
         }
         let closing = close.clone();
-        // In the platform's order (the user's decision E), Close in Cancel's place.
+        // In the platform's order, Close in Cancel's place.
         let buttons = PopupButtons::new().children(ordered(
             self.platform,
             actions,
-            // Opened on Close, so a Return or Space pressed by habit never skips the hooks nor
-            // removes a lock (the user's decision E keeps focus on the safe answer).
+            // Opened on Close, the safe answer, so a Return or Space pressed by habit never
+            // skips the hooks nor removes a lock.
             answer(
                 self.serial,
                 close_id,
@@ -344,7 +342,7 @@ impl Component for GitErrorDialog {
                     .child(PopupTitle::new(self.title.clone()))
                     .child(
                         PopupContent::new()
-                            // Wrapped, never cut (rule 6).
+                            // Wrapped, never cut.
                             .child(
                                 label()
                                     .text(self.sentence.clone())

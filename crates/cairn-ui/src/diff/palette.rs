@@ -1,20 +1,18 @@
-//! The diff view's colours and typeface (PRD R6.5, R6.6), as named tokens: a component
-//! reads these, never a literal at the call site.
+//! The diff view's colours and typeface, as named tokens: a component reads these, never a
+//! literal at the call site.
 //!
-//! **Where each colour comes from.** Fork's measured dark values
-//! (`docs/research/diff-engine/fork-detail-and-diff-ui.md`, Finding 25, Windows 2023-2026,
-//! which Mac 2025 matches) — GitHub's diff colours, the vendor says — drawn on Fork's ground,
-//! `#282828`. Cairn's ground is darker: Freya's dark theme paints `rgb(20, 20, 20)`, which
-//! is what the window and the diff view stand on. So each Fork colour is **retuned** to
-//! Cairn's ground by keeping its offset from Fork's ground, channel by channel
-//! ([`retuned`]): a removed line is as much redder than the ground here as it is in Fork,
-//! and the text keeps Fork's own value, which is lighter against a darker ground. The
-//! retuning is computed, not hand-picked, so the source value stays readable in the code.
+//! **Where each colour comes from.** Fork's measured dark values (Windows, which Mac matches) —
+//! GitHub's diff colours, the vendor says — drawn on Fork's ground, `#282828`. Cairn's ground
+//! is darker: Freya's dark theme paints `rgb(20, 20, 20)`, which is what the window and the
+//! diff view stand on. So each Fork colour is **retuned** to Cairn's ground by keeping its
+//! offset from Fork's ground, channel by channel ([`retuned`]): a removed line is as much
+//! redder than the ground here as it is in Fork, and the text keeps Fork's own value, which is
+//! lighter against a darker ground. The retuning is computed, not hand-picked, so the source
+//! value stays readable in the code.
 //!
-//! **Where colour carries the meaning.** There is no marker column (the user's decision of
-//! 2026-10-04, as Fork's default): in unified the blank gutter of the side a line is not on
-//! still says what the tint says; side by side a changed pair is told from context by its
-//! tint alone, as in Fork — a stated residual of that decision.
+//! **Where colour carries the meaning.** There is no marker column, as Fork's default has
+//! none: in unified the blank gutter of the side a line is not on still says what the tint
+//! says; side by side a changed pair is told from context by its tint alone, as in Fork.
 
 use freya::prelude::Color;
 
@@ -42,24 +40,24 @@ pub const DIFF_MUTED: Color = rgb((0xA0, 0xA0, 0xA0));
 /// The line between the line-number gutter and the text: Fork's `#4B4B4B`, retuned.
 pub const GUTTER_SEPARATOR: Color = retuned((0x4B, 0x4B, 0x4B));
 /// A side-by-side column's filler, where its side has no line beside the other's: Fork's
-/// grey filler rows, `#424242` (Finding 25, Windows), retuned.
+/// grey filler rows, `#424242` (Windows), retuned.
 pub const FILLER: Color = retuned((0x42, 0x42, 0x42));
 /// The header bar over the diff: Fork's `#333333`, retuned.
 pub const HEADER_BAR: Color = retuned((0x33, 0x33, 0x33));
 /// The change last moved to with previous or next change: Fork outlines its active chunk
-/// in the system accent (Finding 25, Mac, `#126CFB`); Cairn has no system accent to read, so
+/// in the system accent (Mac, `#126CFB`); Cairn has no system accent to read, so
 /// its accent is the dark theme's `text_highlight`, `rgb(96, 145, 224)` — Cairn's choice —
 /// which the detail pane's strip already marks its tab with and the diff bar lights an
 /// active toggle with. A copy, so a row reads no theme; pinned equal to the theme's.
 pub const CURRENT_CHANGE: Color = rgb((96, 145, 224));
 
-/// The diff's typeface: IBM Plex Mono, embedded by the application with its licence (L16).
+/// The diff's typeface: IBM Plex Mono, embedded by the application with its licence.
 /// Diff text, ids and paths are drawn in it.
 pub const DIFF_FONT_FAMILY: &str = "IBM Plex Mono";
 /// The diff's text size: Fork's, measured. Fork's Mac default diff font is Menlo at 11 pt
-/// (Finding 17: `Menlo-Regular - 11.0` in two screenshots four years apart) with a 6.6 pt
-/// advance (Finding 24); a point on macOS is a logical pixel, and IBM Plex Mono's 0.6 em
-/// advance at 11 px is the same 6.6. Fork's Windows size is not established.
+/// (`Menlo-Regular - 11.0` in two screenshots four years apart) with a 6.6 pt advance; a
+/// point on macOS is a logical pixel, and IBM Plex Mono's 0.6 em advance at 11 px is the same
+/// 6.6. Fork's Windows size is not established.
 pub const DIFF_FONT_SIZE: f32 = 11.0;
 /// IBM Plex Mono's advance, as a fraction of its size: every glyph is 600 of 1000 units
 /// wide (read from the font's `hmtx` table).
@@ -116,8 +114,8 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
-    /// The retuning is the rule the module states, on the values Finding 25 measured.
-    /// Caught by: a token typed in by hand that no longer follows from Fork's value.
+    /// The retuning is the rule the module states, on Fork's measured values. Caught by: a
+    /// token typed in by hand that does not follow from Fork's value.
     #[test]
     fn each_tint_is_forks_measured_value_moved_to_cairns_ground() {
         assert_eq!(REMOVED_TINT, Color::from_rgb(79, 43, 42));

@@ -1,7 +1,7 @@
-//! Every dialog's buttons in its platform's order (the user's decision E, 2026-10-09): on Linux
-//! the primary first and Cancel last, as Fork for Windows; on macOS Cancel first and the primary
-//! last, as Fork for macOS — the confirmation, the Git Error dialog, Create Branch and the
-//! credential prompt alike — and a destructive confirmation's focus on Cancel on both.
+//! Every dialog's buttons in its platform's order: on Linux the primary first and Cancel last,
+//! as Fork for Windows; on macOS Cancel first and the primary last, as Fork for macOS — the
+//! confirmation, the Git Error dialog, Create Branch and the credential prompt alike — and a
+//! destructive confirmation's focus on Cancel on both.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -164,12 +164,11 @@ fn press_on_open(test: &mut TestingRunner, key: Key) {
     }
 }
 
-/// The user's decision E keeps focus on the safe answer of anything risky, whatever the order
-/// (phase 10's review): a freshly opened host-key prompt and a Git Error dialog offering the
-/// hooks' skip start on Cancel and Close, so Return or Space answers safely on both platforms;
-/// Create Branch starts in its name field, so Space types. Caught by: focus left to the
-/// toolkit — behind a dialog that is not modal, on a modal's frame, or on the first button,
-/// the primary on Linux — or on the risky answer.
+/// Focus starts on the safe answer of anything risky, whatever the order: a freshly opened
+/// host-key prompt and a Git Error dialog offering the hooks' skip start on Cancel and Close,
+/// so Return or Space answers safely on both platforms; Create Branch starts in its name field,
+/// so Space types. Caught by: focus left to the toolkit — behind a dialog that is not modal, on
+/// a modal's frame, or on the first button, the primary on Linux — or on the risky answer.
 #[test]
 fn a_risky_dialog_opens_on_its_safe_answer_on_both_platforms() {
     for platform in [Os::Linux, Os::MacOs] {

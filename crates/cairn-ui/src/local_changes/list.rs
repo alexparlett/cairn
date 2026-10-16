@@ -1,33 +1,31 @@
-//! Local Changes' left side (refs-and-status R9.1, R9.5): a filter field, then Unstaged above
-//! Staged behind a draggable splitter, each headed by its name and each one flat, virtualised
-//! list of paths with Fork's badges (`fork-refs-and-status-ui.md` section 6). The diff of the
-//! selection's primary is the caller's, on the right.
+//! Local Changes' left side: a filter field, then Unstaged above Staged behind a draggable
+//! splitter, each headed by its name and each one flat, virtualised list of paths with Fork's
+//! badges. The diff of the selection's primary is the caller's, on the right.
 //!
 //! **A row.** Its badge, then its path, a rename's or a copy's source before it. The badges are
-//! Fork's, told apart by their shape (the user's decision, 2026-10-07): `M` for a modified file
-//! and a type change alike, `+` for an added or untracked one, `D`, `R`, `C`, and, painted as
-//! shapes rather than set in a font, a submodule's box (`RefGlyph::Submodule`) and Fork's
-//! warning triangle for a conflict (`RefGlyph::Gone`). Colour only reinforces the shape
-//! ([`change_badge`]). The Commit tab keeps its own letters.
+//! Fork's, told apart by their shape: `M` for a modified file and a type change alike, `+` for
+//! an added or untracked one, `D`, `R`, `C`, and, painted as shapes rather than set in a font,
+//! a submodule's box (`RefGlyph::Submodule`) and Fork's warning triangle for a conflict
+//! (`RefGlyph::Gone`). Colour only reinforces the shape ([`change_badge`]). The Commit tab
+//! keeps its own letters.
 //!
 //! **What it asks.** Nothing: a row pressed, or reached with ↑ or ↓ in its focused list, is
 //! reported by its list and its place there, and the caller decides what that shows. Each list
 //! reads its rows by index, through the filter's answer (`ShownFiles`), as they are built; it
 //! walks no path.
 //!
-//! **What it reports** (staging-and-commit R8.1, R8.2), each as a [`ListIntent`] the caller
-//! acts on: a row pressed with the table's extending or range press (the keys the window
-//! heard held, `HeldKeys`), or reached with Shift+↑/↓; a row double-pressed; Fork's five
-//! routes to stage and unstage — the double press, the table's chords heard on a focused list
-//! (`Scope::LocalChanges`), a drag from one list dropped on the other (`ListDrag`, one drop
-//! zone per list, the target list scrolling at its edges), each list's Stage or Unstage
-//! button — greyed while the selection is in the other list — and the context menu
-//! (`local_changes::menu`); Stage All and Unstage All by the heading's button with the table's
-//! heading press held (Shift on Linux, ⌥ on macOS: both buttons read Stage All and Unstage All
-//! while it is, enabled whatever is selected) and by the small double chevrons always drawn, ⇊
-//! in Unstaged and ⇈ in Staged (the redesign's L2); and the discard chord and menu item, on the
-//! unstaged side only. The selection it draws is the caller's ([`LocalSelection`]), read by a
-//! binary search per row built; ↑ and ↓ move from its primary.
+//! **What it reports**, each as a [`ListIntent`] the caller acts on: a row pressed with the
+//! table's extending or range press (the keys the window heard held, `HeldKeys`), or reached
+//! with Shift+↑/↓; a row double-pressed; Fork's five routes to stage and unstage — the double
+//! press, the table's chords heard on a focused list (`Scope::LocalChanges`), a drag from one
+//! list dropped on the other (`ListDrag`, one drop zone per list, the target list scrolling at
+//! its edges), each list's Stage or Unstage button — greyed while the selection is in the other
+//! list — and the context menu (`local_changes::menu`); Stage All and Unstage All by the
+//! heading's button with the table's heading press held (Shift on Linux, ⌥ on macOS: both
+//! buttons read Stage All and Unstage All while it is, enabled whatever is selected) and by the
+//! small double chevrons always drawn, ⇊ in Unstaged and ⇈ in Staged; and the discard chord and
+//! menu item, on the unstaged side only. The selection it draws is the caller's
+//! ([`LocalSelection`]), read by a binary search per row built; ↑ and ↓ move from its primary.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
@@ -96,9 +94,8 @@ pub enum ChangeBadge {
     Glyph(RefGlyph),
 }
 
-/// Fork's badge for a kind of change (the user's decision, 2026-10-07): a type change drawn as
-/// a modification, as Fork draws it; an added and an untracked path one `+`; a submodule and a
-/// conflict painted.
+/// Fork's badge for a kind of change: a type change drawn as a modification, as Fork draws it;
+/// an added and an untracked path one `+`; a submodule and a conflict painted.
 pub fn change_badge(kind: ChangeKind) -> ChangeBadge {
     match kind {
         ChangeKind::Modified | ChangeKind::TypeChanged => ChangeBadge::Letter("M"),
@@ -175,10 +172,10 @@ impl LocalChangesList {
     }
 
     /// How many distinct paths the filter's rows show, as the pass that left them counted them
-    /// (`cairn_model::MatchedRows::paths`): said under the filter as "Showing N of M files",
-    /// M the status's distinct paths ([`LocalChanges::paths`]), so a path in both lists counts
-    /// once on both sides, as the sidebar's count does (the user's decision, 2026-10-07).
-    /// `None` — the default — while every row is shown.
+    /// (`cairn_model::MatchedRows::paths`): said under the filter as "Showing N of M files", M
+    /// the status's distinct paths ([`LocalChanges::paths`]), so a path in both lists counts
+    /// once on both sides, as the sidebar's count does. `None` — the default — while every row
+    /// is shown.
     pub fn shown_paths(mut self, shown_paths: Option<usize>) -> Self {
         self.shown_paths = shown_paths;
         self
@@ -460,8 +457,8 @@ impl Component for ListSection {
         let doubled = use_state(|| false);
         let colours = get_theme_or_default().read().colors().clone();
         let (list, drag) = (self.list, self.drag);
-        // A drag from the other list scrolls this one at its edges while it is on (R7.6): the
-        // list it would drop on, never the one it came from.
+        // A drag from the other list scrolls this one at its edges while it is on: the list it
+        // would drop on, never the one it came from.
         let targeted = drag.read().targets(list);
         use_side_effect(move || {
             let wanted = drag.read().targets(list);
@@ -485,9 +482,9 @@ impl Component for ListSection {
             list_id,
         };
         // The heading's button acts on the selection when it is in this list, and is greyed
-        // while it is in the other or there is none (rule 8); with the heading press held it
-        // is Stage All or Unstage All, enabled whatever is selected while the list shows a row
-        // (L2) — the rows shown, so with a filter on it takes those.
+        // while it is in the other or there is none; with the heading press held it is Stage
+        // All or Unstage All, enabled whatever is selected while the list shows a row — the
+        // rows shown, so with a filter on it takes those.
         let all = self
             .held
             .as_ref()
@@ -519,8 +516,8 @@ impl Component for ListSection {
             },
         );
         // The double chevron in each heading, kept deliberately small, as Fork keeps its own:
-        // ⇊ Stage All in Unstaged (Fork's), ⇈ Unstage All in Staged (the redesign's L2, where
-        // Fork for Windows shows Unstage All only while Shift is held).
+        // ⇊ Stage All in Unstaged (Fork's), ⇈ Unstage All in Staged (where Fork for Windows
+        // shows Unstage All only while Shift is held).
         let staging_all = self.on_intent.clone();
         let (glyph, all_caption) = match list {
             ChangeList::Unstaged => (Glyph::StageAll, STAGE_ALL_CAPTION),
@@ -610,8 +607,8 @@ impl Component for ListSection {
     }
 }
 
-/// The keys of a focused list (R7.3): the table's stage, stage-all and discard chords on its
-/// selection (`Scope::LocalChanges`, and the bare Return the lists alone hear,
+/// The keys of a focused list: the table's stage, stage-all and discard chords on its selection
+/// (`Scope::LocalChanges`, and the bare Return the lists alone hear,
 /// `Scope::LocalChangesLists`); Shift+↑/↓ extending the selection from its anchor
 /// (`Scope::LocalChangesLists`); ↑ and ↓ over the rows `data`'s list shows, from the
 /// selection's primary. Every other key, and every chord of the window or the detail pane, is
@@ -832,10 +829,10 @@ fn change_row(change: &LocalChange<'_>) -> Element {
 mod tests {
     use super::*;
 
-    /// The user's decision (2026-10-07): Fork's badges, told apart by shape — a type change
-    /// drawn as a modification and an added path as an untracked one (`+`), every other kind a
-    /// badge of its own, the submodule's and the conflict's painted. Caught by: a kind given
-    /// another's badge, or the Commit tab's letters back (`A`, `T`, `S`).
+    /// Fork's badges, told apart by shape — a type change drawn as a modification and an added
+    /// path as an untracked one (`+`), every other kind a badge of its own, the submodule's and
+    /// the conflict's painted. Caught by: a kind given another's badge, or the Commit tab's
+    /// letters back (`A`, `T`, `S`).
     #[test]
     fn each_kind_of_change_has_forks_badge() {
         use ChangeBadge::{Glyph, Letter};

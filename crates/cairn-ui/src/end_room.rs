@@ -1,6 +1,6 @@
 //! Room after a list's last row, so the row is never under the horizontal scrollbar.
 //!
-//! Freya's `VirtualScrollView` (the fork at `caa46f8`, `scrollviews/virtual_scrollview.rs`)
+//! Freya's `VirtualScrollView` (the pinned fork's `scrollviews/virtual_scrollview.rs`)
 //! draws its horizontal scrollbar as an overlay — an absolutely positioned bar 16 px tall over
 //! the bottom of the viewport (`scrollviews/scrollbar.rs`) — and lays out no padding of its own:
 //! it reads only its width and height bounds, never a padding. So a list that can scroll

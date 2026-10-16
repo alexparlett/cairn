@@ -210,11 +210,11 @@ fn lost_app() -> impl IntoElement {
         .child(CommitRow::new(lost, graph, 3).lost(true))
 }
 
-/// staging-and-commit R11.1, as Fork draws a lost commit (the user's decision, 2026-10-09):
-/// its subject, author, short id and date in the placeholder grey — about half — and nothing
-/// else dimmed: no element of the row is drawn translucent, so the graph's lanes, edges and
-/// node and its chips keep their own colours; a reached row's subject is the primary text.
-/// Caught by: the whole row drawn at an opacity, a text left undimmed, or a reached row dimmed.
+/// As Fork draws a lost commit: its subject, author, short id and date in the placeholder grey
+/// — about half — and nothing else dimmed: no element of the row is drawn translucent, so the
+/// graph's lanes, edges and node and its chips keep their own colours; a reached row's subject
+/// is the primary text. Caught by: the whole row drawn at an opacity, a text left undimmed, or
+/// a reached row dimmed.
 #[test]
 fn a_lost_rows_text_alone_is_dimmed() {
     let (mut test, ()) = TestingRunner::new(lost_app, (WIDTH, 200.).into(), |_| {}, 1.);
@@ -262,12 +262,12 @@ fn header_with(on: bool, pressed: Pressed) -> impl Fn() -> Element {
     }
 }
 
-/// The user's decision B (2026-10-09): Show Lost Commits is a check box at the right end of the
-/// "Graph and subject" heading's cell, just left of "Author" — the headings still over their
-/// columns — ticked while on, a press reporting the state it turns to, and its tooltip the
-/// chord the accelerator table lists, spelled for this platform. Caught by: the box placed
-/// elsewhere in the strip, a heading pushed off its column, the state not drawn or not
-/// reported, or a tooltip typed rather than read from the table.
+/// Show Lost Commits is a check box at the right end of the "Graph and subject" heading's cell,
+/// just left of "Author" — the headings still over their columns — ticked while on, a press
+/// reporting the state it turns to, and its tooltip the chord the accelerator table lists,
+/// spelled for this platform. Caught by: the box placed elsewhere in the strip, a heading
+/// pushed off its column, the state not drawn or not reported, or a tooltip typed rather than
+/// read from the table.
 #[test]
 fn show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell() {
     for on in [false, true] {

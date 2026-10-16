@@ -1,15 +1,14 @@
-//! The glyphs on the diff bar's buttons, drawn as Fork draws its icons (Finding 10 of
-//! `docs/research/diff-engine/fork-detail-and-diff-ui.md`): chevrons for previous and next
-//! change, `⎵` for ignore whitespace, `−`, `+` and `↕` over lines for fewer lines, more
-//! lines and the entire file, and a split rectangle for side-by-side.
+//! The glyphs on the diff bar's buttons, drawn as Fork draws its icons: chevrons for previous
+//! and next change, `⎵` for ignore whitespace, `−`, `+` and `↕` over lines for fewer lines,
+//! more lines and the entire file, and a split rectangle for side-by-side.
 //!
 //! Each is built from plain shapes — rectangles, borders, one rotation — and never from an
 //! icon font: IBM Plex Mono has no `⎵` and no chevron, and a font the system may lack would
 //! draw a box. The one character drawn is `↕`, which Plex Mono carries (the entire file's and
-//! the comparison's swap). Every glyph is drawn
-//! in one colour, which is how the bar says a toggle is on (Fork's accent) and a button is
-//! disabled. A glyph says nothing to assistive technology: the button carries its name
-//! (`DiffHeader`), so its meaning never rests on the shape.
+//! the comparison's swap). Every glyph is drawn in one colour, which is how the bar says a
+//! toggle is on (Fork's accent) and a button is disabled. A glyph says nothing to assistive
+//! technology: the button carries its name (`DiffHeader`), so its meaning never rests on the
+//! shape.
 
 use freya::prelude::*;
 
@@ -33,18 +32,18 @@ pub(crate) enum Glyph {
     EntireFile,
     SideBySide,
     /// A file in the Commit tab's list, closed: its diff opens under it when pressed (Fork's
-    /// Windows disclosure, Finding 4).
+    /// Windows disclosure).
     Closed,
     /// A file opened in place.
     Open,
-    /// The comparison's base and tip swapped (Fork's swap-direction control, Finding 7).
+    /// The comparison's base and tip swapped (Fork's swap-direction control).
     Swap,
     /// Fork's Stage All in Local Changes' Unstaged heading: a double chevron pointing down,
-    /// into Staged (staging-and-commit R8.2).
+    /// into Staged.
     StageAll,
     /// Unstage All in Local Changes' Staged heading: a double chevron pointing up, into
-    /// Unstaged — always drawn, where Fork for Windows shows it only while Shift is held (the
-    /// redesign's L2, a deviation named in `docs/design/ui.md`).
+    /// Unstaged — always drawn, where Fork for Windows shows it only while Shift is held (a
+    /// deviation named in `docs/design/ui.md`).
     UnstageAll,
 }
 

@@ -1,8 +1,7 @@
-//! Headless tests for the diff's staging gesture (staging-and-commit R9, criteria C19 and C26's
-//! headless half): a hovered chunk's actions, a drag-selection across rows the virtual list
-//! unmounts, a side-by-side selection kept to its column, no gesture where none is handed, a
-//! selection kept over a re-read of the same text and nothing over other text, and one viewport
-//! of rows built with the gesture drawn.
+//! Headless tests for the diff's staging gesture: a hovered chunk's actions, a
+//! drag-selection across rows the virtual list unmounts, a side-by-side selection kept to its
+//! column, no gesture where none is handed, a selection kept over a re-read of the same text
+//! and nothing over other text, and one viewport of rows built with the gesture drawn.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -187,11 +186,10 @@ fn numbers(selection: &Selection) -> (Vec<u32>, Vec<u32>) {
     )
 }
 
-/// R9.1, the QA brief's first risk: hovering a chunk drawn at context ten — one outline over
-/// three of git's changes — floats Stage and Discard Changes…, and Stage takes every changed
-/// line the outline holds and none outside it. Over the staged diff the one action is
-/// Unstage. Caught by: a chunk's action mapped to the change under the pointer alone, or to
-/// the whole file.
+/// Hovering a chunk drawn at context ten — one outline over three of git's changes — floats
+/// Stage and Discard Changes…, and Stage takes every changed line the outline holds and none
+/// outside it. Over the staged diff the one action is Unstage. Caught by: a chunk's action
+/// mapped to the change under the pointer alone, or to the whole file.
 #[test]
 fn a_hovered_chunks_actions_take_exactly_its_changes() {
     // Edits every eight lines from line 4: at context ten the first hunks merge.
@@ -242,8 +240,8 @@ fn a_hovered_chunks_actions_take_exactly_its_changes() {
     assert_eq!(numbers(&acts[0].selection), (vec![4], vec![4]));
 }
 
-/// R9.5: a diff view handed no gesture — the Commit and Changes tabs' — draws no action
-/// however it is hovered or dragged. Caught by: a gesture drawn by every diff view.
+/// A diff view handed no gesture — the Commit and Changes tabs' — draws no action however it
+/// is hovered or dragged. Caught by: a gesture drawn by every diff view.
 #[test]
 fn a_view_handed_no_gesture_draws_no_action() {
     let mut plain = launch(edited(60, 8, 4, Context::lines(3)), None, false);
@@ -264,8 +262,8 @@ fn a_view_handed_no_gesture_draws_no_action() {
     assert!(!drawn.iter().any(|c| c.contains(" Line")), "{drawn:?}");
 }
 
-/// R9.2: a drag across lines narrows the actions to the changed lines it covers — counted in
-/// the caption — and a press without a drag clears the selection. Caught by: the actions still
+/// A drag across lines narrows the actions to the changed lines it covers — counted in the
+/// caption — and a press without a drag clears the selection. Caught by: the actions still
 /// taking the chunk, or a click selecting a line.
 #[test]
 fn a_drag_narrows_the_actions_to_its_lines() {
@@ -310,13 +308,12 @@ fn a_drag_narrows_the_actions_to_its_lines() {
     assert_eq!(view.fixture.lines.peek().selected(content), None);
 }
 
-/// The QA brief's second risk: a drag from row 10 to row 5,000 of a 10,000-line diff, the list
-/// scrolled under the held pointer so every row between is unmounted on the way, selects every
-/// changed line between its ends — counted from the diff, not from the rows built — and the
-/// list builds one viewport of rows with the gesture drawn, at the top and deep (C19's
-/// viewport twin, `the_gesture_builds_one_viewport_over_a_10000_line_diff`'s companion). Caught
-/// by: a drag tracked by a row (it ends as its row unmounts), or a selection read from the
-/// rows built.
+/// A drag from row 10 to row 5,000 of a 10,000-line diff, the list scrolled under the held
+/// pointer so every row between is unmounted on the way, selects every changed line between
+/// its ends — counted from the diff, not from the rows built — and the list builds one
+/// viewport of rows with the gesture drawn, at the top and deep, the companion of
+/// `the_gesture_builds_one_viewport_over_a_10000_line_diff`. Caught by: a drag tracked by a
+/// row (it ends as its row unmounts), or a selection read from the rows built.
 #[test]
 fn a_drag_across_unmounted_rows_selects_every_line_between_its_ends() {
     let shown = edited(10_000, 50, 25, Context::EntireFile);
@@ -353,8 +350,8 @@ fn a_drag_across_unmounted_rows_selects_every_line_between_its_ends() {
     assert_eq!(selected, Some(expected));
 }
 
-/// R9.3: side by side, a drag begun in the old column selects removed lines alone, and one in
-/// the new column added lines alone, whatever column the pointer crosses into. Caught by: a
+/// Side by side, a drag begun in the old column selects removed lines alone, and one in the
+/// new column added lines alone, whatever column the pointer crosses into. Caught by: a
 /// side-by-side drag taking both halves of a replaced row.
 #[test]
 fn side_by_side_a_drag_keeps_to_its_column() {
@@ -381,10 +378,10 @@ fn side_by_side_a_drag_keeps_to_its_column() {
     }
 }
 
-/// The QA brief's third risk, and Fork's Tracker #480: after Stage, with the pointer still,
-/// the actions are gone while the old rows are drawn; once the diff is drawn again they follow
-/// whatever is now under the pointer. A selection made over one text is nothing over the next.
-/// Caught by: actions left on rows already acted on, or hidden for good.
+/// Fork's Tracker #480: after Stage, with the pointer still, the actions are gone while the
+/// old rows are drawn; once the diff is drawn again they follow whatever is now under the
+/// pointer. A selection made over one text is nothing over the next. Caught by: actions left
+/// on rows already acted on, or hidden for good.
 #[test]
 fn after_an_action_the_actions_follow_the_new_rows_or_none() {
     let mut view = launch(
@@ -429,13 +426,13 @@ fn after_an_action_the_actions_follow_the_new_rows_or_none() {
     assert!(view.fixture.lines.peek().selected(after).is_none());
 }
 
-/// R9.6, L4 (C26, headless): a finished selection survives the diff drawn again from a re-read
-/// whose text is the same in every byte — a new answer, built apart — its tint, its actions and
-/// its lines intact, and pressing its action then takes exactly those lines; drawn from a
-/// re-read whose text differs by one byte, far from the selection, it is nothing — no action
-/// over it, nothing taken. Caught by: a selection keyed to the answer rather than its text (a
-/// refresh with the file untouched dropping it), or to the drawn rows alone (a byte changed
-/// outside them keeping it).
+/// A finished selection survives the diff drawn again from a re-read whose text is the same
+/// in every byte — a new answer, built apart — its tint, its actions and its lines intact,
+/// and pressing its action then takes exactly those lines; drawn from a re-read whose text
+/// differs by one byte, far from the selection, it is nothing — no action over it, nothing
+/// taken. Caught by: a selection keyed to the answer rather than its text (a refresh with the
+/// file untouched dropping it), or to the drawn rows alone (a byte changed outside them
+/// keeping it).
 #[test]
 fn a_selection_survives_a_redraw_of_the_same_text_and_no_other() {
     let mut view = launch(
@@ -490,10 +487,10 @@ fn a_selection_survives_a_redraw_of_the_same_text_and_no_other() {
     assert_eq!(view.fixture.acts.borrow().len(), 1);
 }
 
-/// C19's viewport twin: a 10,000-line diff with the gesture drawn — hovered, a selection made
-/// — builds one viewport of rows at the top, deep and at the end, and the layer over it draws
-/// at most three actions. Caught by: a gesture that builds a row per line, or a layer whose
-/// elements grow with the selection or the diff.
+/// A 10,000-line diff with the gesture drawn — hovered, a selection made — builds one
+/// viewport of rows at the top, deep and at the end, and the layer over it draws at most
+/// three actions. Caught by: a gesture that builds a row per line, or a layer whose elements
+/// grow with the selection or the diff.
 #[test]
 fn the_gesture_builds_one_viewport_over_a_10000_line_diff() {
     let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
@@ -531,9 +528,9 @@ fn the_gesture_builds_one_viewport_over_a_10000_line_diff() {
     within(&view.test, "at the end");
 }
 
-/// Phase 08 QA item 12: after an action with no diff drawn again, the actions come back once
-/// the pointer moves — they hide only while it stands where the action was pressed. Caught by:
-/// actions hidden until a redraw that a refused write never brings.
+/// After an action with no diff drawn again, the actions come back once the pointer moves —
+/// they hide only while it stands where the action was pressed. Caught by: actions hidden
+/// until a redraw that a refused write never brings.
 #[test]
 fn after_an_action_a_moved_pointer_brings_the_actions_back() {
     let mut view = launch(

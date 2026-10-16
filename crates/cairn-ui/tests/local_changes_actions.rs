@@ -1,8 +1,7 @@
-//! Headless tests for what Local Changes' lists report when a person acts on them
-//! (staging-and-commit R8.1, R8.2, R8.4, R8.7, R8.8; criterion C18's routes and drag, C8's
-//! submodule row and C24's conflicted row, each at the component's boundary): every press,
-//! chord, button, drag and menu item is a `ListIntent` or a choice, and the component decides
-//! nothing about what it stages.
+//! Headless tests for what Local Changes' lists report when a person acts on them — the routes
+//! to stage and unstage, the drag, a submodule's row and a conflicted row, each at the
+//! component's boundary: every press, chord, button, drag and menu item is a `ListIntent` or a
+//! choice, and the component decides nothing about what it stages.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -216,10 +215,10 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
     test.sync_and_update();
 }
 
-/// R8.1, R7.3: a press with the table's extending press held toggles its row, one with the
-/// range press held ranges to it, and a plain press chooses; Shift+↑/↓ on the focused list
-/// ranges to the row above or below the one chosen. Caught by: a press read without the held
-/// keys (always a choice), the presses swapped, or Shift+↓ moving the choice.
+/// A press with the table's extending press held toggles its row, one with the range press held
+/// ranges to it, and a plain press chooses; Shift+↑/↓ on the focused list ranges to the row
+/// above or below the one chosen. Caught by: a press read without the held keys (always a
+/// choice), the presses swapped, or Shift+↓ moving the choice.
 #[test]
 fn a_held_press_toggles_or_ranges_and_shift_arrows_range() {
     let (mut test, fixture, log) = launch(lists());
@@ -255,10 +254,10 @@ fn a_held_press_toggles_or_ranges_and_shift_arrows_range() {
     );
 }
 
-/// R8.2, R7.3: on a focused list each chord of stage or unstage, stage all and discard is
-/// reported as that action on that list — Unstaged's and Staged's alike — and nothing else.
-/// Caught by: a chord of the list heard as an arrow, one of an action's alternates unheard
-/// (Return alone), or the action reported for the other list.
+/// On a focused list each chord of stage or unstage, stage all and discard is reported as that
+/// action on that list — Unstaged's and Staged's alike — and nothing else. Caught by: a chord
+/// of the list heard as an arrow, one of an action's alternates unheard (Return alone), or the
+/// action reported for the other list.
 #[test]
 fn every_chord_of_the_lists_actions_is_reported_on_its_list() {
     let (mut test, _, log) = launch(lists());
@@ -283,9 +282,9 @@ fn every_chord_of_the_lists_actions_is_reported_on_its_list() {
     }
 }
 
-/// Fork's double-click (R8.2): the second press of a double press is reported as the row's
-/// stage or unstage, and its release chooses nothing more. Caught by: no double press heard,
-/// or its release choosing the row again after it was acted on.
+/// Fork's double-click: the second press of a double press is reported as the row's stage or
+/// unstage, and its release chooses nothing more. Caught by: no double press heard, or its
+/// release choosing the row again after it was acted on.
 #[test]
 fn a_double_press_stages_or_unstages_its_row() {
     let (mut test, _, log) = launch(lists());
@@ -302,13 +301,13 @@ fn a_double_press_stages_or_unstages_its_row() {
     );
 }
 
-/// R8.2, C18, C27 (rule 8, L2): each list's button acts on the selection only while it is in
-/// that list — greyed with nothing selected and while the selection is in the other list — and,
-/// with the table's heading press held (Shift on Linux, ⌥ on macOS), both read Stage All and
-/// Unstage All, enabled whatever is selected, and act on the whole list; the double chevron is
-/// drawn in each heading, ⇊ Stage All in Unstaged and ⇈ Unstage All in Staged, with no key
-/// held. Caught by: a button that acts with nothing selected or on the other list's selection,
-/// a held press not heard, Unstage All reachable only with a key held, or a chevron missing.
+/// Each list's button acts on the selection only while it is in that list — greyed with nothing
+/// selected and while the selection is in the other list — and, with the table's heading press
+/// held (Shift on Linux, ⌥ on macOS), both read Stage All and Unstage All, enabled whatever is
+/// selected, and act on the whole list; the double chevron is drawn in each heading, ⇊ Stage
+/// All in Unstaged and ⇈ Unstage All in Staged, with no key held. Caught by: a button that acts
+/// with nothing selected or on the other list's selection, a held press not heard, Unstage All
+/// reachable only with a key held, or a chevron missing.
 #[test]
 fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything() {
     let (mut test, fixture, log) = launch(lists());
@@ -359,10 +358,10 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
     );
 }
 
-/// C27 (L2): on Linux, Alt held over the headings does nothing — they still read Stage and
-/// Unstage, and Alt was the key before the redesign, which window managers take with a click
-/// — while Shift makes both Stage All and Unstage All; on macOS ⌥ does. Caught by: the old key
-/// left in the table, or Shift not turning the headings.
+/// On Linux, Alt held over the headings does nothing — they still read Stage and Unstage, Alt
+/// being the key window managers take with a click — while Shift makes both Stage All and
+/// Unstage All; on macOS ⌥ does. Caught by: Alt bound in the table on Linux, or Shift not
+/// turning the headings.
 #[test]
 fn only_the_platforms_key_turns_the_headings_into_stage_all() {
     let (mut test, fixture, _) = launch(lists());
@@ -395,12 +394,12 @@ fn only_the_platforms_key_turns_the_headings_into_stage_all() {
     }
 }
 
-/// R8.2, R7.6, C18: a press on a row dragged past the threshold and released over the other
-/// list drops the path it began on, whatever happened to its row meanwhile — a status that no
-/// longer lists it, rows unmounted — and its release chooses nothing; released over its own
-/// list, outside both, or after Escape, nothing drops. Caught by: a drag kept by its row
-/// (lost once the row goes), a drop on the list it came from, a drop after Escape, or the
-/// release choosing the row under it.
+/// A press on a row dragged past the threshold and released over the other list drops the path
+/// it began on, whatever happened to its row meanwhile — a status that no longer lists it, rows
+/// unmounted — and its release chooses nothing; released over its own list, outside both, or
+/// after Escape, nothing drops. Caught by: a drag kept by its row (lost once the row goes), a
+/// drop on the list it came from, a drop after Escape, or the release choosing the row under
+/// it.
 #[test]
 fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     let (mut test, fixture, log) = launch(lists());
@@ -444,7 +443,7 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     drag(&mut test, a, (a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
     test.release_cursor((a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
     test.sync_and_update();
-    // Over Staged first, then released outside both lists, over the filter (QA item 9).
+    // Over Staged first, then released outside both lists, over the filter.
     let filter = (100., 15.);
     drag(&mut test, a, into_staged);
     test.move_cursor(filter);
@@ -465,10 +464,10 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     );
 }
 
-/// R7.6, C18: a drag from Staged held at Unstaged's bottom edge scrolls Unstaged — the list it
-/// would drop on — while the pointer stands still, its first row long unmounted, and still
-/// drops there. Caught by: no scroll during a drag between the lists, or the drag lost as the
-/// rows under it are replaced.
+/// A drag from Staged held at Unstaged's bottom edge scrolls Unstaged — the list it would drop
+/// on — while the pointer stands still, its first row long unmounted, and still drops there.
+/// Caught by: no scroll during a drag between the lists, or the drag lost as the rows under it
+/// are replaced.
 #[test]
 fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     let entries: Vec<StatusEntry> = (0..400)
@@ -501,13 +500,13 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     );
 }
 
-/// R8.2, R8.4, R8.7, R8.8, R14.4, C8, C24: an unstaged row's menu offers Stage, Discard
-/// Changes…, Stage All and Copy Path, each closing the menu as it is chosen; a submodule's and a
-/// conflicted row's offer Stage and their Discard greyed, saying why; a staged row's offers
-/// Unstage, Unstage All and Copy Path, and its Discard greyed with "Staged changes can't be
-/// discarded. Unstage them first." beneath it (the redesign, rule 4). A right-press on an
-/// unselected row chooses it first. Caught by: a discard offered on Staged, for a submodule or
-/// a conflict, a reason missing, or a menu left open after its item was chosen.
+/// An unstaged row's menu offers Stage, Discard Changes…, Stage All and Copy Path, each closing
+/// the menu as it is chosen; a submodule's and a conflicted row's offer Stage and their Discard
+/// greyed, saying why; a staged row's offers Unstage, Unstage All and Copy Path, and its
+/// Discard greyed with "Staged changes can't be discarded. Unstage them first." beneath it. A
+/// right-press on an unselected row chooses it first. Caught by: a discard offered on Staged,
+/// for a submodule or a conflict, a reason missing, or a menu left open after its item was
+/// chosen.
 #[test]
 fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let (mut test, _, log) = launch(lists());
@@ -616,10 +615,10 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     assert!(texts(&test).iter().any(|t| t == UNSTAGED_CAPTION));
 }
 
-/// Phase 07's QA item 8: a drag ends without a drop when a press is heard while it is on — its
-/// own release was made where the window could not hear it — and when the window loses focus;
-/// the release over the other list after either drops nothing. Caught by: a drag kept through
-/// a press, or through focus lost, which drops on the next release over the other list.
+/// A drag ends without a drop when a press is heard while it is on — its own release was made
+/// where the window could not hear it — and when the window loses focus; the release over the
+/// other list after either drops nothing. Caught by: a drag kept through a press, or through
+/// focus lost, which drops on the next release over the other list.
 #[test]
 fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
     let (mut test, _, log) = launch(lists());
@@ -663,11 +662,11 @@ fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
     );
 }
 
-/// The user's decision C (2026-10-09), Fork for Windows, in Local Changes' lists: a right-click
-/// outside the selection chooses its row before the menu opens, so the menu's Stage stages that
-/// row; one inside the selection chooses nothing and the menu acts on the whole selection.
-/// Caught by: a right-click that leaves the selection where it was, so the menu acts on paths
-/// the press never landed on, or one inside the selection that collapses it.
+/// As Fork for Windows does in Local Changes' lists, a right-click outside the selection
+/// chooses its row before the menu opens, so the menu's Stage stages that row; one inside the
+/// selection chooses nothing and the menu acts on the whole selection. Caught by: a right-click
+/// that leaves the selection where it was, so the menu acts on paths the press never landed on,
+/// or one inside the selection that collapses it.
 #[test]
 fn a_right_click_outside_the_selection_chooses_its_row_before_the_menu_opens() {
     let (mut test, fixture, log) = launch(lists());

@@ -1,6 +1,5 @@
-//! C7's row half (refs-and-status R5): which chips a row draws, in what order, compacted and
-//! clipped, and how each kind is drawn — its glyph, the current branch's check mark, the bold
-//! `HEAD` subject — headless.
+//! Which chips a history row draws, in what order, compacted and clipped, and how each kind is
+//! drawn — its glyph, the current branch's check mark, the bold `HEAD` subject — headless.
 
 use std::any::Any;
 
@@ -109,10 +108,10 @@ fn laid(history: &History, refs: Option<&RefsSnapshot>) -> Vec<Chip> {
     row_chips(row.labels(), refs, f32::INFINITY)
 }
 
-/// R5.2, the QA brief's three cases: a local branch and its upstream at one commit are one
-/// chip with the remote glyph; a second remote's ref at that commit keeps its own chip; an
-/// upstream at a different commit is not folded. Caught by: folding any remote of the same
-/// name, folding the upstream wherever it is, or drawing the folded upstream's chip too.
+/// Compact labels: a local branch and its upstream at one commit are one chip with the remote
+/// glyph; a second remote's ref at that commit keeps its own chip; an upstream at a different
+/// commit is not folded. Caught by: folding any remote of the same name, folding the upstream
+/// wherever it is, or drawing the folded upstream's chip too.
 #[test]
 fn a_branch_and_its_upstream_at_one_commit_are_one_chip_and_nothing_else_is_folded() {
     let refs = snapshot(
@@ -215,10 +214,9 @@ fn the_current_branch_leads_then_branches_remotes_and_tags_in_order() {
     );
 }
 
-/// R5.3, and the uncapped labels' bound (phase 05 QA, RR3): chips stop being built once the
-/// room is spent — the one crossing the edge is built, none after it — so ten thousand refs
-/// on one commit build a column's worth. Caught by: building every chip, stopping before
-/// the edge, or counting the rest as "+N".
+/// Chips stop being built once the room is spent — the one crossing the edge is built, none
+/// after it — so ten thousand refs on one commit build a column's worth. Caught by: building
+/// every chip, stopping before the edge, or counting the rest as "+N".
 #[test]
 fn chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has() {
     let names: Vec<String> = (0..10_000).map(|n| format!("refs/tags/t{n:05}")).collect();
@@ -252,7 +250,7 @@ fn chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has() {
     assert_eq!(chips.first().map(|chip| chip.text.as_str()), Some("t00000"));
 }
 
-/// A stash's chip is `stash@{n}`, with the box (R5.4).
+/// A stash's chip is `stash@{n}`, with the box.
 #[test]
 fn a_stash_chip_names_its_entry() {
     let stash = Chip::stash(3);
@@ -340,10 +338,10 @@ fn glyphs(test: &TestingRunner) -> Vec<f32> {
     found
 }
 
-/// C7, R5.1 and R5.5: each kind of chip draws its own glyph before its name — the current
-/// branch its check mark, a compact branch, a remote-tracking ref, a tag and a stash a glyph
-/// in a cap — and a plain branch none. Caught by: a cap dropped from a kind, a check mark on
-/// a branch that is not current, or a glyph after its name.
+/// Each kind of chip draws its own glyph before its name — the current branch its check mark, a
+/// compact branch, a remote-tracking ref, a tag and a stash a glyph in a cap — and a plain
+/// branch none. Caught by: a cap dropped from a kind, a check mark on a branch that is not
+/// current, or a glyph after its name.
 #[test]
 fn each_kind_of_chip_draws_its_glyph_before_its_name_and_a_plain_branch_none() {
     let chips = vec![
@@ -379,7 +377,7 @@ fn each_kind_of_chip_draws_its_glyph_before_its_name_and_a_plain_branch_none() {
     }
 }
 
-/// The `HEAD` row's subject is bold, every other row's not (R5.1). Caught by: the flag
+/// The `HEAD` row's subject is bold, every other row's not. Caught by: the flag
 /// ignored, or every row bold.
 #[test]
 fn the_head_rows_subject_is_bold_and_no_other() {
@@ -396,10 +394,10 @@ fn the_head_rows_subject_is_bold_and_no_other() {
     assert_ne!(weight(false), Some(FontWeight::BOLD));
 }
 
-/// The QA brief: a row with twenty refs clips rather than wraps, and keeps its height — the
-/// chips past the column's edge are not visible, the subject is pushed out, and the author
-/// column stays where it is. Caught by: no clip on the column, a wrapping chip row, or the
-/// chips pushing the fixed columns over.
+/// A row with twenty refs clips rather than wraps, and keeps its height — the chips past the
+/// column's edge are not visible, the subject is pushed out, and the author column stays where
+/// it is. Caught by: no clip on the column, a wrapping chip row, or the chips pushing the fixed
+/// columns over.
 #[test]
 fn twenty_refs_are_clipped_at_the_columns_edge_and_the_row_keeps_its_height() {
     let width = 700.;

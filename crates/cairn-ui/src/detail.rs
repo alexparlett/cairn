@@ -1,6 +1,6 @@
-//! The detail pane under the history (PRD R5): its strip of tabs, the Commit tab and the
-//! files opened in place in it, a commit message's lines, and the Changes tab's file list
-//! and its filter.
+//! The detail pane under the history: its strip of tabs, the Commit tab and the files
+//! opened in place in it, a commit message's lines, and the Changes tab's file list and its
+//! filter.
 
 pub(crate) mod changes_list;
 pub(crate) mod commit_tab;

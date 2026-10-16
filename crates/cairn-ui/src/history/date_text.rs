@@ -20,8 +20,8 @@ const MONTHS: [&str; 12] = [
 ];
 
 /// `time` as Fork shows a commit's date on Windows — `25 Nov 2020 01:11:30 +01:00` — at the
-/// offset it was recorded with, so the instant and the offset both survive (user decision 1,
-/// 2026-10-03: Fork's presentation, not git's, and in English, which needs no locale data).
+/// offset it was recorded with, so the instant and the offset both survive: Fork's presentation,
+/// not git's, and in English, which needs no locale data.
 /// The day is two digits, as the hours are: Fork's one example has a two-digit day, and its
 /// Windows build is .NET, whose `dd` pads. Total over every timestamp.
 pub fn long_date(time: Timestamp) -> String {
@@ -103,12 +103,11 @@ mod tests {
         assert!(high.len() > "1970-01-01 00:00".len());
     }
 
-    /// User decision 1 (2026-10-03): Fork's Windows presentation, `25 Nov 2020 01:11:30
-    /// +01:00` (`docs/research/diff-engine/fork-detail-and-diff-ui.md`, Finding 3) — Fork's
-    /// own example is the first row. Every row is the instant at the offset it was recorded
-    /// with, the reference from GNU `date -d @<seconds> '+%d %b %Y %H:%M:%S %:z'` in a zone
-    /// of that offset. Caught by: rendering in UTC (every offset-bearing case moves), the
-    /// offset without its colon or its sign, an unpadded day, or a 12-hour clock.
+    /// Fork's Windows presentation, `25 Nov 2020 01:11:30 +01:00` — Fork's own example is the
+    /// first row. Every row is the instant at the offset it was recorded with, the reference
+    /// from GNU `date -d @<seconds> '+%d %b %Y %H:%M:%S %:z'` in a zone of that offset. Caught
+    /// by: rendering in UTC (every offset-bearing case moves), the offset without its colon or
+    /// its sign, an unpadded day, or a 12-hour clock.
     #[test]
     fn a_timestamp_reads_as_fork_shows_it_at_its_own_offset() {
         for (seconds, offset_seconds, shown) in [
@@ -137,12 +136,12 @@ mod tests {
         }
     }
 
-    /// User decision 2: a commit recorded before 1970 shows its true instant — git itself
-    /// does not agree with itself there (`%ad` prints nothing, `fuller` clamps to the epoch,
-    /// some commands refuse the commit). Reference values from GNU `date`, as above. Caught
-    /// by: truncating division in place of `div_euclid` and `rem_euclid`, which puts a
-    /// negative instant on the wrong day with a negative hour — most visibly the epoch
-    /// itself under a negative offset, which falls back into 1969.
+    /// A commit recorded before 1970 shows its true instant — git itself does not agree with
+    /// itself there (`%ad` prints nothing, `fuller` clamps to the epoch, some commands refuse
+    /// the commit). Reference values from GNU `date`, as above. Caught by: truncating division
+    /// in place of `div_euclid` and `rem_euclid`, which puts a negative instant on the wrong
+    /// day with a negative hour — most visibly the epoch itself under a negative offset, which
+    /// falls back into 1969.
     #[test]
     fn a_timestamp_before_the_epoch_reads_as_its_true_instant() {
         for (seconds, offset_seconds, shown) in [

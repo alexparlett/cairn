@@ -1,15 +1,15 @@
-//! The Changes tab's left side (PRD R5.4, R5.5): a filter field over the changed files, and
-//! the files it leaves as one virtualised list; and the tab's one-line summary of the commit.
+//! The Changes tab's left side: a filter field over the changed files, and the files it
+//! leaves as one virtualised list; and the tab's one-line summary of the commit.
 //!
-//! Laid out as Fork lays it out (Finding 5): the filter at the top of the list, one row per
-//! file with its status letter and its path — both paths for a rename or a copy — and the
-//! file chosen highlighted. The list has focus of its own: pressed, or reached with Tab, ↑ and
-//! ↓ move to the previous and next file shown, which is chosen (Fork's model, user decision
-//! 6). The list never asks for anything: it reports a file by its index in the change set and
-//! the caller decides what that shows.
+//! Laid out as Fork lays it out: the filter at the top of the list, one row per file with its
+//! status letter and its path — both paths for a rename or a copy — and the file chosen
+//! highlighted. The list has focus of its own: pressed, or reached with Tab, ↑ and ↓ move to
+//! the previous and next file shown, which is chosen, as Fork's list does. The list never
+//! asks for anything: it reports a file by its index in the change set and the caller
+//! decides what that shows.
 //!
-//! The summary is Fork's (Finding 2): who wrote the commit, its short id, its date and its
-//! subject, on one line — no avatar (L9).
+//! The summary is Fork's: who wrote the commit, its short id, its date and its subject, on
+//! one line — no avatar.
 
 use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
@@ -29,9 +29,9 @@ pub const NO_FILE_MATCHES: &str = "No file matches the filter.";
 /// Said under the filter while its first answer for a change set is on its way.
 pub const FILTERING: &str = "Filtering…";
 
-/// Said under an active filter (the user's decision, 2026-10-03): how many of the change
-/// set's `total` files the list shows, so a file hidden by a filter kept from the last commit
-/// is not taken for one this commit did not touch.
+/// Said under an active filter: how many of the change set's `total` files the list shows,
+/// so a file hidden by a filter kept from the last commit is not taken for one this commit
+/// did not touch.
 pub fn filter_count(shown: usize, total: usize) -> String {
     format!(
         "Showing {} of {} file{}",
@@ -40,8 +40,7 @@ pub fn filter_count(shown: usize, total: usize) -> String {
         if total == 1 { "" } else { "s" }
     )
 }
-/// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up (the
-/// user's decision, 2026-10-03).
+/// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up.
 pub const SUMMARY_HEIGHT: f32 = crate::diff::header::DIFF_HEADER_HEIGHT;
 
 const FONT_SIZE: f32 = 13.0;
@@ -330,8 +329,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
-/// The Changes tab's one line about the commit: author, short id, date and subject (Fork,
-/// Finding 2), each cut with an ellipsis rather than wrapped.
+/// The Changes tab's one line about the commit, as Fork draws it: author, short id, date and
+/// subject, each cut with an ellipsis rather than wrapped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChangesSummary {
     details: CommitDetails,
@@ -387,7 +386,7 @@ impl Component for ChangesSummary {
     }
 }
 
-/// Said before a comparison's base, the lower of the two rows (R7.2): the commit the diff runs
+/// Said before a comparison's base, the lower of the two rows: the commit the diff runs
 /// from, its lines the removed ones.
 pub const BASE_CAPTION: &str = "Base";
 /// Said before a comparison's tip: the commit the diff runs to, its lines the added ones.
@@ -404,8 +403,8 @@ pub fn comparison_parts(commit: &CommitSummary) -> [String; 3] {
     ]
 }
 
-/// The Changes tab's header over a comparison of two commits (R7.3): both commits named, one
-/// per line — the base, then the tip — with Fork's swap control at its right (Finding 7).
+/// The Changes tab's header over a comparison of two commits: both commits named, one per
+/// line — the base, then the tip — with Fork's swap control at its right.
 pub struct ComparisonHeader {
     base: CommitSummary,
     tip: CommitSummary,

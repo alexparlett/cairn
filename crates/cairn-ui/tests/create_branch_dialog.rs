@@ -1,10 +1,9 @@
-//! Headless tests for Fork's Create Branch dialog (staging-and-commit R11.3; the user's
-//! decisions of 2026-10-09 and 2026-10-10): its anatomy, the button's caption following the box,
-//! the button and Return enabled only for a name the engine said can be created, a refusal said
-//! beside the buttons behind Fork's warning glyph and worded here, "Local changes:" drawn only
-//! when given in Fork's order with "Stash and reapply" greyed and ⚠ beside a chosen Discard,
-//! Discard's press building the token from the consequence handed in (a confirmation surface),
-//! and every change reported.
+//! Headless tests for Fork's Create Branch dialog: its anatomy, the button's caption following
+//! the box, the button and Return enabled only for a name the engine said can be created, a
+//! refusal said beside the buttons behind Fork's warning glyph and worded here, "Local
+//! changes:" drawn only when given in Fork's order with "Stash and reapply" greyed and ⚠ beside
+//! a chosen Discard, Discard's press building the token from the consequence handed in (a
+//! confirmation surface), and every change reported.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -127,11 +126,11 @@ fn launch_discarding(
     (test, reports)
 }
 
-/// Fork's anatomy: the title and its subtitle, the commit read only (its short id and subject), the name field
-/// with its placeholder, the box, Cancel and the button — "Create", or "Create and Checkout"
-/// with the box ticked — and "Local changes:" only when the window gives it. Caught by: a
-/// caption not Fork's, the button's caption not following the box, or the local changes drawn
-/// when there are none.
+/// Fork's anatomy: the title and its subtitle, the commit read only (its short id and
+/// subject), the name field with its placeholder, the box, Cancel and the button — "Create",
+/// or "Create and Checkout" with the box ticked — and "Local changes:" only when the window
+/// gives it. Caught by: a caption not Fork's, the button's caption not following the box, or
+/// the local changes drawn when there are none.
 #[test]
 fn the_dialog_is_forks_its_button_following_the_box() {
     let (test, _) = launch(
@@ -296,10 +295,9 @@ fn warning() -> Vec<bool> {
     painted(&canvas.on_render)
 }
 
-/// Fork's refusal (USHOT TrackerWin #2472, Tracker #1911; phase 10's QA, items 19 and 20): said
-/// in the buttons' row, left of them, behind the warning triangle — and no triangle without a
-/// refusal. Caught by: the refusal in a row of its own above the buttons, drawn right of them,
-/// or without its glyph.
+/// Fork's refusal (Fork TrackerWin #2472, Tracker #1911): said in the buttons' row, left of
+/// them, behind the warning triangle — and no triangle without a refusal. Caught by: the
+/// refusal in a row of its own above the buttons, drawn right of them, or without its glyph.
 #[test]
 fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
     let refused = "Branch topic already exists";
@@ -348,10 +346,9 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
     );
 }
 
-/// Rule 6 and R14.7: a refusal is never cut — git's words for a ref it cannot lock run long,
-/// and the dialog draws them whole, wrapped beside the buttons, as the discard dialog draws its
-/// prompt (merge bar, phase 21, item 2). Caught by: the refusal capped at a line count or cut to
-/// an ellipsis.
+/// A refusal is never cut — git's words for a ref it cannot lock run long, and the dialog draws
+/// them whole, wrapped beside the buttons, as the discard dialog draws its prompt. Caught by:
+/// the refusal capped at a line count or cut to an ellipsis.
 #[test]
 fn a_long_refusal_is_drawn_whole_and_wrapped() {
     let shown = Shown {
@@ -398,9 +395,9 @@ fn a_long_refusal_is_drawn_whole_and_wrapped() {
     );
 }
 
-/// The user's decision D (2026-10-09): while the name's check waits behind a running write, the
-/// dialog says so where a refusal goes, beside the buttons — with no warning glyph, since
-/// nothing is refused — and a refusal, when there is one, is said instead. Caught by: the
+/// While the name's check waits behind a running write, the dialog says so where a refusal
+/// goes, beside the buttons — with no warning glyph, since nothing is refused — and a refusal,
+/// when there is one, is said instead. Caught by: the
 /// waiting line drawn elsewhere or behind the triangle, or drawn over a refusal.
 #[test]
 fn a_check_waiting_behind_a_write_is_said_beside_the_buttons() {
@@ -441,11 +438,11 @@ fn a_check_waiting_behind_a_write_is_said_beside_the_buttons() {
     assert!(!drawn.iter().any(|l| l == waiting), "{drawn:?}");
 }
 
-/// Fork's "Local changes:" (observed cb2, cb3; B4): Don't change, Stash and reapply, Discard, in
-/// Fork's order; Stash and reapply greyed with "Comes with stashing." beside it, and a press on
-/// it reports nothing; Fork's ⚠ beside Discard only while it is chosen. Caught by: the order not
-/// Fork's, Stash and reapply missing or pressable, its reason unsaid, or the ⚠ drawn for Don't
-/// change or missing for Discard.
+/// Fork's "Local changes:": Don't change, Stash and reapply, Discard, in Fork's order; Stash
+/// and reapply greyed with "Comes with stashing." beside it, and a press on it reports nothing;
+/// Fork's ⚠ beside Discard only while it is chosen. Caught by: the order not Fork's, Stash and
+/// reapply missing or pressable, its reason unsaid, or the ⚠ drawn for Don't change or missing
+/// for Discard.
 #[test]
 fn local_changes_are_forks_three_in_forks_order_stash_greyed_and_a_chosen_discard_warned() {
     let shown = |local| Shown {
@@ -489,12 +486,12 @@ fn local_changes_are_forks_three_in_forks_order_stash_greyed_and_a_chosen_discar
     );
 }
 
-/// C34 and B2: with Discard chosen, the button — and Return in the name field — IS the
-/// confirmation: the dialog builds the token from the consequence it was handed, and reports it
-/// rather than a create; with no consequence handed, or the name not ready, the press does
-/// nothing; with Don't change it reports a create and builds no token. Caught by: a token built
-/// from anything but the consequence handed in, a create reported for Discard, a token for Don't
-/// change, or a press past a missing consequence.
+/// With Discard chosen, the button — and Return in the name field — IS the confirmation: the
+/// dialog builds the token from the consequence it was handed, and reports it rather than a
+/// create; with no consequence handed, or the name not ready, the press does nothing; with
+/// Don't change it reports a create and builds no token. Caught by: a token built from anything
+/// but the consequence handed in, a create reported for Discard, a token for Don't change, or a
+/// press past a missing consequence.
 #[test]
 fn discards_press_builds_the_token_from_the_consequence_it_was_handed() {
     let discard = Shown {
@@ -558,10 +555,10 @@ fn discards_press_builds_the_token_from_the_consequence_it_was_handed() {
     assert_eq!(*reports.created.borrow(), 1);
 }
 
-/// The review's M3: the engine's refusal is typed and worded here — Fork's words for a name
-/// taken, decision F's for `@{`, git's for one it refuses or cannot lock — and Discard's refusal
-/// during an operation in the template the user chose (2026-10-10). Caught by: a refusal worded
-/// otherwise, or an operation named in another's words.
+/// The engine's refusal is typed and worded here — Fork's words for a name taken, Cairn's own
+/// for `@{`, git's for one it refuses or cannot lock — and Discard's refusal during an
+/// operation in one template, each operation named in git's words. Caught by: a refusal
+/// worded otherwise, or an operation named in another's words.
 #[test]
 fn refusals_are_worded_by_the_view() {
     assert_eq!(

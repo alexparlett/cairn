@@ -1,6 +1,6 @@
-//! Headless tests for the confirmation dialog (staging-and-commit R7.4, C17): its words and
-//! its button are the `Consequence`'s, focus starts on Cancel and stays inside it, Escape and
-//! a press outside cancel, and one acknowledgement builds one token from the value drawn.
+//! Headless tests for the confirmation dialog: its words and its button are the
+//! `Consequence`'s, focus starts on Cancel and stays inside it, Escape and a press outside
+//! cancel, and one acknowledgement builds one token from the value drawn.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -142,9 +142,9 @@ fn press(test: &mut TestingRunner, key: NamedKey) {
     test.sync_and_update();
 }
 
-/// C17, L8: the prompt and the button are the `Consequence`'s own words — the files' count
-/// and kinds, and the lines' count — never text typed beside it. Caught by: a dialog that
-/// writes its own words, or a button that does not name the count.
+/// The prompt and the button are the `Consequence`'s own words — the files' count and kinds,
+/// and the lines' count — never text typed beside it. Caught by: a dialog that writes its own
+/// words, or a button that does not name the count.
 #[test]
 fn its_words_and_its_button_are_the_consequences() {
     for (consequence, button) in [
@@ -164,10 +164,10 @@ fn its_words_and_its_button_are_the_consequences() {
     }
 }
 
-/// C17, L8: focus starts on Cancel, so a Return pressed by habit cancels and builds no token;
-/// Escape cancels; a press outside the dialog cancels. Caught by: focus left behind the
-/// dialog (Return acts there), Discard focused as Fork styles it, or an Escape the dialog
-/// does not hear.
+/// Focus starts on Cancel, so a Return pressed by habit cancels and builds no token; Escape
+/// cancels; a press outside the dialog cancels. Caught by: focus left behind the dialog
+/// (Return acts there), Discard focused as Fork styles it, or an Escape the dialog does not
+/// hear.
 #[test]
 fn focus_starts_on_cancel_and_escape_or_a_press_outside_cancels() {
     let (mut test, reports) = launch(three_files());
@@ -200,9 +200,9 @@ fn focus_starts_on_cancel_and_escape_or_a_press_outside_cancels() {
     assert!(reports.confirmed.borrow().is_empty());
 }
 
-/// C17, R7.4: the dialog is modal to the keyboard — Tab and Shift-Tab move between its two
-/// answers and never reach the view behind it, which hears no key while it is open. Caught
-/// by: a dialog without `a11y_modal`, where Tab walks out to the window behind it.
+/// The dialog is modal to the keyboard — Tab and Shift-Tab move between its two answers and
+/// never reach the view behind it, which hears no key while it is open. Caught by: a dialog
+/// without `a11y_modal`, where Tab walks out to the window behind it.
 #[test]
 fn tab_stays_inside_the_dialog() {
     let (mut test, reports) = launch(three_files());
@@ -226,9 +226,9 @@ fn tab_stays_inside_the_dialog() {
     assert_eq!(answered, 1, "Return pressed neither answer");
 }
 
-/// L3, R1: the button builds the token from the consequence drawn — its prompt rendered from
-/// it — and a second press builds no second token. Caught by: a token built from other
-/// words, or one acknowledgement spent twice.
+/// The button builds the token from the consequence drawn — its prompt rendered from it — and
+/// a second press builds no second token. Caught by: a token built from other words, or one
+/// acknowledgement spent twice.
 #[test]
 fn the_button_builds_one_token_from_the_consequence_drawn() {
     let consequence = two_lines();
@@ -269,10 +269,10 @@ fn press_lowest(test: &mut TestingRunner, caption: &str) {
     test.sync_and_update();
 }
 
-/// C17, R7.4 and the user's decision of 2026-10-10 on phase 15's Q1: opened at the press while
-/// the engine counts, the dialog says "Counting…", and its button, greyed, reads the dialog's
-/// title; pressing it builds nothing, and focus is on Cancel, so Return cancels. Caught by: a
-/// button that confirms before the count, a count shown as a number, or focus off Cancel.
+/// Opened at the press while the engine counts, the dialog says "Counting…", and its button,
+/// greyed, reads the dialog's title; pressing it builds nothing, and focus is on Cancel, so
+/// Return cancels. Caught by: a button that confirms before the count, a count shown as a
+/// number, or focus off Cancel.
 #[test]
 fn while_counting_the_dialog_says_so_and_its_greyed_button_builds_nothing() {
     let (mut test, reports) = launch_answering(DialogAnswer::Counting, None);
@@ -299,11 +299,10 @@ fn while_counting_the_dialog_says_so_and_its_greyed_button_builds_nothing() {
     assert!(reports.confirmed.borrow().is_empty());
 }
 
-/// The user's decision of 2026-10-10 on phase 15's Q2 (rule 4): a refusal while counting is the
-/// same dialog titled "Couldn't Discard Changes", the engine's sentence and "Nothing was
-/// changed.", Close alone and focused; Return and Close let it go, and nothing confirms. Caught
-/// by: a confirm or Cancel left on a refusal, the tail missing or said twice, or Close not
-/// focused.
+/// A refusal while counting is the same dialog titled "Couldn't Discard Changes", the engine's
+/// sentence and "Nothing was changed.", Close alone and focused; Return and Close let it go,
+/// and nothing confirms. Caught by: a confirm or Cancel left on a refusal, the tail missing or
+/// said twice, or Close not focused.
 #[test]
 fn a_refusal_is_the_same_dialog_with_close_alone() {
     let why = "src/a.rs changed while it was read.";
@@ -328,9 +327,9 @@ fn a_refusal_is_the_same_dialog_with_close_alone() {
     assert!(reports.confirmed.borrow().is_empty());
 }
 
-/// The redesign's D1: the line saying what a mixed selection leaves is drawn under the prompt,
-/// never part of the prompt the token records. Caught by: the line left out, drawn above the
-/// prompt, or folded into the token's words.
+/// The line saying what a mixed selection leaves is drawn under the prompt, never part of the
+/// prompt the token records. Caught by: the line left out, drawn above the prompt, or folded
+/// into the token's words.
 #[test]
 fn what_is_left_is_one_line_under_the_prompt_and_not_in_the_token() {
     let consequence = three_files();
@@ -353,11 +352,10 @@ fn what_is_left_is_one_line_under_the_prompt_and_not_in_the_token() {
     assert!(!confirmed[0].prompt().contains("left as"));
 }
 
-/// R1.2, R7.4, C17 and the user's decisions of 2026-10-10 on phase 15's Q3 and Q4: a discard of
-/// several files puts "▸ Show files" under its prompt; pressed, the glyph turns to ▾, the
-/// caption stays, and each file is listed with what happens to it; one file and lines list
-/// nothing. Caught by: the detail in the sentence, a caption that changes, a list shown
-/// unasked, or one where what is taken is already on screen.
+/// A discard of several files puts "▸ Show files" under its prompt; pressed, the glyph turns
+/// to ▾, the caption stays, and each file is listed with what happens to it; one file and
+/// lines list nothing. Caught by: the detail in the sentence, a caption that changes, a list
+/// shown unasked, or one where what is taken is already on screen.
 #[test]
 fn show_files_discloses_each_file_and_what_happens_to_it() {
     let (mut test, _) = launch(three_files());
@@ -413,10 +411,10 @@ fn show_files_discloses_each_file_and_what_happens_to_it() {
     }
 }
 
-/// Rule 6 (merge bar, phase 21, item 3): a path wider than the dialog is listed whole, its row
-/// as wide as its words and the list scrolling sideways to it, as every other list of paths
-/// does — never cut at the dialog's edge. Caught by: a row held to the list's width, the path
-/// squeezed into what is left beside its loss.
+/// A path wider than the dialog is listed whole, its row as wide as its words and the list
+/// scrolling sideways to it, as every other list of paths does — never cut at the dialog's
+/// edge. Caught by: a row held to the list's width, the path squeezed into what is left beside
+/// its loss.
 #[test]
 fn show_files_lists_a_path_wider_than_the_dialog_whole_and_scrolls_to_it() {
     let long = format!("src/{}/deep.rs", "a-folder-whose-name-runs-on/".repeat(12));
@@ -463,7 +461,7 @@ fn show_files_lists_a_path_wider_than_the_dialog_whole_and_scrolls_to_it() {
     );
 }
 
-/// C17's viewport twin, and the root `CLAUDE.md`'s virtualization invariant: "Show files" over
+/// The viewport twin of the root `CLAUDE.md`'s virtualization invariant: "Show files" over
 /// a discard of 50,000 files builds one viewport of rows, at the top and scrolled to the end,
 /// the last file there. Caught by: a list that builds a row per file.
 #[test]
@@ -537,10 +535,10 @@ fn button_disabled(test: &TestingRunner, caption: &str) -> Option<bool> {
     })
 }
 
-/// Phase 15's QA item 4, R7.4: while the engine counts, the greyed button is disabled to
-/// assistive technology as well as to the eye, and once the count fills the same dialog its
-/// caption's button is not. Caught by: the disabled flag dropped from the greyed answer (a
-/// screen reader would offer a button that does nothing), or kept on the confirming one.
+/// While the engine counts, the greyed button is disabled to assistive technology as well as
+/// to the eye, and once the count fills the same dialog its caption's button is not. Caught
+/// by: the disabled flag dropped from the greyed answer (a screen reader would offer a button
+/// that does nothing), or kept on the confirming one.
 #[test]
 fn the_greyed_button_is_disabled_to_assistive_technology_until_the_count_arrives() {
     let (mut test, answer) = {

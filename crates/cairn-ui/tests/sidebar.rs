@@ -1,6 +1,6 @@
-//! Headless tests for the sidebar (refs-and-status R8.1-R8.4, R8.7; criterion C8): its entries
-//! and sections in Fork's order, folders split at `/`, Fork's marks on a branch, a press
-//! reported for what it pressed, and one viewport built however many refs it lists.
+//! Headless tests for the sidebar: its entries and sections in Fork's order, folders split at
+//! `/`, Fork's marks on a branch, a press reported for what it pressed, and one viewport built
+//! however many refs it lists.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -195,14 +195,14 @@ fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
     (f64::from(centre.x), f64::from(centre.y))
 }
 
-/// R8.1, R8.2, R9.2: Local Changes with its count and All Commits, the filter, then Branches,
-/// Remotes, Tags and Stashes in Fork's order; branches and remotes in folders split at `/`, an
-/// open folder's refs under it, folders first, a closed folder's hidden; the current branch
-/// bold with its counts behind then ahead, unspaced as Fork prints them (`2↓1↑`); tags
-/// whole; the symbolic `origin/HEAD` by its remote's name too, under its remote; every stash
-/// by its message. Caught by: a section out of Fork's order or missing, a folder flattened,
-/// the current branch drawn plain, its counts left out or spaced, `origin/HEAD` drawn bare,
-/// or the count beside Local Changes missing.
+/// Local Changes with its count and All Commits, the filter, then Branches, Remotes, Tags and
+/// Stashes in Fork's order; branches and remotes in folders split at `/`, an open folder's refs
+/// under it, folders first, a closed folder's hidden; the current branch bold with its counts
+/// behind then ahead, unspaced as Fork prints them (`2↓1↑`); tags whole; the symbolic
+/// `origin/HEAD` by its remote's name too, under its remote; every stash by its message. Caught
+/// by: a section out of Fork's order or missing, a folder flattened, the current branch drawn
+/// plain, its counts left out or spaced, `origin/HEAD` drawn bare, or the count beside Local
+/// Changes missing.
 #[test]
 fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
     let mut disclosure = Disclosure::default();
@@ -245,10 +245,9 @@ fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
     assert_eq!(bold, ["main"], "only the current branch is bold");
 }
 
-/// R8.2, R5.5: each entry's glyph is its kind's shape — the current branch a check mark, a
-/// branch whose upstream is gone Fork's warning triangle (beside the check mark when it is
-/// the current branch, as Fork marks an active branch's invalid upstream), any other branch a
-/// branch, a
+/// Each entry's glyph is its kind's shape — the current branch a check mark, a branch whose
+/// upstream is gone Fork's warning triangle (beside the check mark when it is the current
+/// branch, as Fork marks an active branch's invalid upstream), any other branch a branch, a
 /// remote-tracking ref the remote, a tag the tag, a stash the box, a folder a folder, a
 /// detached `HEAD` the check mark — and a closed section or folder says so. Caught by: a kind
 /// drawn with another's glyph, or a gone upstream told by colour alone.
@@ -305,9 +304,9 @@ fn each_entry_draws_its_kinds_glyph() {
     assert_eq!(remote.glyph, RefGlyph::Remote);
     assert_eq!(remote.counts, None, "a remote-tracking ref has no counts");
 
-    // Fork's three upstream states, each its own shape (the user's decision, 2026-10-07): a
-    // branch with an upstream the branch, one with none the local-only line, one whose
-    // upstream is gone the warning — whoever is current.
+    // Fork's three upstream states, each its own shape: a branch with an upstream the branch,
+    // one with none the local-only line, one whose upstream is gone the warning — whoever is
+    // current.
     let mut plain = every_kind();
     plain.head = HeadState::Detached(oid(1));
     let mut feature_open = Disclosure::default();
@@ -393,9 +392,9 @@ fn the_entry_chosen_is_drawn_chosen_by_its_name() {
     assert_eq!(drawn_chosen, ["WIP on topic: 1234567 subject"]);
 }
 
-/// R8.5, R8.7: a press is reported for what it pressed — a ref's row, a folder's, a section's,
-/// Local Changes and All Commits — and the notice under the filter is drawn. Caught by: a press
-/// that reports another row, or no way to switch the main region.
+/// A press is reported for what it pressed — a ref's row, a folder's, a section's, Local
+/// Changes and All Commits — and the notice under the filter is drawn. Caught by: a press that
+/// reports another row, or no way to switch the main region.
 #[test]
 fn a_press_is_reported_for_what_it_pressed() {
     let refs = every_kind();
@@ -495,9 +494,9 @@ fn within_a_viewport(test: &TestingRunner, place: &str) {
     );
 }
 
-/// R8.4, C8: a sidebar of 50,000 refs, every folder open, builds one viewport of rows at the
-/// top, deep and at the end, and the end is the last ref. Caught by: a list that builds a row
-/// per ref, or an end that is not the snapshot's.
+/// A sidebar of 50,000 refs, every folder open, builds one viewport of rows at the top, deep
+/// and at the end, and the end is the last ref. Caught by: a list that builds a row per ref, or
+/// an end that is not the snapshot's.
 #[test]
 fn a_sidebar_of_50000_refs_builds_one_viewport() {
     let refs = many_branches(50_000, 50);
@@ -529,9 +528,9 @@ fn a_sidebar_of_50000_refs_builds_one_viewport() {
     );
 }
 
-/// The QA brief: folders over a flat list stay virtualized — one folder of 10,000 branches,
-/// opened, builds one viewport, at its top and scrolled deep into it, and closing it builds
-/// none of them. Caught by: a folder that builds every row it holds when opened.
+/// Folders over a flat list stay virtualized — one folder of 10,000 branches, opened, builds
+/// one viewport, at its top and scrolled deep into it, and closing it builds none of them.
+/// Caught by: a folder that builds every row it holds when opened.
 #[test]
 fn a_folder_of_10000_branches_open_builds_one_viewport() {
     let refs = many_branches(10_000, 1);

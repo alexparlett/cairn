@@ -1,8 +1,7 @@
-//! Where a dialog's buttons sit, per platform (the user's decision E, 2026-10-09): on Linux
-//! Fork for Windows' order — the primary button first, Cancel last — and on macOS Fork for
-//! macOS' — Cancel first, the primary last. Data per platform, as the accelerator table's
-//! chords are; which button holds focus is the dialog's own (every destructive confirmation
-//! starts on Cancel, whatever the order).
+//! Where a dialog's buttons sit, per platform: on Linux Fork for Windows' order — the primary
+//! button first, Cancel last — and on macOS Fork for macOS' — Cancel first, the primary last.
+//! Data per platform, as the accelerator table's chords are; which button holds focus is the
+//! dialog's own (every destructive confirmation starts on Cancel, whatever the order).
 
 use freya::prelude::*;
 

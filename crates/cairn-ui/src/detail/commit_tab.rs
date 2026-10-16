@@ -1,29 +1,28 @@
-//! The Commit tab (PRD R5.3): who wrote the commit and who committed it, each with the full
-//! timestamp at its own offset; the full commit id; each parent as a link; the whole
-//! message; then the changed files, a rename or a copy showing both names.
+//! The Commit tab: who wrote the commit and who committed it, each with the full timestamp at
+//! its own offset; the full commit id; each parent as a link; the whole message; then the
+//! changed files, a rename or a copy showing both names.
 //!
-//! Laid out as Fork lays it out (decision L9), with one difference forced by the list's
-//! size: the whole tab is ONE virtualised list of equal rows — header, message lines, then
-//! one row per changed file — because a commit can touch 55,184 paths (R5.5) and a list that
-//! builds a row each is the thing this repository's invariants exist to stop. So a message
-//! line is never wrapped, as git never re-wraps one; a line wider than the pane scrolls
-//! sideways rather than being cut.
+//! Laid out as Fork lays it out, with one difference forced by the list's size: the whole tab
+//! is ONE virtualised list of equal rows — header, message lines, then one row per changed
+//! file — because a commit can touch 55,184 paths and a list that builds a row each is the
+//! thing this repository's invariants exist to stop. So a message line is never wrapped, as
+//! git never re-wraps one; a line wider than the pane scrolls sideways rather than being cut.
 //!
-//! A file's diff opens in place under its row (phase 08, R5.3; Fork, Finding 4): a file
-//! pressed reports it, and the caller opens or closes it; what an opened file draws — its rows,
-//! unified or side by side as the shared setting says, the notice that stands in their place,
-//! or that it is being read or could not be — is read from an [`Expansion`] and drawn as more
-//! rows of the same list, at the same height, so a commit with any number of files open still
-//! builds one viewport of rows. Above the files, Fork's Expand All (Collapse All while any file
-//! is open) and, when Expand All stopped at its line budget, how many files it left collapsed.
+//! A file's diff opens in place under its row, as Fork opens it: a file pressed reports it,
+//! and the caller opens or closes it; what an opened file draws — its rows, unified or side by
+//! side as the shared setting says, the notice that stands in their place, or that it is being
+//! read or could not be — is read from an [`Expansion`] and drawn as more rows of the same
+//! list, at the same height, so a commit with any number of files open still builds one
+//! viewport of rows. Above the files, Fork's Expand All (Collapse All while any file is open)
+//! and, when Expand All stopped at its line budget, how many files it left collapsed.
 //!
-//! Above the id, the REFS row (refs-and-status R6.1, Fork's): the chips of the refs pointing at
-//! the commit, as its row in the history draws them — given to the tab laid out already, and
-//! cut at the pane's edge as Fork's Mac pane cuts them — and no row for a commit with none.
+//! Above the id, Fork's REFS row: the chips of the refs pointing at the commit, as its row in
+//! the history draws them — given to the tab laid out already, and cut at the pane's edge as
+//! Fork's Mac pane cuts them — and no row for a commit with none.
 //!
-//! No avatar (L9), and the tab never asks for anything: a parent link
-//! reports the parent and the caller decides what pressing it reaches. The commit's id, its
-//! parents and the files' paths are drawn in the diff's typeface, IBM Plex Mono (R6.6).
+//! No avatar, and the tab never asks for anything: a parent link reports the parent and the
+//! caller decides what pressing it reaches. The commit's id, its parents and the files' paths
+//! are drawn in the diff's typeface, IBM Plex Mono.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -50,15 +49,15 @@ use crate::history::ref_chips::{Chip, chips_row};
 /// diff keeps Fork's 17 px, `DIFF_ROW_HEIGHT`).
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
 
-/// Fork's control above the files that opens every file (Finding 4).
+/// Fork's control above the files that opens every file.
 pub const EXPAND_ALL_CAPTION: &str = "Expand All";
 /// What it turns into while any file is open.
 pub const COLLAPSE_ALL_CAPTION: &str = "Collapse All";
 /// Said under a file opened in place while its diff is on its way.
 pub const READING_DIFF: &str = "Reading the diff…";
 
-/// Said beside Expand All when it stopped with its line budget spent (R5.3): how many of the
-/// commit's files it left collapsed.
+/// Said beside Expand All when it stopped with its line budget spent: how many of the commit's
+/// files it left collapsed.
 pub fn budget_notice(collapsed: usize) -> String {
     format!(
         "Expand All stopped at its line budget: {} file{} left collapsed.",
@@ -89,7 +88,7 @@ pub const PARENTS_CAPTION: &str = "PARENTS";
 /// What stands where the files would be when a commit changed none.
 pub const NO_FILES: &str = "No files changed.";
 
-/// The notice above the files when `diff.renameLimit` stopped git's rename search (R2.2):
+/// The notice above the files when `diff.renameLimit` stopped git's rename search:
 /// git's own warning, and the number it asks the limit to be raised to.
 pub fn cut_short_notice(needed_limit: usize) -> String {
     format!(
@@ -98,8 +97,8 @@ pub fn cut_short_notice(needed_limit: usize) -> String {
     )
 }
 
-/// The bare letter Fork draws for `status` (user decision 5, 2026-10-03): git's
-/// `--name-status` letter without the similarity score git prints after `R` and `C`.
+/// The bare letter Fork draws for `status`: git's `--name-status` letter without the
+/// similarity score git prints after `R` and `C`.
 pub fn status_letter(status: ChangeStatus) -> &'static str {
     match status {
         ChangeStatus::Added => "A",
@@ -151,7 +150,7 @@ enum Line {
 }
 
 /// The chips of the refs pointing at a commit and the lane its row is in: what the REFS row
-/// draws (R6.1). No chips, no row.
+/// draws. No chips, no row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refs {
     pub chips: Vec<Chip>,
@@ -217,8 +216,8 @@ fn header_lines(changes: &ChangeSet, refs: &Refs) -> Vec<Line> {
 
 /// Everything [`header_lines`] reads from a change set but the commit's own fields, which
 /// its id names, and the refs drawn: one commit's header is built once, however often the
-/// state it is read from is written (a file's diff arriving, from phase 06) without changing
-/// the commit or its refs.
+/// state it is read from is written (a file's diff arriving) without changing the commit or
+/// its refs.
 #[derive(Debug, Clone, PartialEq)]
 struct HeaderKey {
     commit: Option<Oid>,
@@ -260,8 +259,8 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Ve
 /// `expansion`, what each file opened in place draws.
 ///
 /// The tab takes focus when it is pressed or reached with Tab, and while it has it, ↑ and ↓
-/// move the current file — Fork's previous and next file (user decision 6), keys of the
-/// focused list rather than chords. A chord pressed here is left for whoever hears it.
+/// move the current file — Fork's previous and next file, keys of the focused list rather
+/// than chords. A chord pressed here is left for whoever hears it.
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
     refs: Refs,
@@ -292,7 +291,7 @@ impl CommitTab {
     }
 
     /// The chips of the refs pointing at the commit, laid out as its row in the history lays
-    /// them out, and that row's lane: the REFS row (R6.1).
+    /// them out, and that row's lane: the REFS row.
     pub fn refs(mut self, refs: Refs) -> Self {
         self.refs = refs;
         self
@@ -305,14 +304,14 @@ impl CommitTab {
     }
 
     /// Draw opened files side by side rather than unified: the one setting every diff view
-    /// shares (R6.1; users report Fork's Commit-tab diffs follow it, Finding 4).
+    /// shares (users report Fork's Commit-tab diffs follow it).
     pub fn side_by_side(mut self, side_by_side: bool) -> Self {
         self.side_by_side = side_by_side;
         self
     }
 
     /// A parent link was pressed. Whether that parent can be reached is the caller's to
-    /// decide (R5.3: a loaded parent is selected; an unloaded one is issue #3).
+    /// decide (a loaded parent is selected; an unloaded one is issue #3).
     pub fn on_parent(mut self, on_parent: impl Into<EventHandler<Oid>>) -> Self {
         self.on_parent = on_parent.into();
         self
@@ -326,8 +325,8 @@ impl CommitTab {
     }
 
     /// A file was pressed — after [`Self::on_file`] reports it current — as distinct from
-    /// reached with an arrow: Fork opens a pressed file in place, and closes an open one
-    /// (Finding 4). Which it does is the caller's.
+    /// reached with an arrow: Fork opens a pressed file in place, and closes an open one.
+    /// Which it does is the caller's.
     pub fn on_file_pressed(mut self, on_file_pressed: impl Into<EventHandler<usize>>) -> Self {
         self.on_file_pressed = on_file_pressed.into();
         self
@@ -339,7 +338,7 @@ impl CommitTab {
         self
     }
 
-    /// Load Diff was pressed under the file opened in place at this index (R6.8).
+    /// Load Diff was pressed under the file opened in place at this index.
     pub fn on_load(mut self, on_load: impl Into<EventHandler<usize>>) -> Self {
         self.on_load = on_load.into();
         self
@@ -720,9 +719,9 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
     }
 }
 
-/// Expand All, right-aligned above the files as Fork places it (Finding 4) — Collapse All
-/// while any file is open — and, when Expand All stopped at its line budget, how many files
-/// it left collapsed.
+/// Expand All, right-aligned above the files as Fork places it — Collapse All while any file
+/// is open — and, when Expand All stopped at its line budget, how many files it left
+/// collapsed.
 fn files_bar(content: &TabContent) -> Element {
     let (any_open, stopped, collapsed) = {
         let expansion = content.expansion.read();
@@ -1036,9 +1035,8 @@ mod tests {
         }
     }
 
-    /// R6.1: the REFS row stands above the id, holding the chips given, and a commit with
-    /// none has no row. Caught by: a row drawn for no refs, the row below the id, or the
-    /// chips lost.
+    /// The REFS row stands above the id, holding the chips given, and a commit with none has
+    /// no row. Caught by: a row drawn for no refs, the row below the id, or the chips lost.
     #[test]
     fn the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit() {
         let changes = set(Some(details("x", 1)), 1, None);
@@ -1058,10 +1056,10 @@ mod tests {
         assert_eq!(lines.get(refs.unwrap_or_default()), Some(&Line::Refs(two)));
     }
 
-    /// R1: a write to the state the tab reads that leaves the commit as it was — what a
-    /// file's diff arriving in the window's `DiffState` is — redraws the tab without
-    /// building its header again; another commit builds it once. Caught by: building the
-    /// header on every render, or caching it past a change of commit.
+    /// A write to the state the tab reads that leaves the commit as it was — what a file's
+    /// diff arriving in the window's `DiffState` is — redraws the tab without building its
+    /// header again; another commit builds it once. Caught by: building the header on every
+    /// render, or caching it past a change of commit.
     #[test]
     fn the_header_is_built_once_per_commit_however_often_the_state_is_written() {
         #[derive(Clone)]
@@ -1128,9 +1126,9 @@ mod tests {
         assert_eq!(builds(), first + 2, "the same refs rebuilt the header");
     }
 
-    /// T6, user decision 5: each status is its bare letter, as Fork draws it — a rename and
-    /// a copy without the similarity git's `--name-status` prints after the letter. Caught
-    /// by: a letter swapped between two statuses, or a score appended.
+    /// Each status is its bare letter, as Fork draws it — a rename and a copy without the
+    /// similarity git's `--name-status` prints after the letter. Caught by: a letter swapped
+    /// between two statuses, or a score appended.
     #[test]
     fn every_status_is_its_bare_letter() {
         let similar = Similarity::from_percent(87);

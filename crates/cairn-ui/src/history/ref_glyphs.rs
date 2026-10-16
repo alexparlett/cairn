@@ -1,17 +1,16 @@
-//! The glyphs a ref's chip, the title bar and the sidebar carry (refs-and-status R5.1, R5.4,
-//! R5.5, R7.1, R8.2), drawn as Fork draws its label icons: a tag for a tag, a generic remote —
-//! a cloud — for a remote-tracking ref (a forge's own icon is packet 6's), a box for a stash, a
-//! check mark for the current branch, a branch for any other branch with an upstream and the
-//! title bar's, a single line of commits for a branch with none (Fork's local-only icon); and,
-//! in the sidebar, a folder, a warning triangle for a branch whose upstream is gone (Fork's
-//! icon for it), and the triangle that says whether a section or folder is open; and, in Local
-//! Changes, the submodule's badge (a box holding a smaller one) and the same warning triangle
-//! for a conflicted path.
+//! The glyphs a ref's chip, the title bar and the sidebar carry, drawn as Fork draws its label
+//! icons: a tag for a tag, a generic remote — a cloud — for a remote-tracking ref, a box for a
+//! stash, a check mark for the current branch, a branch for any other branch with an upstream
+//! and the title bar's, a single line of commits for a branch with none (Fork's local-only
+//! icon); and, in the sidebar, a folder, a warning triangle for a branch whose upstream is gone
+//! (Fork's icon for it), and the triangle that says whether a section or folder is open; and, in
+//! Local Changes, the submodule's badge (a box holding a smaller one) and the same warning
+//! triangle for a conflicted path.
 //!
 //! Each is painted as a path on a canvas — strokes and fills, never a character — so no font
 //! is needed and none can be missing. Each is drawn in one colour, the chip's text colour, so
-//! what tells one kind of chip from another is the glyph's shape, never its colour (R5.5):
-//! the shapes differ pixel for pixel (`every_glyph_paints_a_shape_no_other_glyph_paints`).
+//! what tells one kind of chip from another is the glyph's shape, never its colour: the shapes
+//! differ pixel for pixel (`every_glyph_paints_a_shape_no_other_glyph_paints`).
 //!
 //! A canvas is repainted only when its layout changes, never when what it would paint does
 //! (`RenderCallback` always compares equal), so a glyph's element must be keyed by what it
@@ -251,8 +250,8 @@ mod tests {
             .collect()
     }
 
-    /// R5.5: a kind of label is told by its glyph's shape, never its colour — every glyph is
-    /// painted in the same colour, so each must cover pixels no other does. Caught by: two
+    /// A kind of label is told by its glyph's shape, never its colour — every glyph is painted
+    /// in the same colour, so each must cover pixels no other does. Caught by: two
     /// kinds sharing a glyph, or a glyph that paints nothing.
     #[test]
     fn every_glyph_paints_a_shape_no_other_glyph_paints() {

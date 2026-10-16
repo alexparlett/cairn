@@ -97,7 +97,7 @@ mod tests {
                 &["Teach the engine", "", "", "Signed-off-by: A <a@x>"],
             ),
             // Tab stops after characters a terminal draws two columns wide and none wide,
-            // where the old hand-rolled table counted one: a rocket, a kana from the
+            // which a one-column-per-character count gets wrong: a rocket, a kana from the
             // supplement, a Thai tone mark.
             (
                 "🚀\tz\n\u{1b000}\tz\n\u{e01}\u{e48}\tz\n",

@@ -1,8 +1,7 @@
-//! The sidebar, Fork's (refs-and-status R8; `fork-refs-and-status-ui.md`, section 5): Local
-//! Changes with its count and All Commits, which choose what the main region shows (R8.7); a
-//! filter box (R8.3); and one virtualized list of the refs — Branches, Remotes, Tags, Stashes,
-//! each a section that opens and closes, branches and remote-tracking refs in folders split at
-//! `/` (R8.1, R8.2, R8.4). The rows are laid out on a worker (`RefsSnapshot::sidebar_rows`); the
+//! The sidebar, Fork's: Local Changes with its count and All Commits, which choose what the
+//! main region shows; a filter box; and one virtualized list of the refs — Branches, Remotes,
+//! Tags, Stashes, each a section that opens and closes, branches and remote-tracking refs in
+//! folders split at `/`. The rows are laid out on a worker (`RefsSnapshot::sidebar_rows`); the
 //! list reads each one's name from the snapshot they index as it builds that row alone, so a
 //! snapshot of tens of thousands of refs builds one viewport.
 //!
@@ -40,7 +39,7 @@ pub const ALL_COMMITS_CAPTION: &str = "All Commits";
 pub const DETACHED_HEAD_CAPTION: &str = "HEAD";
 const FONT_SIZE: f32 = 13.0;
 
-/// What the main region shows (R8.7).
+/// What the main region shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MainView {
     LocalChanges,
@@ -58,7 +57,7 @@ pub fn section_caption(section: SidebarSection) -> &'static str {
     }
 }
 
-/// `Local Changes (N)`, the count left out when there is none (R9.2).
+/// `Local Changes (N)`, the count left out when there is none.
 pub fn local_changes_text(count: Option<usize>) -> String {
     match count {
         Some(count) if count > 0 => format!("{LOCAL_CHANGES_CAPTION} ({count})"),
@@ -394,7 +393,7 @@ pub fn drawn_row(
             let listed = refs.refs.get(index as usize)?;
             let short = listed.name.shorthand();
             // A symbolic remote-tracking ref — `origin/HEAD` — keeps its remote's name, as
-            // Fork lists it (the user's decision, 2026-10-07).
+            // Fork lists it.
             let text = match (listed.kind, &listed.symbolic) {
                 (RefKind::Tag, _) | (RefKind::RemoteTracking, Some(_)) => short,
                 (RefKind::LocalBranch, _) | (RefKind::RemoteTracking, None) => {

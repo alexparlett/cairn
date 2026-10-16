@@ -1,26 +1,25 @@
-//! The refs on a history row, as Fork draws them (refs-and-status R5): one outlined chip per
-//! ref between the graph and the subject, tinted with the row's lane colour — a tag indigo —
-//! each kind told by its glyph and shape (R5.5): a local branch is a plain chip, the current
-//! one with a check mark before its name; a remote-tracking ref and a tag carry their glyph in
-//! a cap of their own at the chip's left; a stash's row carries a `stash@{n}` chip with a box.
+//! The refs on a history row, as Fork draws them: one outlined chip per ref between the graph
+//! and the subject, tinted with the row's lane colour — a tag indigo — each kind told by its
+//! glyph and shape: a local branch is a plain chip, the current one with a check mark before
+//! its name; a remote-tracking ref and a tag carry their glyph in a cap of their own at the
+//! chip's left; a stash's row carries a `stash@{n}` chip with a box.
 //!
 //! **Order.** The current branch first (git's `HEAD -> main` leads too), then the row's refs in
 //! the snapshot's order — local branches, remote-tracking refs, tags, each by name — Fork's
-//! local-before-remote; where Fork puts tags is not recorded (`fork-refs-and-status-ui.md`,
-//! OPEN 3).
+//! local-before-remote; where Fork puts tags is not recorded.
 //!
-//! **Compact labels** (R5.2, Fork's default): a local branch whose upstream is a
-//! remote-tracking ref labelling the same row draws that upstream as the remote glyph in front
-//! of its own chip, and the upstream draws no chip of its own; any other remote's ref at that
-//! commit keeps its chip (Fork, Tracker #1365). Which ref is a branch's upstream is read from
-//! the refs snapshot; that both label this row is read from the row.
+//! **Compact labels** (Fork's default): a local branch whose upstream is a remote-tracking ref
+//! labelling the same row draws that upstream as the remote glyph in front of its own chip, and
+//! the upstream draws no chip of its own; any other remote's ref at that commit keeps its chip
+//! (Fork, Tracker #1365). Which ref is a branch's upstream is read from the refs snapshot; that
+//! both label this row is read from the row.
 //!
-//! **Clipped, never counted** (R5.3): chips are laid out left to right and stop being BUILT
-//! once the room the column has is spent — the chip that crosses its edge is drawn and cut
-//! there, none after it is made — so a row labelled by thousands of refs costs what the
-//! column shows. A chip's width is not known until the toolkit lays its text out, so the room
-//! is spent by a lower bound of each chip's width ([`min_width`]): the column is always filled
-//! to its edge, and at most a column's worth of lower bounds is built past it.
+//! **Clipped, never counted**: chips are laid out left to right and stop being BUILT once the
+//! room the column has is spent — the chip that crosses its edge is drawn and cut there, none
+//! after it is made — so a row labelled by thousands of refs costs what the column shows. A
+//! chip's width is not known until the toolkit lays its text out, so the room is spent by a
+//! lower bound of each chip's width ([`min_width`]): the column is always filled to its edge,
+//! and at most a column's worth of lower bounds is built past it.
 
 use cairn_model::{
     HeadState, HistoryRow, Label, Lane, RefKind, RefsSnapshot, RowContent, RowLabels, Upstream,
@@ -48,14 +47,14 @@ const CHECK_GAP: f32 = 3.0;
 const MIN_ADVANCE: f32 = 2.0;
 const CORNER_RADIUS: f32 = 3.0;
 
-/// Fork's tag colour: indigo, whatever the lane (`fork-refs-and-status-ui.md`, section 1).
+/// Fork's tag colour: indigo, whatever the lane.
 pub const TAG_INDIGO: Color = Color::from_rgb(98, 92, 196);
 
 /// What kind of chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChipKind {
     /// A local branch: `current` when `HEAD` is on it, `tracked` when its upstream labels the
-    /// same row and is folded into this chip as the remote glyph (R5.2).
+    /// same row and is folded into this chip as the remote glyph.
     Branch {
         current: bool,
         tracked: bool,
@@ -129,10 +128,10 @@ pub fn min_width(chip: &Chip) -> f32 {
     cap + check + 2. * NAME_PADDING + chip.text.chars().count() as f32 * MIN_ADVANCE
 }
 
-/// The chips a row with `labels` draws in `room` pixels, in order, compacted (R5.2) and cut
-/// at the room's edge (R5.3). `refs` is the snapshot a branch's upstream is read from; with
-/// none yet, no chip is compacted. Reads at most the labels it builds a chip for, the current
-/// branch's and the upstreams it folds — each found by a search — however many the row has.
+/// The chips a row with `labels` draws in `room` pixels, in order, compacted and cut at the
+/// room's edge. `refs` is the snapshot a branch's upstream is read from; with none yet, no chip
+/// is compacted. Reads at most the labels it builds a chip for, the current branch's and the
+/// upstreams it folds — each found by a search — however many the row has.
 pub fn row_chips(labels: RowLabels<'_>, refs: Option<&RefsSnapshot>, room: f32) -> Vec<Chip> {
     #[cfg(test)]
     LAYOUTS.with(|layouts| layouts.set(layouts.get() + 1));

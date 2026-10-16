@@ -1,41 +1,41 @@
-//! The diff's staging gesture (staging-and-commit R9, L5; Fork, Finding 23): in Local Changes'
-//! diff only, a hovered chunk is outlined and floats its actions — `Stage` and `Discard
-//! Changes…` over the unstaged diff, `Unstage` over the staged one — and a drag across lines
-//! narrows them, and the stage and discard chords, to the changed lines it covers.
+//! The diff's staging gesture, as Fork's: in Local Changes' diff only, a hovered chunk is
+//! outlined and floats its actions — `Stage` and `Discard Changes…` over the unstaged diff,
+//! `Unstage` over the staged one — and a drag across lines narrows them, and the stage and
+//! discard chords, to the changed lines it covers.
 //!
 //! **Outside the recycled rows.** The virtualising view builds and drops rows as they scroll;
 //! nothing here lives in one. The outline, the selection's tint and the floating actions are
 //! one layer laid over the list ([`GestureLayer`]), positioned from the rows' numbers and the
 //! scroll — so the rows the Commit and Changes tabs draw are the same rows, and those tabs,
-//! which hand their view no [`Gesture`], draw none of this (R9.5). The layer is built from the
-//! hover and the selection alone: an outline, a tint and at most three actions, however long
-//! the diff or the selection.
+//! which hand their view no [`Gesture`], draw none of this. The layer is built from the hover
+//! and the selection alone: an outline, a tint and at most three actions, however long the diff
+//! or the selection.
 //!
 //! **Tracked by the list, never a row.** The pointer is heard by the view's root through global
 //! listeners, so a drag goes on across rows the virtual list unmounts as it scrolls, and the
-//! list scrolls itself at its edges (`EdgeScroll`, R7.6). What a drag selects is the rows
-//! between its ends, read from the layout ([`cairn_model::UnifiedLayout::selection_in`]) when it
-//! ends — never from the rows built — so the selection is whole however far it reached. A
-//! release the window never hears ends it at the next press, or when the window loses focus.
+//! list scrolls itself at its edges (`EdgeScroll`). What a drag selects is the rows between its
+//! ends, read from the layout ([`cairn_model::UnifiedLayout::selection_in`]) when it ends —
+//! never from the rows built — so the selection is whole however far it reached. A release the
+//! window never hears ends it at the next press, or when the window loses focus.
 //!
 //! **What an action takes.** A hovered chunk's actions take every changed line its outline
 //! holds (`hunk_selection`: at any context, every exact change the drawn hunk groups, so the
 //! chunk is what the person sees outlined); a selection's take its own lines, counted in the
-//! caption (`Stage 2 Lines`). Side by side, a drag stays in the column it began in (R9.3).
-//! Hovering is not selecting (Fork, Tracker #103): with nothing selected the chords act on the
-//! whole file, and a press without a drag clears a selection.
+//! caption (`Stage 2 Lines`). Side by side, a drag stays in the column it began in. Hovering is
+//! not selecting (Fork, Tracker #103): with nothing selected the chords act on the whole file,
+//! and a press without a drag clears a selection.
 //!
 //! **After an action** the actions hide until the diff is drawn again or the pointer moves, so
 //! a second press cannot act twice on rows the first already took (Fork, Tracker #480); then
 //! they follow whatever is under the pointer, which the layer reads afresh from the new rows.
 //!
-//! **Which text a selection belongs to** (R9.6, L4). A selection names rows, and the rows of
-//! other text are other lines: the view is handed the content of the diff it draws
+//! **Which text a selection belongs to.** A selection names rows, and the rows of other text
+//! are other lines: the view is handed the content of the diff it draws
 //! ([`cairn_model::ShownDiff::content`], a hash of the question and every byte of the answer),
-//! each selection carries the content it was made over, and one made over another is nothing. So
-//! a refresh that re-reads the file unchanged keeps the selection, its tint and its actions, and
-//! one that reads other text leaves it nothing — which the window lets go of, saying so once
-//! ([`SELECTION_CLEARED`]).
+//! each selection carries the content it was made over, and one made over another is nothing.
+//! So a refresh that re-reads the file unchanged keeps the selection, its tint and its actions,
+//! and one that reads other text leaves it nothing — which the window lets go of, saying so
+//! once ([`SELECTION_CLEARED`]).
 
 use std::ops::Range;
 
@@ -57,8 +57,7 @@ pub const DISCARD_CHUNK_CAPTION: &str = "Discard Changes…";
 /// A hovered chunk's action over the staged diff (Fork's).
 pub const UNSTAGE_CHUNK_CAPTION: &str = "Unstage";
 /// Said once in the diff's bar when a refresh drew other text under a finished line selection,
-/// which is let go of (R9.6, L4 — where Fork drops it silently, observed `ln2`); gone at the
-/// next key or press.
+/// which is let go of (where Fork drops it silently); gone at the next key or press.
 pub const SELECTION_CLEARED: &str = "The file changed — line selection cleared.";
 
 /// How many layers the gesture's layer is lifted above the view's root: past the depth of
@@ -76,9 +75,9 @@ pub enum GestureVerb {
 /// Which of Local Changes' diffs the gesture is over: what its actions are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GestureSide {
-    /// A path's unstaged or untracked diff: stage, and discard (R9.1).
+    /// A path's unstaged or untracked diff: stage, and discard.
     Unstaged,
-    /// A path's staged diff: unstage. Staged changes are never discarded (R3.6).
+    /// A path's staged diff: unstage. Staged changes are never discarded.
     Staged,
 }
 
@@ -101,9 +100,9 @@ pub fn chunk_caption(verb: GestureVerb) -> &'static str {
     }
 }
 
-/// A selection's caption for `verb` over `count` lines (R9.2): `Stage 2 Lines`,
-/// `Unstage 1 Line`, and `Discard 2 Lines…`, whose ellipsis says it confirms — the
-/// confirmation's own button then reads `Discard 2 Lines` (the user's decision, 2026-10-09).
+/// A selection's caption for `verb` over `count` lines: `Stage 2 Lines`, `Unstage 1 Line`,
+/// and `Discard 2 Lines…`, whose ellipsis says it confirms — the confirmation's own button
+/// then reads `Discard 2 Lines`.
 pub fn lines_caption(verb: GestureVerb, count: usize) -> String {
     let lines = if count == 1 { "Line" } else { "Lines" };
     match verb {
@@ -113,7 +112,7 @@ pub fn lines_caption(verb: GestureVerb, count: usize) -> String {
     }
 }
 
-/// The mode row's caption for `verb` (R9.4).
+/// The mode row's caption for `verb`.
 pub fn mode_caption(verb: GestureVerb) -> &'static str {
     match verb {
         GestureVerb::Stage => "Stage Mode Change",
@@ -124,7 +123,7 @@ pub fn mode_caption(verb: GestureVerb) -> &'static str {
 
 /// What a person asked of the gesture: `verb` on `selection` of the diff whose content is
 /// `content`. The selection names lines of that text alone: whoever acts on it refuses it once
-/// a diff of other content is drawn (phase 08 QA item 1, R9.6).
+/// a diff of other content is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GestureAct {
     pub verb: GestureVerb,
@@ -132,11 +131,11 @@ pub struct GestureAct {
     pub content: u64,
     /// Whether the selection is the hovered chunk's own — its floating action pressed — rather
     /// than lines a drag selected or the mode row's mode: a discard's prompt names it as the
-    /// chunk (staging-and-commit phase 15).
+    /// chunk.
     pub chunk: bool,
 }
 
-/// Where a drag across a diff's lines stands (R9.2), kept by the window and handed to the view
+/// Where a drag across a diff's lines stands, kept by the window and handed to the view
 /// with its [`Gesture`]: the window reads the lines selected for the chords, and the view
 /// writes it as the pointer moves.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -191,7 +190,7 @@ impl LineDrag {
     }
 
     /// Whether a finished selection made over text other than `content` is held: what a
-    /// refresh that drew `content` in its place lets go of, saying so (R9.6).
+    /// refresh that drew `content` in its place lets go of, saying so.
     pub fn outlived_by(&self, content: u64) -> bool {
         self.content != content
             && match self.phase {
@@ -577,9 +576,9 @@ fn dragged_to(
     Some(row_at(y, scroll).unwrap_or(0).min(last))
 }
 
-/// Lets a drag go when the window loses focus: its release may be heard by another window
-/// (phase 06's QA item 16, as the lists' drag does). `lines` is the drag the view is handed
-/// first; the window keeps one for the life of the view.
+/// Lets a drag go when the window loses focus, as the lists' drag does: its release may be
+/// heard by another window. `lines` is the drag the view is handed first; the window keeps one
+/// for the life of the view.
 pub(crate) fn use_drag_ends_on_focus_lost(lines: Option<State<LineDrag>>) {
     use_side_effect(move || {
         let focused = *Platform::get().is_app_focused.read();
@@ -814,8 +813,8 @@ fn floating_action(caption: String, pressed: impl Fn() + 'static) -> Rect {
         )
 }
 
-/// A file's mode change as a row of its own over its diff (R9.4): git's `old mode` and `new
-/// mode`, and, while hovered, its own actions — the mode change alone, selected through
+/// A file's mode change as a row of its own over its diff: git's `old mode` and `new mode`,
+/// and, while hovered, its own actions — the mode change alone, selected through
 /// [`Selection::select_mode`], never a line.
 #[derive(Clone)]
 pub struct ModeRow {
@@ -999,9 +998,9 @@ mod tests {
         );
     }
 
-    /// R9.6: a selection is the lines over the text it was made over and nothing over other
-    /// text; a finished one is outlived by other content and not by its own, a drag in progress
-    /// never (it is cancelled, not said cleared), and a selection let go of for a change is said
+    /// A selection is the lines over the text it was made over and nothing over other text; a
+    /// finished one is outlived by other content and not by its own, a drag in progress never
+    /// (it is cancelled, not said cleared), and a selection let go of for a change is said
     /// once. Caught by: a selection kept across contents (lines of other text acted on), or a
     /// drag reported as a selection cleared.
     #[test]
@@ -1037,9 +1036,8 @@ mod tests {
         assert!(!drag.says_cleared());
     }
 
-    /// The captions: Fork's for a chunk, a count of lines for a selection (R9.2), the mode's
-    /// own (R9.4), and each side's actions (R9.1). Caught by: a discard offered over the
-    /// staged diff.
+    /// The captions: Fork's for a chunk, a count of lines for a selection, the mode's own, and
+    /// each side's actions. Caught by: a discard offered over the staged diff.
     #[test]
     fn each_side_offers_its_own_actions_in_its_own_words() {
         assert_eq!(

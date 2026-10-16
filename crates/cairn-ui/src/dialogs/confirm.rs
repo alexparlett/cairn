@@ -1,4 +1,4 @@
-//! The confirmation a destructive operation waits on (staging-and-commit R7.4, L8).
+//! The confirmation a destructive operation waits on.
 //!
 //! It draws a [`Consequence`] the engine computed — its prompt and its button's label, both
 //! rendered from it by its own `prompt` and `action`, so no count or path is typed apart
@@ -6,23 +6,21 @@
 //! [`Confirmed`] token from that same value: this file is a confirmation surface, the one
 //! place in the window a token is made (`CONFIRMATION_SURFACES`, root `CLAUDE.md`).
 //!
-//! **It opens at the press** (the redesign's rule 3, the user's decisions of 2026-10-10 on phase
-//! 15): while the engine counts what the operation would destroy it says "Counting…" and its
-//! button, greyed, reads the dialog's title ([`DialogAnswer::Counting`]); the count arriving
-//! makes it the confirmation ([`DialogAnswer::Ready`]), the button its own caption. A refusal
-//! the engine makes while counting makes the same dialog the refusal
-//! ([`DialogAnswer::Refused`], rule 4): titled "Couldn't <title>", the engine's one sentence and
+//! **It opens at the press**: while the engine counts what the operation would destroy it says
+//! "Counting…" and its button, greyed, reads the dialog's title ([`DialogAnswer::Counting`]);
+//! the count arriving makes it the confirmation ([`DialogAnswer::Ready`]), the button its own
+//! caption. A refusal the engine makes while counting makes the same dialog the refusal
+//! ([`DialogAnswer::Refused`]): titled "Couldn't <title>", the engine's one sentence and
 //! "Nothing was changed.", Close alone and no Error Details, since no git failed.
 //!
-//! **Its words are short and never cut** (rule 6): the prompt wraps whole, one line under it says
-//! what the selection held that the operation leaves as it is (the redesign's D1), and the
-//! detail of a discard of several files — each path and what happens to it — sits behind a
-//! "Show files" disclosure over a virtualized list, so a selection of fifty thousand builds one
-//! viewport of rows.
+//! **Its words are short and never cut**: the prompt wraps whole, one line under it says what
+//! the selection held that the operation leaves as it is, and the detail of a discard of
+//! several files — each path and what happens to it — sits behind a "Show files" disclosure
+//! over a virtualized list, so a selection of fifty thousand builds one viewport of rows.
 //!
 //! It is modal to the keyboard and to assistive technology: focus is held inside it
 //! (`a11y_modal`) and starts on **Cancel**, a deliberate deviation from Fork, which styles
-//! Discard as the default (L8, Fork Tracker #1080) — so a Return pressed by habit cancels.
+//! Discard as the default (Fork Tracker #1080) — so a Return pressed by habit cancels.
 //! Escape cancels and so does a press outside it, as `Popup` does. The window's chords are
 //! made inert while it is open by the window itself, whose key listener runs before any
 //! dialog's (`shortcuts::act`). One acknowledgement builds one token: once answered, the
@@ -45,14 +43,14 @@ const DIALOG_WIDTH: f32 = 520.;
 /// The safe answer, which holds focus as the dialog opens.
 pub const CANCEL_CAPTION: &str = "Cancel";
 
-/// What the dialog says while the engine counts (R7.4).
+/// What the dialog says while the engine counts.
 pub const COUNTING_TEXT: &str = "Counting…";
 
-/// The disclosure over the files a discard of several takes (R1.2, the redesign's D2); its
-/// caption stays and its glyph turns, ▸ closed and ▾ open (the user's decision of 2026-10-10).
+/// The disclosure over the files a discard of several takes; its caption stays and its glyph
+/// turns, ▸ closed and ▾ open.
 pub const SHOW_FILES_CAPTION: &str = "Show files";
 
-/// The tail a refusal found while running adds, once (R14.2).
+/// The tail a refusal found while running adds, once.
 pub const NOTHING_CHANGED: &str = "Nothing was changed.";
 
 /// The height of one row of "Show files".
@@ -100,8 +98,8 @@ pub struct ConfirmDialog {
 }
 
 impl ConfirmDialog {
-    /// A dialog titled `title` (the redesign's Title Case, "Discard Changes") asking whether to
-    /// accept `consequence`; `serial` names this confirmation, and must differ for every other.
+    /// A dialog titled `title` (in Title Case, "Discard Changes") asking whether to accept
+    /// `consequence`; `serial` names this confirmation, and must differ for every other.
     pub fn new(serial: u64, title: impl Into<String>, consequence: Rc<Consequence>) -> Self {
         Self::answering(serial, title, DialogAnswer::Ready(consequence))
     }
@@ -123,8 +121,8 @@ impl ConfirmDialog {
     }
 
     /// One line said under the prompt — what the selection held that the operation leaves as
-    /// it is (the redesign's D1: "1 submodule and 1 conflicted file are left as they are.") —
-    /// never part of the prompt the token records, which names only what is destroyed.
+    /// it is ("1 submodule and 1 conflicted file are left as they are.") — never part of the
+    /// prompt the token records, which names only what is destroyed.
     pub fn left(mut self, left: Option<String>) -> Self {
         self.left = left;
         self
@@ -143,8 +141,7 @@ impl ConfirmDialog {
         self
     }
 
-    /// Which platform's button order to draw in (the user's decision E): this build's own
-    /// unless a test names another.
+    /// Which platform's button order to draw in: this build's own unless a test names another.
     pub fn platform(mut self, platform: Os) -> Self {
         self.platform = platform;
         self
@@ -192,9 +189,9 @@ impl PartialEq for ShownFiles {
 }
 
 /// One row of "Show files": the path, and what happens to it, read by index as it is built.
-/// The row is as wide as its words, never cut (rule 6): a path wider than the dialog scrolls
-/// the list sideways, as every other list of paths does. An index past the list's own rows
-/// (the end room) builds an empty row.
+/// The row is as wide as its words, never cut: a path wider than the dialog scrolls the list
+/// sideways, as every other list of paths does. An index past the list's own rows (the end
+/// room) builds an empty row.
 fn shown_file(item: VirtualItem, files: &ShownFiles) -> Element {
     let (path, what) = files.0.listed_file(item.index).unwrap_or_default();
     rect()
@@ -236,7 +233,7 @@ impl Component for ConfirmDialog {
 
         let (title, body, buttons, files) = match &self.answer {
             DialogAnswer::Refused(why) => {
-                // Rule 4: the refusal, in this dialog, Close alone.
+                // The refusal, in this dialog, Close alone.
                 let buttons = PopupButtons::new().child(answer(
                     self.serial,
                     close_id,
@@ -286,8 +283,8 @@ impl Component for ConfirmDialog {
                         }
                     }
                 };
-                // In the platform's order (the user's decision E); focus starts on Cancel
-                // either way, and stays there as the count arrives.
+                // In the platform's order; focus starts on Cancel either way, and stays there
+                // as the count arrives.
                 let buttons = PopupButtons::new().children(ordered(
                     self.platform,
                     vec![answer(

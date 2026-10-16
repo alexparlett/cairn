@@ -1,19 +1,17 @@
-//! The bar over a diff (PRD R6.2, R6.3, R6.7), laid out as Fork lays it out (Finding 10):
-//! previous and next change on the left, the path in the middle with its file name
-//! emphasised, the view's toggles on the right. No statistics and no file actions.
+//! The bar over a diff, laid out as Fork lays it out: previous and next change on the left,
+//! the path in the middle with its file name emphasised, the view's toggles on the right. No
+//! statistics and no file actions.
 //!
-//! **The buttons are Fork's** (Finding 10; the user's decision, 2026-10-03): a glyph each
-//! (`toggle_glyphs`), drawn in the accent colour — the theme's `text_highlight` — while its
-//! toggle is on, never filled; and each button's name, which assistive technology reads and
-//! its tooltip shows, is Fork's tooltip where one is recorded ([`IGNORE_WHITESPACE_LABEL`],
-//! [`FEWER_LINES_LABEL`], [`MORE_LINES_LABEL`], [`ENTIRE_FILE_LABEL`]) and Cairn's own
-//! otherwise ([`PREVIOUS_CHANGE_LABEL`], [`NEXT_CHANGE_LABEL`], [`SIDE_BY_SIDE_LABEL`]), so
-//! no meaning rests on the glyph alone.
+//! **The buttons are Fork's**: a glyph each (`toggle_glyphs`), drawn in the accent colour —
+//! the theme's `text_highlight` — while its toggle is on, never filled; and each button's
+//! name, which assistive technology reads and its tooltip shows, is Fork's tooltip where one
+//! is recorded ([`IGNORE_WHITESPACE_LABEL`], [`FEWER_LINES_LABEL`], [`MORE_LINES_LABEL`],
+//! [`ENTIRE_FILE_LABEL`]) and Cairn's own otherwise ([`PREVIOUS_CHANGE_LABEL`],
+//! [`NEXT_CHANGE_LABEL`], [`SIDE_BY_SIDE_LABEL`]), so no meaning rests on the glyph alone.
 //!
-//! Every toggle is a button and none has a chord — Fork binds none (user decision,
-//! `docs/research/diff-engine/fork-shortcuts.md`); previous and next change also answer the
-//! detail pane's chords. Side-by-side (phase 07) is lit while the shared setting is on. With
-//! whitespace ignored the bar says when that hides a change — only then (R6.7), a deliberate
+//! Every toggle is a button and none has a chord — Fork binds none; previous and next change
+//! also answer the detail pane's chords. Side-by-side is lit while the shared setting is on.
+//! With whitespace ignored the bar says when that hides a change — only then, a deliberate
 //! deviation from Fork, which hides them silently.
 
 use cairn_model::{ChangeStatus, ChangedFile};
@@ -31,13 +29,13 @@ pub const DIFF_HEADER_HEIGHT: f32 = 30.0;
 pub const PREVIOUS_CHANGE_LABEL: &str = "Previous change";
 /// Next change's name and tooltip. Fork's tooltip is not recorded; Cairn's own.
 pub const NEXT_CHANGE_LABEL: &str = "Next change";
-/// Fork's tooltip (Finding 10: the vendor's GIF, Mac 1.0.69).
+/// Fork's tooltip (the vendor's GIF, Mac 1.0.69).
 pub const IGNORE_WHITESPACE_LABEL: &str = "Ignore whitespaces";
-/// Fork's tooltip (Finding 10: named in Tracker #911 and TrackerWin #1046).
+/// Fork's tooltip (named in Fork Tracker #911 and TrackerWin #1046).
 pub const FEWER_LINES_LABEL: &str = "Decrease number of visible lines";
-/// Fork's tooltip (Finding 10: the vendor's GIF, Mac 1.0.69).
+/// Fork's tooltip (the vendor's GIF, Mac 1.0.69).
 pub const MORE_LINES_LABEL: &str = "Increase number of visible lines";
-/// Fork's tooltip (Finding 10: the vendor's screenshot, TrackerWin #792).
+/// Fork's tooltip (the vendor's screenshot, Fork TrackerWin #792).
 pub const ENTIRE_FILE_LABEL: &str = "Show entire file";
 /// Side-by-side's name and tooltip. Fork's header toggle's tooltip is not recorded (its quick
 /// look's eye button reads "Show diff side-by-side (spacebar)", another control); Cairn's
@@ -92,16 +90,16 @@ impl DiffHeader {
     }
 
     /// The diff under the bar is always the exact one, whatever the shared setting says —
-    /// Local Changes', where what is staged is what is drawn (staging-and-commit R8.5, L6):
-    /// ignore whitespace is drawn off and disabled, the shared setting left as it was, and no
-    /// notice says whitespace hides a change.
+    /// Local Changes', where what is staged is what is drawn: ignore whitespace is drawn off
+    /// and disabled, the shared setting left as it was, and no notice says whitespace hides a
+    /// change.
     pub fn exact(mut self, exact: bool) -> Self {
         self.exact = exact;
         self
     }
 
     /// A line the bar says beside the path — Local Changes' "The file changed — line selection
-    /// cleared." (staging-and-commit R9.6) — for as long as the caller hands it.
+    /// cleared." — for as long as the caller hands it.
     pub fn said(mut self, said: Option<&'static str>) -> Self {
         self.said = said;
         self

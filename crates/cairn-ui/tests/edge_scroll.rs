@@ -1,7 +1,6 @@
-//! Headless tests for the edge auto-scroll of a drag over a virtualized list
-//! (staging-and-commit R7.6): the list, never a row, tracks the drag; a pointer held still at
-//! an edge keeps the list scrolling on the timer; away from the edges, or once released, it
-//! stops.
+//! Headless tests for the edge auto-scroll of a drag over a virtualized list: the list, never
+//! a row, tracks the drag; a pointer held still at an edge keeps the list scrolling on the
+//! timer; away from the edges, or once released, it stops.
 
 use std::time::Duration;
 
@@ -96,9 +95,9 @@ fn a_step_points_at_the_edge_the_pointer_is_at() {
     assert!(edge_step(top + 11.0, top, top + 10.0) > 0.0);
 }
 
-/// QA item 15: a viewport not yet laid out (`(0, 0)`, before the list's first `on_sized`), a
-/// collapsed one and an inverted one scroll nothing wherever the pointer is. Caught by: a band
-/// of zero that reads every pointer as past an edge.
+/// A viewport not yet laid out (`(0, 0)`, before the list's first `on_sized`), a collapsed
+/// one and an inverted one scroll nothing wherever the pointer is. Caught by: a band of zero
+/// that reads every pointer as past an edge.
 #[test]
 fn a_viewport_with_no_height_scrolls_nothing() {
     for (top, bottom) in [(0.0, 0.0), (TOP, TOP), (BOTTOM, TOP)] {
@@ -112,8 +111,8 @@ fn a_viewport_with_no_height_scrolls_nothing() {
     }
 }
 
-/// R7.6: a drag begun on a row and moved past the list's bottom keeps the list scrolling while
-/// the pointer stands still there — the row it began on long unmounted — and stops once the
+/// A drag begun on a row and moved past the list's bottom keeps the list scrolling while the
+/// pointer stands still there — the row it began on long unmounted — and stops once the
 /// pointer is back inside; past the top it scrolls back; released, it stops. A pointer at the
 /// edge with no drag scrolls nothing. Caught by: scrolling only on pointer moves, a drag kept
 /// by the row (gone once it scrolls out), or a timer that outlives the drag.
@@ -172,11 +171,11 @@ fn a_drag_held_at_an_edge_keeps_the_list_scrolling_until_it_leaves_or_ends() {
     assert_eq!(shown(&test).0, released, "the scroll outlived the drag");
 }
 
-/// Phase 06's QA item 16: a drag carried out of the window and released there may never be
-/// heard, since the toolkit forgets the button as the pointer leaves. The next press — which
-/// can only come once that release was made — ends the drag; so does the window losing focus.
-/// A drag begun by a press is not ended by that same press. Caught by: a drag that keeps
-/// scrolling after a release the window never heard, or one ended by the press that began it.
+/// A drag carried out of the window and released there may never be heard, since the toolkit
+/// forgets the button as the pointer leaves. The next press — which can only come once that
+/// release was made — ends the drag; so does the window losing focus. A drag begun by a press
+/// is not ended by that same press. Caught by: a drag that keeps scrolling after a release the
+/// window never heard, or one ended by the press that began it.
 #[test]
 fn a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost() {
     let mut test = launch();

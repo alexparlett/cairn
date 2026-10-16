@@ -1,20 +1,17 @@
-//! Fork's Create Branch dialog (`docs/prd/staging-and-commit.md` R11.3; the user's decisions
-//! of 2026-10-09 and 2026-10-10; evidence `docs/research/staging-and-commit/
-//! fork-create-branch-evidence.md` and `fork-observed-2026-10-10.md`), opened by "New Branch…"
-//! on any commit row, or at `HEAD` by its chord: under the title Fork's line on folders, then
-//! "Create branch at:" the commit — its short id and subject, read only — a "Branch name:"
-//! field, "Check out after create", and, while that is ticked and the working tree has changes,
-//! "Local changes:" with Fork's three choices in Fork's order — "Don't change", "Stash and
-//! reapply", drawn greyed with "Comes with stashing." beside it until packet 5b builds stashing
-//! (B4), and "Discard", with Fork's ⚠ beside it while it is chosen. Its button reads "Create",
-//! or "Create and Checkout" while the box is ticked, whatever is chosen (B3).
+//! Fork's Create Branch dialog, opened by "New Branch…" on any commit row, or at `HEAD` by its
+//! chord: under the title Fork's line on folders, then "Create branch at:" the commit — its
+//! short id and subject, read only — a "Branch name:" field, "Check out after create", and,
+//! while that is ticked and the working tree has changes, "Local changes:" with Fork's three
+//! choices in Fork's order — "Don't change", "Stash and reapply", drawn greyed with "Comes with
+//! stashing." beside it while Cairn cannot stash, and "Discard", with Fork's ⚠ beside it while
+//! it is chosen. Its button reads "Create", or "Create and Checkout" while the box is ticked,
+//! whatever is chosen.
 //!
-//! **A confirmation surface** (staging-and-commit R1.1, on the seal guard's roster; the user's
-//! decision of 2026-10-10, B2): with Discard chosen, pressing Create and Checkout — or Return in
-//! the name field — IS the acknowledgement, and builds the `Confirmed` here from the
-//! `Consequence` the engine computed for it, handed in by the window; no second dialog opens.
-//! The acknowledgement is the radio chosen plus the press, as in Fork. Without that consequence
-//! the press does nothing.
+//! **A confirmation surface** (on the seal guard's roster): with Discard chosen, pressing
+//! Create and Checkout — or Return in the name field — IS the acknowledgement, and builds the
+//! `Confirmed` here from the `Consequence` the engine computed for it, handed in by the window;
+//! no second dialog opens. The acknowledgement is the radio chosen plus the press, as in Fork.
+//! Without that consequence the press does nothing.
 //!
 //! A name is refused inline, before git runs: the button stays disabled until the engine has
 //! answered that git takes the name and no branch has it, and a refusal is said in the buttons'
@@ -39,7 +36,7 @@ use crate::text_field::text_field;
 
 /// The dialog's title, Fork's.
 pub const CREATE_BRANCH_TITLE: &str = "Create Branch";
-/// The line under the title, Fork's (VSHOT TrackerWin #1394).
+/// The line under the title, Fork's (Fork TrackerWin #1394).
 pub const CREATE_BRANCH_SUBTITLE: &str = "Use '/' as a path separator to create folders";
 /// The commit row's caption, Fork's.
 pub const CREATE_BRANCH_AT: &str = "Create branch at:";
@@ -53,10 +50,10 @@ pub const CHECK_OUT_AFTER_CREATE: &str = "Check out after create";
 pub const LOCAL_CHANGES_LABEL: &str = "Local changes:";
 /// Keep the changes and check out over them, Fork's default.
 pub const DONT_CHANGE_CAPTION: &str = "Don't change";
-/// Fork's second choice, drawn greyed until packet 5b builds stashing (B4).
+/// Fork's second choice, drawn greyed while Cairn cannot stash.
 pub const STASH_AND_REAPPLY_CAPTION: &str = "Stash and reapply";
-/// Why "Stash and reapply" is greyed, beside it (rule 4: a refusal known in advance is a
-/// greyed control with its reason).
+/// Why "Stash and reapply" is greyed, beside it: a refusal known in advance is a greyed control
+/// with its reason.
 pub const COMES_WITH_STASHING: &str = "Comes with stashing.";
 /// Throw the changes away: chosen, the button's press is the confirmation.
 pub const DISCARD_LOCAL_CAPTION: &str = "Discard";
@@ -82,11 +79,10 @@ pub enum LocalChoice {
 }
 
 /// Why a name typed cannot be a new branch's, as the dialog says it beside its buttons: Fork's
-/// words for a name taken, verbatim ("Branch test already exists",
-/// `fork-create-branch-evidence.md`), decision F's for `@{`, and git's own, verbatim, for a name
-/// it refuses or a ref it cannot lock beside a branch ("cannot lock ref 'refs/heads/a/b':
-/// 'refs/heads/a' exists; cannot create 'refs/heads/a/b'", as `git branch` says it; phase 14's QA
-/// item 16c).
+/// words for a name taken, verbatim ("Branch test already exists"), Cairn's own for `@{`, and
+/// git's own, verbatim, for a name it refuses or a ref it cannot lock beside a branch ("cannot
+/// lock ref 'refs/heads/a/b': 'refs/heads/a' exists; cannot create 'refs/heads/a/b'", as `git
+/// branch` says it).
 pub fn name_refusal(name: &str, why: &NameRefusal) -> String {
     match why {
         NameRefusal::AtBrace => "A branch name can't contain '@{'".to_owned(),
@@ -102,10 +98,9 @@ pub fn name_refusal(name: &str, why: &NameRefusal) -> String {
 }
 
 /// Why Discard is refused while git is in the middle of an operation, which its forced
-/// checkout would abandon (the user's decision of 2026-10-10): "A merge is in progress. Finish
-/// or abort it first." `git am` is named in git's own word for it, a session ("An am session is
-/// in progress.", the user's decision of 2026-10-10 on phase 14's QA), as git's own status
-/// says "You are in the middle of an am session."
+/// checkout would abandon: "A merge is in progress. Finish or abort it first." `git am` is
+/// named in git's own word for it, a session ("An am session is in progress."), as git's own
+/// status says "You are in the middle of an am session."
 pub fn discard_refusal(operation: &OperationInProgress) -> String {
     let named = match operation {
         OperationInProgress::Merge => "A merge",
@@ -177,8 +172,8 @@ impl CreateBranchDialog {
         self
     }
 
-    /// What the name's check waits behind, said beside the buttons where nothing is refused
-    /// (the user's decision D, 2026-10-09): "Waiting for the commit to finish…".
+    /// What the name's check waits behind, said beside the buttons where nothing is refused:
+    /// "Waiting for the commit to finish…".
     pub fn waiting(mut self, waiting: Option<String>) -> Self {
         self.waiting = waiting;
         self
@@ -235,8 +230,7 @@ impl CreateBranchDialog {
         self
     }
 
-    /// Which platform's button order to draw in (the user's decision E): this build's own
-    /// unless a test names another.
+    /// Which platform's button order to draw in: this build's own unless a test names another.
     pub fn platform(mut self, platform: Os) -> Self {
         self.platform = platform;
         self
@@ -284,7 +278,7 @@ impl Component for CreateBranchDialog {
         let colours = get_theme_or_default().read().colors().clone();
         let ready = self.ready;
         // Discard chosen: the press is the acknowledgement, and builds the token from the
-        // consequence the engine computed (B2); otherwise it asks the create.
+        // consequence the engine computed; otherwise it asks the create.
         let create = {
             let on_create = self.on_create.clone();
             let on_confirmed = self.on_confirmed.clone();
@@ -363,7 +357,7 @@ impl Component for CreateBranchDialog {
                     Some(move || on_local.call(this))
                 })
             };
-            // Fork's order (observed cb2): Don't change, Stash and reapply, Discard.
+            // Fork's order: Don't change, Stash and reapply, Discard.
             let stash = rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
@@ -380,7 +374,7 @@ impl Component for CreateBranchDialog {
                 .cross_align(Alignment::Center)
                 .spacing(6.)
                 .child(option(DISCARD_LOCAL_CAPTION, LocalChoice::Discard))
-                // Fork's ⚠ beside Discard while it is chosen (observed cb3).
+                // Fork's ⚠ beside Discard while it is chosen.
                 .maybe(choice == LocalChoice::Discard, |discard| {
                     discard.child(
                         rect()
@@ -406,7 +400,7 @@ impl Component for CreateBranchDialog {
             CREATE_CAPTION
         };
         // Fork's refusal sits in the buttons' row, left of them, behind its warning triangle
-        // (USHOT TrackerWin #2472, Tracker #1911); the buttons keep PopupButtons' spacing.
+        // (Fork TrackerWin #2472, Tracker #1911); the buttons keep PopupButtons' spacing.
         let said = rect()
             .horizontal()
             .content(Content::Flex)
@@ -422,13 +416,13 @@ impl Component for CreateBranchDialog {
                         .child(RefGlyph::Gone.draw(colours.warning)),
                 )
             })
-            // A refusal, or else what the name's check waits behind (the user's decision D).
+            // A refusal, or else what the name's check waits behind.
             .maybe_child(
                 self.refusal
                     .clone()
                     .or_else(|| self.waiting.clone())
                     .map(|reason| {
-                        // Wrapped, never cut (rule 6, R14.7).
+                        // Wrapped, never cut.
                         label()
                             .text(reason)
                             .width(Size::flex(1.))
@@ -444,7 +438,7 @@ impl Component for CreateBranchDialog {
             .padding(8.)
             .spacing(4.)
             .child(said)
-            // In the platform's order (the user's decision E).
+            // In the platform's order.
             .children(ordered(
                 self.platform,
                 vec![

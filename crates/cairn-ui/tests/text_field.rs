@@ -1,7 +1,7 @@
-//! Headless tests for the one key policy every text field takes (staging-and-commit R7.1,
-//! C15): a field hands the window's chords and the held modifiers to the window, keeps its
-//! own keys from the views around it, and — in the commit box — claims the commit chord
-//! without a new line. Every chord is pressed through the accelerator table.
+//! Headless tests for the one key policy every text field takes: a field hands the window's
+//! chords and the held modifiers to the window, keeps its own keys from the views around it,
+//! and — in the commit box — claims the commit chord without a new line. Every chord is pressed
+//! through the accelerator table.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -119,12 +119,11 @@ fn key_down(test: &mut TestingRunner, key: Key, code: Code, modifiers: Modifiers
     test.sync_and_update();
 }
 
-/// C15, R7.1: with a filter focused, the window's chord reaches the window untyped, and the
-/// extending press's held key reaches the window's `HeldKeys`; what is typed is the field's,
-/// and Enter, Backspace and Delete never reach Local Changes' stage or discard around it.
-/// Caught by: a field that claims every key, one that hands its keys to the views around, or
-/// one that lets a chord it hands to the window bubble through the views between (QA
-/// mutation K).
+/// With a filter focused, the window's chord reaches the window untyped, and the extending
+/// press's held key reaches the window's `HeldKeys`; what is typed is the field's, and Enter,
+/// Backspace and Delete never reach Local Changes' stage or discard around it. Caught by: a
+/// field that claims every key, one that hands its keys to the views around, or one that lets a
+/// chord it hands to the window bubble through the views between.
 #[test]
 fn a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own() {
     let (mut test, heard, value) = launch(false);
@@ -181,12 +180,12 @@ fn a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own() {
     );
 }
 
-/// C15, C16, the QA brief: in the commit box's description, Backspace deletes a character and
-/// never discards, Enter makes a new line and never stages, and the commit chord commits
-/// without a new line — claimed, so neither the view around nor the window acts on it; no
-/// staging chord is the box's. Caught by: a description whose commit chord inserts a line
-/// (Freya's multiline Enter ignores modifiers), bare keys handed to Local Changes, or a
-/// claimed chord the window's global listener still hears (QA mutation L).
+/// In the commit box's description, Backspace deletes a character and never discards, Enter
+/// makes a new line and never stages, and the commit chord commits without a new line —
+/// claimed, so neither the view around nor the window acts on it; no staging chord is the
+/// box's. Caught by: a description whose commit chord inserts a line (Freya's multiline Enter
+/// ignores modifiers), bare keys handed to Local Changes, or a claimed chord the window's
+/// global listener still hears.
 #[test]
 fn in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits() {
     let (mut test, heard, value) = launch(true);

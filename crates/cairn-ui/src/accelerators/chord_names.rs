@@ -1,9 +1,9 @@
-//! A chord spelled for a person to read — the one place Cairn does that (the user's decision,
-//! 2026-10-09, amending the modifier invariant): a tooltip names an action's chord, written
-//! as Fork's own shortcut lists write it (`fork-dev/Docs`, `keyboard-shortcuts-windows.md`
-//! and `keyboard-shortcuts-mac.md`) — on Linux Fork's Windows form, each held key then the
-//! key joined by `+` (`Ctrl+Alt+Shift+S`); on macOS the held keys' symbols run together in
-//! Fork's order, then the key (`⌘⌥⇧S`, `⌘Return`, `⌫`).
+//! A chord spelled for a person to read — the one place Cairn does that, and the one
+//! exception to the modifier invariant: a tooltip names an action's chord, written as Fork's
+//! own shortcut lists write it (`fork-dev/Docs`, `keyboard-shortcuts-windows.md` and
+//! `keyboard-shortcuts-mac.md`) — on Linux Fork's Windows form, each held key then the key
+//! joined by `+` (`Ctrl+Alt+Shift+S`); on macOS the held keys' symbols run together in Fork's
+//! order, then the key (`⌘⌥⇧S`, `⌘Return`, `⌫`).
 //!
 //! Every name is rendered from the accelerator table's data — the chord [`super::chords`]
 //! lists first for the action — and never typed out whole: this file names each held key

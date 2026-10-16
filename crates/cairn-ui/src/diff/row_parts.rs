@@ -3,12 +3,11 @@
 //!
 //! Unified (`unified_rows`) and side-by-side (`side_by_side_rows`) rows are these pieces in two
 //! arrangements, so a line reads alike in both: the same typeface, colours, tab stops, control
-//! pictures and cut (R6.9).
+//! pictures and cut.
 //!
-//! **No marker column** (the user's decision, 2026-10-04, reversing 2026-10-03's): Fork draws
-//! none by default, only colours, and neither does Cairn. **The gutter is Fork's**, sized from
-//! its measurements and the user-supplied Fork captures of 2026-10-04: the numbers in a
-//! smaller size than the text ([`NUMBER_FONT_SIZE`]), each column as wide as the file's widest
+//! **No marker column**: Fork draws none by default, only colours, and neither does Cairn.
+//! **The gutter is Fork's**, sized from its measurements and captures of Fork: the numbers in
+//! a smaller size than the text ([`NUMBER_FONT_SIZE`]), each column as wide as the file's widest
 //! number and a few pixels either side ([`number_width`]), a clear gap before the separator
 //! ([`NUMBER_PADDING`]) and a small one after it before the text ([`TEXT_PADDING`]). The gap
 //! is made by a box around the number, not by the number's own padding: this toolkit build
@@ -27,10 +26,10 @@ use crate::diff::palette::{
 /// One column of IBM Plex Mono at the diff's size.
 pub(crate) const ADVANCE: f32 = DIFF_FONT_SIZE * MONO_ADVANCE_EM;
 /// The line numbers' size: Fork's numbers are smaller than its text. Fork's Mac numbers are
-/// 6.5 pt tall (Finding 24), and Plex Mono's figures are 0.698 em tall, so 6.5 ÷ 0.698 ≈
-/// 9.3 px; the user-supplied Windows capture agrees — its digits advance 0.84 of its code's
-/// advance, and 0.84 × 11 px ≈ 9.3 px. This toolkit build takes a font size in whole pixels
-/// (`FontSize` holds an `i32`), so 9.
+/// 6.5 pt tall, and Plex Mono's figures are 0.698 em tall, so 6.5 ÷ 0.698 ≈ 9.3 px; a
+/// Windows capture of Fork agrees — its digits advance 0.84 of its code's advance, and
+/// 0.84 × 11 px ≈ 9.3 px. This toolkit build takes a font size in whole pixels (`FontSize`
+/// holds an `i32`), so 9.
 pub const NUMBER_FONT_SIZE: f32 = 9.0;
 /// One digit of a line number: Plex Mono's advance at [`NUMBER_FONT_SIZE`].
 pub(crate) const NUMBER_ADVANCE: f32 = NUMBER_FONT_SIZE * MONO_ADVANCE_EM;
@@ -38,10 +37,10 @@ pub(crate) const NUMBER_ADVANCE: f32 = NUMBER_FONT_SIZE * MONO_ADVANCE_EM;
 /// digits' right but this sliver.
 pub(crate) const NUMBER_LEAD: f32 = 2.0;
 /// After a number's digits, before the next column or the separator: Fork's gap there,
-/// about 6 px in the user-supplied captures.
+/// about 6 px in captures of Fork.
 pub const NUMBER_PADDING: f32 = 6.0;
-/// After the separator, before a line's text: a few pixels, as in Fork (the user's
-/// correction of 2026-10-04: the wider space in the capture was the code's own indentation).
+/// After the separator, before a line's text: a few pixels, as in Fork (the wider space a
+/// capture shows there is the code's own indentation).
 pub const TEXT_PADDING: f32 = 4.0;
 pub(crate) const SEPARATOR_WIDTH: f32 = 1.0;
 pub(crate) const CURRENT_SEPARATOR_WIDTH: f32 = 3.0;
@@ -123,8 +122,8 @@ pub(crate) fn words(text: String, colour: Color) -> Paragraph {
 }
 
 /// A line's text as a row draws it — its intra-line `ranges` in `emphasis`, and, for a line
-/// past the long-line limit, its start and the muted cut marker (R6.9). The work is the
-/// drawn text's, never the whole line's.
+/// past the long-line limit, its start and the muted cut marker. The work is the drawn
+/// text's, never the whole line's.
 pub(crate) fn line_text(bytes: &[u8], ranges: &[ByteRange], emphasis: Color) -> Paragraph {
     let line = shown_line(bytes, ranges);
     let drawn = words(line.text, DIFF_TEXT)
@@ -143,8 +142,8 @@ mod tests {
 
     /// The gutter's columns for one, two and four digits, spelled out: Plex Mono's 0.6 em
     /// at 9 px is 5.4 px a digit, and 8 px of gaps — so two columns of four digits come to
-    /// 59.2 px, Fork's ≈ 60 in the user-supplied capture. Caught by: the numbers measured
-    /// at the text's size (6.6 px a digit), or the gaps changed without the docs' table.
+    /// 59.2 px, Fork's ≈ 60 in a capture of Fork. Caught by: the numbers measured at the
+    /// text's size (6.6 px a digit), or the gaps changed without the docs' table.
     #[test]
     fn a_number_column_is_its_digits_at_the_numbers_size_and_two_gaps() {
         for (digits, width) in [(1, 13.4), (2, 18.8), (4, 29.6)] {

@@ -1,15 +1,15 @@
-//! The one key policy every text field takes (staging-and-commit R7.1).
+//! The one key policy every text field takes.
 //!
 //! Freya's `Input` claims every key but Enter, Escape, Shift and Tab: it stops the press
-//! bubbling and cancels the window's global key event, so a focused field hid the window's
-//! chords (F5) and the held modifiers a pointer press is resolved against (`HeldKeys`) —
-//! `docs/research/staging-and-commit/freya-ui-apis.md` §2. Every field is built here instead,
-//! and asks the accelerator table what each key is ([`accelerators::field_key`]): a window
-//! chord or a lone modifier key reaches the window untyped; a primary+letter press that is no
-//! editing binding types nothing; a chord of the field's own scope (the commit box's commit)
-//! is claimed and done, without a new line; and every other key is the field's alone, kept
-//! from the views around it — so a bare Enter, Backspace or Delete typed in a field never
-//! reaches Local Changes' stage or discard. Nothing here names a modifier: the table decides.
+//! bubbling and cancels the window's global key event, so a focused `Input` alone hides the
+//! window's chords (Refresh's F5) and the held modifiers a pointer press is resolved against
+//! (`HeldKeys`). Every field is built here instead, and asks the accelerator table what each
+//! key is ([`accelerators::field_key`]): a window chord or a lone modifier key reaches the
+//! window untyped; a primary+letter press that is no editing binding types nothing; a chord of
+//! the field's own scope (the commit box's commit) is claimed and done, without a new line; and
+//! every other key is the field's alone, kept from the views around it — so a bare Enter,
+//! Backspace or Delete typed in a field never reaches Local Changes' stage or discard. Nothing
+//! here names a modifier: the table decides.
 //!
 //! `every_text_field_takes_the_shared_key_policy` holds every render file to building its
 //! fields here.
@@ -34,7 +34,7 @@ pub fn text_field_in(
     Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into()), None))
 }
 
-/// The commit box's subject (staging-and-commit R10.2): [`text_field_in`], with a bare ↑ or ↓
+/// The commit box's subject: [`text_field_in`], with a bare ↑ or ↓
 /// ([`accelerators::recall_step`]) offered first to `recall`, which answers whether it took the
 /// step — recalling a recent message — and claims the key when it did; a step it does not take
 /// is the editor's, as every other key goes through the one policy.

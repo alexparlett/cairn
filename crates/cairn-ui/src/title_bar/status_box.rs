@@ -1,15 +1,15 @@
-//! The title bar's status box, Fork's (refs-and-status R7.1; `fork-refs-and-status-ui.md`,
-//! section 9): the repository's name — its folder's, as the worker that opened it names it — marked `*` while status reports a change; a branch
-//! glyph and the current branch; and how far it is from its upstream — behind, then ahead,
-//! Fork's `18↓1↑`, a count of nothing left out as Fork leaves it — or that its upstream is
-//! gone. A detached `HEAD` names its short id, an unborn branch its name and that it has no
-//! commit yet, each in git's own words. The arrows are drawn in IBM Plex Mono, the typeface
-//! the application embeds, which carries them.
+//! The title bar's status box, Fork's: the repository's name — its folder's, as the worker that
+//! opened it names it — marked `*` while status reports a change; a branch glyph and the current
+//! branch; and how far it is from its upstream — behind, then ahead, Fork's `18↓1↑`, a count of
+//! nothing left out as Fork leaves it — or that its upstream is gone. A detached `HEAD` names
+//! its short id, an unborn branch its name and that it has no commit yet, each in git's own
+//! words. The arrows are drawn in IBM Plex Mono, the typeface the application embeds, which
+//! carries them.
 //!
-//! It is also where progress shows (staging-and-commit R14.1, F1, F9): a spinner and the running
-//! operation's one name — a local write, " · N waiting" behind it while writes queue, and a fetch
-//! with git's latest progress line — each only once it has run [`PROGRESS_AFTER`], so a write
-//! that is over at once draws nothing. The wait is a task on the toolkit's executor
+//! It is also where progress shows: a spinner and the running operation's one name — a local
+//! write, " · N waiting" behind it while writes queue, and a fetch with git's latest progress
+//! line — each only once it has run [`PROGRESS_AFTER`], so a write that is over at once draws
+//! nothing. The wait is a task on the toolkit's executor
 //! (`async_io::Timer`), never a sleep.
 
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ pub const NO_COMMITS_YET: &str = "no commits yet";
 pub const UPSTREAM_GONE: &str = "upstream gone";
 
 const FONT_SIZE: f32 = 13.0;
-/// How long an operation runs before the status box shows it (F1).
+/// How long an operation runs before the status box shows it.
 pub const PROGRESS_AFTER: Duration = Duration::from_millis(250);
 
 /// An operation running, as the status box shows it.
@@ -58,7 +58,7 @@ pub fn running_text(running: &Running) -> String {
     text
 }
 
-/// Whether an operation that has run `elapsed` is shown yet (F1).
+/// Whether an operation that has run `elapsed` is shown yet.
 pub fn progress_shown(elapsed: Duration) -> bool {
     elapsed >= PROGRESS_AFTER
 }
@@ -84,9 +84,8 @@ pub fn head_text(head: &HeadState) -> String {
     }
 }
 
-/// `n↓m↑` as Fork prints it — behind first, no space between, a zero count left out (the
-/// user's decision, 2026-10-07, from Fork's own screenshots) — empty when the branch is level
-/// with its upstream.
+/// `n↓m↑` as Fork prints it — behind first, no space between, a zero count left out — empty
+/// when the branch is level with its upstream.
 pub fn counts_text(counts: AheadBehind) -> String {
     let behind = (counts.behind > 0).then(|| format!("{}↓", counts.behind));
     let ahead = (counts.ahead > 0).then(|| format!("{}↑", counts.ahead));
@@ -281,7 +280,7 @@ mod tests {
     use super::*;
     use cairn_model::Oid;
 
-    /// R7.1 in git's words: a branch by its name, a detached `HEAD` by its short id, an unborn
+    /// In git's words: a branch by its name, a detached `HEAD` by its short id, an unborn
     /// branch by its name and that it has no commit. Caught by: a full ref name, the long id,
     /// or an unborn branch drawn as an ordinary one.
     #[test]

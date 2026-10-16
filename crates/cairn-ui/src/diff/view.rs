@@ -1,15 +1,15 @@
-//! The diff view (PRD R6.1, R6.4, R6.5, R6.9): one file's diff as `git diff` prints it,
-//! drawn row by row through the virtualising view — unified (`unified_rows`) or side by side
-//! (`side_by_side_rows`), as the shared setting says, both from one prepared answer.
+//! The diff view: one file's diff as `git diff` prints it, drawn row by row through the
+//! virtualising view — unified (`unified_rows`) or side by side (`side_by_side_rows`), as the
+//! shared setting says, both from one prepared answer.
 //!
 //! **What is built once, and what per row.** [`ShownDiff`] (`cairn-model`) is built once per
-//! answer, on the worker that answered it (phase 07): both rows' indexes, proportional to the
-//! changes, whether ignoring whitespace hides a change, the gutter's digits and the widest
-//! line as drawn (one pass over the drawn bytes, a line past the long-line limit counted to
-//! its cut). Toggling side-by-side therefore builds nothing. A frame builds the rows in view and nothing else: per row, a search of the
-//! index, one search of the intra-line ranges, and the line's drawn text — at most
-//! [`LINE_CUT_BYTES`](crate::LINE_CUT_BYTES) of it — never growing with the file, the line
-//! or the scroll offset. Every row has one height, [`DIFF_ROW_HEIGHT`].
+//! answer, on the worker that answered it: both rows' indexes, proportional to the changes,
+//! whether ignoring whitespace hides a change, the gutter's digits and the widest line as
+//! drawn (one pass over the drawn bytes, a line past the long-line limit counted to its cut).
+//! Toggling side-by-side therefore builds nothing. A frame builds the rows in view and nothing
+//! else: per row, a search of the index, one search of the intra-line ranges, and the line's
+//! drawn text — at most [`LINE_CUT_BYTES`](crate::LINE_CUT_BYTES) of it — never growing with
+//! the file, the line or the scroll offset. Every row has one height, [`DIFF_ROW_HEIGHT`].
 //!
 //! **Horizontal extent.** Unified: every row is as wide as the view, or as
 //! [`content_width`] where that is wider — the widest drawn line's columns at IBM
@@ -37,7 +37,7 @@ use crate::diff::staging_gesture::{
 use crate::diff::{side_by_side_rows, unified_rows};
 
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
-/// on the Mac (Finding 24, a vendor screenshot at 2×, May 2026), the hunk header the same.
+/// on the Mac (a vendor screenshot at 2×), the hunk header the same.
 /// Fork's Windows pitch is not established at a known scale.
 pub const DIFF_ROW_HEIGHT: f32 = 17.0;
 
@@ -99,10 +99,10 @@ pub struct ChangeCursor {
     pub scrolled_y: i32,
 }
 
-/// One step of previous or next change (R6.2) over `stops`, the view scrolled to
-/// `scrolled_y`: from `cursor` while the view is still where that step left it, otherwise
-/// from the top row in view — so the first press finds the first change at or below the
-/// top, even one already in view. The new cursor says which change, and the scroll that
+/// One step of previous or next change over `stops`, the view scrolled to `scrolled_y`: from
+/// `cursor` while the view is still where that step left it, otherwise from the top row in
+/// view — so the first press finds the first change at or below the top, even one already in
+/// view. The new cursor says which change, and the scroll that
 /// puts its first row [`LEAD_ROWS`] below the top; `None` when there is no change that way.
 /// Rows and pixels are whole numbers throughout, so the answer is exact however deep.
 pub fn step_change(
@@ -134,7 +134,7 @@ pub fn step_change(
 /// from it as they are built. `scroll` is the application's, so previous and next change can
 /// move the view; `current` is the change they last moved to, marked in the gutter. Handed a
 /// [`Gesture`] — Local Changes' diff alone — it draws the staging gesture over its rows
-/// (`staging_gesture`); without one it draws none (R9.5).
+/// (`staging_gesture`); without one it draws none.
 pub struct DiffView {
     shown: Readable<ShownDiff>,
     scroll: ScrollController,
@@ -156,7 +156,7 @@ impl DiffView {
         }
     }
 
-    /// The staging gesture over the rows (staging-and-commit R9): Local Changes' alone.
+    /// The staging gesture over the rows: Local Changes' alone.
     pub fn gesture(mut self, gesture: Option<Gesture>) -> Self {
         self.gesture = gesture;
         self
@@ -168,7 +168,7 @@ impl DiffView {
         self
     }
 
-    /// Side by side rather than unified (R6.1).
+    /// Side by side rather than unified.
     pub fn side_by_side(mut self, side_by_side: bool) -> Self {
         self.side_by_side = side_by_side;
         self
@@ -526,12 +526,12 @@ mod tests {
         );
     }
 
-    /// Phase 06 QA (T8): previous and next change stop at what is drawn. With whitespace
-    /// ignored a whitespace-only change draws nothing and is never a stop, at a context
-    /// and at the entire file; at the entire file every change of its one hunk is a stop.
-    /// Each stop is the change's first row, a removed line at the change's own number,
-    /// and previous retraces next. Caught by: stepping over the exact ranges under `-w` (a
-    /// stop where nothing is drawn), or stopping once per hunk rather than per change.
+    /// Previous and next change stop at what is drawn. With whitespace ignored a
+    /// whitespace-only change draws nothing and is never a stop, at a context and at the
+    /// entire file; at the entire file every change of its one hunk is a stop. Each stop is
+    /// the change's first row, a removed line at the change's own number, and previous
+    /// retraces next. Caught by: stepping over the exact ranges under `-w` (a stop where
+    /// nothing is drawn), or stopping once per hunk rather than per change.
     #[test]
     fn previous_and_next_change_stop_at_what_is_drawn() {
         let old: Vec<u8> = (0..60)
@@ -601,12 +601,12 @@ mod tests {
         }
     }
 
-    /// Phase 06 QA's obligation, met in phase 07: previous and next change compute rows and
-    /// pixels in whole numbers, so a change a million rows down is found from the row really
-    /// at the top and is put exactly one row below it. The scroll offsets here are odd past
-    /// 2^24 pixels, which an `f32` cannot hold: the old arithmetic took the top row for the
-    /// row above it (so previous change skipped the change just above the view) and put the
-    /// change a pixel off. Caught by: any step of the arithmetic done in `f32`.
+    /// Previous and next change compute rows and pixels in whole numbers, so a change a
+    /// million rows down is found from the row really at the top and is put exactly one row
+    /// below it. The scroll offsets here are odd past 2^24 pixels, which an `f32` cannot
+    /// hold: arithmetic in `f32` takes the top row for the row above it (so previous change
+    /// skips the change just above the view) and puts the change a pixel off. Caught by: any
+    /// step of the arithmetic done in `f32`.
     #[test]
     fn a_change_a_million_rows_down_is_stepped_to_exactly() {
         let lines = 1_000_200u32;

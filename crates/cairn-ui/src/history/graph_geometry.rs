@@ -79,8 +79,8 @@ pub fn row_middle() -> f32 {
 /// Lanes past [`MAX_DRAWN_LANES`] share the last column, so on a row thousands of open
 /// lines cross most of their strokes land on one another, pixel for pixel. Each place is
 /// painted once, by the stroke painted there last — the one whose colour showed before —
-/// so a row costs the places it paints, never the lines that cross it (refs-and-status
-/// RR2: 5,000 open lines painted 175,000 strokes a viewport).
+/// so a row costs the places it paints, never the lines that cross it (a stroke per line
+/// would paint 175,000 strokes a viewport for 5,000 open lines).
 pub fn row_geometry(row: &RowEdges, parents: usize) -> RowGeometry {
     let middle = row_middle();
     let mut painted = std::collections::HashSet::new();
@@ -160,9 +160,9 @@ mod tests {
         assert_eq!(seen.len(), MAX_DRAWN_LANES);
     }
 
-    /// RR2: thousands of lines crossing a row paint each place once, by the line painted
-    /// there last, and every place a line reaches is still painted. Caught by: a stroke per
-    /// line however many share a column, a place lost, or the wrong line's colour kept.
+    /// Thousands of lines crossing a row paint each place once, by the line painted there
+    /// last, and every place a line reaches is still painted. Caught by: a stroke per line
+    /// however many share a column, a place lost, or the wrong line's colour kept.
     #[test]
     fn lines_sharing_the_last_column_are_painted_once_each_place() {
         let lanes = 5_000;
@@ -200,7 +200,7 @@ mod tests {
         let few = row_geometry(&row(0, edges[..3].to_vec()), 1);
         assert_eq!(few.strokes, every[..3].to_vec());
 
-        // TC1: past the cap a line passing the row and a line into its node start at the same
+        // Past the cap a line passing the row and a line into its node start at the same
         // place and end at different ones; both are painted, read by their coordinates.
         let past = Lane::new(MAX_DRAWN_LANES + 3);
         let node = Lane::new(2);

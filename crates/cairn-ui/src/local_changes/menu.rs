@@ -1,19 +1,17 @@
-//! What Local Changes offers a selection, and its context menu (staging-and-commit R8.2, R8.4,
-//! R8.7, R8.8): Stage or Unstage, Discard Changes…, Stage All or Unstage All, and Copy Path —
-//! Fork's menu, less what this packet does not build (open, external diff, blame, history,
-//! ignore, stash, save as patch).
+//! What Local Changes offers a selection, and its context menu: Stage or Unstage, Discard
+//! Changes…, Stage All or Unstage All, and Copy Path — Fork's menu, less the items Cairn does
+//! not offer (open, external diff, blame, history, ignore, stash, save as patch).
 //!
-//! **What is never discarded.** Nothing on the staged side, anywhere (R3.6). A conflicted path
-//! stages whole — `git add`, which marks it resolved — and is never discarded (R8.7, L25); a
-//! submodule's changes are never discarded, since `git restore` leaves its commit where it was
-//! and no prompt can count what is dirty inside it (R8.8, L24); and a repository nested in the
-//! working tree is never touched, since deleting it would take every commit only it has (R8.4,
-//! the user's decision of 2026-10-10 — Fork deletes one as an untracked folder and loses its
-//! history). A selection mixing any of them with paths that can be discarded discards those, and
-//! the confirmation says in one line what is left ([`Left`]; the redesign's D1, where Fork asks
-//! twice). A selection with nothing that can be discarded offers its Discard greyed, the reason
-//! wrapped beneath it and never cut ([`NoDiscard`]; R14.4), and the discard chord over it does
-//! nothing, as Fork's does (rule 4: there is no line under the lists to say it in).
+//! **What is never discarded.** Nothing on the staged side, anywhere. A conflicted path stages
+//! whole — `git add`, which marks it resolved — and is never discarded; a submodule's changes
+//! are never discarded, since `git restore` leaves its commit where it was and no prompt can
+//! count what is dirty inside it; and a repository nested in the working tree is never touched,
+//! since deleting it would take every commit only it has (Fork deletes one as an untracked
+//! folder and loses its history). A selection mixing any of them with paths that can be
+//! discarded discards those, and the confirmation says in one line what is left ([`Left`]),
+//! where Fork asks twice. A selection with nothing that can be discarded offers its Discard
+//! greyed, the reason wrapped beneath it and never cut ([`NoDiscard`]), and the discard chord
+//! over it does nothing, as Fork's does: there is no line under the lists to say it in.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
@@ -28,7 +26,7 @@ pub const UNSTAGE_ALL_CAPTION: &str = "Unstage All";
 pub const DISCARD_CAPTION: &str = "Discard Changes…";
 pub const COPY_PATH_CAPTION: &str = "Copy Path";
 
-/// A row a discard leaves as it is (R8.4, R8.7, R8.8).
+/// A row a discard leaves as it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kept {
     Submodule,
@@ -71,11 +69,11 @@ impl Left {
         }
     }
 
-    /// The one line a discard's confirmation adds under its prompt (the redesign's D1 and the
-    /// user's decision of 2026-10-10 on phase 15's Q6): "1 submodule and 1 conflicted file are
-    /// left as they are.", "1 nested repository is left as it is.", "2 nested repositories are
-    /// left as they are.", "1 submodule and 1 nested repository are left as they are." — each
-    /// kind in that order, three joined "a, b and c". `None` when it leaves none.
+    /// The one line a discard's confirmation adds under its prompt: "1 submodule and 1
+    /// conflicted file are left as they are.", "1 nested repository is left as it is.", "2
+    /// nested repositories are left as they are.", "1 submodule and 1 nested repository are
+    /// left as they are." — each kind in that order, three joined "a, b and c". `None` when it
+    /// leaves none.
     pub fn text(&self) -> Option<String> {
         let counted =
             |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
@@ -105,7 +103,7 @@ impl Left {
 /// Why a selection offers no discard: nothing in it can be discarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoDiscard {
-    /// The Staged list: staged changes are never discarded (R3.6).
+    /// The Staged list: staged changes are never discarded.
     Staged,
     /// Every row one a discard leaves as it is, and which kinds there were.
     Kept {
@@ -117,8 +115,8 @@ pub enum NoDiscard {
 
 impl NoDiscard {
     /// The reason, as the menu says it beneath its greyed Discard — one template, "<what> can't
-    /// be discarded. <way forward>." (the redesign; the user's decisions of 2026-10-10 on phase
-    /// 15's Q5 and Q6): one sentence per kind the selection holds, submodules first.
+    /// be discarded. <way forward>.": one sentence per kind the selection holds, submodules
+    /// first.
     pub fn text(&self) -> String {
         match self {
             Self::Staged => "Staged changes can't be discarded. Unstage them first.".to_owned(),
@@ -144,10 +142,10 @@ impl NoDiscard {
 
 /// Why discarding `paths` of `list` is not offered, if it is not: the Staged list, else every
 /// path `list` lists one a discard leaves as it is ([`kept`]), with the kinds there were. A
-/// selection with one path that can be discarded is offered, whatever else it holds (the
-/// redesign's D1). A path `list` does not list is left out, as acting on the selection leaves it
-/// out, and a selection of none of its paths offers nothing to refuse. A binary search per path,
-/// stopping at the first path that can be discarded.
+/// selection with one path that can be discarded is offered, whatever else it holds. A path
+/// `list` does not list is left out, as acting on the selection leaves it out, and a selection
+/// of none of its paths offers nothing to refuse. A binary search per path, stopping at the
+/// first path that can be discarded.
 pub fn no_discard<'a>(
     changes: &LocalChanges,
     list: ChangeList,
@@ -184,9 +182,9 @@ pub enum MenuChoice {
 }
 
 /// The menu for a selection in `list`: Stage or Unstage, Discard Changes… — greyed with its
-/// reason wrapped beneath it when `refusal` says why, as it always does on the staged side
-/// (R8.4, R14.4) — Stage All or Unstage All, Copy Path. Each item closes the menu as it is
-/// chosen (Freya closes it on no choice of its own).
+/// reason wrapped beneath it when `refusal` says why, as it always does on the staged side —
+/// Stage All or Unstage All, Copy Path. Each item closes the menu as it is chosen (Freya closes
+/// it on no choice of its own).
 pub fn menu(
     list: ChangeList,
     refusal: Option<&NoDiscard>,
@@ -212,7 +210,7 @@ pub fn menu(
     };
     let discard: Vec<MenuButton> = match refusal {
         None => vec![item(DISCARD_CAPTION, MenuChoice::Act(Action::Discard))],
-        // The reason wraps and is never cut (rule 6).
+        // The reason wraps and is never cut.
         Some(why) => vec![
             MenuButton::new().enabled(false).child(DISCARD_CAPTION),
             MenuButton::new().enabled(false).child(
@@ -266,12 +264,11 @@ mod tests {
         ]))
     }
 
-    /// R3.6, R8.7, R8.8, the redesign's D1 and the user's decisions of 2026-10-10 on phase 15's
-    /// Q5 and Q6: the Staged list offers no discard whatever it holds; on the unstaged side a
-    /// selection is refused only when nothing in it can be discarded — every path a submodule, a
-    /// conflicted one or a nested repository — saying so per kind, submodules first; a selection
-    /// mixing them with paths that can be is offered; modified and untracked paths, and a path
-    /// the list does not hold, refuse nothing. Caught by: a discard offered on Staged, a mixed
+    /// The Staged list offers no discard whatever it holds; on the unstaged side a selection is
+    /// refused only when nothing in it can be discarded — every path a submodule, a conflicted
+    /// one or a nested repository — saying so per kind, submodules first; a selection mixing
+    /// them with paths that can be is offered; modified and untracked paths, and a path the
+    /// list does not hold, refuse nothing. Caught by: a discard offered on Staged, a mixed
     /// selection refused whole, a nested repository read as a file, a kind's reason left out,
     /// or a refusal for an ordinary path.
     #[test]
@@ -335,10 +332,9 @@ mod tests {
         assert_eq!(refused(&[path("gone.rs")]), None);
     }
 
-    /// The redesign's D1 and the user's decision of 2026-10-10 on phase 15's Q6: the one line
-    /// under a mixed discard's prompt counts what is left by kind, in the approved words,
-    /// singular and plural. Caught by: a kind left out, a count or a verb that does not agree,
-    /// or a line where nothing is left.
+    /// The one line under a mixed discard's prompt counts what is left by kind, singular and
+    /// plural. Caught by: a kind left out, a count or a verb that does not agree, or a line
+    /// where nothing is left.
     #[test]
     fn what_a_mixed_discard_leaves_is_said_in_one_line() {
         let left = |submodules, conflicted, nested| {

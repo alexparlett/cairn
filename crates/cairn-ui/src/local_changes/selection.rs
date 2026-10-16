@@ -1,7 +1,7 @@
-//! Local Changes' selection (staging-and-commit R8.1, the redesign's rule 8 and L1): the paths
-//! selected in one of the two lists, the primary among them — the file whose diff is shown — and
-//! the path a range extends from. One value; `None` (no selection at all) is the only way to
-//! have nothing selected, so there is no empty selection still "in" a list.
+//! Local Changes' selection: the paths selected in one of the two lists, the primary among them
+//! — the file whose diff is shown — and the path a range extends from. One value; `None` (no
+//! selection at all) is the only way to have nothing selected, so there is no empty selection
+//! still "in" a list.
 //!
 //! **Paths, not rows.** A selection names paths, kept in the lists' own order
 //! (`cairn_model::path_order`), so a refresh that moves rows under it keeps it, a row is drawn
@@ -9,13 +9,13 @@
 //! and nothing walks the lists to draw one. One list at a time, as Fork's lists are two:
 //! selecting in the other list starts a selection there.
 //!
-//! **The primary is the file clicked first** (observed in Fork for Windows 2.21.1, `lc2`): a
-//! plain press makes its row the selection, primary and anchor; a ⌘- or Ctrl-press toggles a
-//! row in — where ranges extend from next, the primary staying the file clicked first — or out,
-//! the primary toggled out moving to the nearest path still selected; a Shift-press or
-//! Shift+↑/↓ spans from the anchor to the row, the row primary. Where the selection goes after
-//! an action or a refresh is the application's one rule (`next_selection`), built on
-//! [`LocalSelection::kept`] and [`nearest_remaining`].
+//! **The primary is the file clicked first**, as in Fork: a plain press makes its row the
+//! selection, primary and anchor; a ⌘- or Ctrl-press toggles a row in — where ranges extend
+//! from next, the primary staying the file clicked first — or out, the primary toggled out
+//! moving to the nearest path still selected; a Shift-press or Shift+↑/↓ spans from the anchor
+//! to the row, the row primary. Where the selection goes after an action or a refresh is the
+//! application's one rule (`next_selection`), built on [`LocalSelection::kept`] and
+//! [`nearest_remaining`].
 
 use std::cmp::Ordering;
 
@@ -152,7 +152,7 @@ impl LocalSelection {
     }
 
     /// The first path selected in the lists' order: whose place a selection that leaves whole
-    /// gives to the row that takes it (R8.3).
+    /// gives to the row that takes it.
     pub fn first(&self) -> &RepoPath {
         // Never empty: every constructor and every change leaves a path, or no selection.
         self.paths.first().unwrap_or(&self.primary)
@@ -175,9 +175,9 @@ impl LocalSelection {
 }
 
 /// The row a list moves to once the rows `acted` says leave it, a list of `len` rows, measured
-/// from `first`, the first row's place (R8.3): the first row at or after it that stays — the
-/// row that slides into its place — else the nearest above it; `None` when no row stays. Rows
-/// past `len` are never answered.
+/// from `first`, the first row's place: the first row at or after it that stays — the row that
+/// slides into its place — else the nearest above it; `None` when no row stays. Rows past `len`
+/// are never answered.
 pub fn nearest_remaining(len: usize, first: usize, acted: impl Fn(usize) -> bool) -> Option<usize> {
     let first = first.min(len);
     (first..len)
@@ -204,12 +204,11 @@ mod tests {
     const U: ChangeList = ChangeList::Unstaged;
     const S: ChangeList = ChangeList::Staged;
 
-    /// R8.1, observed `lc2`: a plain press selects one path, primary and anchor; a toggle adds
-    /// a path without making it primary — the primary is the file clicked first — and moves
-    /// the anchor to it; a toggle in the other list, or with nothing selected, starts a
-    /// selection there; the paths are kept in the lists' order. Caught by: the toggled path made
-    /// primary (Cairn's old brief, superseded by Fork's observed behaviour), a toggle that keeps
-    /// the other list's paths, or paths in byte order (`b10` before `b9`).
+    /// As in Fork, a plain press selects one path, primary and anchor; a toggle adds a path
+    /// without making it primary — the primary is the file clicked first — and moves the anchor
+    /// to it; a toggle in the other list, or with nothing selected, starts a selection there;
+    /// the paths are kept in the lists' order. Caught by: the toggled path made primary, a
+    /// toggle that keeps the other list's paths, or paths in byte order (`b10` before `b9`).
     #[test]
     fn a_toggle_adds_a_path_and_the_file_clicked_first_stays_primary() {
         let one = LocalSelection::of(U, path("b9"));
@@ -234,11 +233,11 @@ mod tests {
         );
     }
 
-    /// R8.1: the primary toggled out moves to the nearest path still selected — the one after
-    /// it, else the one before — the anchor toggled out to the primary, and the last path
-    /// toggled out leaves nothing selected. Caught by: a primary left on a path no longer
-    /// selected (the diff showing an unselected file), the first path chosen rather than the
-    /// nearest, or an empty selection still held.
+    /// The primary toggled out moves to the nearest path still selected — the one after it,
+    /// else the one before — the anchor toggled out to the primary, and the last path toggled
+    /// out leaves nothing selected. Caught by: a primary left on a path no longer selected (the
+    /// diff showing an unselected file), the first path chosen rather than the nearest, or an
+    /// empty selection still held.
     #[test]
     fn the_primary_toggled_out_moves_to_the_nearest_path_and_the_last_leaves_none() {
         let mut selection = LocalSelection::of(U, path("c"));
@@ -266,9 +265,9 @@ mod tests {
         );
     }
 
-    /// R8.1: a range holds every path it was given once each, the anchor and the row among
-    /// them, the row primary and the anchor kept. Caught by: the anchor made primary, or a path
-    /// held twice.
+    /// A range holds every path it was given once each, the anchor and the row among them, the
+    /// row primary and the anchor kept. Caught by: the anchor made primary, or a path held
+    /// twice.
     #[test]
     fn a_range_spans_from_the_anchor_and_its_row_is_primary() {
         let range = LocalSelection::spanning(
@@ -283,10 +282,10 @@ mod tests {
         assert_eq!(range.list(), S);
     }
 
-    /// L5: what a selection keeps — all of it, unchanged; some, the primary kept or moved to
-    /// the nearest kept path and the anchor kept or moved to the primary; none, nothing.
-    /// Caught by: a kept selection whose primary or anchor moved though both stayed, or a
-    /// primary left on a path not kept.
+    /// What a selection keeps — all of it, unchanged; some, the primary kept or moved to the
+    /// nearest kept path and the anchor kept or moved to the primary; none, nothing. Caught by:
+    /// a kept selection whose primary or anchor moved though both stayed, or a primary left on
+    /// a path not kept.
     #[test]
     fn a_selection_keeps_its_primary_and_anchor_while_they_stay() {
         let range =
@@ -306,9 +305,9 @@ mod tests {
         assert_eq!(range.kept(|_| false), None);
     }
 
-    /// R8.3: the row that slides into the first acted row's place, else the nearest row above
-    /// it, and none when every row went. Caught by: the row after the last acted on chosen for
-    /// a selection with a gap, the top of the list chosen, or an acted row chosen.
+    /// The row that slides into the first acted row's place, else the nearest row above it, and
+    /// none when every row went. Caught by: the row after the last acted on chosen for a
+    /// selection with a gap, the top of the list chosen, or an acted row chosen.
     #[test]
     fn the_nearest_row_left_is_the_one_that_takes_the_first_acted_rows_place() {
         let acted = |rows: &'static [usize]| move |row: usize| rows.contains(&row);

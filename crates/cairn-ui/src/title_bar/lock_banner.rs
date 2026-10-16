@@ -1,10 +1,9 @@
-//! The leftover lock's banner (staging-and-commit R12.4, F6; one of the two banners R14.6
-//! keeps): drawn under the title bar while `<gitdir>/index.lock` is there, no `git` of Cairn's
-//! runs or waits in the repository — the window decides those, and draws this only then — and
-//! the lock is older than [`LOCK_STALE_AFTER`], which this component decides: a lock younger
-//! than that is likely a running git's, and the banner waits on the toolkit's executor
-//! (`async_io::Timer`, never a sleep) until it is old enough. It offers `Remove index.lock…`,
-//! which the window answers with the "Remove Stale Lock" confirmation.
+//! The leftover lock's banner: drawn under the title bar while `<gitdir>/index.lock` is there,
+//! no `git` of Cairn's runs or waits in the repository — the window decides those, and draws
+//! this only then — and the lock is older than [`LOCK_STALE_AFTER`], which this component
+//! decides: a lock younger than that is likely a running git's, and the banner waits on the
+//! toolkit's executor (`async_io::Timer`, never a sleep) until it is old enough. It offers
+//! `Remove index.lock…`, which the window answers with the "Remove Stale Lock" confirmation.
 
 use std::time::{Duration, SystemTime};
 
@@ -13,10 +12,10 @@ use freya::prelude::*;
 
 use crate::dialogs::git_error::REMOVE_LOCK_CAPTION;
 
-/// What the banner says (R12.4 as amended 2026-10-10).
+/// What the banner says.
 pub const LOCK_BANNER_TEXT: &str = "index.lock is in this repository, so git can't change the \
                                     index. If no other git program is running, it was left behind.";
-/// How old a lock must be before the banner shows (F6): about ten seconds.
+/// How old a lock must be before the banner shows: about ten seconds.
 pub const LOCK_STALE_AFTER: Duration = Duration::from_secs(10);
 
 /// Whether a lock last changed at `changed` is old enough at `now` for the banner; a lock dated
@@ -97,7 +96,7 @@ impl Component for LockBanner {
             .padding(Gaps::new(6., 12., 6., 12.))
             .background(colours.surface_tertiary)
             .child(
-                // Wrapped, never cut (rule 6).
+                // Wrapped, never cut.
                 label()
                     .text(LOCK_BANNER_TEXT)
                     .font_size(13.)
@@ -122,7 +121,7 @@ impl Component for LockBanner {
 mod tests {
     use super::*;
 
-    /// F6: the banner waits until the lock is about ten seconds old — a younger one is likely a
+    /// The banner waits until the lock is about ten seconds old — a younger one is likely a
     /// running git's — and a lock dated ahead of the clock never shows it. Caught by: the age
     /// read the wrong way round, or a future time read as old.
     #[test]

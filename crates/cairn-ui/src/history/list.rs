@@ -12,7 +12,7 @@ use crate::history::ref_chips::{Chip, chips_of_row};
 
 pub const PREFETCH_ROWS: usize = 24;
 
-/// The commit rows' context menu item, Fork's (the user's decision, 2026-10-09).
+/// The commit rows' context menu item, Fork's.
 pub const NEW_BRANCH_CAPTION: &str = "New Branch…";
 
 /// Every row in the last [`PREFETCH_ROWS`] asks, not only the boundary one, which a fast scroll can skip.
@@ -35,8 +35,7 @@ pub struct RowRender {
     pub chips: Vec<Chip>,
     /// Whether this is `HEAD`'s commit, drawn bold.
     pub head: bool,
-    /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed
-    /// (staging-and-commit R11.1).
+    /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed.
     pub lost: bool,
     pub selected: bool,
     /// Width of the graph column for the whole list, in lanes.
@@ -89,8 +88,8 @@ impl HistoryList {
         self
     }
 
-    /// The refs snapshot a branch's upstream is read from, for compact labels (R5.2), and the
-    /// branch `HEAD` is on, whose chip leads its row's.
+    /// The refs snapshot a branch's upstream is read from, for compact labels, and the branch
+    /// `HEAD` is on, whose chip leads its row's.
     /// Keeps where the selection sits in `cursor` rather than a state of its own, so its
     /// caller — which selects rows the list did not choose, a pressed ref's or a parent link's —
     /// can say where the row it chose is, and the next arrow key finds it there at once
@@ -117,7 +116,7 @@ impl HistoryList {
         self
     }
 
-    /// The second of two rows selected to be compared (R7), drawn selected beside the first.
+    /// The second of two rows selected to be compared, drawn selected beside the first.
     pub fn also_selected(mut self, also_selected: Option<RowId>) -> Self {
         self.also_selected = also_selected;
         self
@@ -137,7 +136,7 @@ impl HistoryList {
     }
 
     /// A row pressed with the selection-extending chord held, with its index in the rows: the
-    /// second commit of a comparison (R7.1). What it selects is the caller's.
+    /// second commit of a comparison. What it selects is the caller's.
     pub fn on_extend(mut self, on_extend: impl Into<EventHandler<(RowId, usize)>>) -> Self {
         self.on_extend = on_extend.into();
         self
@@ -150,18 +149,16 @@ impl HistoryList {
         self
     }
 
-    /// A chord of the history's own scope pressed while the list has focus
-    /// ([`Scope::History`]: Show Lost Commits, staging-and-commit R7.3), resolved through the
-    /// accelerator table. What it does is the caller's.
+    /// A chord of the history's own scope pressed while the list has focus ([`Scope::History`]:
+    /// Show Lost Commits), resolved through the accelerator table. What it does is the caller's.
     pub fn on_action(mut self, on_action: impl Into<EventHandler<Action>>) -> Self {
         self.on_action = on_action.into();
         self
     }
 
     /// "New Branch…" chosen from a commit row's context menu — every commit's row, a lost
-    /// one's too; a stash's row has no menu — reporting that commit and its subject
-    /// (staging-and-commit R11.3, the user's decision, 2026-10-09). What it opens is the
-    /// caller's.
+    /// one's too; a stash's row has no menu — reporting that commit and its subject. What it
+    /// opens is the caller's.
     pub fn on_new_branch(mut self, on_new_branch: impl Into<EventHandler<(Oid, String)>>) -> Self {
         self.on_new_branch = on_new_branch.into();
         self
@@ -242,8 +239,8 @@ impl Component for HistoryList {
         // resolved unconditionally so the hook count holds either way.
         let own_cursor = use_state(|| 0usize);
         let cursor = self.cursor.unwrap_or(own_cursor);
-        // Measured, so chips stop being built at the column's edge (R5.3); none are built
-        // before the first measurement.
+        // Measured, so chips stop being built at the column's edge; none are built before the
+        // first measurement.
         let mut width = use_state(|| 0.0f32);
 
         // Reading the length subscribes this component to the row vector.
@@ -385,8 +382,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let on_reach_end = data.on_reach_end.clone();
     let on_new_branch = data.on_new_branch.clone();
     let rows = data.rows;
-    // A right-click selects its row, unless it lands in the selection already made (the user's
-    // decision C, 2026-10-09, Fork for Windows).
+    // A right-click selects its row, unless it lands in the selection already made, as Fork
+    // for Windows does.
     let in_selection = data.selected == Some(id) || data.also_selected == Some(id);
     let right_selects = data.on_select.clone();
     let mut right_cursor = data.cursor;
@@ -680,9 +677,9 @@ mod tests {
         assert_eq!(moved_to(&Key::Character("j".into()), Some(3), 99), None);
     }
 
-    /// The QA brief: a row's labels are laid out once per row built, never per frame — idle
-    /// frames lay out nothing, a scroll lays out the rows it builds. Caught by: chips laid out
-    /// in the row's own render, or a list that rebuilds its rows every frame.
+    /// A row's labels are laid out once per row built, never per frame — idle frames lay out
+    /// nothing, a scroll lays out the rows it builds. Caught by: chips laid out in the row's own
+    /// render, or a list that rebuilds its rows every frame.
     #[test]
     fn a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame() {
         use crate::history::graph_geometry::ROW_HEIGHT;

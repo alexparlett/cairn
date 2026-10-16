@@ -1,12 +1,11 @@
-//! One row of the unified view (PRD R6.4, R6.5): an old and a new line-number gutter on the
-//! plain ground, a thin separator, then — tinted for a changed line, from the separator to
-//! the row's end — the line, a few pixels in. No marker column (the user's decision of
-//! 2026-10-04, as Fork's default): a removed line leaves the new gutter blank and an added one
-//! the old, so the gutter still says what the tint says without colour. A hunk header is
-//! git's `@@ -a,b +c,d @@` and the function context git printed after it, muted, at the same
-//! height, starting where a line's text starts, with no band and no button (Fork, Finding
-//! 13); git's `\ No newline at end of file` is a muted row of its own. The gutter scrolls
-//! sideways with the text.
+//! One row of the unified view: an old and a new line-number gutter on the plain ground, a
+//! thin separator, then — tinted for a changed line, from the separator to the row's end —
+//! the line, a few pixels in. No marker column, as Fork's default has none: a removed line
+//! leaves the new gutter blank and an added one the old, so the gutter still says what the
+//! tint says without colour. A hunk header is git's `@@ -a,b +c,d @@` and the function
+//! context git printed after it, muted, at the same height, starting where a line's text
+//! starts, with no band and no button, as Fork draws it; git's `\ No newline at end of file`
+//! is a muted row of its own. The gutter scrolls sideways with the text.
 
 use cairn_model::{ByteRange, LineNumber, ShownDiff, UnifiedRow};
 use freya::prelude::*;

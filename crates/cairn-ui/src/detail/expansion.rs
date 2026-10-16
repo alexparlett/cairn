@@ -1,7 +1,7 @@
-//! The files opened in place in the Commit tab (PRD R5.3), and where each one's rows fall in
-//! the tab's one list.
+//! The files opened in place in the Commit tab, and where each one's rows fall in the tab's
+//! one list.
 //!
-//! The Commit tab is one virtualised list of rows of one height (R5.5): its header, then a
+//! The Commit tab is one virtualised list of rows of one height: its header, then a
 //! row per changed file — and, under a file opened in place, that file's own rows: its diff,
 //! unified or side by side, or the notice that stands in place of rows, or a line saying it is
 //! being read or could not be. Opened files make this the longest list in the application,
@@ -24,7 +24,7 @@ use crate::diff::notice::{DiffNotice, notice_rows};
 pub enum Opened {
     /// Asked for, and not answered yet.
     Reading,
-    /// It could not be read: why, as display text. That file's alone (phase 04 QA's R1).
+    /// It could not be read: why, as display text. That file's alone.
     Failed(String),
     /// Its diff, prepared on the worker that read it.
     Shown(Box<ShownDiff>),
@@ -37,7 +37,7 @@ impl Opened {
             Self::Reading | Self::Failed(_) => 1,
             Self::Shown(shown) => match DiffNotice::of(shown) {
                 Some(notice) => notice_rows(&notice).len(),
-                // Ignoring whitespace says it is hiding something (R6.7): a row of its own
+                // Ignoring whitespace says it is hiding something: a row of its own
                 // above the diff, since an opened file has no bar to say it in.
                 None => shown.rows(side_by_side) + usize::from(shown.hides_changes()),
             },
@@ -78,7 +78,7 @@ fn layout(side_by_side: bool) -> usize {
 }
 
 impl Expansion {
-    /// Nothing open: what a commit's files start as (R5.3, Fork's default).
+    /// Nothing open: what a commit's files start as, as in Fork.
     pub const fn new() -> Self {
         Self {
             opened: BTreeMap::new(),

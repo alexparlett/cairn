@@ -2,8 +2,8 @@
 //! draws.
 //!
 //! git prints a line's bytes as they are; a terminal turns them into columns. A row is a
-//! Skia paragraph, which draws a tab and a control byte as a box (measured headlessly,
-//! 2026-10-03), so the row does what the terminal does:
+//! Skia paragraph, which draws a tab and a control byte as a box (measured headlessly), so
+//! the row does what the terminal does:
 //!
 //! - a tab moves to the next multiple of [`TAB_WIDTH`] columns, as `git diff` in a terminal
 //!   and `git log`'s message lines (`message_lines`) show it, the columns before it counted
@@ -22,7 +22,7 @@
 //! the other in the same pass that builds the text. A row's work is proportional to its own
 //! line — never to the file, never to where the view is scrolled.
 //!
-//! **A line past the long-line limit is drawn cut** (R6.9). Only a diff loaded past R2.6's
+//! **A line past the long-line limit is drawn cut.** Only a diff loaded past the size
 //! ceilings holds one — the engine refuses any other with a line longer than
 //! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row
 //! built (a 64 MiB line is 64 MiB of text for one row) and a horizontal extent of hundreds of
@@ -37,8 +37,8 @@ use crate::diff::columns::columns;
 /// The column a tab moves to a multiple of: `git diff` in a terminal.
 pub const TAB_WIDTH: usize = TAB_STOP;
 
-/// Drawn after a line cut at the long-line limit, in the muted colour (R6.9): how many of the
-/// line's bytes are not drawn (the user's words, 2026-10-03).
+/// Drawn after a line cut at the long-line limit, in the muted colour: how many of the line's
+/// bytes are not drawn.
 pub fn cut_marker(bytes_not_drawn: usize) -> String {
     format!(
         " … {} more bytes",
@@ -201,10 +201,10 @@ mod tests {
         assert_eq!(shown.highlights, [(3, 4), (1, 3)]);
     }
 
-    /// A tab stop is counted in terminal columns (the user's decision, 2026-10-03): a wide
-    /// character — an emoji, a CJK ideograph, a kana outside the old table — takes two, a
-    /// combining mark none. Each line here is what `git diff` prints in a terminal. Caught
-    /// by: counting every character as one column, or a hand-rolled table that misses one.
+    /// A tab stop is counted in terminal columns: a wide character — an emoji, a CJK ideograph,
+    /// a kana — takes two, a combining mark none. Each line here is what `git diff` prints in a
+    /// terminal. Caught by: counting every character as one column, or a hand-rolled table that
+    /// misses one.
     #[test]
     fn a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops() {
         for (line, shown) in [
@@ -243,9 +243,9 @@ mod tests {
         assert!(shown_line(b"abc", &[range(2, 2)]).highlights.is_empty());
     }
 
-    /// R6.9: a line longer than the long-line limit is drawn to the limit, never past it,
-    /// with its ranges past the cut left out. Caught by: drawing the whole line (a
-    /// multi-mebibyte row).
+    /// A line longer than the long-line limit is drawn to the limit, never past it, with its
+    /// ranges past the cut left out. Caught by: drawing the whole line (a multi-mebibyte
+    /// row).
     #[test]
     fn a_line_past_the_limit_is_drawn_to_the_limit() {
         let long = "a".repeat(3 * 1024 * 1024);

@@ -1,6 +1,5 @@
-//! The accelerator table (decision D5, PRD R8; staging-and-commit R7): every keyboard
-//! shortcut Cairn has is a logical [`Action`] mapped here to a list of distinct chords per
-//! [`Os`], and to the [`Scope`] it is heard in.
+//! The accelerator table: every keyboard shortcut Cairn has is a logical [`Action`] mapped
+//! here to a list of distinct chords per [`Os`], and to the [`Scope`] it is heard in.
 //!
 //! This is the one file of a render path that names a modifier, and it holds data and the
 //! resolution of a press against it — never an element, and never a chord spelled out for a
@@ -15,28 +14,25 @@
 //! here too ([`field_key`]), since telling a modifier key or a primary+letter press from
 //! typing names a modifier.
 //!
-//! The chords are Fork's, and only Fork's (user decision 6, 2026-10-03, from
-//! `docs/research/diff-engine/fork-shortcuts.md`; the staging chords from
-//! `docs/research/staging-and-commit/fork-staging-and-commit.md` §1-2, locked as L7 and L22):
-//! previous and next change are ⌘↑/⌘↓ on macOS and Ctrl+↑/Ctrl+↓ elsewhere, heard only
-//! while the detail pane has focus so a text field keeps those keys; the detail tabs are
-//! ⌘⌥1/⌘⌥2 (the 3 is kept for a File Tree tab); a second commit is added to the selection
-//! with ⌘-click or Ctrl-click; and Refresh is ⌘R on macOS and F5 elsewhere (Fork's own lists,
-//! `fork-dev/Docs` `keyboard-shortcuts-mac.md` and `keyboard-shortcuts-windows.md`: Linux
-//! takes Fork's Windows row, whose F5 is no desktop's and no other action's). In Local
-//! Changes, Fork keeps alternates — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
-//! discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a LIST of chords (L22).
-//! The bare Backspace and Delete are heard in exactly one scope, a focused file list or diff in
-//! Local Changes ([`Scope::LocalChanges`]), and the bare Return or Enter in a narrower one, a
-//! focused file list alone ([`Scope::LocalChangesLists`]): in Fork's diff Return does nothing
-//! and ⌘S or Ctrl+S stages the whole selection (observed `lc3`, `lc4`; R7.3 as amended
-//! 2026-10-10), so a chord is heard where [`chord_heard_in`] says — its action's scope, but a
-//! bare Return's. Nowhere else is a bare chord anything but a function key. Fork
-//! binds no chord to the diff's toggles, so neither does Cairn: side-by-side, ignoring
-//! whitespace, more or fewer lines and the entire file are actions without one, reached from
-//! the diff's header; and the previous or next file is the changed-file list's own ↑/↓, with
-//! Tab and Shift-Tab moving focus between that list and the diff, as Fork does — keys of the
-//! focused view, like the history list's arrows, not chords.
+//! The chords are Fork's, and only Fork's: previous and next change are ⌘↑/⌘↓ on macOS and
+//! Ctrl+↑/Ctrl+↓ elsewhere, heard only while the detail pane has focus so a text field keeps
+//! those keys; the detail tabs are ⌘⌥1/⌘⌥2 (the 3 is kept for a File Tree tab); a second
+//! commit is added to the selection with ⌘-click or Ctrl-click; and Refresh is ⌘R on macOS and
+//! F5 elsewhere (Fork's own lists, `fork-dev/Docs` `keyboard-shortcuts-mac.md` and
+//! `keyboard-shortcuts-windows.md`: Linux takes Fork's Windows row, whose F5 is no desktop's
+//! and no other action's). In Local Changes, Fork keeps alternates — stage on Return and ⌘S
+//! (Ctrl+S on Windows, and Ctrl+Shift+S), discard on Backspace, Delete and Ctrl+Shift+D — so
+//! an action holds a LIST of chords. The bare Backspace and Delete are heard in exactly one
+//! scope, a focused file list or diff in Local Changes ([`Scope::LocalChanges`]), and the bare
+//! Return or Enter in a narrower one, a focused file list alone ([`Scope::LocalChangesLists`]):
+//! in Fork's diff Return does nothing and ⌘S or Ctrl+S stages the whole selection, so a chord
+//! is heard where [`chord_heard_in`] says — its action's scope, but a bare Return's. Nowhere
+//! else is a bare chord anything but a function key. Fork binds no chord to the diff's
+//! toggles, so neither does Cairn: side-by-side, ignoring whitespace, more or fewer lines and
+//! the entire file are actions without one, reached from the diff's header; and the previous
+//! or next file is the changed-file list's own ↑/↓, with Tab and Shift-Tab moving focus
+//! between that list and the diff, as Fork does — keys of the focused view, like the history
+//! list's arrows, not chords.
 
 use freya::prelude::{Code, Key, KeyboardEventData, Modifiers, NamedKey};
 use freya::text_edit::EditBindings;
@@ -76,22 +72,22 @@ pub enum Action {
     ShowCommitTab,
     /// Shows the detail pane's Changes tab.
     ShowChangesTab,
-    /// Reads the refs, ahead/behind and the working tree's status again (PRD R10.1).
+    /// Reads the refs, ahead/behind and the working tree's status again.
     Refresh,
     /// Stages what is selected in the Unstaged list or its diff, or unstages what is selected
-    /// in the Staged list or its diff (staging-and-commit R8.2, R9.2).
+    /// in the Staged list or its diff.
     StageOrUnstage,
     /// Stages every unstaged path, or unstages every staged one, by the list that has focus —
     /// or, a heading press, by the list whose Stage or Unstage button is pressed with its key
     /// held, which turns both headings' buttons into Stage All and Unstage All while it is.
     StageOrUnstageAll,
-    /// Discards what is selected on the unstaged side, through the confirmation (R8.4).
+    /// Discards what is selected on the unstaged side, through the confirmation.
     Discard,
-    /// Commits what is staged, from the commit box (R10).
+    /// Commits what is staged, from the commit box.
     Commit,
-    /// Shows or hides the commits only a reflog reaches (R11.1).
+    /// Shows or hides the commits only a reflog reaches.
     ShowLostCommits,
-    /// Opens Create Branch at `HEAD`'s commit (R11.3; Fork's "New branch").
+    /// Opens Create Branch at `HEAD`'s commit (Fork's "New branch").
     NewBranch,
 }
 
@@ -136,12 +132,11 @@ pub enum Scope {
     /// Backspace or Delete is a chord, since no text field is in it.
     LocalChanges,
     /// Only while Local Changes' Unstaged or Staged list has focus: the one scope where a bare
-    /// Return or Enter is a chord — never the diff's (R7.3 as amended, observed `lc3`).
+    /// Return or Enter is a chord — never the diff's, where Fork's Return does nothing.
     LocalChangesLists,
     /// Only while the commit box's subject or description has focus: commit's chord is heard
     /// there, and no list or staging chord fires — Backspace deletes a character and Enter
-    /// makes a new line — while the window's chords still do, as from any field (R7.3, as
-    /// amended by the user on 2026-10-09).
+    /// makes a new line — while the window's chords still do, as from any field.
     CommitBox,
     /// Only while the history list has focus.
     History,
@@ -182,7 +177,7 @@ impl FieldScope {
 }
 
 /// The platforms whose chords differ. Every platform but macOS takes the Linux row: Linux is
-/// the target, and Windows is not a goal (D5).
+/// the target, and Windows is not a goal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
     Linux,
@@ -214,7 +209,7 @@ enum Trigger {
     /// A primary press of the pointer on one of Local Changes' list headings' Stage or Unstage
     /// buttons: told apart from a press on a row, so one held key means one thing on a row
     /// and another on the heading — Shift a range on a row and, on Fork for Windows' heading,
-    /// Stage All (the redesign's L2).
+    /// Stage All.
     HeadingPress,
 }
 
@@ -307,7 +302,7 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         },
         // Return or ⌘S on macOS, Enter, Ctrl+S or Ctrl+Shift+S on Windows (and so Linux): the
         // bare key heard from Local Changes' file lists alone ([`chord_heard_in`]), ⌘S and
-        // Ctrl+S from the diff too, where Fork's stages the whole selection (observed `lc4`).
+        // Ctrl+S from the diff too, where Fork's stages the whole selection.
         Action::StageOrUnstage => match platform {
             Os::Linux => Chords::of([
                 (bare, key(NamedKey::Enter)),
@@ -318,9 +313,9 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         },
         // ⌥⇧⌘S / Ctrl+Alt+Shift+S on a focused list or diff; and the key held over a list's
         // Stage or Unstage button that makes it Stage All or Unstage All — a heading press:
-        // Fork for Mac's ⌥, and Fork for Windows' Shift on Linux (TrackerWin #2429, #2466; the
-        // redesign's L2), which no window manager takes with a click, where Alt was taken by
-        // xfwm, openbox and Plasma 5 to move the window.
+        // Fork for Mac's ⌥, and Fork for Windows' Shift on Linux (Fork's TrackerWin #2429,
+        // #2466), which no window manager takes with a click, where Alt is taken by xfwm,
+        // openbox and Plasma 5 to move the window.
         Action::StageOrUnstageAll => Chords::of([
             (command | option | shift, at(Code::KeyS)),
             (
@@ -361,7 +356,7 @@ pub fn chords(action: Action, platform: Os) -> Chords {
 
 /// Where one of `action`'s chords is heard: its action's scope ([`heard_in`]), but a bare
 /// Return or Enter of Local Changes', which is heard from its file lists alone, never its diff —
-/// where Fork's Return does nothing (observed `lc3`; R7.3 as amended 2026-10-10).
+/// where Fork's Return does nothing.
 pub fn chord_heard_in(action: Action, chord: Chord) -> Scope {
     match (heard_in(action), chord.trigger) {
         (Scope::LocalChanges, Trigger::Named(NamedKey::Enter))
@@ -509,8 +504,8 @@ pub fn resolve_heading_press_on(platform: Os, held: Modifiers) -> Option<Action>
     })
 }
 
-/// What a focused text field does with a key press (staging-and-commit R7.1): the one key
-/// policy every field takes, through `cairn_ui::text_field`.
+/// What a focused text field does with a key press: the one key policy every field takes,
+/// through `cairn_ui::text_field`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKey {
     /// A chord of the field's own scope (the commit box's commit): the field claims it, types
@@ -568,8 +563,8 @@ pub fn field_key_on(
     }
 }
 
-/// A step through Recent Commit Messages from the commit box's subject (staging-and-commit
-/// R10.2): ↑ to an older message, ↓ to a newer one.
+/// A step through Recent Commit Messages from the commit box's subject: ↑ to an older message,
+/// ↓ to a newer one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecallStep {
     Older,
@@ -581,7 +576,7 @@ pub fn recall_step(event: &KeyboardEventData) -> Option<RecallStep> {
     recall_step_on(&event.key, event.modifiers)
 }
 
-/// The subject's ↑ and ↓ (R10.2, Fork Tracker #587): a bare arrow, never one held with a
+/// The subject's ↑ and ↓ (Fork Tracker #587): a bare arrow, never one held with a
 /// modifier — Shift+↑ selects in the field — and nothing for any other key. Not a chord of the
 /// table: a field's own scope holds no bare key (`a_fields_own_scope_holds_no_bare_chord`), and
 /// the subject takes the step only while it is empty or holds the message last recalled, which
@@ -655,7 +650,7 @@ impl HeldKeys {
 mod tests {
     use super::*;
 
-    /// R10.2: a bare ↑ or ↓ in the subject is a step through the recent messages, and an arrow
+    /// A bare ↑ or ↓ in the subject is a step through the recent messages, and an arrow
     /// held with any modifier — Shift selecting, the command key's previous and next change —
     /// or any other key is none. Caught by: a step taken on Shift+↑, which would recall over a
     /// selection the person was making.
@@ -691,10 +686,10 @@ mod tests {
         );
     }
 
-    /// Phase 05's obligation to phase 08: a pointer press carries no modifiers, so the second
-    /// commit of a comparison is resolved from the keys the window heard — the command key
-    /// held makes a press `ExtendSelection` on each platform, and its release, another key, a
-    /// lock or an extra Shift do not; the key's own press counts before its state does.
+    /// A pointer press carries no modifiers, so the second commit of a comparison is resolved
+    /// from the keys the window heard — the command key held makes a press `ExtendSelection`
+    /// on each platform, and its release, another key, a lock or an extra Shift do not; the
+    /// key's own press counts before its state does.
     /// Caught by: a press read with no keys held (the gesture never resolves), the other
     /// platform's command key, a release not let go of (every later click extends), or a
     /// modifier key's own press ignored until a second event.
@@ -766,9 +761,9 @@ mod tests {
             }
         }
         // The key held over a list heading's Stage or Unstage button makes it Stage All or
-        // Unstage All (R8.2, the redesign's L2) — Shift on Linux, as Fork for Windows, and ⌥ on
-        // macOS — with nothing else held only; and on a row the same Shift is still the range
-        // press, the heading and the row told apart by where the press lands.
+        // Unstage All — Shift on Linux, as Fork for Windows, and ⌥ on macOS — with nothing else
+        // held only; and on a row the same Shift is still the range press, the heading and the
+        // row told apart by where the press lands.
         for (platform, all) in [(Os::Linux, NamedKey::Shift), (Os::MacOs, NamedKey::Alt)] {
             let Some((key, code, modifiers)) = chords(Action::StageOrUnstageAll, platform)
                 .iter()
@@ -796,8 +791,8 @@ mod tests {
                 "another key held as well is no press of the table's"
             );
         }
-        // On Linux, Alt held over the heading does nothing (it was the key before L2), and
-        // Shift on a row is the range press.
+        // On Linux, Alt held over the heading does nothing, and Shift on a row is the range
+        // press.
         let mut held = HeldKeys::default();
         held.heard(&key_of(NamedKey::Alt, Modifiers::empty()), true);
         assert_eq!(
@@ -868,9 +863,9 @@ mod tests {
         }
     }
 
-    /// T1, user decision 6, and staging-and-commit R7.2-R7.3 (L7, L22): the whole table,
-    /// spelled out per platform from `docs/systems/diff.md`'s table and Fork's own lists —
-    /// every action's chords in order, or its lack of one, and where it is heard. Caught by:
+    /// The whole table, spelled out per platform from `docs/systems/diff.md`'s table and Fork's
+    /// own lists — every action's chords in order, or its lack of one, and where it is heard.
+    /// Caught by:
     /// Linux's command key or option key swapped for another modifier, a key code or a
     /// trigger swapped, an invented chord given back to an action Fork leaves unbound, one of
     /// Fork's alternates dropped (stage on Return alone, discard without Delete), or a chord
@@ -1000,7 +995,7 @@ mod tests {
                 );
                 assert_eq!(heard_in(action), heard, "{action:?}");
                 // Every chord is heard in its action's scope, but the stage's bare Return,
-                // heard from the file lists alone (R7.3 as amended, observed `lc3`).
+                // heard from the file lists alone.
                 for chord in chords_of {
                     let narrowed =
                         action == Action::StageOrUnstage && chord == keyed(none, NamedKey::Enter);
@@ -1040,11 +1035,11 @@ mod tests {
         );
     }
 
-    /// C13, C16: every chord of every action's list resolves back to that action through the
-    /// table, in its own scope and in no other — the stage's bare Return in the file lists'
-    /// scope alone, never the diff's. Caught by: an action whose row the resolver skips, a chord
-    /// of a list after its first that the resolver never reads, two actions the resolver cannot
-    /// tell apart, or a scope the resolver ignores.
+    /// Every chord of every action's list resolves back to that action through the table, in
+    /// its own scope and in no other — the stage's bare Return in the file lists' scope alone,
+    /// never the diff's. Caught by: an action whose row the resolver skips, a chord of a list
+    /// after its first that the resolver never reads, two actions the resolver cannot tell
+    /// apart, or a scope the resolver ignores.
     #[test]
     fn every_chord_resolves_to_its_action_in_its_scope_only() {
         for platform in PLATFORMS {
@@ -1070,10 +1065,10 @@ mod tests {
         }
     }
 
-    /// C16, R7.3: with the commit box focused, the stage, unstage, stage-all, discard and
-    /// Show Lost Commits chords resolve to nothing, and the commit chord commits — on each
-    /// platform, every chord of each list. Caught by: a staging chord heard in every scope, or
-    /// the commit chord heard outside the box.
+    /// With the commit box focused, the stage, unstage, stage-all, discard and Show Lost
+    /// Commits chords resolve to nothing, and the commit chord commits — on each platform,
+    /// every chord of each list. Caught by: a staging chord heard in every scope, or the commit
+    /// chord heard outside the box.
     #[test]
     fn in_the_commit_box_only_the_commit_chord_resolves() {
         for platform in PLATFORMS {
@@ -1134,12 +1129,12 @@ mod tests {
         rows
     }
 
-    /// The bare keys a chord may be in Local Changes' list-and-diff scope (L7): Fork's discard
+    /// The bare keys a chord may be in Local Changes' list-and-diff scope: Fork's discard
     /// keys, heard from the lists and the diff alike.
     const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];
 
     /// The bare keys a chord may be in Local Changes' lists' scope alone: Fork's stage key,
-    /// which its diff does not hear (R7.3 as amended 2026-10-10, observed `lc3`).
+    /// which its diff does not hear.
     const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = [NamedKey::Enter];
 
     /// What breaks the pin in `rows`: a chord listed twice — in one action's list, or shared by
@@ -1193,16 +1188,16 @@ mod tests {
         found
     }
 
-    /// R7.2 (L7, L22), R7.3 as amended 2026-10-10: no chord is listed twice on one platform —
-    /// not within one action's list, and not by two actions, whatever their scopes — and every
-    /// chord holds a modifier but a function key's or, in Local Changes' list-and-diff scope
-    /// alone, a bare Backspace or Delete, and in its lists' scope alone a bare Enter: an
-    /// unmodified key belongs to whatever has focus (the history list's arrows, the file
-    /// list's, Tab, a letter typed in a filter or the commit box), a function key types nothing
-    /// in any of them — Fork's Windows Refresh is F5 alone — the scopes with bare keys are ones
-    /// no text field is in, and Return is nothing in Fork's diff (observed `lc3`). The rule is
-    /// checked over the table, then shown to fail on the shapes it claims to refuse — a bare
-    /// Enter in the diff's scope among them — so a rule that went blind fails too.
+    /// No chord is listed twice on one platform — not within one action's list, and not by two
+    /// actions, whatever their scopes — and every chord holds a modifier but a function key's
+    /// or, in Local Changes' list-and-diff scope alone, a bare Backspace or Delete, and in its
+    /// lists' scope alone a bare Enter: an unmodified key belongs to whatever has focus (the
+    /// history list's arrows, the file list's, Tab, a letter typed in a filter or the commit
+    /// box), a function key types nothing in any of them — Fork's Windows Refresh is F5 alone —
+    /// the scopes with bare keys are ones no text field is in, and Return is nothing in Fork's
+    /// diff. The rule is checked over the table, then shown to fail on the shapes it claims to
+    /// refuse — a bare Enter in the diff's scope among them — so a rule that went blind fails
+    /// too.
     #[test]
     fn chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own() {
         for platform in PLATFORMS {
@@ -1220,7 +1215,7 @@ mod tests {
             }
 
             // The stage's bare Enter heard on the diff — Local Changes' list-and-diff scope —
-            // fails: in Fork's diff Return does nothing (observed `lc3`).
+            // fails: in Fork's diff Return does nothing.
             let mut enter_in_the_diff = rows.clone();
             enter_in_the_diff
                 .iter_mut()
@@ -1332,7 +1327,7 @@ mod tests {
         }
     }
 
-    /// D5: macOS reads the command key where Linux reads Control, so the same press means
+    /// macOS reads the command key where Linux reads Control, so the same press means
     /// different things on the two. Caught by: one row for both platforms.
     #[test]
     fn the_command_key_is_the_platforms_own() {
@@ -1382,7 +1377,7 @@ mod tests {
         assert_eq!(resolve_press_on(Os::Linux, Modifiers::META), None);
     }
 
-    /// T8: a key or a press without its modifiers, or with one more than its chord, is not
+    /// A key or a press without its modifiers, or with one more than its chord, is not
     /// the chord; a lock key held is ignored. Caught by: matching with `contains`, which
     /// makes Ctrl+Shift+↓ "next change" and Ctrl+Shift-click a second commit, and leaves
     /// Shift nothing to mean later — and makes Ctrl+Enter a bare Enter's stage.
@@ -1425,8 +1420,8 @@ mod tests {
             resolve_key_on(linux, lists, &enter, Code::Enter, Modifiers::NUM_LOCK),
             Some(Action::StageOrUnstage)
         );
-        // In the diff's scope a bare Return is nothing, and Ctrl+S stages (observed `lc3`,
-        // `lc4`); Ctrl+S with Shift is the stage too, and with Alt as well Stage All.
+        // In the diff's scope a bare Return is nothing, and Ctrl+S stages, as in Fork's diff;
+        // Ctrl+S with Shift is the stage too, and with Alt as well Stage All.
         let local = Scope::LocalChanges;
         assert_eq!(
             resolve_key_on(linux, local, &enter, Code::Enter, Modifiers::empty()),
@@ -1511,10 +1506,9 @@ mod tests {
     }
 
     /// A view asks [`is_chord`] to leave a press alone when the window, the detail pane or a
-    /// scope it is in hears it — and only then (QA item 14, the user's decision of
-    /// 2026-10-09). Caught by: asking one scope only, which hands "next change" to the history
-    /// list as "next commit"; or asking every scope, which swallows Local Changes' Shift+↓ in
-    /// every other list.
+    /// scope it is in hears it — and only then. Caught by: asking one scope only, which hands
+    /// "next change" to the history list as "next commit"; or asking every scope, which
+    /// swallows Local Changes' Shift+↓ in every other list.
     #[test]
     fn a_chord_of_the_window_the_pane_or_the_views_own_scope_is_a_chord() {
         let platform = Os::current();
@@ -1556,9 +1550,9 @@ mod tests {
         ));
     }
 
-    /// QA item 11: a field claims its own scope's chords before it types, so no scope a field
-    /// can be heard in may hold a bare chord on any platform — or a Backspace typed there would
-    /// be Local Changes' discard. Caught by: a `FieldScope` added for a scope with a bare key.
+    /// A field claims its own scope's chords before it types, so no scope a field can be heard
+    /// in may hold a bare chord on any platform — or a Backspace typed there would be Local
+    /// Changes' discard. Caught by: a `FieldScope` added for a scope with a bare key.
     #[test]
     fn a_fields_own_scope_holds_no_bare_chord() {
         for platform in PLATFORMS {
@@ -1578,7 +1572,7 @@ mod tests {
         }
     }
 
-    /// R7.1, C15: what a focused text field does with each kind of key. A window chord and a
+    /// What a focused text field does with each kind of key. A window chord and a
     /// lone Control, Alt or Command are neither typed nor kept from the window; Shift is the
     /// field's and still reaches the views around it; a primary+letter press that is no
     /// editing binding types nothing; the editing bindings, typing, Enter and Backspace are

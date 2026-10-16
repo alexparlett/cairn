@@ -1,8 +1,7 @@
-//! RR2's drawing half and the chips' cost (refs-and-status phase 07): what drawing a viewport
-//! of history rows costs when thousands of lines are open across it — the widest the graph
-//! gets, every unmerged ref one line — and what laying out a row's chips costs when its
-//! commit carries thousands of refs. A measurement, `#[ignore]`d: timings in CI are flaky
-//! and bound to a machine. Run in release:
+//! What drawing a viewport of history rows costs when thousands of lines are open across it —
+//! the widest the graph gets, every unmerged ref one line — and what laying out a row's chips
+//! costs when its commit carries thousands of refs. A measurement, `#[ignore]`d: timings in
+//! CI are flaky and bound to a machine. Run in release:
 //! `cargo test --release -p cairn-ui --test drawn_lanes -- --ignored --nocapture`.
 
 use std::time::{Duration, Instant};

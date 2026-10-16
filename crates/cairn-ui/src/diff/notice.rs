@@ -1,16 +1,16 @@
-//! What stands where a file's rows would be (PRD R6.8, R6.9): the states of R1.2 that are
-//! not text, and a text diff with no row to draw.
+//! What stands where a file's rows would be: the states of a file's diff that are not text,
+//! and a text diff with no row to draw.
 //!
 //! Each state says what it is in words that cannot be mistaken for another — a submodule's
 //! notice names commits, never "binary" — and quotes git where git has words for it: a mode
 //! change is git's own `old mode` and `new mode` lines, a rename with no content change git's
 //! `similarity index`, `rename from` and `rename to` lines, a submodule git's `Subproject
-//! commit` line with its `-dirty`. A change with no content to draw is titled in the user's
-//! words (2026-10-03): "Mode changed", "Renamed without changes", "Renamed, mode changed",
-//! and a copy's alike. Fork's words where Fork's are recorded: "Changes are too large to
-//! display" and "Load Diff" (Finding 21, Windows), and "Old" and "New" over a binary's two
-//! sizes (Finding 22). [`DiffNotice::of`] reads a [`ShownDiff`] by naming every state, so a
-//! ninth state does not compile until it is given a notice.
+//! commit` line with its `-dirty`. A change with no content to draw is titled "Mode
+//! changed", "Renamed without changes", "Renamed, mode changed", and a copy's alike. Fork's
+//! words where Fork's are recorded: "Changes are too large to display" and "Load Diff" (Fork
+//! for Windows), and "Old" and "New" over a binary's two sizes. [`DiffNotice::of`] reads a
+//! [`ShownDiff`] by naming every state, so a ninth state does not compile until it is given
+//! a notice.
 
 use cairn_model::{ChangeStatus, DiffContent, DiffLimits, FileMode, Oid, ShownDiff, SizeLimit};
 use freya::prelude::*;
@@ -20,13 +20,13 @@ use crate::diff::palette::{
     REMOVED_EMPHASIS,
 };
 
-/// Fork's words for a file past the limits (Finding 21, Windows).
+/// Fork's words for a file past the limits (Fork for Windows).
 pub const TOO_LARGE_TO_DISPLAY: &str = "Changes are too large to display";
-/// Fork's button, which asks for the file past the limits (Finding 21, Windows).
+/// Fork's button, which asks for the file past the limits (Fork for Windows).
 pub const LOAD_DIFF_CAPTION: &str = "Load Diff";
 /// Said over a binary file's two sizes.
 pub const BINARY_FILE: &str = "Binary file";
-/// The label over an LFS pointer's text (R6.8).
+/// The label over an LFS pointer's text.
 pub const LFS_POINTER: &str = "Git LFS pointer";
 /// Said over a submodule's two commits.
 pub const SUBMODULE: &str = "Submodule";
@@ -35,30 +35,27 @@ pub const SUBMODULE: &str = "Submodule";
 /// the engine gives reaches it today; named rather than left to fall through to another
 /// state's words.
 pub const NO_CONTENT_CHANGE: &str = "No change to the file's content";
-/// Said over git's rename lines for a rename with no content or mode change (the user's
-/// words, 2026-10-03).
+/// Said over git's rename lines for a rename with no content or mode change.
 pub const RENAMED_WITHOUT_CHANGES: &str = "Renamed without changes";
 /// Said over git's copy lines for a copy with no content or mode change, in the rename's form.
 pub const COPIED_WITHOUT_CHANGES: &str = "Copied without changes";
-/// Said over git's mode lines for a change of mode alone (the user's words, 2026-10-03).
+/// Said over git's mode lines for a change of mode alone.
 pub const MODE_CHANGED: &str = "Mode changed";
-/// Said over git's mode and rename lines for a rename with no content change whose mode moved
-/// (the user's words, 2026-10-03).
+/// Said over git's mode and rename lines for a rename with no content change whose mode moved.
 pub const RENAMED_MODE_CHANGED: &str = "Renamed, mode changed";
 /// Said over git's mode and copy lines for a copy with no content change whose mode moved, in
 /// the rename's form.
 pub const COPIED_MODE_CHANGED: &str = "Copied, mode changed";
-/// Said for a conflicted path (R3.4), in the user's words (2026-10-03): git's own "Unmerged
-/// path", and why no diff is drawn.
+/// Said for a conflicted path: git's own "Unmerged path", and why no diff is drawn.
 pub const CONFLICTED: &str =
     "Unmerged path — conflicts must be resolved before a diff can be shown";
 /// Said for a file whose diff has no change to show and hides none: a working-tree path git
 /// shows nothing for, or a file whose content did not change.
 pub const NO_CHANGES_SHOWN: &str = "No changes to show.";
-/// Said for a file whose every change ignoring whitespace hides (R6.7).
+/// Said for a file whose every change ignoring whitespace hides.
 pub const ONLY_WHITESPACE_CHANGED: &str =
     "Every change to this file is whitespace, which is being ignored.";
-/// Fork's labels over the two sides of a binary (Finding 22).
+/// Fork's labels over the two sides of a binary.
 pub const OLD_SIDE: &str = "Old";
 pub const NEW_SIDE: &str = "New";
 
@@ -159,7 +156,7 @@ pub enum NoticeTone {
 }
 
 /// One row of a notice where it must be drawn as rows of one height: under a file opened in
-/// place in the Commit tab (R5.3), whose list is one virtualised list of equal rows. The same
+/// place in the Commit tab, whose list is one virtualised list of equal rows. The same
 /// words [`DiffNoticeView`] draws, from the same [`DiffNotice`], one line each
 /// (`every_notice_says_the_same_words_in_place_as_in_the_changes_tab`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,9 +288,9 @@ pub fn header_lines(file: &cairn_model::ChangedFile) -> Vec<String> {
     lines
 }
 
-/// What a change with no content to draw is called (the user's words, 2026-10-03): a change
-/// of mode alone is "Mode changed"; a rename or a copy is renamed or copied "without changes",
-/// or ", mode changed" when its mode moved too; anything else has no change to its content.
+/// What a change with no content to draw is called: a change of mode alone is "Mode changed";
+/// a rename or a copy is renamed or copied "without changes", or ", mode changed" when its
+/// mode moved too; anything else has no change to its content.
 fn no_content_title(file: &cairn_model::ChangedFile) -> &'static str {
     match (file.status, file.mode_changed()) {
         (ChangeStatus::Renamed(_), false) => RENAMED_WITHOUT_CHANGES,
@@ -321,9 +318,9 @@ fn mode_digits(mode: FileMode) -> String {
     mode.octal().to_owned()
 }
 
-/// A size as Fork shows one, in kilobytes and in bytes (Finding 22); under a kilobyte, in
-/// bytes alone. Fork's sample does not settle whether its KB is 1,000 or 1,024 bytes, so the
-/// unit is said honestly: KiB, 1,024 bytes (the user's decision, 2026-10-03).
+/// A size as Fork shows one, in kilobytes and in bytes; under a kilobyte, in bytes alone.
+/// Fork's sample does not settle whether its KB is 1,000 or 1,024 bytes, so the unit is said
+/// honestly: KiB, 1,024 bytes.
 pub fn size_text(bytes: u64) -> String {
     if bytes < 1024 {
         return format!("{} bytes", grouped(bytes));
@@ -375,11 +372,11 @@ pub fn mib_text(bytes: u64) -> String {
 }
 
 /// Why a file is too large, in the measurement the limit fired on, and whether it can be
-/// loaded anyway. Past the load-anyway ceiling it says the file's size and the ceiling (the
-/// user's words, 2026-10-03): "72.3 MiB — larger than the 64 MiB Cairn can load". The
-/// ceiling is [`DiffLimits::LOAD_ANYWAY_BYTES`], the one the application asks every file diff
-/// with — R2.6's ceilings are fixed — and not the limit the engine names, which on a first ask
-/// is the drawing limit (1 MiB) the file crossed first.
+/// loaded anyway. Past the load-anyway ceiling it says the file's size and the ceiling:
+/// "72.3 MiB — larger than the 64 MiB Cairn can load". The ceiling is
+/// [`DiffLimits::LOAD_ANYWAY_BYTES`], the one the application asks every file diff with — the
+/// ceilings are fixed — and not the limit the engine names, which on a first ask is the
+/// drawing limit (1 MiB) the file crossed first.
 pub fn too_large_reason(crossed: SizeLimit, loadable: bool) -> String {
     if let (SizeLimit::Bytes { measured, .. }, false) = (crossed, loadable) {
         return format!(
@@ -602,8 +599,8 @@ mod tests {
             ),
             "2,532,736 bytes, more than the limit of 1,048,576 bytes"
         );
-        // Past the ceiling, in MiB as the user worded it (2026-10-03); the engine's first ask
-        // names the drawing limit, which the sentence does not repeat.
+        // Past the ceiling, in MiB; the engine's first ask names the drawing limit, which the
+        // sentence does not repeat.
         assert_eq!(mib_text(64 * 1024 * 1024), "64 MiB");
         assert_eq!(mib_text(75_812_045), "72.3 MiB");
         assert_eq!(
@@ -628,12 +625,12 @@ mod tests {
         );
     }
 
-    /// Phase 05's obligation carried into phase 08: a file just past the 64 MiB ceiling never
-    /// reads as the ceiling itself. A tenth is kept wherever it says the size honestly; where
-    /// it would round to a whole number of MiB — "64.0 MiB" for 64 MiB and one byte — the
-    /// size is given to as many places as it takes to read as more (or less) than whole.
-    /// Caught by: rounding to a tenth unconditionally ("64.0 MiB — larger than the 64 MiB
-    /// Cairn can load"), or dropping the fraction ("64 MiB").
+    /// A file just past the 64 MiB ceiling never reads as the ceiling itself. A tenth is kept
+    /// wherever it says the size honestly; where it would round to a whole number of MiB —
+    /// "64.0 MiB" for 64 MiB and one byte — the size is given to as many places as it takes to
+    /// read as more (or less) than whole. Caught by: rounding to a tenth unconditionally
+    /// ("64.0 MiB — larger than the 64 MiB Cairn can load"), or dropping the fraction
+    /// ("64 MiB").
     #[test]
     fn a_size_just_past_the_ceiling_never_reads_as_the_ceiling() {
         const MIB: u64 = 1024 * 1024;

@@ -1,11 +1,10 @@
-//! Edge auto-scroll for a drag over a virtualized list (staging-and-commit R7.6, L5).
+//! Edge auto-scroll for a drag over a virtualized list.
 //!
 //! Freya scrolls nothing while a drag stands at a list's edge. A drag over Local Changes'
 //! lists or a diff's lines must reach rows the viewport does not show, so the list scrolls
 //! itself while the pointer is near or past its top or bottom edge — and keeps scrolling while
 //! the pointer stands still there, which pointer moves alone cannot do. A timer paces it:
-//! `async_io::Timer`, a future on the toolkit's own executor, so the UI thread never sleeps
-//! (the user's decision, L5).
+//! `async_io::Timer`, a future on the toolkit's own executor, so the UI thread never sleeps.
 //!
 //! The drag is tracked by the LIST, never by a row: a row is unmounted by the virtual list as
 //! it scrolls out, and its listeners with it, so the list's container — which stays mounted —
@@ -17,7 +16,7 @@
 //! (`freya-winit`'s `CursorLeft`), and whether the release arrives depends on the platform's
 //! pointer grab. So a drag also ends when the button goes down again while it is still held —
 //! a press can only start once the last one was released, wherever that was — and when the
-//! window loses focus (phase 06's QA item 16).
+//! window loses focus.
 
 use std::time::Duration;
 
@@ -35,8 +34,8 @@ pub const MOST_PER_TICK: f32 = 32.0;
 
 /// How far one tick scrolls for a pointer at `y` over a list whose viewport spans `top` to
 /// `bottom`: negative toward the list's start, positive toward its end, zero away from both
-/// edges and for a viewport with no height. It grows with how near the edge — then how far past it — the pointer is, up to
-/// [`MOST_PER_TICK`].
+/// edges and for a viewport with no height. It grows with how near the edge — then how far
+/// past it — the pointer is, up to [`MOST_PER_TICK`].
 pub fn edge_step(y: f32, top: f32, bottom: f32) -> f32 {
     // A viewport not yet laid out (`(0, 0)` before the list's first size), collapsed or
     // inverted has no edges: nothing scrolls.

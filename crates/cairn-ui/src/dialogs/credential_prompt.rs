@@ -2,10 +2,10 @@
 //!
 //! It says WHICH remote is asking and shows the prompt text itself — the URL
 //! in it is the one being authenticated against, not a nickname that could
-//! disagree with where the request goes (PRD product rule). What it asks for
-//! decides how it asks: a username is typed in the open, a password or
-//! passphrase masked, and ssh's host-key check is a question with a yes and
-//! a no rather than a text field, so a password is never typed into it.
+//! disagree with where the request goes. What it asks for decides how it
+//! asks: a username is typed in the open, a password or passphrase masked,
+//! and ssh's host-key check is a question with a yes and a no rather than a
+//! text field, so a password is never typed into it.
 //!
 //! The typed text leaves this component through `on_submit` as the `String`
 //! the input held, moved rather than copied; the caller wraps it in
@@ -60,8 +60,7 @@ impl CredentialPrompt {
         self
     }
 
-    /// Which platform's button order to draw in (the user's decision E): this build's own
-    /// unless a test names another.
+    /// Which platform's button order to draw in: this build's own unless a test names another.
     pub fn platform(mut self, platform: Os) -> Self {
         self.platform = platform;
         self
@@ -113,9 +112,8 @@ impl Component for CredentialPrompt {
         let on_accept = self.on_submit.clone();
         let accept = move |_| on_accept.call(PromptKind::ACCEPTED.to_owned());
 
-        // ssh's host-key question opens on Cancel, so a Return or Space pressed by habit
-        // declines (the user's decision E keeps focus on the safe answer); a field's prompt
-        // opens in its field.
+        // ssh's host-key question opens on Cancel, the safe answer, so a Return or Space
+        // pressed by habit declines; a field's prompt opens in its field.
         let identity = {
             use std::hash::{DefaultHasher, Hash, Hasher};
             let mut hasher = DefaultHasher::new();
@@ -192,7 +190,7 @@ impl Component for CredentialPrompt {
                 .child("Continue")
                 .into();
         }
-        // In the platform's order (the user's decision E).
+        // In the platform's order.
         let buttons =
             PopupButtons::new().children(ordered(self.platform, vec![primary], cancel_button));
 

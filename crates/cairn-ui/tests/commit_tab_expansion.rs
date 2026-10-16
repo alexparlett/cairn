@@ -1,5 +1,5 @@
-//! Headless tests for a file's diff opened in place in the Commit tab (phase 08, PRD R5.3,
-//! criterion C10's expansion; R5.5's one viewport of rows however many files are open).
+//! Headless tests for a file's diff opened in place in the Commit tab, and its one viewport of
+//! rows however many files are open.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -206,11 +206,11 @@ fn press(test: &mut TestingRunner, text: &str) {
     test.sync_and_update();
 }
 
-/// C10, R5.3 (Fork, Finding 4): a file starts collapsed, a pressed file is reported for its
-/// caller to open, and once open its diff is drawn under its own row and above the next
-/// file's — rows of the same list, pushing the files below it down. Caught by: a press that
-/// reports another file, the diff drawn anywhere but under its row, or the files after it
-/// left where they were (drawn over it).
+/// As in Fork, a file starts collapsed, a pressed file is reported for its caller to open,
+/// and once open its diff is drawn under its own row and above the next file's — rows of the
+/// same list, pushing the files below it down. Caught by: a press that reports another file,
+/// the diff drawn anywhere but under its row, or the files after it left where they were
+/// (drawn over it).
 #[test]
 fn a_pressed_file_is_reported_and_its_diff_opens_under_its_row() {
     let (mut test, fixture, reports) = launch(change_set(8), false);
@@ -240,7 +240,7 @@ fn a_pressed_file_is_reported_and_its_diff_opens_under_its_row() {
     assert_eq!(next - next_before, 8. * DETAIL_ROW_HEIGHT);
 }
 
-/// R5.3's states of an opened file, each a row of the list: being read, failed — that file's
+/// The states of an opened file, each a row of the list: being read, failed — that file's
 /// alone — and a notice standing in place of rows, whose Load Diff reports which file it is
 /// under. Caught by: a failure drawn under another file, a notice missing from the list, or
 /// Load Diff reporting nothing or another file.
@@ -280,7 +280,7 @@ fn an_opened_file_says_it_is_being_read_or_failed_or_why_it_has_no_rows() {
     assert_eq!(reports.borrow().loads, [4]);
 }
 
-/// C10, R5.3: Expand All above the files reports itself; while any file is open it is
+/// Expand All above the files reports itself; while any file is open it is
 /// Collapse All; and when Expand All stopped at its budget, the tab says how many files it
 /// left collapsed — the files not open, counted. Caught by: the button never turning, the
 /// notice shown when Expand All did not stop at the budget, or counting the open files.
@@ -319,15 +319,15 @@ fn expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed() 
     assert_eq!(reports.borrow().expand_all, [true, false]);
 }
 
-/// R5.5 with files open, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`
-/// (QA brief: expansion makes this the longest list in the application): 55,184 files with
-/// three of them open, each 10,000 lines drawn whole, build one viewport of rows at the top,
-/// deep inside the middle file's diff and at the very end — the same number at each, unified
-/// and side by side — and at the end the last file's row sits at the bottom of the view, so
-/// the list is exactly as long as its header, its files and every opened file's rows. Caught
-/// by: rows built per opened line, a length that forgets the opened rows (the last file cut
-/// off) or counts them twice (empty space after it), or a deep row placed in the wrong file
-/// or a row off its place, against row counts worked out by hand.
+/// With files open, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`
+/// (expansion makes this the longest list in the application): 55,184 files with three of
+/// them open, each 10,000 lines drawn whole, build one viewport of rows at the top, deep
+/// inside the middle file's diff and at the very end — the same number at each, unified and
+/// side by side — and at the end the last file's row sits at the bottom of the view, so the
+/// list is exactly as long as its header, its files and every opened file's rows. Caught by:
+/// rows built per opened line, a length that forgets the opened rows (the last file cut off)
+/// or counts them twice (empty space after it), or a deep row placed in the wrong file or a
+/// row off its place, against row counts worked out by hand.
 #[test]
 fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
     const FILES: usize = 55_184;
@@ -363,9 +363,9 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
         let header = (first_top / DETAIL_ROW_HEIGHT).floor();
         // Where a file's label sits inside its row, centred.
         let inset = first_top - header * DETAIL_ROW_HEIGHT;
-        // Counted by hand, not by the function under test (phase 08 QA's U5: a row too many
-        // per opened file, there or in the table, passed when this was read from it): one hunk
-        // header and 10,000 lines, and unified the 200 changed lines a second row each.
+        // Counted by hand, not by the function under test (a row too many per opened file,
+        // there or in the table, would pass were this read from it): one hunk header and
+        // 10,000 lines, and unified the 200 changed lines a second row each.
         let opened_rows = if side_by_side { 10_001 } else { 10_201 };
         assert_eq!(long_diff(10, LINES).rows(side_by_side), opened_rows);
         let opened_above = opened_rows as f64;

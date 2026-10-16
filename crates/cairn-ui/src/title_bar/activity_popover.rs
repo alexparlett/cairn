@@ -1,22 +1,21 @@
-//! Fork's Activity Manager (staging-and-commit R12.1, C29; `fork-observed-2026-10-10.md` `am1`,
-//! `am2`), opened from the title bar's status box: on the left the session's operations, newest
-//! first — each its one name, Fork's result line under it ("staged", "Switched to branch
-//! 'topic'"), when it started, ⚠ on a failure and a shape of its own on a cancel, with a cancel
-//! for a running one that can be cancelled, and no status word — and on the right the one
-//! selected: its name; one of four words, running, succeeded, failed or cancelled, with its time
-//! and how long it took (F8, which Fork lacks); a failed or cancelled operation's one sentence,
-//! never cut; the prompt it confirmed, whole and wrapped, for an operation that ran (F3,
-//! Cairn's addition); an amend's way back, "Show in Lost Commits" (F4); then one append-only
-//! list of each `$ git …` it ran and what that said, each command's ending in one form.
+//! Fork's Activity Manager, opened from the title bar's status box: on the left the session's
+//! operations, newest first — each its one name, Fork's result line under it ("staged",
+//! "Switched to branch 'topic'"), when it started, ⚠ on a failure and a shape of its own on a
+//! cancel, with a cancel for a running one that can be cancelled, and no status word — and on
+//! the right the one selected: its name; one of four words, running, succeeded, failed or
+//! cancelled, with its time and how long it took, which Fork lacks; a failed or cancelled
+//! operation's one sentence, never cut; the prompt it confirmed, whole and wrapped, for an
+//! operation that ran, Cairn's addition; an amend's way back, "Show in Lost Commits"; then one
+//! append-only list of each `$ git …` it ran and what that said, each command's ending in one
+//! form.
 //!
 //! Both lists are virtualized, each row of one fixed height — the operations and the selected
 //! one's lines, which are as long as git's output makes them — so neither builds more than a
-//! viewport of rows (R12.1). An operation whose output passed its bound starts with "Earlier
-//! output not kept.". Every line is the window's, already stripped of escape sequences and of a
-//! URL's userinfo (R12.2): this file draws text it is given and reads nothing else. Escape and
-//! a press outside close it. It hangs from the status box, its left edge under the box's and an
-//! arrow pointing up at it, kept inside the window's width (the user's decision A,
-//! 2026-10-09).
+//! viewport of rows. An operation whose output passed its bound starts with "Earlier output not
+//! kept.". Every line is the window's, already stripped of escape sequences and of a URL's
+//! userinfo: this file draws text it is given and reads nothing else. Escape and a press outside
+//! close it. It hangs from the status box, its left edge under the box's and an arrow pointing
+//! up at it, kept inside the window's width.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -29,7 +28,7 @@ use crate::diff::palette::DIFF_FONT_FAMILY;
 
 /// The popover's title, Fork's word for its log.
 pub const ACTIVITY_TITLE: &str = "Activity";
-/// The way back from an amend (F4): Show Lost Commits turned on and the replaced commit selected.
+/// The way back from an amend: Show Lost Commits turned on and the replaced commit selected.
 pub const SHOW_IN_LOST_COMMITS_CAPTION: &str = "Show in Lost Commits";
 /// The cancel beside a running operation that can be cancelled (Fork's ×).
 pub const CANCEL_OPERATION_CAPTION: &str = "×";
@@ -70,7 +69,7 @@ pub enum ActivityLine {
     Output(String),
 }
 
-/// How an operation stands, in one of the four words (rule 5, R14.2).
+/// How an operation stands, in one of the four words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityStatus {
     Running,
@@ -116,9 +115,9 @@ pub struct ActivityEntry {
     /// Its one sentence: why it failed or what a cancel left, or what a success did beyond its
     /// name (an amend whose replaced commit was pushed while it ran, a forced checkout).
     pub sentence: Option<String>,
-    /// The prompt it confirmed, for a destructive operation that ran (R1.6, F3).
+    /// The prompt it confirmed, for a destructive operation that ran.
     pub prompt: Option<String>,
-    /// The commit an amend replaced, which Show Lost Commits draws (R12.1, F4).
+    /// The commit an amend replaced, which Show Lost Commits draws.
     pub replaced: Option<Oid>,
     /// A running operation that can be cancelled: a commit, an amend, a fetch.
     pub cancellable: bool,
@@ -175,7 +174,7 @@ impl ActivityPopover {
     }
 
     /// Hangs it from the status box, whose laid-out left edge and bottom are `left` and `bottom`
-    /// in the window (the user's decision A, 2026-10-09).
+    /// in the window.
     pub fn anchor(mut self, anchor: Option<(f32, f32)>) -> Self {
         self.anchor = anchor;
         self
@@ -321,10 +320,10 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
         .into()
 }
 
-/// The selected operation's lines, opened as Fork opens them (observed 2026-10-11,
-/// `fork-activity-result-lines-2026-10-11.md`): a running operation's at the end of its output so
-/// far, a finished one's at its top — its first `$ git …` — and, either way, left where they are
-/// as lines arrive, never following them. Mounted afresh for each entry selected (its key).
+/// The selected operation's lines, opened as Fork opens them: a running operation's at the end
+/// of its output so far, a finished one's at its top — its first `$ git …` — and, either way,
+/// left where they are as lines arrive, never following them. Mounted afresh for each entry
+/// selected (its key).
 struct EntryLines {
     lines: Lines,
     running: bool,
@@ -475,7 +474,7 @@ impl Component for ActivityPopover {
                         .font_size(12.)
                         .color(colours.text_secondary),
                 )
-                // One sentence, never cut (rule 6).
+                // One sentence, never cut.
                 .maybe_child(entry.sentence.clone().map(|sentence| {
                     label()
                         .text(sentence)
@@ -483,8 +482,8 @@ impl Component for ActivityPopover {
                         .font_size(12.)
                         .color(colours.text_primary)
                 }))
-                // The prompt it confirmed, whole and wrapped (F3): laid out above the lines, so
-                // their rows keep one fixed height.
+                // The prompt it confirmed, whole and wrapped: laid out above the lines, so their
+                // rows keep one fixed height.
                 .maybe_child(entry.prompt.clone().map(|prompt| {
                     rect()
                         .width(Size::fill())
@@ -517,9 +516,8 @@ impl Component for ActivityPopover {
                 )
         });
 
-        // Hung from the status box (the user's decision A): its left edge under the box's, kept
-        // inside the window's width, the arrow's tip over the box wherever the panel had to
-        // move to fit.
+        // Hung from the status box: its left edge under the box's, kept inside the window's
+        // width, the arrow's tip over the box wherever the panel had to move to fit.
         let room = Platform::get().root_size.read().width;
         let (box_left, box_bottom) = self.anchor.unwrap_or((MARGIN, TOP - ARROW / 2.));
         let (panel_left, width, arrow_left) = hung(box_left, room);
@@ -615,9 +613,9 @@ pub fn hung(box_left: f32, room: f32) -> (f32, f32, f32) {
 mod tests {
     use super::*;
 
-    /// The user's decision A: the panel's left edge sits under the box's, and in a window too
-    /// narrow for it there, it moves left to fit while the arrow stays over the box; it never
-    /// leaves the window. Caught by: a panel centred, or hanging off the window's right edge.
+    /// The panel's left edge sits under the box's, and in a window too narrow for it there, it
+    /// moves left to fit while the arrow stays over the box; it never leaves the window. Caught
+    /// by: a panel centred, or hanging off the window's right edge.
     #[test]
     fn the_panel_hangs_under_the_box_inside_the_window() {
         let (left, width, arrow) = hung(120., 1440.);

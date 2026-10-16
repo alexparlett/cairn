@@ -1,6 +1,6 @@
-//! Headless test of the status box's progress (staging-and-commit R14.1, F1): an operation
-//! running is shown — its one name, the writes waiting behind it — only once it has run 250 ms,
-//! the wait a task on the toolkit's executor, driven here by the runner's poll.
+//! Headless test of the status box's progress: an operation running is shown — its one name,
+//! the writes waiting behind it — only once it has run 250 ms, the wait a task on the toolkit's
+//! executor, driven here by the runner's poll.
 
 use std::time::{Duration, Instant};
 
@@ -12,9 +12,9 @@ fn labels(test: &TestingRunner) -> Vec<String> {
     test.find_many(|_, element| Label::try_downcast(element).map(|label| label.text.to_string()))
 }
 
-/// F1: nothing before 250 ms, "Commit 1 file · 1 waiting" after, without anything else redrawing the
-/// box; and an operation already past 250 ms as it is drawn shows at once. Caught by: the name
-/// drawn at once (a flash for every stage), or never drawn because nothing wakes the box.
+/// Nothing before 250 ms, "Commit 1 file · 1 waiting" after, without anything else redrawing
+/// the box; and an operation already past 250 ms as it is drawn shows at once. Caught by: the
+/// name drawn at once (a flash for every stage), or never drawn because nothing wakes the box.
 #[test]
 fn the_status_box_shows_an_operation_only_once_it_has_run_250_ms() {
     assert!(!progress_shown(Duration::from_millis(249)));

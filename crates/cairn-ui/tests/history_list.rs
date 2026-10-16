@@ -235,9 +235,9 @@ fn labelled_rows(length: usize, per_row: usize, crowded: usize, crowd: usize) ->
 }
 
 /// The viewport twin with labelled rows: the history list still builds one viewport of
-/// rows, and a row labelled by thousands of refs lays out only the chips its column holds
-/// (R5.3, phase 05 QA RR3). Caught by: chips laid out for every label, or labels making the
-/// list build rows past its viewport.
+/// rows, and a row labelled by thousands of refs lays out only the chips its column holds.
+/// Caught by: chips laid out for every label, or labels making the list build rows past its
+/// viewport.
 #[test]
 fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips() {
     let viewport_rows = (HEIGHT / ROW_HEIGHT).ceil() as usize;
@@ -294,10 +294,10 @@ fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_o
     );
 }
 
-/// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "previous change",
-/// "next change" — resolved through the table, not the list's "next commit", though the
-/// detail pane that hears those chords does not have focus here. Caught by: the list moving
-/// on any arrow whatever is held, or asking only the scope it sits in.
+/// An arrow held with a chord's modifiers is the accelerator's — "previous change", "next
+/// change" — resolved through the table, not the list's "next commit", though the detail pane
+/// that hears those chords does not have focus here. Caught by: the list moving on any arrow
+/// whatever is held, or asking only the scope it sits in.
 #[test]
 fn an_accelerators_chord_does_not_move_the_selection() {
     let reports = Reports::default();
@@ -324,10 +324,10 @@ fn an_accelerators_chord_does_not_move_the_selection() {
     );
 }
 
-/// staging-and-commit R7.3: the history's own chord, Show Lost Commits, is reported to the
-/// list's caller as its action, and moves no selection; a chord of the detail pane's scope is
-/// left alone and reported as nothing. Caught by: the chord left unheard (the phase 06 carry),
-/// heard as an arrow, or another scope's chord reported as the history's.
+/// The history's own chord, Show Lost Commits, is reported to the list's caller as its
+/// action, and moves no selection; a chord of the detail pane's scope is left alone and
+/// reported as nothing. Caught by: the chord left unheard, heard as an arrow, or another
+/// scope's chord reported as the history's.
 #[test]
 fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
     let reports = Reports::default();
@@ -359,10 +359,9 @@ fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
     );
 }
 
-/// staging-and-commit R11.1: a row of a commit no ref reaches is drawn lost, and only that row,
-/// from the history's own flag — and drawn as any other once a later page says a ref reaches
-/// it after all. Caught by: the flag not handed to the row, handed to its neighbours, or read
-/// from a stale copy.
+/// A row of a commit no ref reaches is drawn lost, and only that row, from the history's own
+/// flag — and drawn as any other once a later page says a ref reaches it after all. Caught
+/// by: the flag not handed to the row, handed to its neighbours, or read from a stale copy.
 #[test]
 fn a_lost_row_is_drawn_lost_and_no_other() {
     let mut history = History::new();
@@ -415,10 +414,9 @@ fn a_lost_row_is_drawn_lost_and_no_other() {
     );
 }
 
-/// QA item 14, the user's decision (2026-10-09): Shift+↓ — Local Changes' list extension,
-/// a chord of a scope the history list is not in — moves the commit selection as ↓ does, and
-/// Shift+↑ as ↑. Caught by: a list that leaves alone every scope's chords, which swallowed
-/// Shift+arrows here once Local Changes' lists had them.
+/// Shift+↓ — Local Changes' list extension, a chord of a scope the history list is not in —
+/// moves the commit selection as ↓ does, and Shift+↑ as ↑. Caught by: a list that leaves
+/// alone every scope's chords, which would swallow Shift+arrows here.
 #[test]
 fn another_views_chord_is_the_history_lists_arrow() {
     let reports = Reports::default();
@@ -724,10 +722,10 @@ fn braided_walk(len: usize) -> Vec<(Oid, Vec<Oid>)> {
     walk
 }
 
-/// The QA brief's scroll: deep, then back to the top. Every row the list draws, each time it
-/// draws it, carries exactly the edges the assigner retained for it before compaction.
-/// Caught by: deriving a row from a snapshot other than its own nearest, or from state a
-/// previous row's derivation left behind.
+/// A scroll deep, then back to the top. Every row the list draws, each time it draws it,
+/// carries exactly the edges the assigner retained for it before compaction. Caught by:
+/// deriving a row from a snapshot other than its own nearest, or from state a previous row's
+/// derivation left behind.
 #[test]
 fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
     let length = 3_000;
@@ -830,13 +828,13 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
     );
 }
 
-/// RR1: the list keeps where its selection sits in the hint its caller gives it, and reads it
+/// The list keeps where its selection sits in the hint its caller gives it, and reads it
 /// there first — so a row its caller chose (a pressed ref's, a parent link's), told to the
 /// hint, is moved from at once rather than searched for among every loaded row. A press is
-/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a
-/// history no walk makes, built so the two ways of finding it disagree — the hint at 500
-/// moves an arrow key to 501, where a search from the top would find 5 and move to 6. Caught
-/// by: the list keeping a hint of its own and ignoring the caller's.
+/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a history
+/// no walk makes, built so the two ways of finding it disagree — the hint at 500 moves an
+/// arrow key to 501, where a search from the top would find 5 and move to 6. Caught by: the
+/// list keeping a hint of its own and ignoring the caller's.
 #[test]
 fn the_list_moves_from_the_row_its_callers_hint_names() {
     #[derive(Clone)]
@@ -927,10 +925,10 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
     test.sync_and_update();
 }
 
-/// The user's decision (2026-10-09): every commit row's context menu offers Fork's "New
-/// Branch…", and choosing it reports that row's commit — a lost row's as any other's; a
-/// stash's row offers none. Caught by: the menu on lost rows alone (R11.3 as it read before),
-/// the wrong commit reported, or a stash's row offering a branch at its stash commit.
+/// Every commit row's context menu offers Fork's "New Branch…", and choosing it reports that
+/// row's commit — a lost row's as any other's; a stash's row offers none. Caught by: the menu
+/// on lost rows alone, the wrong commit reported, or a stash's row offering a branch at its
+/// stash commit.
 #[test]
 fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
     let mut history = rows(0..3);
@@ -988,11 +986,11 @@ fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
     assert_eq!(reports.new_branch.borrow().len(), 2);
 }
 
-/// The user's decision C (2026-10-09), Fork for Windows: a right-click selects the row it lands
-/// on — so the detail pane follows and the menu acts on what is shown — and a right-click on a
-/// row of the selection already made, either of a compared pair, keeps the whole selection.
-/// Caught by: a right-click that leaves the selection where it was, or one inside a compared
-/// pair that collapses it to one row.
+/// As in Fork for Windows, a right-click selects the row it lands on — so the detail pane
+/// follows and the menu acts on what is shown — and a right-click on a row of the selection
+/// already made, either of a compared pair, keeps the whole selection. Caught by: a
+/// right-click that leaves the selection where it was, or one inside a compared pair that
+/// collapses it to one row.
 #[test]
 fn a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in() {
     let reports = Reports::default();

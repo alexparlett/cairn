@@ -1,36 +1,32 @@
-//! The commit box under Local Changes' diff (staging-and-commit R10, L9, L12), Fork's as
-//! `docs/research/staging-and-commit/fork-staging-and-commit.md` section 5 records it: a
-//! one-line subject with Fork's characters-left counter and the `≡` that opens Recent Commit
-//! Messages, a description with a ruler at column 72, `Amend` at the left and the one button at
-//! the right.
+//! The commit box under Local Changes' diff, as Fork draws it: a one-line subject with Fork's
+//! characters-left counter and the `≡` that opens Recent Commit Messages, a description with a
+//! ruler at column 72, `Amend` at the left and the one button at the right.
 //!
 //! **What it draws, and what it decides.** It draws what it is handed and reports what is
 //! pressed; the window decides what the press does (`crates/cairn-app/src/commit_box/pane.rs`).
 //! The subject and the description are the window's own text (`State<String>`), bound two ways
-//! to the fields, so the draft is the window's for its life (R10.7) — Amend ticked and unticked,
-//! a refresh, a failed hook — and a value the window writes (a recalled message, `HEAD`'s, a
+//! to the fields, so the draft is the window's for its life — Amend ticked and unticked, a
+//! refresh, a failed hook — and a value the window writes (a recalled message, `HEAD`'s, a
 //! merge's) is what the field shows; an edit the person makes in either field is reported
-//! ([`CommitBox::on_edit`]), so the window knows the draft is theirs and fills it no more (C7).
-//! Both fields take the one key policy, heard in the commit box's scope
-//! (`FieldScope::CommitBox`): ⌘Return or Ctrl+Enter presses the button without a new line, the
-//! window's chords still reach the window, and no list or staging chord fires (R7.3 as amended);
-//! the subject offers a bare ↑ or ↓ to the window first, which recalls a recent message while
-//! the subject is empty or holds the one last recalled (R10.2).
+//! ([`CommitBox::on_edit`]), so the window knows the draft is theirs and fills it no more. Both
+//! fields take the one key policy, heard in the commit box's scope (`FieldScope::CommitBox`):
+//! ⌘Return or Ctrl+Enter presses the button without a new line, the window's chords still reach
+//! the window, and no list or staging chord fires; the subject offers a bare ↑ or ↓ to the
+//! window first, which recalls a recent message while the subject is empty or holds the one
+//! last recalled.
 //!
-//! **One button** (R10.6, C6, the redesign of 2026-10-10): `Commit N Files`, or Fork's "Amend
-//! Last Commit" while Amend is ticked, and nothing under it; the commit chord presses it, in
-//! every state. It builds no token: what an amend costs is read when it is pressed, in the job
-//! that runs it, and one that must be confirmed opens the window's confirmation dialog (rule 2,
-//! C1). While a commit is asked the button's place says what it is doing — "Waiting for the
-//! commit to finish…", "Committing 0:03" with Cancel beside it, "Cancelling…" (R10.4, C5).
+//! **One button**: `Commit N Files`, or Fork's "Amend Last Commit" while Amend is ticked, and
+//! nothing under it; the commit chord presses it, in every state. It builds no token: what an
+//! amend costs is read when it is pressed, in the job that runs it, and one that must be
+//! confirmed opens the window's confirmation dialog. While a commit is asked the button's place
+//! says what it is doing — "Waiting for the commit to finish…", "Committing 0:03" with Cancel
+//! beside it, "Cancelling…".
 //!
-//! **One line** (R10.8, C8, rule 6): at most one, over the fields — the operation in progress
-//! and what committing does to it, or that `HEAD` is detached — wrapped, never cut
-//! ([`operation_line`]).
+//! **One line**: at most one, over the fields — the operation in progress and what committing
+//! does to it, or that `HEAD` is detached — wrapped, never cut ([`operation_line`]).
 //!
 //! **Amend reports its state.** The toggle is a check box to assistive technology whose toggled
-//! state is set ([`AMEND_CAPTION`]), which Freya's own `Checkbox` does not set
-//! (`freya-ui-apis.md` §3).
+//! state is set ([`AMEND_CAPTION`]), which Freya's own `Checkbox` does not set.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -53,27 +49,27 @@ pub const AMEND_CAPTION: &str = "Amend";
 pub const RECENT_MESSAGES_CAPTION: &str = "Recent Commit Messages";
 /// What the running commit's cancel says.
 pub const CANCEL_COMMIT_CAPTION: &str = "Cancel";
-/// The button's caption while Amend is ticked, Fork's (R10.6, the user's answer of 2026-10-10,
-/// 3): it names no commit; the dialog, where one is asked, names it once.
+/// The button's caption while Amend is ticked, Fork's: it names no commit; the dialog, where
+/// one is asked, names it once.
 pub const AMEND_BUTTON_CAPTION: &str = "Amend Last Commit";
-/// The confirmation dialog's title for an amend that must be confirmed (R10.6).
+/// The confirmation dialog's title for an amend that must be confirmed.
 pub const AMEND_TITLE: &str = "Amend Commit";
-/// What the button's place says from a cancel until git is reaped (R10.4, R4.7).
+/// What the button's place says from a cancel until git is reaped.
 pub const CANCELLING: &str = "Cancelling…";
-/// The line on an unborn branch: Amend greyed, its reason beside it (rule 4, R10.1).
+/// The line on an unborn branch: Amend greyed, its reason beside it.
 pub const UNBORN_LINE: &str = "No commit yet, so Amend is unavailable.";
-/// The line on a detached `HEAD` (R10.8, C8): the commit is recoverable, so it asks nothing.
+/// The line on a detached `HEAD`: the commit is recoverable, so it asks nothing.
 pub const DETACHED_LINE: &str = "HEAD is detached: this commit will be on no branch.";
-/// The Git Error dialog's skip (R10.5), Fork's words.
+/// The Git Error dialog's skip, Fork's words.
 pub const SKIP_HOOKS_CAPTION: &str = "Skip pre-commit hooks and commit";
 
 /// Fork's soft limit on a subject's length: the counter says how many characters are left
-/// before it, and goes negative past it (R10.1).
+/// before it, and goes negative past it.
 pub const SUBJECT_SOFT_LIMIT: usize = 50;
 /// Fork's hard limit: past it the counter turns red — where git tools truncate a subject, not
 /// a limit on what is typed.
 pub const SUBJECT_HARD_LIMIT: usize = 70;
-/// The description's ruler: the column git's own guidance wraps a body at (R10.1).
+/// The description's ruler: the column git's own guidance wraps a body at.
 pub const RULER_COLUMN: usize = 72;
 
 /// The description's size: monospace, so the ruler stands at a column.
@@ -93,8 +89,8 @@ pub fn commit_caption(files: usize) -> String {
     }
 }
 
-/// The subject's counter (R10.1): characters left before [`SUBJECT_SOFT_LIMIT`], negative past
-/// it, and whether it is past [`SUBJECT_HARD_LIMIT`], where it turns red.
+/// The subject's counter: characters left before [`SUBJECT_SOFT_LIMIT`], negative past it, and
+/// whether it is past [`SUBJECT_HARD_LIMIT`], where it turns red.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubjectCount {
     pub left: i64,
@@ -111,9 +107,9 @@ pub fn subject_count(subject: &str) -> SubjectCount {
     }
 }
 
-/// The one line over the fields (R10.8, C3, C8, rule 4, rule 6): the operation in progress
-/// and what committing does to it — Amend unavailable during every one, as git refuses it —
-/// or, with none, that `HEAD` is detached; `None` otherwise. Short, so it is never cut.
+/// The one line over the fields: the operation in progress and what committing does to it —
+/// Amend unavailable during every one, as git refuses it — or, with none, that `HEAD` is
+/// detached; `None` otherwise. Short, so it is never cut.
 pub fn operation_line(operation: Option<&OperationInProgress>, detached: bool) -> Option<String> {
     let refusing = |name: &str, command: &str| {
         format!("{name} is in progress. Continue or abort it with {command} --continue or --abort.")
@@ -162,11 +158,11 @@ pub enum CommitButton {
     /// Commit what is staged: `files` of it.
     Commit { files: usize },
     /// Amend `HEAD` with what is staged: Fork's "Amend Last Commit". What it costs is read when
-    /// it is pressed (R6.4).
+    /// it is pressed.
     Amend,
 }
 
-/// A commit or an amend asked and not ended: what stands in the button's place (R10.4, C5).
+/// A commit or an amend asked and not ended: what stands in the button's place.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Busy {
     /// Queued behind another write: "Waiting for the commit to finish…", the one form every
@@ -226,8 +222,8 @@ impl CommitBox {
         }
     }
 
-    /// Whether Amend is ticked, and whether it can be (no `HEAD`, an operation in progress:
-    /// R10.1, the reason on the box's line).
+    /// Whether Amend is ticked, and whether it can be (no `HEAD`, an operation in progress: the
+    /// reason on the box's line).
     pub fn amend(mut self, ticked: bool, enabled: bool) -> Self {
         self.amend = ticked;
         self.amend_enabled = enabled;
@@ -247,8 +243,7 @@ impl CommitBox {
         self
     }
 
-    /// The box is disabled: an operation in progress refuses a commit (R10.8), which the line
-    /// names.
+    /// The box is disabled: an operation in progress refuses a commit, which the line names.
     pub fn stopped(mut self, stopped: bool) -> Self {
         self.stopped = stopped;
         self
@@ -285,7 +280,7 @@ impl CommitBox {
     }
 
     /// The person changed the text of either field — typed, deleted, pasted, cleared: the draft
-    /// is theirs (C7). A value the window writes is no edit.
+    /// is theirs. A value the window writes is no edit.
     pub fn on_edit(mut self, on_edit: impl Into<EventHandler<()>>) -> Self {
         self.on_edit = on_edit.into();
         self
@@ -552,8 +547,8 @@ fn recent_button(recent: Rc<Vec<String>>, open: bool, on_recall: EventHandler<us
     )
 }
 
-/// What stands in the button's place while a commit is asked (R10.4, C5): "Waiting for the
-/// commit to finish…", "Committing 0:03" and its Cancel, or "Cancelling…".
+/// What stands in the button's place while a commit is asked: "Waiting for the commit to
+/// finish…", "Committing 0:03" and its Cancel, or "Cancelling…".
 fn busy_place(busy: Busy, on_cancel: EventHandler<()>) -> Element {
     let colours = get_theme_or_default().read().colors().clone();
     let said = |text: String| -> Element {
@@ -566,7 +561,7 @@ fn busy_place(busy: Busy, on_cancel: EventHandler<()>) -> Element {
     match busy {
         Busy::Waiting(text) => said(text),
         Busy::Cancelling => said(CANCELLING.to_owned()),
-        // Not yet started: its verb alone, since a Cancel would reach nothing (R4.3).
+        // Not yet started: its verb alone, since a Cancel would reach nothing.
         Busy::Running {
             verb,
             started: None,
@@ -628,8 +623,8 @@ pub fn elapsed_text(verb: &str, elapsed: Duration) -> String {
 mod tests {
     use super::*;
 
-    /// R10.1: Fork's counter is the characters left before 50, negative past it, red only past
-    /// 70; characters are counted, not bytes. Caught by: bytes counted (a subject of accented
+    /// Fork's counter is the characters left before 50, negative past it, red only past 70;
+    /// characters are counted, not bytes. Caught by: bytes counted (a subject of accented
     /// letters running out early), or red from 51.
     #[test]
     fn the_counter_counts_characters_left_before_fifty_and_reddens_past_seventy() {
@@ -649,7 +644,7 @@ mod tests {
         assert!(past.past_hard_limit);
     }
 
-    /// R10.1: the button names how many files a commit takes, as Fork's does.
+    /// The button names how many files a commit takes, as Fork's does.
     #[test]
     fn the_button_names_the_files_staged() {
         assert_eq!(commit_caption(0), "Commit");
@@ -657,10 +652,10 @@ mod tests {
         assert_eq!(commit_caption(35), "Commit 35 Files");
     }
 
-    /// R10.8, C3, C8 and rule 6: one line at most — the operation's, naming what committing does
-    /// to it or git's command to continue or abort it, a picked commit by its short id — or, with
-    /// none, a detached `HEAD`'s; none otherwise. Caught by: two lines, a sentence for one
-    /// operation drawn for another, or `git am` capitalised.
+    /// One line at most — the operation's, naming what committing does to it or git's command
+    /// to continue or abort it, a picked commit by its short id — or, with none, a detached
+    /// `HEAD`'s; none otherwise. Caught by: two lines, a sentence for one operation drawn for
+    /// another, or `git am` capitalised.
     #[test]
     fn one_line_names_the_operation_or_a_detached_head() {
         let id = cairn_model::Oid::from_bytes(&[0xab; 20]).ok();
@@ -699,7 +694,7 @@ mod tests {
         assert_eq!(line(None, false), None);
     }
 
-    /// R10.4: "Committing 0:03", minutes and two-digit seconds.
+    /// "Committing 0:03", minutes and two-digit seconds.
     #[test]
     fn the_elapsed_time_reads_as_the_button_says_it() {
         assert_eq!(

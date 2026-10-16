@@ -1,12 +1,11 @@
-//! Headless tests for the activity popover (staging-and-commit R12.1, C29): its operations and
-//! the selected one's lines are each drawn through a virtualizing view of fixed rows, so a
-//! session of many operations and a `git` that said a hundred thousand lines build one viewport
-//! of rows each; each row is Fork's — its name, its result line, its time, ⚠ or the cancel's
-//! shape, no status word — and the right pane its word, time and duration, its one sentence and
-//! the prompt it confirmed whole; a press on an operation, its cancel and the way back each
-//! report, and no entry offers `Remove index.lock…` (phase 19: the leftover lock is the
-//! repository's banner); and it hangs from the status box inside the window (the user's decision
-//! A, 2026-10-09).
+//! Headless tests for the activity popover: its operations and the selected one's lines are
+//! each drawn through a virtualizing view of fixed rows, so a session of many operations and a
+//! `git` that said a hundred thousand lines build one viewport of rows each; each row is Fork's
+//! — its name, its result line, its time, ⚠ or the cancel's shape, no status word — and the
+//! right pane its word, time and duration, its one sentence and the prompt it confirmed whole;
+//! a press on an operation, its cancel and the way back each report, and no entry offers
+//! `Remove index.lock…`, the leftover lock being the repository's banner; and it hangs from the
+//! status box inside the window.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -119,9 +118,8 @@ fn launch_hung(
     (test, heard)
 }
 
-/// R12.1, the lists virtualized: 200 operations and a selected one of 100,000 lines build one
-/// viewport of rows each, never every operation or every line. Caught by: either list laid out
-/// whole.
+/// The lists virtualized: 200 operations and a selected one of 100,000 lines build one viewport of
+/// rows each, never every operation or every line. Caught by: either list laid out whole.
 #[test]
 fn the_popover_builds_one_viewport_of_operations_and_of_lines() {
     let lines: Lines = Arc::new(
@@ -161,7 +159,8 @@ fn the_popover_builds_one_viewport_of_operations_and_of_lines() {
 
 /// Each control reports what it is for: a press on an operation its place, a running one's
 /// cancel its place, the way back the replaced commit; a press outside closes it, the way back
-/// is drawn only where the entry has one, and `Remove index.lock…` nowhere (phase 19). Caught by: a control wired to another's handler, or drawn whatever the entry says.
+/// is drawn only where the entry has one, and `Remove index.lock…` nowhere. Caught by: a
+/// control wired to another's handler, or drawn whatever the entry says.
 #[test]
 fn each_control_reports_what_it_is_for() {
     let replaced = Oid::from_bytes(&[0xcd; 20]).unwrap_or_else(|e| panic!("{e}"));
@@ -216,10 +215,9 @@ fn area(test: &TestingRunner, text: &str) -> freya::prelude::Area {
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
 }
 
-/// The user's decision A (2026-10-09): the popover hangs from the status box — its left edge
-/// under the box's and just below it — and stays inside the window when the box is near its
-/// right edge or the window is narrower than the panel. Caught by: a centred popover, or one
-/// hung off the window's edge.
+/// The popover hangs from the status box — its left edge under the box's and just below it — and
+/// stays inside the window when the box is near its right edge or the window is narrower than the
+/// panel. Caught by: a centred popover, or one hung off the window's edge.
 #[test]
 fn the_popover_hangs_from_the_status_box_inside_the_window() {
     let entries = || Rc::new(vec![entry(0, none())]);
@@ -264,10 +262,9 @@ fn the_popover_hangs_from_the_status_box_inside_the_window() {
     );
 }
 
-/// C29's row (observed `am1`): its name, Fork's result line under it, its time, ⚠ on a failure
-/// and a shape of its own on a cancel — no status word; the selected one's header its word with
-/// its time and how long it took. Caught by: a status word drawn in a row, a glyph on a success,
-/// or the duration left out.
+/// A row: its name, Fork's result line under it, its time, ⚠ on a failure and a shape of its own on
+/// a cancel — no status word; the selected one's header its word with its time and how long it
+/// took. Caught by: a status word drawn in a row, a glyph on a success, or the duration left out.
 #[test]
 fn each_row_is_forks_name_result_time_and_glyph() {
     let entries = Rc::new(vec![
@@ -323,10 +320,10 @@ fn each_row_is_forks_name_result_time_and_glyph() {
     );
 }
 
-/// C29 and F3: the sentence and the confirmed prompt are drawn whole and wrapped above the lines
-/// — never cut, with no Show All — and the lines keep one fixed row height beneath them; an
-/// operation whose output passed its bound starts with "Earlier output not kept.". Caught by: a
-/// prompt cut, lines drawn over it, or the cut unsaid.
+/// The sentence and the confirmed prompt are drawn whole and wrapped above the lines — never cut,
+/// with no Show All — and the lines keep one fixed row height beneath them; an operation whose
+/// output passed its bound starts with "Earlier output not kept.". Caught by: a prompt cut, lines
+/// drawn over it, or the cut unsaid.
 #[test]
 fn the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said() {
     let prompt = (0..8)
@@ -359,12 +356,10 @@ fn the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said() {
     assert!(!labels(&test).iter().any(|label| label == "Show All"));
 }
 
-/// Phase 20's QA item 1, as Fork does it (observed first-hand 2026-10-11,
-/// `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`): the selected
-/// entry's lines open, for a running operation, at the end of its output so far — its newest
-/// line built — and, for a finished one, at its top — its `$ git …` line built — over the window's
-/// one tail's worth of lines and fifty more. Caught by: every entry opened at its top (the
-/// newest of a running hook's flood a scroll away) or at its end.
+/// As Fork does it: the selected entry's lines open, for a running operation, at the end of its
+/// output so far — its newest line built — and, for a finished one, at its top — its `$ git …` line
+/// built — over the window's one tail's worth of lines and fifty more. Caught by: every entry
+/// opened at its top (the newest of a running hook's flood a scroll away) or at its end.
 #[test]
 fn a_running_entry_opens_at_its_end_and_a_finished_one_at_its_top() {
     // `crate::output_tail::OUTPUT_LINES` in the window, and fifty more.

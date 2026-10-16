@@ -1,12 +1,11 @@
-//! One row of the side-by-side view (PRD R6.1, R6.4): two columns of equal width inside the
-//! one virtualising view, never two scroll views — the old side on the left and the new on
-//! the right, each a line-number gutter, a separator, and a text area, with filler where its
-//! side has no line beside the other's (Fork, Finding 11: equal panes, one gutter each, grey
-//! filler rows; the hunk header repeated at the top of each). A changed line's tint spans its
-//! whole column, number included, as Fork's side-by-side panes do (user-supplied Fork
-//! capture, 2026-10-04) — unlike unified, whose gutter keeps the ground. No marker column
-//! (the user's decision, 2026-10-04, as Fork's default): a changed pair is told from context
-//! by its tint alone, as in Fork, a stated residual (`docs/systems/diff.md`).
+//! One row of the side-by-side view: two columns of equal width inside the one virtualising
+//! view, never two scroll views — the old side on the left and the new on the right, each a
+//! line-number gutter, a separator, and a text area, with filler where its side has no line
+//! beside the other's (as Fork's: equal panes, one gutter each, grey filler rows; the hunk
+//! header repeated at the top of each). A changed line's tint spans its whole column, number
+//! included, as Fork's side-by-side panes do — unlike unified, whose gutter keeps the ground.
+//! No marker column, as Fork's default has none: a changed pair is told from context by its
+//! tint alone, as in Fork, a stated residual (`docs/systems/diff.md`).
 //!
 //! **Equal columns, both in view.** Each column is half the view, so both sides are on screen
 //! together, as Fork's two panes are. A line wider than its column scrolls sideways: the
@@ -15,10 +14,10 @@
 //! every row is laid out at the scroll's offset, a spacer as wide as the scroll ahead of the
 //! columns so they stay put while the virtualising view moves its content.
 //!
-//! **What each column draws is what `git diff` prints** (phase 07's parity rule, pinned by
-//! `side_by_side_view` in `cairn-git`'s parity tests): a context line is git's printed line,
-//! the new side's, in both columns; git's `\ No newline at end of file` stands in the column
-//! of the side whose last line did not end.
+//! **What each column draws is what `git diff` prints** (pinned by `side_by_side_view` in
+//! `cairn-git`'s parity tests): a context line is git's printed line, the new side's, in both
+//! columns; git's `\ No newline at end of file` stands in the column of the side whose last
+//! line did not end.
 
 use cairn_model::{ByteRange, LineNumber, ShownDiff, SideBySideRow};
 use freya::prelude::*;

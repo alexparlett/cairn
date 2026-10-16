@@ -1,9 +1,8 @@
-//! A dialog's answer that can hold focus as the dialog opens (staging-and-commit R7.4; the
-//! user's decision E, 2026-10-09): every dialog asking something risky — a destructive
-//! confirmation, ssh's host-key question, a hook's skip — opens with focus on its safe answer,
-//! whichever side of the row the platform puts it on, so a Return or Space pressed by habit
-//! answers safely. Freya's `Popup` gives focus to nothing as it opens, and a modal frame takes
-//! it only to hold it inside, so the dialog must say where it starts.
+//! A dialog's answer that can hold focus as the dialog opens: every dialog asking something
+//! risky — a destructive confirmation, ssh's host-key question, a hook's skip — opens with
+//! focus on its safe answer, whichever side of the row the platform puts it on, so a Return or
+//! Space pressed by habit answers safely. Freya's `Popup` gives focus to nothing as it opens,
+//! and a modal frame takes it only to hold it inside, so the dialog must say where it starts.
 
 use freya::prelude::*;
 
@@ -30,8 +29,8 @@ pub(crate) fn answer(
 }
 
 /// An answer drawn greyed and not yet pressable — the confirmation's button while the engine
-/// counts what it would destroy (staging-and-commit R7.4): never focusable, never pressed, read
-/// by assistive technology as disabled.
+/// counts what it would destroy: never focusable, never pressed, read by assistive technology
+/// as disabled.
 pub(crate) fn greyed_answer(caption: String, colours: &AnswerColours) -> Element {
     rect()
         .a11y_role(AccessibilityRole::Button)

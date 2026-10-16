@@ -1,12 +1,11 @@
-//! The diff views' settings (PRD R6.1, R6.3, R6.7): how much context, the entire file or
-//! not, whitespace ignored or not, unified or side-by-side. One value for the session, held
-//! by the application; not remembered across sessions (issue #29).
+//! The diff views' settings: how much context, the entire file or not, whitespace ignored or
+//! not, unified or side-by-side. One value for the session, held by the application; not
+//! remembered across sessions (issue #29).
 //!
 //! The context, the whitespace and side-by-side are shared by every diff view. The entire
 //! file is the Changes tab's and Local Changes', each a view of one file under the bar, and
-//! never a file opened in place (the user's decision, 2026-10-04, departing from Fork): a file
-//! opened in place in the Commit tab, which has no bar to turn it off, is always asked at
-//! [`DiffSettings::line_context`].
+//! never a file opened in place, a departure from Fork: a file opened in place in the Commit
+//! tab, which has no bar to turn it off, is always asked at [`DiffSettings::line_context`].
 
 use cairn_model::Context;
 
@@ -18,8 +17,8 @@ pub struct DiffSettings {
     lines: u32,
     entire_file: bool,
     ignore_whitespace: bool,
-    /// Side-by-side rather than unified (R6.1): a way of drawing the same answer, so changing
-    /// it asks git nothing.
+    /// Side-by-side rather than unified: a way of drawing the same answer, so changing it asks
+    /// git nothing.
     side_by_side: bool,
     /// Whether the user has moved the context this session: until they have, the context
     /// follows the configuration's `diff.context` once the engine has read it.
@@ -67,7 +66,7 @@ impl DiffSettings {
         self.ignore_whitespace
     }
 
-    /// Whether diffs are drawn side by side; unified by default (R6.1).
+    /// Whether diffs are drawn side by side; unified by default.
     pub fn side_by_side(self) -> bool {
         self.side_by_side
     }
@@ -84,7 +83,7 @@ impl DiffSettings {
         true
     }
 
-    /// One more line of context (R6.3). Does nothing while the entire file is shown.
+    /// One more line of context. Does nothing while the entire file is shown.
     pub fn more_lines(&mut self) -> bool {
         if self.entire_file {
             return false;
@@ -94,7 +93,7 @@ impl DiffSettings {
         true
     }
 
-    /// One line fewer, never below one (R6.3). Does nothing while the entire file is shown.
+    /// One line fewer, never below one. Does nothing while the entire file is shown.
     pub fn fewer_lines(&mut self) -> bool {
         if self.entire_file || self.lines <= 1 {
             return false;
@@ -130,9 +129,9 @@ impl DiffSettings {
 mod tests {
     use super::*;
 
-    /// R6.3: a line per click, never below one; the entire file shows every line and gives
-    /// back the count it left. Caught by: a floor of zero, a step of more than one, or the
-    /// entire file forgetting the lines.
+    /// A line per click, never below one; the entire file shows every line and gives back the
+    /// count it left. Caught by: a floor of zero, a step of more than one, or the entire file
+    /// forgetting the lines.
     #[test]
     fn context_moves_a_line_at_a_time_and_never_below_one() {
         let mut settings = DiffSettings::default();
@@ -154,9 +153,9 @@ mod tests {
         assert_eq!(settings.context(), Context::Lines(2));
     }
 
-    /// The Commit tab's in-place diffs never show the entire file (the user's decision,
-    /// 2026-10-04): their context is the lines, the entire file on or off. Caught by: the
-    /// line context reading the entire-file setting.
+    /// The Commit tab's in-place diffs never show the entire file: their context is the
+    /// lines, the entire file on or off. Caught by: the line context reading the entire-file
+    /// setting.
     #[test]
     fn the_line_context_ignores_the_entire_file() {
         let mut settings = DiffSettings::default();
@@ -183,8 +182,8 @@ mod tests {
         assert_eq!(settings.context(), Context::Lines(2));
     }
 
-    /// R6.1: unified by default; side-by-side toggles and changes nothing git is asked —
-    /// the context and whitespace stay as they were. Caught by: starting side by side, or a
+    /// Unified by default; side-by-side toggles and changes nothing git is asked — the
+    /// context and whitespace stay as they were. Caught by: starting side by side, or a
     /// toggle that moves another setting.
     #[test]
     fn side_by_side_starts_off_and_toggles_alone() {

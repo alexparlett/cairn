@@ -73,7 +73,7 @@ impl CommitRow {
         self
     }
 
-    /// Whether this is `HEAD`'s commit, whose subject is bold (R5.1).
+    /// Whether this is `HEAD`'s commit, whose subject is bold.
     pub fn head(mut self, head: bool) -> Self {
         self.head = head;
         self
@@ -81,8 +81,7 @@ impl CommitRow {
 
     /// Whether no ref reaches this commit — Show Lost Commits drew it from a reflog — so the
     /// row's texts — subject, author, short id and date — are drawn in the placeholder grey, as
-    /// Fork draws a lost commit, its graph and chips in their own colours (staging-and-commit
-    /// R11.1; the user's decision, 2026-10-09).
+    /// Fork draws a lost commit, its graph and chips in their own colours.
     pub fn lost(mut self, lost: bool) -> Self {
         self.lost = lost;
         self
@@ -133,7 +132,7 @@ impl ComponentOwned for CommitRow {
                     ))
                     .child(
                         // Chips then subject, cut at the column's edge: many chips push the
-                        // subject out of it, as in Fork (R5.3).
+                        // subject out of it, as in Fork.
                         rect()
                             .horizontal()
                             .content(Content::Flex)
@@ -200,8 +199,8 @@ impl ComponentOwned for CommitRow {
 pub const SHOW_LOST_COMMITS_CAPTION: &str = "Show Lost Commits";
 
 /// The history's column headings, and — at the right end of the "Graph and subject" cell, just
-/// left of "Author" — Show Lost Commits' check box (staging-and-commit R11.1; the user's
-/// decision B, 2026-10-09), so every heading stays over its column and no row loses width.
+/// left of "Author" — Show Lost Commits' check box, so every heading stays over its column and no
+/// row loses width.
 #[derive(Clone)]
 pub struct HistoryHeader {
     /// Show Lost Commits' state, when the header draws its check box.

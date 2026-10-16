@@ -1,9 +1,9 @@
-//! Headless tests for the commit box (staging-and-commit R10) and the Git Error dialog: the
-//! Amend toggle reports its state to assistive technology; the one button and the commit chord
-//! report the same press, building no token; the counter is Fork's; a disabled box asks nothing;
-//! the line is drawn whole; a commit asked stands in the button's place; an edit is reported;
-//! and the Git Error dialog draws its output through a virtualizing view, the skip in its footer
-//! beside Close, focus on Close.
+//! Headless tests for the commit box and the Git Error dialog: the Amend toggle reports its
+//! state to assistive technology; the one button and the commit chord report the same press,
+//! building no token; the counter is Fork's; a disabled box asks nothing; the line is drawn
+//! whole; a commit asked stands in the button's place; an edit is reported; and the Git Error
+//! dialog draws its output through a virtualizing view, the skip in its footer beside Close,
+//! focus on Close.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -115,9 +115,9 @@ fn amend_toggled(test: &TestingRunner) -> Option<Toggled> {
     })
 }
 
-/// Phase 09's step 2 (`freya-ui-apis.md` §3): the Amend toggle is a check box to assistive
-/// technology that says whether it is ticked, and a press reports the other state. Caught by:
-/// Freya's `Checkbox`, which sets no toggled state, or a toggle that reports its own state.
+/// The Amend toggle is a check box to assistive technology that says whether it is ticked, and
+/// a press reports the other state. Caught by: Freya's `Checkbox`, which sets no toggled state,
+/// or a toggle that reports its own state.
 #[test]
 fn the_amend_toggle_reports_its_toggled_state_to_assistive_technology() {
     for (ticked, toggled) in [(false, Toggled::False), (true, Toggled::True)] {
@@ -135,9 +135,9 @@ fn the_amend_toggle_reports_its_toggled_state_to_assistive_technology() {
     }
 }
 
-/// R10.6, C1 and C6: amending, the one button reads Fork's "Amend Last Commit" with nothing
-/// under it and reports the press — the box builds no token; the chord's press is the window's
-/// test (`commit_box/tests.rs`). Caught by: a line under the button, or the press unheard.
+/// Amending, the one button reads Fork's "Amend Last Commit" with nothing under it and reports
+/// the press — the box builds no token; the chord's press is the window's test
+/// (`commit_box/tests.rs`). Caught by: a line under the button, or the press unheard.
 #[test]
 fn amend_last_commit_reports_its_press_and_draws_no_line() {
     let (mut test, reports) = launch(true, CommitButton::Amend, "Fix", false, None, None);
@@ -155,10 +155,10 @@ fn amend_last_commit_reports_its_press_and_draws_no_line() {
     assert_eq!(*reports.commits.borrow(), 1);
 }
 
-/// R10.1, rule 4: Fork's counter beside the subject, and its button naming the files; R10.8: a
-/// box an operation in progress disables draws its one line whole — wrapped, never cut — and
-/// its button and Amend ask nothing. Caught by: a disabled box that still commits or amends,
-/// or the line cut to an ellipsis.
+/// Fork's counter beside the subject, and its button naming the files; and a box an operation
+/// in progress disables draws its one line whole — wrapped, never cut — and its button and
+/// Amend ask nothing. Caught by: a disabled box that still commits or amends, or the line cut
+/// to an ellipsis.
 #[test]
 fn the_counter_is_drawn_and_a_stopped_box_asks_nothing() {
     let (test, _) = launch(
@@ -198,10 +198,10 @@ fn the_counter_is_drawn_and_a_stopped_box_asks_nothing() {
     assert!(reports.amend.borrow().is_empty());
 }
 
-/// R10.4 and C5: a commit asked stands in the button's place — waiting in the one form every
-/// queued write uses, with no Cancel; running, "Committing 0:00" beside its Cancel, which is
-/// reported; cancelled, "Cancelling…" with no Cancel — and no press of the button is heard
-/// meanwhile. Caught by: a Cancel offered while queued or cancelling, or the button drawn beside.
+/// A commit asked stands in the button's place — waiting in the one form every queued write
+/// uses, with no Cancel; running, "Committing 0:00" beside its Cancel, which is reported;
+/// cancelled, "Cancelling…" with no Cancel — and no press of the button is heard meanwhile.
+/// Caught by: a Cancel offered while queued or cancelling, or the button drawn beside.
 #[test]
 fn a_commit_asked_stands_in_the_buttons_place() {
     let waiting = "Waiting for staging to finish…";
@@ -240,7 +240,7 @@ fn a_commit_asked_stands_in_the_buttons_place() {
     click(&mut test, CANCEL_COMMIT_CAPTION);
     assert_eq!(*reports.cancels.borrow(), 1);
 
-    // Asked and not yet started: its verb alone, no Cancel (phase 18's QA item 6).
+    // Asked and not yet started: its verb alone, no Cancel.
     let (test, _) = launch(
         false,
         CommitButton::Commit { files: 1 },
@@ -276,9 +276,9 @@ fn a_commit_asked_stands_in_the_buttons_place() {
     );
 }
 
-/// C7: a key that changes a field's text is reported as the person's edit, and one that does
-/// not (an arrow) is not. Caught by: no edit reported, which would let a fill overwrite a draft
-/// the person cleared.
+/// A key that changes a field's text is reported as the person's edit, and one that does not
+/// (an arrow) is not. Caught by: no edit reported, which would let a fill overwrite a draft the
+/// person cleared.
 #[test]
 fn an_edit_in_a_field_is_reported() {
     let (mut test, reports) = launch(
@@ -347,10 +347,10 @@ fn launch_error(lines: usize, skip: bool) -> (TestingRunner, Answers) {
     (test, answers)
 }
 
-/// R10.5: a hook's output of a hundred thousand lines builds one viewport's rows — through a
-/// virtualizing view, never a `ScrollView` — opened at its end, where the failure is said;
-/// and the skip is drawn only where it is offered. Caught by: a dialog laying out every line,
-/// or the skip drawn whatever the hooks.
+/// A hook's output of a hundred thousand lines builds one viewport's rows — through a
+/// virtualizing view, never a `ScrollView` — opened at its end, where the failure is said; and
+/// the skip is drawn only where it is offered. Caught by: a dialog laying out every line, or
+/// the skip drawn whatever the hooks.
 #[test]
 fn the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered() {
     let (test, _) = launch_error(100_000, true);
@@ -384,9 +384,9 @@ fn the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered() 
     assert_eq!(*answers.skipped.borrow(), 1, "the skip ran twice");
 }
 
-/// R10.5 and C4: the skip sits in the dialog's footer beside Close — the same answer component,
-/// on the same row — and focus starts on Close, so a Return pressed by habit closes rather than
-/// skips the hooks. Caught by: the skip drawn in the body, or focus on the skip.
+/// The skip sits in the dialog's footer beside Close — the same answer component, on the same
+/// row — and focus starts on Close, so a Return pressed by habit closes rather than skips the
+/// hooks. Caught by: the skip drawn in the body, or focus on the skip.
 #[test]
 fn the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close() {
     let (mut test, answers) = launch_error(3, true);

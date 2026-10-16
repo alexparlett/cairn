@@ -953,7 +953,7 @@ mod tests {
 
     /// The log's bounds, a thousand records and 4 MiB, and the close's, three seconds.
     #[test]
-    fn the_log_and_close_bounds_have_the_values_the_packet_recorded() {
+    fn the_log_and_close_bounds_have_their_documented_values() {
         assert_eq!(LOG_ENTRIES, 1000);
         assert_eq!(LOG_BYTES, 4 * 1024 * 1024);
         assert_eq!(CLOSE_BOUND, Duration::from_secs(3));

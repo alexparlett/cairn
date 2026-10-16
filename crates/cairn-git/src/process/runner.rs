@@ -2357,7 +2357,7 @@ mod tests {
     /// rather than a silent one: the 2 s grace before `SIGKILL`, the 256 KiB
     /// stderr tail and the 250 ms drain bound.
     #[test]
-    fn the_fixed_bounds_have_the_values_the_packet_recorded() {
+    fn the_fixed_bounds_have_their_documented_values() {
         assert_eq!(TERMINATION_GRACE, Duration::from_secs(2));
         assert_eq!(pipes::TAIL_BYTES, 256 * 1024);
         assert_eq!(DRAIN_BOUND, Duration::from_millis(250));

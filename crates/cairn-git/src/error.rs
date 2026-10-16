@@ -523,7 +523,7 @@ pub enum RefusedWrite {
     /// the setting itself writes nothing on a fetch; it is refused on sight
     /// because it is what `git clone --mirror` leaves beside the
     /// `+refs/*:refs/*` refspec, and a mirror is a repository whose every
-    /// ref is the remote's to overwrite (decided on issue #17).
+    /// ref is the remote's to overwrite (issue #17).
     Mirror,
     /// The remote is defined by a file git reads in place of configuration,
     /// `$GIT_DIR/remotes/<name>` or `$GIT_DIR/branches/<name>`, which no query

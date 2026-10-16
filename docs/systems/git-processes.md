@@ -841,7 +841,7 @@ something else still holds a pipe.
   the return comes within the bound of the stub's last line and not before the
   drain, and the `sleep` — never cancelled — is left alone.
 
-The values are pinned by `the_fixed_bounds_have_the_values_the_packet_recorded`:
+The values are pinned by `the_fixed_bounds_have_their_documented_values`:
 the 2 s grace, the 256 KiB tail, the 250 ms drain bound.
 
 **What the runner costs** (PRD G19): `git diff-tree -r -M -z --raw` on the
@@ -1118,7 +1118,7 @@ signal), `a_dropped_invocation_is_logged_once_by_its_reaper`,
 `the_log_holds_no_more_than_log_bytes` and
 `a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so`
 (`process/command_log.rs`), and
-`the_log_and_close_bounds_have_the_values_the_packet_recorded`
+`the_log_and_close_bounds_have_their_documented_values`
 (`process/registry.rs`); and the token
 by `a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`
 (`ops/fetch.rs`), whose stub writes the environment it was given to a file —

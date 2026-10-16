@@ -144,7 +144,7 @@ mod tests {
     /// The default limits, pinned as numbers: an engine reading a different ceiling would
     /// answer "too large" for files Fork shows.
     #[test]
-    fn the_default_limits_are_the_ones_the_packet_committed_to() {
+    fn the_default_limits_are_the_documented_ones() {
         let limits = DiffLimits::default();
         assert_eq!(limits.max_bytes, 1024 * 1024);
         assert_eq!(limits.max_lines, 50_000);

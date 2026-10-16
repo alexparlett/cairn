@@ -1,9 +1,9 @@
-//! staging-and-commit's commit engine against real `git` (R6, R1.4, R4.7): C13's, C24's and
-//! C33's engine halves, C14's engine half, C32's stripspace and config halves, C2's amend half
-//! and C12's identity case, on the host's git and, through `scripts/git-floor.sh`, on 2.30.9
-//! and 2.32.7. Every oracle is git's own — what `git commit -F <file>` stores, what `git
-//! commit` with an editor leaves, `git diff --cached --name-status`, `git log`, `git status`,
-//! `git reflog` — never the code under test.
+//! The commit engine against real `git`: the message stored, the identity, amend's staged list,
+//! whether a remote has `HEAD`, the amend at the press and its re-check, the reflog, operations in
+//! progress and the prepared message git cleans, and whether a commit was made, on the host's git
+//! and, through `scripts/git-floor.sh`, on 2.30.9 and 2.32.7. Every oracle is git's own — what `git
+//! commit -F <file>` stores, what `git commit` with an editor leaves, `git diff --cached
+//! --name-status`, `git log`, `git status`, `git reflog` — never the code under test.
 //!
 //! Every commit the engine makes here runs with an environment built for the test: `PATH`, an
 //! empty `HOME` and the C locale, so no configuration of the machine's user — a global
@@ -119,8 +119,8 @@ fn consequence(repo: &Repo) -> Result<Consequence, Error> {
     ops::amend_consequence(committer(), &engine(repo), &CancelSignal::new())
 }
 
-/// Amends at the press (R6.4): run where it is recoverable, its `Consequence` answered where it
-/// must be confirmed.
+/// Amends at the press: run where it is recoverable, its `Consequence` answered where it must be
+/// confirmed.
 fn amend_at_press(repo: &Repo, message: &str, hooks: Hooks) -> Result<AmendAnswer, Error> {
     let cancel = CancelSignal::new();
     let mut running = |_| {};
@@ -154,13 +154,13 @@ fn hook(repo: &Repo, directory: &str, name: &str, body: &str, mode: u32) {
     super::write_executable(&path, &format!("#!/bin/sh\n{body}"), mode);
 }
 
-// --- C13: the message, byte for byte, as `git commit -F` leaves it ---
+// --- the message, byte for byte, as `git commit -F` leaves it ---
 
-/// C13 and the QA brief, and the phase's stopping rule: under every `commit.cleanup` value
-/// (and none), with `core.commentChar` unset and `;`, a draft with `#` and `;` lines, CRLF
-/// endings, trailing spaces and blank lines, a scissors line and non-ASCII text is stored as
-/// the same git stores from `git commit -F <file>`, by commit and by amend. Caught by: a
-/// `--cleanup` passed, the message trimmed or re-encoded by Cairn, or a newline added.
+/// Under every `commit.cleanup` value (and none), with `core.commentChar` unset and `;`, a draft
+/// with `#` and `;` lines, CRLF endings, trailing spaces and blank lines, a scissors line and
+/// non-ASCII text is stored as the same git stores from `git commit -F <file>`, by commit and by
+/// amend. Caught by: a `--cleanup` passed, the message trimmed or re-encoded by Cairn, or a newline
+/// added.
 #[test]
 fn a_message_is_stored_as_git_commit_f_stores_it_under_every_cleanup() {
     let draft = "  Subject é  \r\n\r\n# hash line\r\n; semi line\r\nbody  \n\
@@ -216,9 +216,9 @@ fn a_message_is_stored_as_git_commit_f_stores_it_under_every_cleanup() {
     }
 }
 
-/// C13: a non-UTF-8 `i18n.commitEncoding` is refused before git runs, `HEAD` and the index
-/// untouched; git's own spellings of UTF-8 commit. Caught by: a Latin-1 setting let through,
-/// which stores the UTF-8 draft's bytes as Latin-1.
+/// A non-UTF-8 `i18n.commitEncoding` is refused before git runs, `HEAD` and the index untouched;
+/// git's own spellings of UTF-8 commit. Caught by: a Latin-1 setting let through, which stores the
+/// UTF-8 draft's bytes as Latin-1.
 #[test]
 fn a_non_utf8_commit_encoding_is_refused_before_git_runs() {
     let repo = identified("c13-encoding");
@@ -261,12 +261,12 @@ fn a_non_utf8_commit_encoding_is_refused_before_git_runs() {
     assert_eq!(repo.git(&["log", "-1", "--format=%s"]), "café\n");
 }
 
-/// C13: a failing `pre-commit` hook fails the commit with its output — stdout and stderr
-/// alike, handed on as it ran and carried on the failure — nothing is committed, the staged
-/// change stays staged and no lock is left; the skip, `--no-verify`, commits past it; and a
-/// `commit-msg` hook in a `core.hooksPath` git resolves fails it too, git finding the hook (C4:
-/// Cairn keeps no hook model, so the skip is offered on every failure). Caught by: a failure
-/// that drops git's or the hook's words, a lock left, or the skip not passing `--no-verify`.
+/// A failing `pre-commit` hook fails the commit with its output — stdout and stderr alike, handed
+/// on as it ran and carried on the failure — nothing is committed, the staged change stays staged
+/// and no lock is left; the skip, `--no-verify`, commits past it; and a `commit-msg` hook in a
+/// `core.hooksPath` git resolves fails it too, git finding the hook (Cairn keeps no hook model, so
+/// the skip is offered on every failure). Caught by: a failure that drops git's or the hook's
+/// words, a lock left, or the skip not passing `--no-verify`.
 #[test]
 fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits() {
     let repo = identified("c13-hook");
@@ -339,8 +339,8 @@ fn a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commi
     );
 }
 
-/// C13 and R6.8: with no identity configured, git's own error is the outcome — nothing is
-/// committed. Caught by: an identity Cairn made up, or a failure that loses git's words.
+/// With no identity configured, git's own error is the outcome — nothing is committed. Caught by:
+/// an identity Cairn made up, or a failure that loses git's words.
 #[test]
 fn with_no_identity_gits_own_error_is_the_outcome() {
     let repo = Repo::new("c13-no-identity");
@@ -361,10 +361,9 @@ fn with_no_identity_gits_own_error_is_the_outcome() {
     );
 }
 
-/// C12's identity case and R5.2: a commit made with `GIT_AUTHOR_EMAIL` and the committer's
-/// variables in Cairn's own environment is by them, over the repository's configuration — a
-/// terminal's `git commit` is. Caught by: an identity variable dropped from the inherited
-/// roster.
+/// A commit made with `GIT_AUTHOR_EMAIL` and the committer's variables in Cairn's own
+/// environment is by them, over the repository's configuration — a terminal's `git commit`
+/// is. Caught by: an identity variable dropped from the inherited roster.
 #[test]
 fn a_commit_is_by_the_identity_in_cairns_environment() {
     let repo = identified("c12-identity");
@@ -382,9 +381,9 @@ fn a_commit_is_by_the_identity_in_cairns_environment() {
     );
 }
 
-/// C13 and R6.7: the recent messages are `git log -n 10 --format=%B HEAD`'s, newest first,
-/// each as written — multi-line, trailing spaces, no trailing newline; and none on an unborn
-/// branch. Caught by: subjects for messages, another order, or a count other than ten.
+/// The recent messages are `git log -n 10 --format=%B HEAD`'s, newest first, each as written —
+/// multi-line, trailing spaces, no trailing newline; and none on an unborn branch. Caught by:
+/// subjects for messages, another order, or a count other than ten.
 #[test]
 fn recent_messages_are_git_logs_last_ten() {
     let repo = identified("c13-recent");
@@ -414,7 +413,7 @@ fn recent_messages_are_git_logs_last_ten() {
     assert_eq!(messages, logged);
 }
 
-// --- R6.3: amend's staged list, and amend unavailable ---
+// --- amend's staged list, and amend unavailable ---
 
 /// The `--name-status` line git prints for one changed file.
 fn name_status(file: &ChangedFile) -> String {
@@ -438,10 +437,10 @@ fn lines(n: usize, tag: &str) -> String {
     (0..n).map(|i| format!("{tag} line {i}\n")).collect()
 }
 
-/// C13 and R6.3: amend's staged list is `git diff --cached --name-status HEAD^` — what `HEAD`
-/// changed and what is staged on top, a rename paired as the user's `diff.renames` pairs it,
-/// an intent-to-add file left out — and a root commit's is against the empty tree. Caught by:
-/// the list against `HEAD` (the plain staged list), or renames unpaired.
+/// Amend's staged list is `git diff --cached --name-status HEAD^` — what `HEAD` changed and what is
+/// staged on top, a rename paired as the user's `diff.renames` pairs it, an intent-to-add file left
+/// out — and a root commit's is against the empty tree. Caught by: the list against `HEAD` (the
+/// plain staged list), or renames unpaired.
 #[test]
 fn amends_staged_list_is_the_index_against_heads_parent() {
     let repo = identified("c13-amend-list");
@@ -498,8 +497,8 @@ fn amends_staged_list_is_the_index_against_heads_parent() {
     assert_eq!(listed, ["A\ta.txt", "A\tb.txt"]);
 }
 
-/// C13 and R6.3: a root commit's amend works, and a file unstaged out of it — `git rm --cached
-/// -f` — leaves the amended root without it. Caught by: an amend refused for having no parent.
+/// A root commit's amend works, and a file unstaged out of it — `git rm --cached -f` — leaves
+/// the amended root without it. Caught by: an amend refused for having no parent.
 #[test]
 fn a_root_commits_amend_works_and_unstages_with_rm_cached() {
     let repo = identified("c13-root-amend");
@@ -532,7 +531,7 @@ fn a_root_commits_amend_works_and_unstages_with_rm_cached() {
     );
 }
 
-/// C13 and R6.3: on an unborn branch there is nothing to amend — refused, and no staged list.
+/// On an unborn branch there is nothing to amend — refused, and no staged list.
 #[test]
 fn amend_is_unavailable_on_an_unborn_branch() {
     let repo = identified("c13-unborn");
@@ -556,7 +555,7 @@ fn amend_is_unavailable_on_an_unborn_branch() {
     assert_eq!(repo.git(&["log", "--format=%s"]), "first\n");
 }
 
-// --- C14: whether a remote has HEAD ---
+// --- whether a remote has HEAD ---
 
 /// A clone of a repository with two commits on `main`, its upstream `origin/main`.
 fn cloned(name: &str) -> (Repo, Repo) {
@@ -585,14 +584,13 @@ fn published(repo: &Repo) -> Publication {
     }
 }
 
-/// C14 and the QA brief: the dialog appears exactly when a remote has `HEAD` — an upstream at
-/// `HEAD` or ahead of it has it; one behind it does not, unless another remote branch holds
-/// it (phase 05's QA item 1: `Unpublished` means no remote-tracking ref reaches it); with no
-/// upstream, another remote
-/// branch holding it does, and none at all does not; a fork whose remote branch was deleted
-/// (its upstream gone) falls back to every remote; an upstream that is a local branch is no
-/// remote; a detached `HEAD` on a remote's commit is published. Caught by: the ahead count
-/// read the wrong way round, or a gone or local upstream taken for a remote one.
+/// The dialog appears exactly when a remote has `HEAD` — an upstream at `HEAD` or ahead of it has
+/// it; one behind it does not, unless another remote branch holds it (`Unpublished` means no
+/// remote-tracking ref reaches it); with no upstream, another remote branch holding it does, and
+/// none at all does not; a fork whose remote branch was deleted (its upstream gone) falls back to
+/// every remote; an upstream that is a local branch is no remote; a detached `HEAD` on a remote's
+/// commit is published. Caught by: the ahead count read the wrong way round, or a gone or local
+/// upstream taken for a remote one.
 #[test]
 fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
     let (_origin, clone) = cloned("c14");
@@ -676,12 +674,11 @@ fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
     assert_eq!(published(&clone), Publication::SomeRemote, "detached");
 }
 
-/// Phase 05's QA item 4: with a commit-graph, whether a remote has `HEAD` is answered from
-/// the graph, cut at `HEAD`'s generation, and the answer is the object walk's and git's own —
-/// `HEAD` far behind a remote tip, on a side branch no remote reaches, at the tip, and a new
-/// commit the graph does not hold (the object walk's again). Caught by: the cut made at the
-/// wrong generation (a reached `HEAD` called unpublished), or a commit outside the graph
-/// answered from it.
+/// With a commit-graph, whether a remote has `HEAD` is answered from the graph, cut at `HEAD`'s
+/// generation, and the answer is the object walk's and git's own — `HEAD` far behind a remote tip,
+/// on a side branch no remote reaches, at the tip, and a new commit the graph does not hold (the
+/// object walk's again). Caught by: the cut made at the wrong generation (a reached `HEAD` called
+/// unpublished), or a commit outside the graph answered from it.
 #[test]
 fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
     let (_origin, clone) = cloned("graph");
@@ -720,7 +717,7 @@ fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
         );
     }
     // HEAD in the graph, and the one remote tip that reaches it outside the graph: the graph
-    // cannot answer for a tip it does not hold, so the object walk does (phase 11's QA, TC1).
+    // cannot answer for a tip it does not hold, so the object walk does.
     clone.git(&["checkout", "-q", "--detach", "side"]);
     clone.write("pushed.txt", b"pushed\n");
     clone.commit("pushed on top of side");
@@ -750,10 +747,10 @@ fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
     assert!(by_git("HEAD"));
 }
 
-/// C14's engine half: the `Consequence` names `HEAD`, the remote ref that has it and the
-/// reflog fact, and nothing drawn for display — its prompt the fixed sentences of R10.6, its
-/// button "Amend". Caught by: a subject back in the value (a display field the re-check would
-/// compare), or the prompt drifting from the fixed sentences.
+/// The `Consequence` names `HEAD`, the remote ref that has it and the reflog fact, and nothing
+/// drawn for display — its prompt the dialog's fixed sentences, its button "Amend". Caught by: a
+/// subject back in the value (a display field the re-check would compare), or the prompt drifting
+/// from the fixed sentences.
 #[test]
 fn the_amends_consequence_names_head_and_why_it_is_confirmed() {
     let (_origin, clone) = cloned("c14-text");
@@ -779,12 +776,11 @@ fn the_amends_consequence_names_head_and_why_it_is_confirmed() {
     assert!(read.needs_confirming());
 }
 
-// --- C14 and R6.4: the amend at the press ---
+// --- the amend at the press ---
 
-/// The QA brief, its first case: an amend no remote has and git logs runs at once, unconfirmed
-/// — no `Confirmed` is built — and the replaced commit is in the reflog git wrote, so Show Lost
-/// Commits draws it as lost. Caught by: the recoverable amend sent to the dialog, or run under
-/// a setting git does not log by.
+/// An amend no remote has and git logs runs at once, unconfirmed — no `Confirmed` is built — and
+/// the replaced commit is in the reflog git wrote, so Show Lost Commits draws it as lost. Caught
+/// by: the recoverable amend sent to the dialog, or run under a setting git does not log by.
 #[test]
 fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
     let repo = identified("press-recoverable");
@@ -806,8 +802,8 @@ fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
             panic!("a recoverable amend asked to be confirmed: {consequence:?}")
         }
     };
-    // Phase 18, step 6: the replaced commit is the answer's, not the request's; and C35's
-    // untouched case: read again after the run, it costs what it cost at the press.
+    // The replaced commit is the answer's, not the request's; and, nothing touched, the cost
+    // read again after the run is what it was at the press.
     assert_eq!(answered, replaced);
     assert_eq!(after.as_ref(), Some(&before));
     assert!(after.is_some_and(|after| !after.needs_confirming()));
@@ -823,11 +819,11 @@ fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
     assert_eq!(shown_by_show_lost_commits(&repo, &replaced), Some(true));
 }
 
-/// The QA brief, its second case, and C14: the same press on a commit a remote has, and on a
-/// repository whose `core.logAllRefUpdates` is false with no log yet — and one whose include
-/// sets it only for a linked worktree — runs no git: `HEAD`, the index and the git directory's
-/// refs as they were, the `Consequence` answered for the dialog. Caught by: a published or
-/// unlogged amend run unconfirmed, or the setting read by another reader than git.
+/// The same press on a commit a remote has, and on a repository whose `core.logAllRefUpdates` is
+/// false with no log yet — and one whose include sets it only for a linked worktree — runs no git:
+/// `HEAD`, the index and the git directory's refs as they were, the `Consequence` answered for the
+/// dialog. Caught by: a published or unlogged amend run unconfirmed, or the setting read by another
+/// reader than git.
 #[test]
 fn an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run() {
     let unchanged = |repo: &Repo, what: &str| {
@@ -925,13 +921,12 @@ fn an_amend_a_remote_has_or_git_logs_nowhere_is_answered_not_run() {
     let _ = std::fs::remove_file(include);
 }
 
-/// C35, the token-free amend's window (R1.5, the user's ratification of 2026-10-10, option B): an
-/// amend the press found recoverable is read again once git is reaped. A `pre-commit` hook that
-/// moves a remote-tracking ref onto the commit being replaced — standing in for a push from a
-/// terminal while the hook runs — makes the answer say a remote has it; one that turns the reflog
-/// off and removes the logs makes it say git logged nothing, as the reflog then shows. Either
-/// would now need confirming; the amend is made all the same. Caught by: the cost answered from
-/// the press's read, or a re-read taken before git was reaped.
+/// The token-free amend's window: an amend the press found recoverable is read again once git is
+/// reaped. A `pre-commit` hook that moves a remote-tracking ref onto the commit being replaced —
+/// standing in for a push from a terminal while the hook runs — makes the answer say a remote has
+/// it; one that turns the reflog off and removes the logs makes it say git logged nothing, as the
+/// reflog then shows. Either would by then need confirming; the amend is made all the same. Caught
+/// by: the cost answered from the press's read, or a re-read taken before git was reaped.
 #[test]
 fn an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped() {
     let amended =
@@ -1003,11 +998,12 @@ fn an_amend_run_at_the_press_reports_what_it_cost_once_git_is_reaped() {
     assert!(after.needs_confirming());
 }
 
-// --- R6.4: the reflog, each arm against what git then writes ---
+// --- the reflog, each arm against what git then writes ---
 
 /// Whether git logged a move away from `replaced` — an entry whose old id is it — in `HEAD`'s
-/// reflog or `main`'s: the entry R6.4's `Reflog` says git will write. Read from the log files
-/// git names (`git rev-parse --git-path`), since `git reflog` prints each entry's new id only.
+/// reflog or `main`'s: the entry the consequence's `Reflog` says git will write. Read from the log
+/// files git names (`git rev-parse --git-path`), since `git reflog` prints each entry's new id
+/// only.
 fn logged_a_move_from(repo: &Repo, replaced: &cairn_model::Oid) -> bool {
     ["logs/HEAD", "logs/refs/heads/main"].iter().any(|log| {
         let path = repo.git(&["rev-parse", "--git-path", log]);
@@ -1032,9 +1028,9 @@ fn reflog_of_an_amend(repo: &Repo) -> (Reflog, bool) {
         "the amend",
     );
     let logged = logged_a_move_from(repo, &replaced);
-    // The amend's entry and Show Lost Commits' walk are one (staging-and-commit R11.1): the
-    // replaced commit is drawn when git logged the amend or a ref still reaches it (a branch
-    // left on it by a detached amend), and drawn lost exactly when no ref does.
+    // The amend's entry and Show Lost Commits' walk are one: the replaced commit is drawn when git
+    // logged the amend or a ref still reaches it (a branch left on it by a detached amend), and
+    // drawn lost exactly when no ref does.
     let reached = repo
         .git(&["rev-list", "--branches", "--remotes", "--tags", "HEAD"])
         .lines()
@@ -1048,9 +1044,8 @@ fn reflog_of_an_amend(repo: &Repo) -> (Reflog, bool) {
     (said, logged)
 }
 
-/// Whether Show Lost Commits — the walk from every ref and every reflog entry of `HEAD` and
-/// each local branch (staging-and-commit R11.1) — draws `commit`, and if so whether as lost,
-/// the whole walk paged.
+/// Whether Show Lost Commits — the walk from every ref and every reflog entry of `HEAD` and each
+/// local branch — draws `commit`, and if so whether as lost, the whole walk paged.
 fn shown_by_show_lost_commits(repo: &Repo, commit: &cairn_model::Oid) -> Option<bool> {
     let engine = engine(repo);
     let read = ok(engine.refs(&CancelSignal::new()), "reading the refs");
@@ -1069,12 +1064,11 @@ fn shown_by_show_lost_commits(repo: &Repo, commit: &cairn_model::Oid) -> Option<
         .map(|row| row.is_lost())
 }
 
-/// R6.4 as amended, each arm against real git: the default writes the entry; `false` with no
-/// log does not; `false` with a log that exists does (git appends); `always` does; a linked
-/// worktree of a bare repository does (git does not count it bare); and the same worktree
-/// with `false` and no log does not; and under `false`, `HEAD`'s log alone (detached) and the
-/// branch's alone each do. Caught by: the setting read as git does not read it, or
-/// an existing log ignored.
+/// The reflog setting, each arm against real git: the default writes the entry; `false` with no log
+/// does not; `false` with a log that exists does (git appends); `always` does; a linked worktree of
+/// a bare repository does (git does not count it bare); and the same worktree with `false` and no
+/// log does not; and under `false`, `HEAD`'s log alone (detached) and the branch's alone each do.
+/// Caught by: the setting read as git does not read it, or an existing log ignored.
 #[test]
 fn whether_the_reflog_is_written_is_what_git_then_does() {
     let made = |name: &str, setting: Option<&str>, keep_logs: bool| {
@@ -1111,8 +1105,8 @@ fn whether_the_reflog_is_written_is_what_git_then_does() {
         (Reflog::Written, true)
     );
 
-    // One log at a time under `false` (phase 05's QA item 7): a detached `HEAD` with only
-    // its own log, and a branch with only the branch's — each enough for git to append.
+    // One log at a time under `false`: a detached `HEAD` with only its own log, and a branch
+    // with only the branch's — each enough for git to append.
     let detached = made("reflog-false-head-only", Some("false"), true);
     detached.git(&["checkout", "-q", "--detach"]);
     std::fs::remove_file(detached.path().join(".git/logs/refs/heads/main"))
@@ -1182,11 +1176,11 @@ fn whether_the_reflog_is_written_is_what_git_then_does() {
     assert_eq!(reflog_of_an_amend(&unlogged), (Reflog::NotWritten, false));
 }
 
-// --- C2's amend half: refused, writing nothing, when what was confirmed moved ---
+// --- the amend refused, writing nothing, when what was confirmed moved ---
 
-/// C2 and R1.4: `HEAD` moved between the confirmation and the run — another commit made — or
-/// a remote came to hold it: the amend refuses, writing nothing. Caught by: an amend that
-/// amends whatever `HEAD` is now, under a prompt that named another commit.
+/// `HEAD` moved between the confirmation and the run — another commit made — or a remote came to
+/// hold it: the amend refuses, writing nothing. Caught by: an amend that amends whatever `HEAD` is
+/// now, under a prompt that named another commit.
 #[test]
 fn an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed() {
     let repo = identified("c2-amend");
@@ -1211,11 +1205,10 @@ fn an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed() {
     assert_eq!(repo.rev("HEAD"), moved);
 }
 
-/// C2 and R1.4 for the reflog (phase 05's QA item 9): confirmed while git would log the
-/// amend — "the old commit stays in Show Lost Commits" — then the logs removed and the
-/// setting turned off, so git no longer would: the amend refuses, writing nothing, rather than
-/// replace a commit under a promise that is no longer true. Caught by: a re-check that compares
-/// `HEAD` alone.
+/// The same for the reflog: confirmed while git would log the amend — "the old commit stays in Show
+/// Lost Commits" — then the logs removed and the setting turned off, so git no longer would: the
+/// amend refuses, writing nothing, rather than replace a commit under a promise that is no longer
+/// true. Caught by: a re-check that compares `HEAD` alone.
 #[test]
 fn an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed() {
     let repo = identified("c2-amend-reflog");
@@ -1233,7 +1226,7 @@ fn an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed()
     assert_eq!(repo.git(&["log", "--format=%s"]), "one\n");
 }
 
-// --- C24: operations in progress ---
+// --- operations in progress ---
 
 /// The text `git status` says of the operation in progress, in the C locale.
 fn status_says(repo: &Repo) -> String {
@@ -1266,12 +1259,11 @@ fn prepared(repo: &Repo) -> Option<String> {
     )
 }
 
-/// C24 and C32: a merge in progress is reported; git's `MERGE_MSG`, cleaned, has no `#
-/// Conflicts:` block; once the conflict is staged (`git add`, which `git status` then reports
-/// resolved) the commit of that cleaned message is the merge commit, its parents `HEAD` and
-/// `MERGE_HEAD`, and its message what `git commit` with an editor leaves; an amend is refused.
-/// Caught by: a merge commit with one parent, git's comment lines committed, or an amend
-/// offered mid-merge.
+/// A merge in progress is reported; git's `MERGE_MSG`, cleaned, has no `# Conflicts:` block; once
+/// the conflict is staged (`git add`, which `git status` then reports resolved) the commit of that
+/// cleaned message is the merge commit, its parents `HEAD` and `MERGE_HEAD`, and its message what
+/// `git commit` with an editor leaves; an amend is refused. Caught by: a merge commit with one
+/// parent, git's comment lines committed, or an amend offered mid-merge.
 #[test]
 fn a_merge_in_progress_commits_the_merge_and_refuses_an_amend() {
     let repo = conflicting("c24-merge");
@@ -1331,10 +1323,10 @@ fn merging(name: &str, config: &[(&str, &str)], message: &str) -> Repo {
 }
 
 /// What `git commit` with an editor that changes nothing stores for the merge in progress — the
-/// oracle for what the box shows and commits (C32). `commit.status=false` leaves out the
-/// template git adds around the message in an editor session — the help lines and the status,
-/// which under `whitespace` and `verbatim` a person removes by hand (`git help config`,
-/// `commit.cleanup`) and which the commit box never shows.
+/// oracle for what the box shows and commits. `commit.status=false` leaves out the template git
+/// adds around the message in an editor session — the help lines and the status, which under
+/// `whitespace` and `verbatim` a person removes by hand (`git help config`, `commit.cleanup`) and
+/// which the commit box never shows.
 fn committed_by_gits_editor(repo: &Repo) -> Vec<u8> {
     let (status, _, stderr) = repo.run(
         &["-c", "commit.status=false", "commit", "-q"],
@@ -1345,15 +1337,14 @@ fn committed_by_gits_editor(repo: &Repo) -> Vec<u8> {
     stored_message(repo)
 }
 
-/// C32 and R6.10 (the QA brief's last case), every setting: under each `commit.cleanup` (unset,
-/// `default`, `strip`, `whitespace`, `verbatim`, `scissors`) and each comment character (unset,
-/// `;`, `auto`), a `MERGE_MSG` with `# Conflicts:`, the merge's own `#123` and `;45` lines, a
-/// trailing space and blank lines — and, under `scissors`, git's scissors line — is shown exactly
-/// as `git commit` with an editor leaves it, and the commit box's `git commit -F -` of it stores
-/// the same, on the host's git and both floors. Caught by: one cleaning for every setting (git's
-/// editor keeps comment lines under `whitespace` and `verbatim`, a `#123` above the scissors
-/// line, and every line under `auto`), the scissors line not cut, or the cleaned text committed
-/// differently.
+/// Every setting: under each `commit.cleanup` (unset, `default`, `strip`, `whitespace`, `verbatim`,
+/// `scissors`) and each comment character (unset, `;`, `auto`), a `MERGE_MSG` with `# Conflicts:`,
+/// the merge's own `#123` and `;45` lines, a trailing space and blank lines — and, under
+/// `scissors`, git's scissors line — is shown exactly as `git commit` with an editor leaves it, and
+/// the commit box's `git commit -F -` of it stores the same, on the host's git and both floors.
+/// Caught by: one cleaning for every setting (git's editor keeps comment lines under `whitespace`
+/// and `verbatim`, a `#123` above the scissors line, and every line under `auto`), the scissors
+/// line not cut, or the cleaned text committed differently.
 #[test]
 fn merge_msg_is_shown_and_committed_as_gits_editor_leaves_it_under_every_setting() {
     let message = "Merge other  \n\n\n#123 fixes the bug\n;45 also\n\n";
@@ -1411,10 +1402,10 @@ fn merge_msg_is_shown_and_committed_as_gits_editor_leaves_it_under_every_setting
     }
 }
 
-/// C32: the settings change what is shown — `#123` dropped as a comment under the default and
-/// kept under `;`, `# Conflicts:` kept under `whitespace`, `verbatim` and `auto`, and the
-/// scissors line and what follows cut under `scissors` — so the matrix above compares answers
-/// that differ. Caught by: a matrix whose every case leaves the same text.
+/// The settings change what is shown — `#123` dropped as a comment under the default and kept under
+/// `;`, `# Conflicts:` kept under `whitespace`, `verbatim` and `auto`, and the scissors line and
+/// what follows cut under `scissors` — so the matrix above compares answers that differ. Caught by:
+/// a matrix whose every case leaves the same text.
 #[test]
 fn each_setting_shows_a_message_of_its_own() {
     let message = "Merge other\n\n#123 fixes the bug\n;45 also\n";
@@ -1465,10 +1456,10 @@ fn each_setting_shows_a_message_of_its_own() {
     }
 }
 
-/// C33 and C24: a single cherry-pick in progress is reported naming the picked commit, its
-/// `MERGE_MSG` cleaned; Commit concludes it as `git commit -F` does — the picked commit's author
-/// kept, `CHERRY_PICK_HEAD` gone, one parent; and an amend is refused. Caught by: a single pick
-/// refused, the author made the committer, or the marker left for git to trip on.
+/// A single cherry-pick in progress is reported naming the picked commit, its `MERGE_MSG` cleaned;
+/// Commit concludes it as `git commit -F` does — the picked commit's author kept,
+/// `CHERRY_PICK_HEAD` gone, one parent; and an amend is refused. Caught by: a single pick refused,
+/// the author made the committer, or the marker left for git to trip on.
 #[test]
 fn a_single_cherry_pick_is_concluded_by_commit_keeping_its_author() {
     let made = |name: &str| {
@@ -1536,9 +1527,9 @@ fn a_single_cherry_pick_is_concluded_by_commit_keeping_its_author() {
     assert_eq!(engine(&cairn).operation_in_progress(), None);
 }
 
-/// C33: a single revert in progress is reported naming the reverted commit; Commit concludes
-/// it as `git commit -F` does — `REVERT_HEAD` gone, the commit by the committer. Caught by: a
-/// single revert refused, or its marker left.
+/// A single revert in progress is reported naming the reverted commit; Commit concludes it as `git
+/// commit -F` does — `REVERT_HEAD` gone, the commit by the committer. Caught by: a single revert
+/// refused, or its marker left.
 #[test]
 fn a_single_revert_is_concluded_by_commit() {
     let made = |name: &str| {
@@ -1583,12 +1574,12 @@ fn a_single_revert_is_concluded_by_commit() {
     assert_eq!(engine(&cairn).operation_in_progress(), None);
 }
 
-/// C24 and C33: during a rebase, `git am`, and a sequence of cherry-picks — stopped on its
-/// first pick, and with that pick resolved and committed — or of reverts, the engine reports
-/// each as `git status` does, and a commit and an amend are refused before git runs, naming it
-/// and git's command to continue or abort it — `HEAD` and the index as they were. Caught by:
-/// gix's reading (the committed sequence reads as nothing), a sequence's stopped pick concluded
-/// as a single one, or a commit made mid-rebase.
+/// During a rebase, `git am`, and a sequence of cherry-picks — stopped on its first pick, and with
+/// that pick resolved and committed — or of reverts, the engine reports each as `git status` does,
+/// and a commit and an amend are refused before git runs, naming it and git's command to continue
+/// or abort it — `HEAD` and the index as they were. Caught by: gix's reading (the committed
+/// sequence reads as nothing), a sequence's stopped pick concluded as a single one, or a commit
+/// made mid-rebase.
 #[test]
 fn a_rebase_am_or_sequence_in_progress_refuses_commit_and_amend() {
     let check = |repo: &Repo, operation: OperationInProgress, says: &str, command: &str| {
@@ -1679,9 +1670,9 @@ fn a_rebase_am_or_sequence_in_progress_refuses_commit_and_amend() {
     }
 }
 
-/// C8 and R6.9: on a detached `HEAD` a commit is made — on no branch, refused by nothing, no
-/// operation reported — and the refs say `HEAD` is detached. Caught by: a detached `HEAD`
-/// refused, or reported as an operation in progress.
+/// On a detached `HEAD` a commit is made — on no branch, refused by nothing, no operation reported
+/// — and the refs say `HEAD` is detached. Caught by: a detached `HEAD` refused, or reported as an
+/// operation in progress.
 #[test]
 fn a_commit_on_a_detached_head_is_made() {
     let repo = identified("c8-detached");
@@ -1704,9 +1695,9 @@ fn a_commit_on_a_detached_head_is_made() {
     assert_eq!(repo.rev("main"), base, "a branch moved");
 }
 
-/// R1.6: an amend's record quotes the prompt the user accepted, and the commit's declares the
-/// refs, the index and the objects invalid. Caught by: an amend that loses its prompt, or a
-/// commit that leaves the history unread.
+/// An amend's record quotes the prompt the user accepted, and the commit's declares the refs, the
+/// index and the objects invalid. Caught by: an amend that loses its prompt, or a commit that
+/// leaves the history unread.
 #[test]
 fn an_amend_records_its_prompt_and_a_commit_invalidates_what_it_moves() {
     let repo = identified("r16-amend");
@@ -1762,13 +1753,13 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
     );
 }
 
-/// R1.1's option (a) as (a′), the user's decision of 2026-10-10: a `pre-commit` hook fails a
-/// confirmed amend — git has refreshed the index and written tree objects, its own bookkeeping,
-/// but `HEAD` is still the confirmed commit — so the error hands the token back unspent, the
-/// same consequence; the skip amends with it, `--no-verify`, asking nothing again, and its run
-/// re-checks it. A refusal before git ran hands none back (another error, no token in it).
-/// Caught by: a token kept by the failed run (the skip would have to confirm again); one handed
-/// back from a run that moved `HEAD` is `a_failed_amend_whose_head_moved_hands_no_token_back`'s.
+/// A `pre-commit` hook fails a confirmed amend — git has refreshed the index and written tree
+/// objects, its own bookkeeping, but `HEAD` is still the confirmed commit — so the error hands the
+/// token back unspent, the same consequence; the skip amends with it, `--no-verify`, asking nothing
+/// again, and its run re-checks it. A refusal before git ran hands none back (another error, no
+/// token in it). Caught by: a token kept by the failed run (the skip would have to confirm again);
+/// one handed back from a run that moved `HEAD` is
+/// `a_failed_amend_whose_head_moved_hands_no_token_back`'s.
 #[test]
 fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
     let repo = identified("r11-token-back");
@@ -1832,12 +1823,11 @@ fn a_hook_failing_a_confirmed_amend_hands_the_token_back_and_the_skip_amends() {
     ));
 }
 
-/// Phase 13's QA item #3, the token hand-back's `HEAD` condition: a `pre-commit` hook that
-/// moves `HEAD` — a commit of its own made with `commit-tree` and `update-ref` — and then fails
-/// the confirmed amend. git refused before amending, but `HEAD` is no longer the confirmed
-/// commit, so the error is git's failure and no token comes back. Caught by: a token handed back
-/// from a run that moved `HEAD` (the hand-back's `HEAD` check dropped), which a skip would spend
-/// on a commit nobody confirmed.
+/// The token hand-back's `HEAD` condition: a `pre-commit` hook that moves `HEAD` — a commit of its
+/// own made with `commit-tree` and `update-ref` — and then fails the confirmed amend. git refused
+/// before amending, but `HEAD` is no longer the confirmed commit, so the error is git's failure and
+/// no token comes back. Caught by: a token handed back from a run that moved `HEAD` (the
+/// hand-back's `HEAD` check dropped), which a skip would spend on a commit nobody confirmed.
 #[test]
 fn a_failed_amend_whose_head_moved_hands_no_token_back() {
     let repo = identified("q3-head-moved");
@@ -1869,7 +1859,7 @@ fn a_failed_amend_whose_head_moved_hands_no_token_back() {
     );
 }
 
-// --- R4.7 and phase 12's QA item #10: made is read from HEAD ---
+// --- made is read from HEAD ---
 
 /// Commits (or, with `amend`, amends at the press) `message` with what is staged, cancelling
 /// from another thread as soon as `marker` exists — a hook writes it, then sleeps — and hands
@@ -1934,11 +1924,11 @@ fn cancelled_at(repo: &Repo, marker: &std::path::Path, amend: bool) -> Result<bo
     panic!("the hook stayed busy");
 }
 
-/// R4.7: a commit or an amend cancelled while its `pre-commit` hook runs was not made — `HEAD`
-/// read after the reap says so — and is the cancel it is; one cancelled while its
-/// `post-commit` hook runs, after git made it, is reported made. Caught by: a cancel reported
-/// as "may have taken effect" whatever `HEAD` says, or a made commit reported cancelled, which
-/// would keep a draft already committed.
+/// A commit or an amend cancelled while its `pre-commit` hook runs was not made — `HEAD` read after
+/// the reap says so — and is the cancel it is; one cancelled while its `post-commit` hook runs,
+/// after git made it, is reported made. Caught by: a cancel reported as "may have taken effect"
+/// whatever `HEAD` says, or a made commit reported cancelled, which would keep a draft already
+/// committed.
 #[test]
 fn a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so() {
     for amend in [false, true] {
@@ -1979,11 +1969,11 @@ fn a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so() {
     }
 }
 
-/// C35 under a cancel (phase 18's QA item 2): an amend at the press cancelled while its
-/// `post-commit` hook runs — git made it, and the write's own cancel has fired, both its signal
-/// and its kill — still answers what it cost once git is reaped: that read runs under the
-/// watch's `closing`, which only the repository's close sets. Caught by: the read run under the
-/// write's own cancel, answering nothing for the very amend C35 reports.
+/// The token-free amend's re-read under a cancel: an amend at the press cancelled while its
+/// `post-commit` hook runs — git made it, and the write's own cancel has fired, both its signal and
+/// its kill — still answers what it cost once git is reaped: that read runs under the watch's
+/// `closing`, which only the repository's close sets. Caught by: the read run under the write's own
+/// cancel, answering nothing for the very amend the re-read reports on.
 #[test]
 fn an_amend_cancelled_after_git_made_it_still_reports_what_it_cost() {
     use cairn_git::Cancel as _;
@@ -2113,11 +2103,11 @@ fn failing_after_commit(name: &str) -> (GitBinary, std::path::PathBuf) {
     (committer_on(Some(path), &[]), directory)
 }
 
-/// Phase 13's QA item #1 (R4.7, "Made is read from `HEAD`"): git made the commit — `HEAD` moved
-/// to it — and then exited non-zero. A commit, an amend at the press and a confirmed amend are
-/// each reported made-but-failed, never plain git's failure, and the confirmed amend hands no
-/// token back (the amend landed: the token is spent). Caught by: `HEAD` read only on git's
-/// success, so a landed commit is reported failed and its draft offered again.
+/// Made is read from `HEAD`: git made the commit — `HEAD` moved to it — and then exited non-zero. A
+/// commit, an amend at the press and a confirmed amend are each reported made-but-failed, never
+/// plain git's failure, and the confirmed amend hands no token back (the amend landed: the token is
+/// spent). Caught by: `HEAD` read only on git's success, so a landed commit is reported failed and
+/// its draft offered again.
 #[test]
 fn a_commit_git_made_then_failed_after_is_reported_made() {
     let (git, wrapper) = failing_after_commit("made");
@@ -2194,9 +2184,9 @@ fn a_commit_git_made_then_failed_after_is_reported_made() {
     let _ = std::fs::remove_dir_all(wrapper);
 }
 
-/// Phase 12's QA item #10, beside "HEAD moved in between": git exits 0, but `HEAD` is not the
-/// commit it made — a `post-commit` hook moved it back — so the commit and the amend are
-/// reported unconfirmed, never made. Caught by: success read from git's exit status alone.
+/// git exits 0, but `HEAD` is not the commit it made — a `post-commit` hook moved it back — so the
+/// commit and the amend are reported unconfirmed, never made. Caught by: success read from git's
+/// exit status alone.
 #[test]
 fn a_commit_git_says_it_made_with_head_elsewhere_is_unconfirmed() {
     let repo = identified("r10-moved");
@@ -2289,9 +2279,9 @@ fn an_amend_that_makes_the_same_commit_is_made() {
     panic!("no amend made the commit it replaced within fifty tries");
 }
 
-/// The pushed check's cost where history is long (the phase's stopping rule): an ignored
-/// reporter that times [`ops::amend_consequence`] on the repository `CAIRN_BENCH_REPO` names,
-/// in whatever state its `HEAD` is, and prints what it found. It only reads.
+/// The pushed check's cost where history is long: an ignored reporter that times
+/// [`ops::amend_consequence`] on the repository `CAIRN_BENCH_REPO` names, in whatever state its
+/// `HEAD` is, and prints what it found. It only reads.
 ///
 /// ```text
 /// CAIRN_BENCH_REPO=/tmp/rust-clone cargo test -p cairn-git --release --test diff_engine \

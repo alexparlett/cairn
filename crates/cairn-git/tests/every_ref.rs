@@ -1,7 +1,7 @@
-//! C6: the history walked from every ref, labelled, with stash rows (PRD R4.1-R4.3). Every
-//! expectation is read out of the `git` binary, run in the same fixture at test time —
-//! `git rev-list --branches --remotes --tags HEAD`, `git log --decorate=full`, `git stash
-//! list` — and every walk is paged to its end, so each comparison covers the whole history.
+//! The history walked from every ref, labelled, with stash rows. Every expectation is read out of
+//! the `git` binary, run in the same fixture at test time — `git rev-list --branches --remotes
+//! --tags HEAD`, `git log --decorate=full`, `git stash list` — and every walk is paged to its end,
+//! so each comparison covers the whole history.
 
 #[path = "support/fixtures.rs"]
 mod fixtures;
@@ -173,7 +173,7 @@ fn git_labels(fixture: &Fixture) -> HashMap<String, GitLabels> {
             } else if item == "HEAD" {
                 read.head = true;
             } else if item == "refs/stash" {
-                // `refs/stash` labels no row (C6).
+                // `refs/stash` labels no row.
             } else {
                 read.names
                     .insert(item.trim_start_matches("tag: ").to_owned());
@@ -260,12 +260,11 @@ fn committed(fixture: &Fixture) -> HashMap<String, i64> {
         .collect()
 }
 
-/// The fixture C6 names, and then some: on `main` a commit `HEAD` reaches; `side`, which
-/// `HEAD` cannot reach; a remote-tracking ref and a tag each reaching a commit nothing else
-/// does; a lightweight, an annotated and a nested tag; a tag on a tree, lightweight and
-/// annotated; a stash whose branch was deleted; two stashes on `main`'s tip, one made with
-/// `--include-untracked`; a stash on `side`'s tip dated older than it; and a branch at the
-/// untracked stash's index commit.
+/// The fixture: on `main` a commit `HEAD` reaches; `side`, which `HEAD` cannot reach; a
+/// remote-tracking ref and a tag each reaching a commit nothing else does; a lightweight, an
+/// annotated and a nested tag; a tag on a tree, lightweight and annotated; a stash whose branch was
+/// deleted; two stashes on `main`'s tip, one made with `--include-untracked`; a stash on `side`'s
+/// tip dated older than it; and a branch at the untracked stash's index commit.
 struct Everything {
     fixture: Fixture,
     /// The deleted branch's commits and its stash.
@@ -403,14 +402,13 @@ fn everything() -> Everything {
     }
 }
 
-/// C6's first half: the commits walked from every ref, to the end, are git's
-/// `rev-list --branches --remotes --tags HEAD` — the branch `HEAD` cannot reach, the
-/// remote-tracking ref's and the tag's own commits among them, the tag on a tree and the
-/// stashes adding nothing — each once; the deleted branch's stash has no row and pulls none
-/// of its commits in; a stash's index and untracked commits are no rows, unless a ref
-/// reaches one, which is then a commit's row, once. Caught by: `refs/stash` or a stash's
-/// base seeding the walk, a stash laid out with all its parents, a tag on a tree failing
-/// the walk, or a seed kind left out.
+/// The commits walked from every ref, to the end, are git's `rev-list --branches --remotes
+/// --tags HEAD` — the branch `HEAD` cannot reach, the remote-tracking ref's and the tag's own
+/// commits among them, the tag on a tree and the stashes adding nothing — each once; the
+/// deleted branch's stash has no row and pulls none of its commits in; a stash's index and
+/// untracked commits are no rows, unless a ref reaches one, which is then a commit's row, once.
+/// Caught by: `refs/stash` or a stash's base seeding the walk, a stash laid out with all its
+/// parents, a tag on a tree failing the walk, or a seed kind left out.
 #[test]
 fn the_commits_walked_from_every_ref_are_git_rev_lists() {
     let it = everything();
@@ -449,12 +447,11 @@ fn the_commits_walked_from_every_ref_are_git_rev_lists() {
     assert_eq!(drawn_stashes, expected_stashes);
 }
 
-/// C6's labels: every commit's row carries exactly the refs `git log --decorate=full`
-/// names for it, `refs/stash` aside — `HEAD`, the branch it is on as current, the
-/// remote-tracking refs (`origin/HEAD` among them), lightweight, annotated and nested tags
-/// — each with its kind; a stash's row carries none. Caught by: a symbolic ref or a nested
-/// tag dropped, a tag's kind lost, `HEAD` marked on another row, or labels read off by a
-/// row.
+/// Every commit's row carries exactly the refs `git log --decorate=full` names for it,
+/// `refs/stash` aside — `HEAD`, the branch it is on as current, the remote-tracking refs
+/// (`origin/HEAD` among them), lightweight, annotated and nested tags — each with its kind; a
+/// stash's row carries none. Caught by: a symbolic ref or a nested tag dropped, a tag's kind
+/// lost, `HEAD` marked on another row, or labels read off by a row.
 #[test]
 fn every_rows_labels_are_what_git_log_decorates_it_with() {
     let it = everything();
@@ -513,12 +510,11 @@ fn every_rows_labels_are_what_git_log_decorates_it_with() {
     );
 }
 
-/// C6's stash rows: each stash whose base is walked is one row — its index, base, message,
-/// author and date git's — with one line, leaving its node down its own lane and ending at
-/// its base; two stashes on one commit take a lane each; a stash dated older than its base
-/// is directly above it; the others sit at their dates. Caught by: a stash's row laid out
-/// as a commit's (lines joined, or to every parent), placed after its base, or placed by
-/// its base alone and never by its date.
+/// Each stash whose base is walked is one row — its index, base, message, author and date git's
+/// — with one line, leaving its node down its own lane and ending at its base; two stashes on
+/// one commit take a lane each; a stash dated older than its base is directly above it; the
+/// others sit at their dates. Caught by: a stash's row laid out as a commit's (lines joined, or
+/// to every parent), placed after its base, or placed by its base alone and never by its date.
 #[test]
 fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
     let it = everything();
@@ -621,11 +617,10 @@ fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
     assert!(commits.contains_key(&it.side_tip));
 }
 
-/// The QA brief's paging: a walk paged one, two or five rows at a time — held, or cold
-/// from each cursor — draws every row, stash rows among them, exactly as one page of the
-/// whole does, so a stash older than the first page's last commit arrives with the page
-/// that reaches its date. Caught by: stashes merged into the first page alone, or a cursor
-/// that forgets which were placed.
+/// A walk paged one, two or five rows at a time — held, or cold from each cursor — draws every
+/// row, stash rows among them, exactly as one page of the whole does, so a stash older than the
+/// first page's last commit arrives with the page that reaches its date. Caught by: stashes
+/// merged into the first page alone, or a cursor that forgets which were placed.
 #[test]
 fn a_walk_paged_any_way_draws_the_rows_one_page_does() {
     let it = everything();
@@ -690,12 +685,12 @@ fn deep_stash() -> (Fixture, String) {
     (fixture, base)
 }
 
-/// The QA brief's deep base: the base is the `AFTER + 1`th commit the walk yields. Looking
-/// ahead that far, the stash's row is at its date; one commit less, directly above its
-/// base — never after it, and never missing — on the held route and on the cold one, whose
-/// cursor carries the look-ahead. Caught by: a stash whose base was not found within the
-/// look-ahead dropped or drawn below its base, the look-ahead bound off by one, or a
-/// resumed cold page looking ahead the default distance.
+/// A deep base: the base is the `AFTER + 1`th commit the walk yields. Looking ahead that far,
+/// the stash's row is at its date; one commit less, directly above its base — never after it,
+/// and never missing — on the held route and on the cold one, whose cursor carries the
+/// look-ahead. Caught by: a stash whose base was not found within the look-ahead dropped or
+/// drawn below its base, the look-ahead bound off by one, or a resumed cold page looking ahead
+/// the default distance.
 #[test]
 fn a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base() {
     let (fixture, base) = deep_stash();
@@ -917,11 +912,11 @@ fn row_ids(rows: &History) -> Vec<String> {
         .collect()
 }
 
-/// TC1: a branch commit on top of a stash commit, dated older than the stash but newer
-/// than its base, so the walk's first commit is that branch commit and looking ahead for
-/// the stash's base meets the stash commit itself first. The stash commit is a commit's
-/// row and no stash's, and the walk is git's `rev-list --date-order`. Caught by: the
-/// look-ahead not noticing the stash commit, which draws it twice.
+/// A branch commit on top of a stash commit, dated older than the stash but newer than its
+/// base, so the walk's first commit is that branch commit and looking ahead for the stash's
+/// base meets the stash commit itself first. The stash commit is a commit's row and no stash's,
+/// and the walk is git's `rev-list --date-order`. Caught by: the look-ahead not noticing the
+/// stash commit, which draws it twice.
 #[test]
 fn a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs() {
     let fixture = fixtures::unborn();
@@ -965,12 +960,12 @@ fn a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs() {
     assert_eq!(row_ids(&rows), expected);
 }
 
-/// QC1: stash rows in their own date order. An older stash on the walk's first commit and
-/// a newer one on an older branch's tip: the newer is drawn first, as `git log
-/// --date-order` over the refs and the stash commits orders them — and over the fixture
-/// with every kind of stash too; and a stash dated the same second as its index commit is
-/// above it. Caught by: a stash going directly above its base before a newer stash whose
-/// date has come, or a commit going first on a tie.
+/// Stash rows in their own date order. An older stash on the walk's first commit and a newer
+/// one on an older branch's tip: the newer is drawn first, as `git log --date-order` over the
+/// refs and the stash commits orders them — and over the fixture with every kind of stash too;
+/// and a stash dated the same second as its index commit is above it. Caught by: a stash going
+/// directly above its base before a newer stash whose date has come, or a commit going first on
+/// a tie.
 #[test]
 fn stash_rows_are_in_gits_date_order() {
     let fixture = fixtures::unborn();
@@ -1038,9 +1033,9 @@ fn stash_rows_are_in_gits_date_order() {
     );
 }
 
-/// TC3: a page cancelled while it looks ahead for a stash's base stops there, having laid
-/// nothing out, and the session then pages the same rows as one never cancelled. Caught
-/// by: the look-ahead not polling the cancel.
+/// A page cancelled while it looks ahead for a stash's base stops there, having laid nothing
+/// out, and the session then pages the same rows as one never cancelled. Caught by: the
+/// look-ahead not polling the cancel.
 #[test]
 fn a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows() {
     let (fixture, _) = deep_stash();
@@ -1080,9 +1075,9 @@ fn a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows() {
     assert_eq!(described(&rows), expected);
 }
 
-/// TC4: looking ahead for a deleted branch's stash stops once the walk passes its base's
-/// date: the first page pulls the commits newer than the base and one more, not the whole
-/// history. Caught by: the early stop dropped, which looks ahead to the walk's end.
+/// Looking ahead for a deleted branch's stash stops once the walk passes its base's date: the
+/// first page pulls the commits newer than the base and one more, not the whole history. Caught
+/// by: the early stop dropped, which looks ahead to the walk's end.
 #[test]
 fn looking_ahead_stops_once_the_walk_passes_the_bases_date() {
     let fixture = fixtures::unborn();
@@ -1135,9 +1130,8 @@ fn looking_ahead_stops_once_the_walk_passes_the_bases_date() {
     assert_eq!(rows.len(), newer + 5);
 }
 
-/// QC3: a stash whose commit is gone since the snapshot was read — dropped and pruned —
-/// has no row, and the walk goes on without it. Caught by: an unreadable stash failing the
-/// whole walk.
+/// A stash whose commit is gone since the snapshot was read — dropped and pruned — has no row,
+/// and the walk goes on without it. Caught by: an unreadable stash failing the whole walk.
 #[test]
 fn a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row() {
     let fixture = fixtures::unborn();
@@ -1177,10 +1171,9 @@ fn a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row() {
     assert_eq!(commits.len(), 1);
 }
 
-/// QC4, the user's decision (2026-10-07): `git stash store` files one stash commit twice in
-/// the list; the graph draws it once, as its newest entry, `stash@{0}`, while the snapshot
-/// keeps both entries for the sidebar. Caught by: one row per entry (two rows sharing one
-/// identity), or the older entry's index drawn.
+/// `git stash store` files one stash commit twice in the list; the graph draws it once, as its
+/// newest entry, `stash@{0}`, while the snapshot keeps both entries for the sidebar. Caught by: one
+/// row per entry (two rows sharing one identity), or the older entry's index drawn.
 #[test]
 fn a_stash_commit_filed_twice_is_one_row_its_newest_entrys() {
     let fixture = fixtures::unborn();
@@ -1232,11 +1225,11 @@ fn a_stash_commit_filed_twice_is_one_row_its_newest_entrys() {
     assert_eq!(unique.len(), ids.len(), "two rows share one identity");
 }
 
-/// RR1: opening a walk from every ref reads each tip, and polls the cancel before each but
-/// the first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops
-/// having read six tips and laid nothing out, and a session cancelled there pages, once
-/// asked again, the rows one never cancelled does. Caught by: the open reading every tip
-/// without a poll (gitoxide's own `sorting`), which lays rows out before the cancel lands.
+/// Opening a walk from every ref reads each tip, and polls the cancel before each but the
+/// first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops having read
+/// six tips and laid nothing out, and a session cancelled there pages, once asked again, the
+/// rows one never cancelled does. Caught by: the open reading every tip without a poll
+/// (gitoxide's own `sorting`), which lays rows out before the cancel lands.
 #[test]
 fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
     let fixture = fixtures::unborn();
@@ -1293,14 +1286,14 @@ fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
     assert_eq!(described(&rows), expected);
 }
 
-// --- The reporter: C11's first page from every ref ---
+// --- The reporter: the first page from every ref ---
 
-/// C11's first page: on the repository `CAIRN_BENCH_REPO` names (read only), the first page
-/// of 64 rows from `HEAD` and from every ref — the snapshot already read, and with its read
-/// — warm, median of seven after a warm-up, each run a fresh open of the repository. It
-/// prints how many commits each first page pulled off the walk, look-ahead for a stash's
-/// base included, and how many stashes it drew. Run with
-/// `cargo test --release -p cairn-git --test every_ref -- --ignored --nocapture`.
+/// The first page: on the repository `CAIRN_BENCH_REPO` names (read only), the first page of 64
+/// rows from `HEAD` and from every ref — the snapshot already read, and with its read — warm,
+/// median of seven after a warm-up, each run a fresh open of the repository. It prints how many
+/// commits each first page pulled off the walk, look-ahead for a stash's base included, and how
+/// many stashes it drew. Run with `cargo test --release -p cairn-git --test every_ref --
+/// --ignored --nocapture`.
 #[test]
 #[ignore = "needs a repository named by CAIRN_BENCH_REPO; run with --release"]
 fn measures_the_first_page_from_every_ref() {
@@ -1379,15 +1372,14 @@ fn measures_the_first_page_from_every_ref() {
     eprintln!("CANCELLED BEFORE THE OPEN median={median:.2} ms [{low:.2}-{high:.2}]");
 }
 
-/// Phase 05 QA's RR2, measured by phase 06: what a walk from every ref costs when thousands
-/// of refs are unmerged, each opening a lane of its own. A fixture of a main line of
-/// `MAIN` commits with `branches` branches of one commit each, forked from main at even
-/// steps down its upper half and each dated after main's tip — so the walk meets every
-/// branch first and holds every one of their lines open down to its fork, the widest the
-/// graph gets — is built with `git fast-import`; then, for each width, the first page
-/// from every ref, the whole walk paged to its end and the widest row, and the per-frame
-/// derivation of a viewport's edges at the top and in the middle (`row_edges`, what drawing
-/// a row reads; phase 07 measures the drawing itself). Median of seven, warm, release:
+/// What a walk from every ref costs when thousands of refs are unmerged, each opening a lane of its
+/// own. A fixture of a main line of `MAIN` commits with `branches` branches of one commit each,
+/// forked from main at even steps down its upper half and each dated after main's tip — so the walk
+/// meets every branch first and holds every one of their lines open down to its fork, the widest
+/// the graph gets — is built with `git fast-import`; then, for each width, the first page from
+/// every ref, the whole walk paged to its end and the widest row, and the per-frame derivation of a
+/// viewport's edges at the top and in the middle (`row_edges`, what drawing a row reads, not the
+/// drawing itself). Median of seven, warm, release:
 /// `cargo test --release -p cairn-git --test every_ref measures_layout_over_unmerged_refs --
 /// --ignored --nocapture`.
 #[test]

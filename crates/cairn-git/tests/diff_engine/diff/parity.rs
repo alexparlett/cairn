@@ -1,17 +1,17 @@
-//! R2.4 and R2.8, enforced: the content query's unified projection is what the user's own
-//! `git diff` prints — every header, the function context after it, and every line — under
-//! every algorithm, with and without the indent heuristic, under a diff driver's algorithm,
-//! at more than one context, ignoring whitespace, over crafted content chosen because the
-//! algorithms disagree on it and over this repository's own history.
+//! The content query's unified projection is what the user's own `git diff` prints — every
+//! header, the function context after it, and every line — under every algorithm, with and
+//! without the indent heuristic, under a diff driver's algorithm, at more than one context,
+//! ignoring whitespace, over crafted content chosen because the algorithms disagree on it
+//! and over this repository's own history.
 //!
 //! The reference is porcelain `git diff` between the commit's parent and the commit, for the
 //! file's paths, with the rename detection that pairs them — the command a user types — so
 //! it reads `diff.algorithm`, the drivers and the indent heuristic exactly as they do. Only
-//! `--no-ext-diff` and `--no-textconv` are added, since Cairn runs neither program (R2.3).
+//! `--no-ext-diff` and `--no-textconv` are added, since Cairn runs neither program.
 //!
 //! Every comparison through [`compare_commit_at`] holds BOTH views to git's answer: the
 //! unified rows, and the side-by-side rows read column by column ([`side_by_side_view`]), so
-//! the parity bar is one bar for both (phase 07).
+//! the parity bar is one bar for both.
 
 use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, DiffSession, Repository};
 use cairn_model::{
@@ -437,7 +437,7 @@ const CONFIGURATIONS: &[&[(&str, &str)]] = &[
     &[("diff.drv.algorithm", "minimal")],
 ];
 
-/// R2.4 on content the algorithms disagree on: under every configuration, at three lines
+/// On content the algorithms disagree on: under every configuration, at three lines
 /// of context, every header, function context and line is `git diff -U3`'s. The fixture is
 /// first shown to discriminate — each algorithm's answer differs from myers', patience's
 /// from histogram's, the indent heuristic's from its absence, and, on a git that reads
@@ -612,7 +612,7 @@ fn session_file_diff(
     )
 }
 
-/// R2.8: ignoring whitespace is `git diff -w`, header, function context and line, on files
+/// Ignoring whitespace is `git diff -w`, header, function context and line, on files
 /// with whitespace-only edits, real ones, and both — and the notice that changes are hidden
 /// is still decided: said for a file whose only edits are whitespace, and not for one whose
 /// edits are all real. Caught by: comparing lines with their whitespace stripped by Cairn's
@@ -677,11 +677,12 @@ fn ignoring_whitespace_reads_as_git_diff_w_shows_it() {
     );
 }
 
-/// R2.4 over real content nobody crafted: up to the last 150 non-merge commits of this
+/// Over real content nobody crafted: up to the last 150 non-merge commits of this
 /// repository, under each algorithm, every text file compared with `git diff -U3`, with no
-/// divergence allowed. The content-parity spike found gix differing on 9 of 262 such files
-/// under myers. Run in a clone sharing this checkout's objects, so the configuration each
-/// algorithm needs is never written to the checkout itself.
+/// divergence allowed. gix's own line diff differs from git's on 9 of 262 such files under
+/// myers (`docs/research/diff-engine/content-parity-spike.md`). Run in a clone sharing this
+/// checkout's objects, so the configuration each algorithm needs is never written to the
+/// checkout itself.
 #[test]
 fn this_repositorys_history_reads_as_git_diff_shows_it_under_every_algorithm() {
     let here = ok(
@@ -792,10 +793,10 @@ fn expand_all_answers_what_each_file_answers_alone() {
 }
 
 /// How many `git diff-tree` runs Expand All makes, read from the repository's command log:
-/// one per page (phase 08 pages it: `PAGE_FILES`, `PAGE_LINES`), one more for each distinct
-/// algorithm the page's diff drivers name (git 2.40 and later; none before), and all of it
-/// twice when whitespace is ignored — never one per file — over a fixture of seventy-odd text files, renames and
-/// copies among them, without a driver algorithm and with one naming patience for its
+/// one per page (`PAGE_FILES`, `PAGE_LINES`), one more for each distinct algorithm the
+/// page's diff drivers name (git 2.40 and later; none before), and all of it twice when
+/// whitespace is ignored — never one per file — over a fixture of seventy-odd text files,
+/// renames and copies among them, without a driver algorithm and with one naming patience for its
 /// seventeen-odd `drv/` files. Its answers are shown equal to the per-file ones by
 /// `expand_all_answers_what_each_file_answers_alone`; this is what that test cannot see.
 /// Caught by: every file sent to a read of its own, or each driver file, which answer the
@@ -1154,7 +1155,7 @@ fn alone_and_expanded_read_as_git_diff(repo: &Repo, config: &[&str]) -> usize {
     set.files.len()
 }
 
-/// C6 on paths git quotes: a space, a double quote, a tab, a newline, a backslash, a
+/// On paths git quotes: a space, a double quote, a tab, a newline, a backslash, a
 /// non-ASCII letter, glob characters and a leading `-`, each edited, and a rename from one
 /// such path to another. The changes query lists exactly `git diff --name-status -z`'s
 /// pairs, and every file reads as `git diff` shows it, alone and through Expand All, whose
@@ -1262,7 +1263,7 @@ fn a_renamed_files_driver_algorithm_is_its_old_paths() {
     assert_eq!(alone_and_expanded_read_as_git_diff(&repo, &[]), 2);
 }
 
-/// Phase 06, the view's rows against `git diff`: at one, three and eight lines of context,
+/// The view's rows against `git diff`: at one, three and eight lines of context,
 /// with whitespace ignored and without, every header, function context, line — a context
 /// line the new side's under `-w` — and `\ No newline at end of file` is what the user's
 /// `git diff [-w] -U<n>` prints. The fixture holds whitespace-only edits next to real ones,
@@ -1301,7 +1302,7 @@ fn the_view_draws_what_git_diff_draws_at_every_context_with_whitespace_ignored_o
     );
 }
 
-/// Phase 06 QA (T1): a `diff.context` or a `diff.interHunkContext` git refuses refuses every
+/// A `diff.context` or a `diff.interHunkContext` git refuses refuses every
 /// content query — one file, Expand All and one path of the working tree — as the user's
 /// own `git diff` refuses to run; none falls back to git's default. Caught by: the grouping
 /// read with `.unwrap_or(..)` a default in any of the three.
@@ -1357,7 +1358,7 @@ fn a_grouping_git_refuses_refuses_every_content_query() {
     }
 }
 
-/// Phase 06, the user's grouping: with `diff.context` and `diff.interHunkContext` set, the
+/// The user's grouping: with `diff.context` and `diff.interHunkContext` set, the
 /// context a view opens at is `diff.context` (`Repository::configured_context`), and the
 /// view's rows at it are plain `git diff`'s — which reads both keys — with whitespace
 /// ignored and without, and at an explicit `-U1`, with and without `-w`, still grouped
@@ -1408,7 +1409,7 @@ fn the_view_groups_hunks_as_the_users_git_diff_does() {
         );
     }
 
-    // Expand All carries the same grouping as each file asked alone (QA T2).
+    // Expand All carries the same grouping as each file asked alone.
     let request = ChangesRequest::commit(ok(Oid::parse(&head), "a commit id"));
     let set = ok(
         session.changes(super::git(), &request, &CancelSignal::new()),
@@ -1481,7 +1482,7 @@ fn pair_name_status(repo: &Repo, old: &str, new: &str) -> Vec<(char, String, Str
     found
 }
 
-/// R7 and C12's parity, at the engine: comparing two commits is `git diff <base> <tip>` —
+/// At the engine, comparing two commits is `git diff <base> <tip>` —
 /// tip against tip, never a merge base — for the pair far apart and adjacent, in both
 /// directions, under the user's own rename detection (`diff.renames` unset, `false` and
 /// `copies`): the same files with the same statuses and pairs as `git diff --name-status`,

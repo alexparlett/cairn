@@ -1,15 +1,15 @@
-//! How every local write of `docs/prd/staging-and-commit.md` R3 runs: one write invocation,
-//! git's global `--literal-pathspecs` ahead of the verb, its input on stdin, and the lock
-//! files listed before it starts and after it is over (R3.8).
+//! How every local write runs: one write invocation, git's global `--literal-pathspecs` ahead
+//! of the verb, its input on stdin, and the lock files listed before it starts and after it is
+//! over.
 //!
 //! `--literal-pathspecs` is git's global option, given on `argv` before the verb — never the
 //! `GIT_LITERAL_PATHSPECS` variable, since an invocation's environment is built only in
 //! `crate::process`, and the environment twin refuses one set anywhere else — so a path
-//! named `*.rs` or `:(top)x` is that path and never a pattern (R3). git exports the mode to
-//! the hooks it runs under these verbs (`GIT_LITERAL_PATHSPECS=1` in a `post-index-change` or
-//! `post-checkout` hook's environment): the residual R3 states.
+//! named `*.rs` or `:(top)x` is that path and never a pattern. git exports the mode to the
+//! hooks it runs under these verbs (`GIT_LITERAL_PATHSPECS=1` in a `post-index-change` or
+//! `post-checkout` hook's environment): a residual, since git sets it itself.
 //!
-//! A local write is not cancelled: only a commit or an amend is (R4.3), so the signal the
+//! A local write is not cancelled: only a commit or an amend is, so the signal the
 //! runner polls is one nobody holds. Its stdout is drained and dropped — `git clean`'s
 //! "Removing" lines are prose — and its stderr travels on its failure.
 

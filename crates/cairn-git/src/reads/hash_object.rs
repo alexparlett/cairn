@@ -1,6 +1,5 @@
 //! `git hash-object --path=<p> -- <p>`: the object id one working-tree file has in git's
-//! form, as the stale check before a discard of lines needs it (`docs/prd/staging-and-commit.md`
-//! R3.7, R3.9).
+//! form, as the stale check before a discard of lines needs it.
 //!
 //! The drawn side of an unstaged or untracked diff is git's form of the file — after the
 //! clean filter driver its attributes name, the line-ending conversion, `ident` and a
@@ -8,11 +7,12 @@
 //! patch's `index` line. What a discard compares that id with must be computed the same way,
 //! by git, from the file as it is now: `hash-object` with `--path` names the path whose
 //! attributes apply, and the file argument is read from the working tree. Without `-w` it
-//! writes nothing: no object, no index, no ref (`hashing_a_file_gives_git_diffs_id_and_writes_nothing`, which
-//! holds the git directory byte-identical after it; and
-//! `hashing_a_file_runs_only_the_clean_filter_and_writes_nothing`). It reads no index entry for the path and
-//! takes no lock; as a read of the working tree it runs the path's clean filter driver, as
-//! `git diff-files` does for the diff it is compared with (D1 as amended, `crate::reads`).
+//! writes nothing: no object, no index, no ref
+//! (`hashing_a_file_gives_git_diffs_id_and_writes_nothing`, which holds the git directory
+//! byte-identical after it; and `hashing_a_file_runs_only_the_clean_filter_and_writes_nothing`).
+//! It reads no index entry for the path and takes no lock; as a read of the working tree it
+//! runs the path's clean filter driver, as `git diff-files` does for the diff it is compared
+//! with (`crate::reads`).
 //!
 //! A symlink is not asked: `hash-object` opens the path and so reads the file a link points
 //! to, where git stores a link as its target. The caller hashes a link itself (`crate::ops`'
@@ -171,11 +171,10 @@ mod tests {
         }
     }
 
-    /// The stopping rule's question, answered: `hash-object --path` reproduces the id git's
-    /// own diff gives the working-tree side of a CRLF file under `core.autocrlf` and of a
-    /// file under a clean filter — the `index` line of `git diff-files --full-index` — and
-    /// not the id of the bytes on disk. And it writes nothing: the git directory is
-    /// byte-identical after it, `.git/objects` included.
+    /// `hash-object --path` reproduces the id git's own diff gives the working-tree side of a CRLF
+    /// file under `core.autocrlf` and of a file under a clean filter — the `index` line of `git
+    /// diff-files --full-index` — and not the id of the bytes on disk. And it writes nothing: the
+    /// git directory is byte-identical after it, `.git/objects` included.
     #[test]
     fn hashing_a_file_gives_git_diffs_id_and_writes_nothing() {
         let fixture = Fixture::new();

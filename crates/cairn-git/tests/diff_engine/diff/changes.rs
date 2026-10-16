@@ -1,6 +1,6 @@
-//! C5: the changes query against git's own detection, under the same configuration — and
-//! against what the user's own `git log` shows under their configuration, which is what
-//! decision E promises. Since `git diff-tree` answers the query, what these decide is that
+//! The changes query against git's own detection, under the same configuration — and
+//! against what the user's own `git log` shows under their configuration, which is what the
+//! query answers. Since `git diff-tree` answers the query, what these decide is that
 //! Cairn asks git the right question and reads the answer whole: the detection the
 //! configuration names, the limit git applies, the commits compared, and every record.
 
@@ -173,8 +173,8 @@ fn every_crafted_commit_lists_what_git_lists() {
     for commit in &commits {
         let id = Oid::parse(commit).expect("an id");
         let found = changes_of(&repo, &ChangesRequest::commit(id));
-        // `--root` is what makes git diff the first commit against the empty tree, which
-        // is what decision L5 says Cairn does without being asked.
+        // `--root` is what makes git diff the first commit against the empty tree, which Cairn
+        // does without being asked.
         let expected = git_rows(&repo, &["-M", "--root"], &[commit]);
         assert_eq!(
             cairn_rows(&found.files, commit.len()),
@@ -222,7 +222,7 @@ fn a_root_commit_is_compared_with_the_empty_tree() {
     );
 }
 
-/// R2.1's merge rule: the first parent, like any other commit, and never a combined diff.
+/// A merge's rule: the first parent, like any other commit, and never a combined diff.
 #[test]
 fn a_merge_is_compared_with_its_first_parent() {
     let repo = repositories::merged();
@@ -251,7 +251,7 @@ fn a_merge_is_compared_with_its_first_parent() {
 }
 
 /// Two commits, tip against tip, with no commit details because there is no one commit
-/// the answer is about (R7.3).
+/// the answer is about.
 #[test]
 fn a_comparison_of_two_commits_is_tip_against_tip() {
     let repo = repositories::crafted();
@@ -288,7 +288,7 @@ fn a_comparison_of_two_commits_is_tip_against_tip() {
     );
 }
 
-/// R2.2 through the config, not through an argument: the same commit read three ways.
+/// Detection through the config, not through an argument: the same commit read three ways.
 #[test]
 fn rename_and_copy_detection_follow_the_users_configuration() {
     let off = repositories::rewrites(&[("diff.renames", "false")]);
@@ -358,17 +358,16 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
     assert!(found.renames.copies, "{:?}", found.renames);
 }
 
-/// R2.2's second half: when `diff.renameLimit` stops the search, the answer says so — and
-/// says so exactly when git's own `git log` warns that it did, naming the limit git's
-/// warning names. Over renames and copies, a limit either side of each boundary, the stage
-/// that pairs exact renames ahead of the limit and the one that pairs by name ahead of it.
-/// The `dissimilar` cases are where the count meets the square exactly: two unpaired
-/// deletions by two unpaired additions at a limit of 2 is a search git ran and paired
-/// nothing in, without a warning, and the same commit at a limit of 1 is one it skipped.
-/// Caught by: reading the limit from the wrong config, counting the sources the exact
-/// stage paired on a git that culls them (`exact and inexact` at a limit of 2), `>=` for
-/// `>` (`dissimilar` at a limit of 2), or an answer that differs from git's at any of
-/// these.
+/// When `diff.renameLimit` stops the search, the answer says so — and says so exactly when
+/// git's own `git log` warns that it did, naming the limit git's warning names. Over renames
+/// and copies, a limit either side of each boundary, the stage that pairs exact renames ahead
+/// of the limit and the one that pairs by name ahead of it. The `dissimilar` cases are where
+/// the count meets the square exactly: two unpaired deletions by two unpaired additions at a
+/// limit of 2 is a search git ran and paired nothing in, without a warning, and the same commit
+/// at a limit of 1 is one it skipped. Caught by: reading the limit from the wrong config,
+/// counting the sources the exact stage paired on a git that culls them (`exact and inexact` at
+/// a limit of 2), `>=` for `>` (`dissimilar` at a limit of 2), or an answer that differs from
+/// git's at any of these.
 #[test]
 fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns() {
     type Fixture = fn(&[(&str, &str)]) -> Repo;
@@ -436,12 +435,12 @@ fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns()
     );
 }
 
-/// Decision E's promise, read through the configuration: for each way a user can spell
-/// `diff.renames` and `diff.renameLimit` — unset, the words, numbers git reads as booleans,
-/// the bare key, unit suffixes and bases — the files the query lists are the ones the
-/// user's own `git log` shows, commit by commit, root included. Caught by: plumbing's
-/// defaults standing in for the user's (no renames at all), a parser that differs from
-/// git's on any spelling, or the bare key read as unset or false.
+/// The changes query answers as git does, read through the configuration: for each way a user can
+/// spell `diff.renames` and `diff.renameLimit` — unset, the words, numbers git reads as booleans,
+/// the bare key, unit suffixes and bases — the files the query lists are the ones the user's own
+/// `git log` shows, commit by commit, root included. Caught by: plumbing's defaults standing in for
+/// the user's (no renames at all), a parser that differs from git's on any spelling, or the bare
+/// key read as unset or false.
 #[test]
 fn the_answer_is_what_git_log_shows_under_each_configuration() {
     let renames: &[Option<&str>] = &[
@@ -542,7 +541,7 @@ fn a_configuration_git_refuses_is_refused() {
     }
 }
 
-/// R2.1's order, which a view depends on and gix does not provide: the same query twice
+/// The list's order, which a view depends on and gix does not provide: the same query twice
 /// gives the same list, and the key is total enough to place a rename pair.
 #[test]
 fn the_file_list_is_sorted_by_path_and_never_shuffles() {
@@ -565,8 +564,8 @@ fn the_file_list_is_sorted_by_path_and_never_shuffles() {
     );
 }
 
-/// R2.9 from outside the crate: a query already superseded answers that it was cancelled
-/// and starts no process. Superseding one while `git` runs, and the process ending, is
+/// From outside the crate: a query already superseded answers that it was cancelled and starts
+/// no process. Superseding one while `git` runs, and the process ending, is
 /// `a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it` in
 /// `crates/cairn-git/src/reads.rs`, where the command log can be read.
 #[test]
@@ -587,8 +586,8 @@ fn a_cancelled_changes_query_answers_cancelled() {
     assert!(shared.command_log().is_empty(), "git was started anyway");
 }
 
-/// R2.10, and the failure a view has to draw something for: on either side of a
-/// comparison, and before any process starts.
+/// A commit that is not there is the failure a view has to draw something for: refused on
+/// either side of a comparison, and before any process starts.
 #[test]
 fn a_commit_that_is_not_there_is_refused() {
     let repo = repositories::crafted();
@@ -612,8 +611,8 @@ fn a_commit_that_is_not_there_is_refused() {
     );
 }
 
-/// R1.8 and R5.3: every field the Commit tab draws, against what git prints for the same
-/// commit — the committer beside the author, both offsets, and the whole message.
+/// Every field the Commit tab draws, against what git prints for the same commit — the
+/// committer beside the author, both offsets, and the whole message.
 #[test]
 fn the_commit_details_are_the_ones_git_records() {
     let repo = repositories::signed_by_two_people();
@@ -669,12 +668,12 @@ fn the_commit_details_are_the_ones_git_records() {
     );
 }
 
-/// User decision 4 (2026-10-03): a commit's names, addresses and message are the
-/// characters git prints for them — re-encoded from the encoding the commit names, or the
-/// object's bytes as they are where git's conversion fails — in the Commit tab and in the
-/// history row alike. Caught by: decoding lossily as UTF-8 (every re-encoded case), reading
-/// ISO-8859-1 as windows-1252 (its C1 bytes), converting a field when another field's byte
-/// failed the object, or the history row and the details disagreeing.
+/// A commit's names, addresses and message are the characters git prints for them — re-encoded
+/// from the encoding the commit names, or the object's bytes as they are where git's conversion
+/// fails — in the Commit tab and in the history row alike. Caught by: decoding lossily as UTF-8
+/// (every re-encoded case), reading ISO-8859-1 as windows-1252 (its C1 bytes), converting a
+/// field when another field's byte failed the object, or the history row and the details
+/// disagreeing.
 #[test]
 fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
     let (repo, commits) = repositories::encoded_commits();

@@ -129,8 +129,8 @@ impl SharedRepository {
         // open only: a second open of the repository left to gix's own rule loads the
         // repository's configuration at reduced trust where its git directory is another
         // user's, and gix's lookups then filter it out, so no other open is left to that
-        // rule: fetch's refspec check, which once opened the repository a second time to
-        // read its remote, now asks git (`reads::fetch_settings`).
+        // rule: fetch's refspec check reads its remote by asking git
+        // (`reads::fetch_settings`), never by opening the repository a second time.
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
             .config_overrides([NO_REDUCED_TRUST_ALLOCATION_LIMIT])
@@ -268,12 +268,11 @@ impl SharedRepository {
 
     /// Every `*.lock` file under the repository's git directories now — the ones a write
     /// that was ended before it could clean up leaves behind, which every later write to
-    /// that file fails on (staging-and-commit R4.9, #44): its git directory and, for a linked
-    /// worktree, the common one. Listed as the repository opens, so a lock a write stranded
-    /// when the window closed under it is named the next time. A finding, not a verdict: a
-    /// lock a git in a terminal holds this instant is listed too. Everything under `refs/` is
-    /// walked, so it is a worker's call, and `cancel` is polled before each directory: `None`
-    /// once it is set.
+    /// that file fails on (#44): its git directory and, for a linked worktree, the common one.
+    /// Listed as the repository opens, so a lock a write stranded when the window closed under
+    /// it is named the next time. A finding, not a verdict: a lock a git in a terminal holds
+    /// this instant is listed too. Everything under `refs/` is walked, so it is a worker's
+    /// call, and `cancel` is polled before each directory: `None` once it is set.
     pub fn lock_files(&self, cancel: &impl crate::Cancel) -> Option<Vec<std::path::PathBuf>> {
         let common = self.inner.common_dir.as_deref().unwrap_or(&self.git_dir);
         crate::ops::stranded_locks::stranded_locks_until(&self.git_dir, common, cancel)
@@ -334,8 +333,7 @@ impl Repository {
 
     /// The command log's records of the `git` invocations this thread built since `mark` that
     /// are over, oldest first: what one operation run on this thread ran, whatever other
-    /// threads ran in the repository meanwhile (staging-and-commit R12.1). As far back as the
-    /// log keeps.
+    /// threads ran in the repository meanwhile. As far back as the log keeps.
     pub fn commands_since(&self, mark: CommandMark) -> Vec<CommandRecord> {
         self.processes.built_here_since(mark)
     }
@@ -352,7 +350,7 @@ impl Repository {
 mod tests {
     use super::*;
 
-    /// R4.9: the lock files a repository has are listed — none in a clean one, and an
+    /// The lock files a repository has are listed — none in a clean one, and an
     /// `index.lock` left in its git directory by name. Caught by: a listing that misses the
     /// git directory's own locks, or reports one that is not there.
     #[test]

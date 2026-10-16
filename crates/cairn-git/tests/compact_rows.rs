@@ -1,8 +1,8 @@
-//! C15 on real repositories: every row a history pages out draws exactly the edges the lane
+//! On real repositories, every row a history pages out draws exactly the edges the lane
 //! assigner retained for it before rows were compacted — repaints included — with the
 //! frozen copy of that assigner as the oracle, run over the very walk the rows came from.
 //! The `#[ignore]`d reporter does the same over every ref of a named repository and
-//! measures what compact, slim rows cost (C15's find time, C16's retained bytes).
+//! measures what compact, slim rows cost (the time a find takes, and the bytes retained).
 
 #[path = "../../cairn-model/tests/support/layout_before_compaction.rs"]
 mod layout_before_compaction;
@@ -35,7 +35,7 @@ fn walk_of(repo: &Repository, rows: &History) -> Vec<(Oid, Vec<Oid>)> {
                 let details = ok(repo.commit_details(&id), "reading a commit's parents");
                 (id, details.parents)
             }
-            // C15's oracle knows commits alone; its walks are seeded with no stash.
+            // The oracle knows commits alone; its walks are seeded with no stash.
             RowId::Stash(id) => panic!("C15 was handed a walk with stash {id}"),
         })
         .collect()
@@ -228,7 +228,7 @@ fn each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_fo
     );
 }
 
-// --- The reporter: C15's measured half, and K ---
+// --- The reporter: what compact rows cost, and K ---
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
@@ -275,7 +275,7 @@ fn request_for(repo: &Repository, seed: &str) -> HistoryRequest {
 
 /// Reporter. Env: `CAIRN_BENCH_REPO`; `CAIRN_C15_MODE` — `find` (time a find of
 /// `CAIRN_FIND_TARGET`, or of the last row, paging as the window does and appending every
-/// page to one `History`; what it retains, by capacity, held to C16's 64 MiB or to a lower
+/// page to one `History`; what it retains, by capacity, held to 64 MiB or to a lower
 /// `CAIRN_C16_MIB`, which can never raise it),
 /// `equivalence` (every row of the whole history against the frozen assigner), or
 /// `derive` (the worst-case derivation at each snapshot interval in `CAIRN_C15_KS`);
@@ -352,8 +352,8 @@ fn find(repo: &Repository, seed: &str) {
         "RssAnon {anon_before} -> {anon_after} kB (+{:.1} MiB)",
         (anon_after.saturating_sub(anon_before)) as f64 / 1024.0,
     );
-    // C16's bar: every row of the history and the stores they read, by capacity. The
-    // override can only tighten it: a ceiling above C16's 64 MiB is held to 64.
+    // The ceiling: every row of the history and the stores they read, by capacity. The
+    // override can only tighten it: a ceiling above 64 MiB is held to 64.
     let ceiling = env("CAIRN_C16_MIB")
         .map_or(64.0, |mib| ok(mib.parse::<f64>(), "CAIRN_C16_MIB"))
         .min(64.0);

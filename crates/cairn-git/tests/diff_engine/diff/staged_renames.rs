@@ -1,7 +1,7 @@
-//! staging-and-commit's C7 (R2.6, L18): the staged diff of a path pairs a rename or a copy
-//! exactly as the user's `git diff --cached` pairs it — under `diff.renames` unset, `false`,
-//! `copies`, and a `diff.renameLimit` that cuts the search short — and draws the pair's
-//! lines as git draws them.
+//! The staged diff of a path pairs a rename or a copy exactly as the user's
+//! `git diff --cached` pairs it — under `diff.renames` unset, `false`, `copies`, and a
+//! `diff.renameLimit` that cuts the search short — and draws the pair's lines as git draws
+//! them.
 //!
 //! The oracle is porcelain `git diff --cached --raw -z` over the whole index, run with the
 //! fixture's own configuration: what it pairs a path into is the record the engine must
@@ -138,7 +138,7 @@ fn record_for<'a>(records: &'a [ChangedFile], path: &str) -> Option<&'a ChangedF
         })
 }
 
-/// C7 itself, for each configuration: every path's staged record is git's, and its lines
+/// For each configuration, every path's staged record is git's, and its lines
 /// are git's lines for it.
 #[test]
 fn the_staged_diff_pairs_renames_and_copies_as_git_diff_cached_does() {
@@ -192,8 +192,9 @@ fn the_staged_diff_pairs_renames_and_copies_as_git_diff_cached_does() {
 }
 
 /// Why the oracle above is the whole index: a pathspec of the destination alone shows git
-/// an addition, under every setting. Without this, C7's oracle could quietly be the one-path
-/// diff, which pairs nothing and agrees with the bug R2.6 fixed.
+/// an addition, under every setting. Without this, the oracle could quietly be the one-path
+/// diff, which pairs nothing and agrees with a staged rename drawn as an addition beside a
+/// deletion.
 #[test]
 fn git_diff_cached_of_one_path_pairs_nothing() {
     let repo = staged_rewrites(&[]);

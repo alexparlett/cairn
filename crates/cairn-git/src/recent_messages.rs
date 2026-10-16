@@ -1,7 +1,6 @@
-//! The commit box's Recent Commit Messages (`docs/prd/staging-and-commit.md` R6.7): the
-//! messages of the latest commits on the current branch, newest first, as Fork lists them —
-//! what `git log -n 10 --format=%B HEAD` prints, read from the history walk on a worker and
-//! never stored.
+//! The commit box's Recent Commit Messages: the messages of the latest commits on the current
+//! branch, newest first, as Fork lists them — what `git log -n 10 --format=%B HEAD` prints, read
+//! from the history walk on a worker and never stored.
 
 use crate::history::{HistoryOrder, walk};
 use crate::{Cancel, Error, Repository};

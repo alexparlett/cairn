@@ -1,13 +1,12 @@
-//! Whether a name can be a new branch's (`docs/prd/staging-and-commit.md` R11.3; the user's
-//! decision, 2026-10-09): Create Branch refuses a name inline, before git runs — one git does
-//! not take as a branch's, by git's own rules (`crate::reads::branch_name`), one a local
-//! branch has already, one holding `@{` (refused before git is asked), or one git cannot lock
-//! beside a branch: a branch at a directory on the way to it (`baz` for `baz/qux`), or one
-//! under it (`foo/bar` for `foo`). Each refusal is typed ([`NameRefusal`]) and worded by the
-//! view (the review's M3, 2026-10-10). `git check-ref-format --branch` is the oracle `git
-//! branch` and `git checkout -b` agree with: both verbs resolve `@{-N}` as it does, where
-//! `check-ref-format refs/heads/<name>` would take `-x` and `HEAD`, which they refuse — pinned
-//! against real git by `a_name_is_taken_or_refused_as_gits_verbs_take_it`.
+//! Whether a name can be a new branch's: Create Branch refuses a name inline, before git runs
+//! — one git does not take as a branch's, by git's own rules (`crate::reads::branch_name`),
+//! one a local branch has already, one holding `@{` (refused before git is asked), or one git
+//! cannot lock beside a branch: a branch at a directory on the way to it (`baz` for
+//! `baz/qux`), or one under it (`foo/bar` for `foo`). Each refusal is typed ([`NameRefusal`])
+//! and worded by the view. `git check-ref-format --branch` is the oracle `git branch` and
+//! `git checkout -b` agree with: both verbs resolve `@{-N}` as it does, where
+//! `check-ref-format refs/heads/<name>` would take `-x` and `HEAD`, which they refuse —
+//! pinned against real git by `a_name_is_taken_or_refused_as_gits_verbs_take_it`.
 
 use cairn_model::{BranchName, NameRefusal};
 
@@ -24,8 +23,8 @@ impl Repository {
         name: &str,
         cancel: &impl Cancel,
     ) -> Result<BranchName, Error> {
-        // The user's decision F (2026-10-09): refused before git is asked, since git reads `@{`
-        // as the start of a reflog selector and would take `@{-1}` as another branch's name.
+        // Refused before git is asked, since git reads `@{` as the start of a reflog selector and
+        // would take `@{-1}` as another branch's name.
         if name.contains("@{") {
             return Ok(BranchName::Refused(NameRefusal::AtBrace));
         }
@@ -46,7 +45,7 @@ impl Repository {
             return Ok(BranchName::Refused(NameRefusal::Taken));
         }
         // A branch at a directory on the way to it, or one under it: git cannot lock the ref,
-        // and says so in these words (phase 10's QA, item 15).
+        // and says so in these words.
         let parts: Vec<&str> = taken_as.split('/').collect();
         for end in 1..parts.len() {
             let above = format!(

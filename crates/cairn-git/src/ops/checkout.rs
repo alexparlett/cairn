@@ -1,14 +1,13 @@
-//! Create Branch's checkout (`docs/prd/staging-and-commit.md` R11.3): a branch created at a
-//! commit and checked out, with the working tree's changes kept — "Don't change", `git checkout
-//! -q -b <name> <id> --`, which git refuses, writing nothing, where a change or an untracked file
-//! would be overwritten — or discarded — "Discard", Fork's forced checkout, `git checkout -q
-//! --no-track -f -b <name> <id> --` (Fork's command, observed in its Activity Manager, with
-//! Cairn's `-q` and `--`; the user's decision of 2026-10-10). Discard is destructive and sealed:
-//! its [`Consequence::CheckoutDiscarding`] is fixed and generic — the branch, the commit and
-//! `HEAD` — predicting nothing of what git deletes (the redesign's rule 7: git decides), and the
-//! Create Branch dialog's press with Discard chosen is its confirmation. Its re-check is that
-//! `HEAD`, the commit and the name are unchanged, and nothing else (R1.4). It is the one
-//! operation that discards a staged change (R1.5's stated exception).
+//! Create Branch's checkout: a branch created at a commit and checked out, with the working
+//! tree's changes kept — "Don't change", `git checkout -q -b <name> <id> --`, which git refuses,
+//! writing nothing, where a change or an untracked file would be overwritten — or discarded —
+//! "Discard", Fork's forced checkout, `git checkout -q --no-track -f -b <name> <id> --` (Fork's
+//! command, observed in its Activity Manager, with Cairn's `-q` and `--`). Discard is
+//! destructive and sealed: its [`Consequence::CheckoutDiscarding`] is fixed and generic — the
+//! branch, the commit and `HEAD` — predicting nothing of what git deletes (git decides that),
+//! and the Create Branch dialog's press with Discard chosen is its confirmation. Its re-check is
+//! that `HEAD`, the commit and the name are unchanged, and nothing else. It is the one operation
+//! that discards a staged change.
 //!
 //! What git does with it, on 2.56.0, 2.30.9 and 2.32.7 alike
 //! (`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`): staged and
@@ -21,8 +20,8 @@
 //! git runs, when the consequence is read and again before the run.
 //!
 //! The name is `-b`'s value, which git reads as the name whatever it begins with; the commit is
-//! its full id, and the `--` after it says it is no path. Checking out is this packet's only
-//! through Create Branch; checking out a branch is branch-ops'.
+//! its full id, and the `--` after it says it is no path. This module checks out only the
+//! branch Create Branch creates.
 
 use std::ffi::OsString;
 
@@ -89,13 +88,12 @@ pub fn checkout_discarding_consequence(
 /// Creates the branch the confirmation names at the commit it names and checks it out with
 /// `git checkout -q --no-track -f -b <name> <id> --`, discarding local changes and any untracked
 /// files in the way as git does. Immediately before, it re-checks exactly what the confirmation
-/// holds (R1.4) — `HEAD` is the commit it was, the commit can still be read, and the name is
-/// still one git takes and no branch has — refusing with [`Error::CheckoutChangedSinceConfirmed`],
+/// holds — `HEAD` is the commit it was, the commit can still be read, and the name is still one
+/// git takes and no branch has — refusing with [`Error::CheckoutChangedSinceConfirmed`],
 /// writing nothing, when any moved; nothing else is compared, so an edit made since is discarded
 /// with the rest. An operation begun since is refused as at the confirmation, read last before
-/// git runs. Every target is
-/// read from the confirmation, never from a parameter beside it. Invalidates the refs, the index
-/// and the working tree.
+/// git runs. Every target is read from the confirmation, never from a parameter beside it.
+/// Invalidates the refs, the index and the working tree.
 pub fn create_branch_discarding(
     git: &GitBinary,
     repo: &Repository,
@@ -124,10 +122,9 @@ pub fn create_branch_discarding(
         BranchName::Free => {}
         BranchName::Refused(_) => return moved(CheckoutMoved::Name { name: branch }),
     }
-    // Last before the run, after the name's re-check ran its `git` (phase 14's QA, DO#2): an
-    // operation begun in a terminal since is refused, never abandoned by `-f` unseen. One begun
-    // between this read and git's own start is not seen — the residual race
-    // `docs/systems/staging.md` states.
+    // Last before the run, after the name's re-check ran its `git`: an operation begun in a
+    // terminal since is refused, never abandoned by `-f` unseen. One begun between this read
+    // and git's own start is not seen — the residual race `docs/systems/staging.md` states.
     if let Some(operation) = repo.operation_in_progress() {
         return Err(Error::CheckoutRefused {
             why: CheckoutRefusal::InProgress(operation),
@@ -198,8 +195,8 @@ mod tests {
     use super::*;
     use crate::ops::recording_stub::RecordingStub;
 
-    /// R11.3's argv, kept and discarding: `checkout -q -b`, Fork's `--no-track -f` only when
-    /// discarding (C34), the name as `-b`'s value, the commit by its full id, `--` after it; a
+    /// The argv, kept and discarding: `checkout -q -b`, Fork's `--no-track -f` only when
+    /// discarding, the name as `-b`'s value, the commit by its full id, `--` after it; a
     /// write's environment. Caught by: `-f` on the kept checkout, `--no-track` dropped (Fork's
     /// argv, held literal here: from a full id git sets no upstream either way, so no effect
     /// test can see it), a name or a commit read as a path, a short id.
@@ -265,7 +262,7 @@ mod tests {
         );
         checkout.assert_a_write();
 
-        // Discard, as the stub git records it (C34): Fork's command with Cairn's `-q` and `--`.
+        // Discard, as the stub git records it: Fork's command with Cairn's `-q` and `--`.
         let consequence = checkout_discarding_consequence(&repo, "discarded", head).unwrap();
         create_branch_discarding(&git, &repo, Confirmed::by_user(consequence), None).unwrap();
         let recorded = stub.recorded();
@@ -299,11 +296,11 @@ mod tests {
         forced.assert_a_write();
     }
 
-    /// Phase 14's QA (DO#2): the in-progress check runs after the name's re-check, whose `git
-    /// check-ref-format` is a process an operation could begin during — so a merge begun while
-    /// the re-check ran is refused, the forced checkout never run and the merge left. The
-    /// `git` here begins one (writes `MERGE_HEAD`) when asked `check-ref-format`, then runs the
-    /// real git. Caught by: the in-progress check made before the name's re-check.
+    /// The in-progress check runs after the name's re-check, whose `git check-ref-format` is a
+    /// process an operation could begin during — so a merge begun while the re-check ran is
+    /// refused, the forced checkout never run and the merge left. The `git` here begins one
+    /// (writes `MERGE_HEAD`) when asked `check-ref-format`, then runs the real git. Caught by:
+    /// the in-progress check made before the name's re-check.
     #[test]
     fn an_operation_begun_during_the_recheck_is_refused_before_git_runs() {
         let fixture = RecordingStub::new();

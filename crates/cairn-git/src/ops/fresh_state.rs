@@ -1,7 +1,6 @@
 //! What a write is checked against, read fresh from the repository the moment it is
 //! needed: the index entry at a path, read with gix, and the working-tree file, hashed as
-//! its bytes are and, where a patch needs it, in git's form
-//! (`docs/prd/staging-and-commit.md` R1.4, R3.7).
+//! its bytes are and, where a patch needs it, in git's form.
 //!
 //! Two hashes of a working-tree file, for two questions:
 //!
@@ -11,11 +10,11 @@
 //!   opens the file a link points to. Hashed here, with gix's hasher, streamed: no process,
 //!   and no file held whole in memory. What a destructive operation's re-check compares,
 //!   so ANY byte changed after the confirmation refuses it — a line ending under
-//!   `core.autocrlf` included, which git's form does not show (phase 01's QA item 25).
+//!   `core.autocrlf` included, which git's form does not show.
 //! - **Its git form** ([`git_form`]): the id git's diff gives the working-tree side —
 //!   through the clean filter, the line-ending conversion, `ident` — asked of git
 //!   (`crate::reads::hash_object`). What a discard of lines' patch was built against, so
-//!   what its stale check compares (R3.7).
+//!   what its stale check compares.
 //!
 //! Nothing here caches: every call reads the index file and the working tree again, so a
 //! re-check reads the repository, never the copy a `Consequence` carries.
@@ -178,8 +177,8 @@ pub(super) enum OnDisk {
     Changing,
     /// A directory on the path is not a real directory — a file, or a symlink — so nothing
     /// is at the path as git holds it, and what stands in the way is not the path's to
-    /// replace (QA item 1 of phase 03: `git restore` would unlink a file standing where a
-    /// deleted file's directory was, or replace a symlinked directory with a real one).
+    /// replace (`git restore` would unlink a file standing where a deleted file's directory
+    /// was, or replace a symlinked directory with a real one).
     Obstructed,
 }
 
@@ -342,7 +341,7 @@ pub(super) fn git_form(
 ) -> Result<Option<Oid>, Error> {
     match disk {
         OnDisk::File { .. } => {
-            // Never cancelled: it runs inside the operation and ends with it (R3.9).
+            // Never cancelled: it runs inside the operation and ends with it.
             hash_object(git, repo, path, &CancelSignal::new()).map(Some)
         }
         OnDisk::Symlink { id, .. } => Ok(Some(*id)),

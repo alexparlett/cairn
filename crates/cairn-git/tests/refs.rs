@@ -1,4 +1,4 @@
-//! The refs snapshot, ahead/behind and the ref-storage refusal (PRD R1, R2; C1, C2, C3).
+//! The refs snapshot, ahead/behind and the ref-storage refusal.
 //! Every expectation is read out of the `git` binary, run in the same fixture at test
 //! time: `git for-each-ref`, `git cat-file --batch-check`, `git symbolic-ref`,
 //! `git rev-parse`, `git stash list` and `git rev-list --left-right --count`. None is typed
@@ -313,11 +313,11 @@ fn pin_configuration_read(fixture: &Fixture) {
     fixture.git(&["config", "core.warnAmbiguousRefs", "true"]);
 }
 
-/// Every kind of ref C1 names: loose and packed refs, a loose ref over a packed one, a
-/// packed annotated tag with its peeled line and a loose one without, lightweight,
-/// annotated and chained tags (a packed chain and a loose one of three), tags on a tree and a blob, `origin/HEAD`, a symbolic local
-/// branch, dangling symbolic refs one and two levels deep, an unreadable ref and invalid
-/// names.
+/// Every kind of ref the snapshot lists as git does: loose and packed refs, a loose ref
+/// over a packed one, a packed annotated tag with its peeled line and a loose one without,
+/// lightweight, annotated and chained tags (a packed chain and a loose one of three), tags
+/// on a tree and a blob, `origin/HEAD`, a symbolic local branch, dangling symbolic refs one
+/// and two levels deep, an unreadable ref and invalid names.
 fn every_kind() -> Fixture {
     let fixture = fixtures::unborn();
     let mut clock = fixtures::EPOCH;
@@ -384,14 +384,14 @@ fn every_kind() -> Fixture {
     fixture
 }
 
-// ── C1: the snapshot is git's ───────────────────────────────────────────────
+// ── the snapshot is git's ───────────────────────────────────────────────────
 
-/// C1 over every kind of ref, with `HEAD` on a branch, then detached, then unborn. The
-/// fixture is first checked to hold what it claims: a packed annotated tag with its `^`
-/// line, a loose ref over its packed self, `origin/HEAD` symbolic. Caught by: peeling a
-/// symbolic ref into its target's name (`origin/main` twice, `origin/HEAD` gone), listing
-/// a dangling one, a tag chain followed one level or a tag's object lost to its commit, a
-/// tag on a tree taken for a commit, the packed ref read over the loose one, an
+/// The snapshot over every kind of ref, with `HEAD` on a branch, then detached, then
+/// unborn. The fixture is first checked to hold what it claims: a packed annotated tag with
+/// its `^` line, a loose ref over its packed self, `origin/HEAD` symbolic. Caught by:
+/// peeling a symbolic ref into its target's name (`origin/main` twice, `origin/HEAD` gone),
+/// listing a dangling one, a tag chain followed one level or a tag's object lost to its
+/// commit, a tag on a tree taken for a commit, the packed ref read over the loose one, an
 /// unreadable ref failing the snapshot, or `HEAD` read as anything but what git says.
 #[test]
 fn the_snapshot_is_what_git_lists_whatever_the_kind_of_ref_and_head() {
@@ -483,9 +483,9 @@ fn the_snapshot_is_what_git_lists_whatever_the_kind_of_ref_and_head() {
     );
 }
 
-/// C1 over a braided history of merges, in a repository whose objects are named by SHA-1
-/// and one named by SHA-256, each with an annotated tag packed and a lightweight one loose.
-/// Caught by: an id of the other width refused or truncated.
+/// The snapshot over a braided history of merges, in a repository whose objects are named
+/// by SHA-1 and one named by SHA-256, each with an annotated tag packed and a lightweight
+/// one loose. Caught by: an id of the other width refused or truncated.
 #[test]
 fn the_snapshot_is_gits_over_a_braided_history_in_either_hash() {
     for fixture in [fixtures::braided(4), fixtures::braided_in("sha256", 6)] {
@@ -501,10 +501,10 @@ fn the_snapshot_is_gits_over_a_braided_history_in_either_hash() {
     }
 }
 
-/// C1 from a linked worktree: its `HEAD` is its own, and the refs are the ones git lists
-/// there. The worktree's private `refs/worktree/` is outside the three namespaces both
-/// sides list, so its exclusion holds by construction and this decides nothing about it.
-/// Caught by: the main worktree's `HEAD` read from the linked one.
+/// The snapshot from a linked worktree: its `HEAD` is its own, and the refs are the ones
+/// git lists there. The worktree's private `refs/worktree/` is outside the three namespaces
+/// both sides list, so its exclusion holds by construction and this decides nothing about
+/// it. Caught by: the main worktree's `HEAD` read from the linked one.
 #[test]
 fn a_linked_worktree_lists_what_git_lists_there_with_its_own_head() {
     let fixture = every_kind();
@@ -530,7 +530,7 @@ fn a_linked_worktree_lists_what_git_lists_there_with_its_own_head() {
     );
 }
 
-/// C1's stash list: forty entries, one with a message over 4 KiB that is neither the
+/// The stash list: forty entries, one with a message over 4 KiB that is neither the
 /// newest nor the oldest, and one made with `--include-untracked`. Caught by: gix's
 /// newest-first reader, which stops at the long line and lists nothing past it, or an
 /// index counted from the wrong end.
@@ -574,12 +574,12 @@ fn the_stash_list_is_git_stash_lists_with_forty_entries_and_a_long_message() {
     assert_eq!(cairn.unreadable, 0);
 }
 
-/// C1's upstreams: every case measured, each against `%(upstream)` — the ones gix answers
+/// Upstreams: every case measured, each against `%(upstream)` — the ones gix answers
 /// differently (two `merge` values, a short `merge` with a named remote, two refspecs that
 /// both map the merge, `remote = .`) and the ones it agrees on (gone, a local upstream
 /// short or full, no remote, an unknown remote, a remote given as a URL, `remote` set
 /// twice, a negative refspec, a remote with no fetch refspec, a short local name that
-/// resolves to two refs). Caught by: any of parity rules 4 and 5 undone.
+/// resolves to two refs). Caught by: parity rule 4 or 5 of `docs/systems/refs.md` undone.
 #[test]
 fn each_upstream_is_what_git_resolves() {
     let fixture = fixtures::unborn();
@@ -715,12 +715,12 @@ fn each_upstream_is_what_git_resolves() {
     );
 }
 
-/// R1.8, C1: with `GIT_NAMESPACE` set in Cairn's own environment the snapshot is still
-/// `git for-each-ref`'s without it. A process's environment is fixed for its threads, so
-/// the half that opens the repository runs in a child of this test binary with the
-/// variable set; gix, opened there as it opens by default, is checked to see the
-/// namespace, so the variable is live. Caught by: the namespace gix reads at open left in
-/// place, which lists `refs/heads/inside` and no `refs/heads/main`.
+/// With `GIT_NAMESPACE` set in Cairn's own environment the snapshot is still
+/// `git for-each-ref`'s without it. A process's environment is fixed for its threads, so the
+/// half that opens the repository runs in a child of this test binary with the variable
+/// set; gix, opened there as it opens by default, is checked to see the namespace, so the
+/// variable is live. Caught by: the namespace gix reads at open left in place, which lists
+/// `refs/heads/inside` and no `refs/heads/main`.
 #[test]
 fn git_namespace_in_cairns_environment_is_not_honoured() {
     const CHILD: &str = "CAIRN_TEST_NAMESPACE_CHILD";
@@ -782,10 +782,10 @@ fn git_namespace_in_cairns_environment_is_not_honoured() {
     );
 }
 
-/// A ref naming an object that is not there is skipped and counted (a decision the user
-/// made: git's own `for-each-ref` refuses to list anything at all, `fatal: missing
-/// object`). The rest is what git lists by name. Caught by: the whole snapshot failing on
-/// it, or the ref listed with a target nobody can read.
+/// A ref naming an object that is not there is skipped and counted (where git's own
+/// `for-each-ref` refuses to list anything at all, `fatal: missing object`). The rest is
+/// what git lists by name. Caught by: the whole snapshot failing on it, or the ref listed
+/// with a target nobody can read.
 #[test]
 fn a_ref_naming_a_missing_object_is_skipped_and_counted() {
     let fixture = fixtures::unborn();
@@ -888,10 +888,11 @@ fn the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical() {
     );
 }
 
-/// What a refresh compares to decide whether to reopen the history (PRD R10.4,
-/// `RefsSnapshot::walks_as`) sees a symbolic ref retargeted to a ref on the same commit, and
-/// an annotated tag replaced by one on the same commit — each the ONLY change between its
-/// two reads, and each invisible to a comparison of peeled ids. Caught by: tips peeled again.
+/// What a refresh compares to decide whether to reopen the history
+/// (`RefsSnapshot::walks_as`) sees a symbolic ref retargeted to a ref on the same commit,
+/// and an annotated tag replaced by one on the same commit — each the ONLY change between
+/// its two reads, and each invisible to a comparison of peeled ids. Caught by: tips peeled
+/// again.
 #[test]
 fn a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
     let fixture = every_kind();
@@ -1142,7 +1143,7 @@ fn a_damaged_stash_reflog_is_numbered_as_git_numbers_it() {
     assert_eq!(cairn.unreadable, 2);
 }
 
-// ── C3: ahead and behind ────────────────────────────────────────────────────
+// ── ahead and behind ────────────────────────────────────────────────────────
 
 /// What `git rev-list --left-right --count <branch>...<upstream>` prints.
 fn git_ahead_behind(dir: &Path, branch: &str, upstream: &str) -> AheadBehind {
@@ -1165,7 +1166,7 @@ fn git_ahead_behind(dir: &Path, branch: &str, upstream: &str) -> AheadBehind {
     }
 }
 
-/// C3: a branch ahead, behind, diverged (with a merge on each side), equal, with a local
+/// A branch ahead, behind, diverged (with a merge on each side), equal, with a local
 /// upstream, and with a gone upstream, which has no counts. Caught by: either walk not
 /// hiding the other side, the two counts swapped, or a gone upstream counted.
 #[test]
@@ -1310,7 +1311,7 @@ fn long_branch(fixture: &Fixture, branch: &str, from: &str, count: usize, first_
     assert!(imported.status.success(), "{imported:?}");
 }
 
-/// C3: a cancelled ahead/behind stops its walk rather than finishing it and dropping the
+/// A cancelled ahead/behind stops its walk rather than finishing it and dropping the
 /// answer — DURING the frontier gix paints before a hiding walk's first commit, the one
 /// long call in it. The counted side is one commit past the base; its upstream, the hidden
 /// side, is two thousand past it, so counting the one commit means painting the two
@@ -1413,10 +1414,11 @@ fn a_cancelled_ahead_behind_stops_its_walk() {
     ));
 }
 
-/// C3 where committer dates run against the graph: the base is dated after every commit
-/// on both sides, and one side's commits are dated in decreasing order, so an order by
-/// date meets the merge base first. Counts equal `git rev-list --left-right --count`.
-/// Caught by: a count that trusts dates to find where the two sides meet.
+/// Ahead and behind where committer dates run against the graph: the base is dated after
+/// every commit on both sides, and one side's commits are dated in decreasing order, so an
+/// order by date meets the merge base first. Counts equal
+/// `git rev-list --left-right --count`. Caught by: a count that trusts dates to find where
+/// the two sides meet.
 #[test]
 fn ahead_and_behind_are_what_rev_list_counts_when_dates_run_backwards() {
     let fixture = fixtures::unborn();
@@ -1476,9 +1478,9 @@ fn ahead_and_behind_are_what_rev_list_counts_when_dates_run_backwards() {
     );
 }
 
-/// C3 in a shallow clone, whose boundary commits git reads as having no parents: counts
-/// equal `git rev-list --left-right --count` there, for a divergence that reaches past the
-/// boundary. Caught by: the walk following a parent the clone cut off.
+/// Ahead and behind in a shallow clone, whose boundary commits git reads as having no
+/// parents: counts equal `git rev-list --left-right --count` there, for a divergence that
+/// reaches past the boundary. Caught by: the walk following a parent the clone cut off.
 #[test]
 fn ahead_and_behind_are_what_rev_list_counts_in_a_shallow_clone() {
     let source = fixtures::unborn();
@@ -1535,7 +1537,7 @@ fn ahead_and_behind_are_what_rev_list_counts_in_a_shallow_clone() {
     );
 }
 
-// ── C2: ref storage at open ─────────────────────────────────────────────────
+// ── ref storage at open ─────────────────────────────────────────────────────
 
 /// Whether the git on `PATH` can make a reftable repository, asked with the same
 /// `git init` command `scripts/gate.sh`'s `require_reftable_where_possible` runs (here in
@@ -1556,7 +1558,7 @@ fn no_reftable_here(at: &Path) -> Option<String> {
     (!made.status.success()).then(|| String::from_utf8_lossy(&made.stderr).trim().to_owned())
 }
 
-/// C2: a reftable repository, and a linked worktree of one, is refused at open with its
+/// A reftable repository, and a linked worktree of one, is refused at open with its
 /// reason — Cairn's, not gix's failure on the first ref it reads — and a files repository
 /// opens. Skipped where the
 /// host's git cannot make a reftable repository (before 2.45), and required wherever it
@@ -1719,12 +1721,13 @@ fn the_ref_storage_setting_is_read_as_git_reads_it() {
         .unwrap_or_else(|e| panic!("a repository with no config file was refused: {e}"));
 }
 
-// ── C11: what it costs ──────────────────────────────────────────────────────
+// ── what it costs ───────────────────────────────────────────────────────────
 
-/// Reporter for C11's refs numbers: the refs snapshot alone and with every ahead/behind,
-/// warm, median of seven, on the repository `CAIRN_BENCH_REPO` names (read only) and on a
-/// generated fixture of 10,000 refs (6,000 packed, a quarter of the tags annotated, 500
-/// loose). Run with `--release --ignored --nocapture`.
+/// Reporter for the refs numbers in `docs/research/refs-and-status/measured.md`: the refs
+/// snapshot alone and with every ahead/behind, warm, median of seven, on the repository
+/// `CAIRN_BENCH_REPO` names (read only) and on a generated fixture of 10,000 refs (6,000
+/// packed, a quarter of the tags annotated, 500 loose). Run with
+/// `--release --ignored --nocapture`.
 #[test]
 #[ignore = "needs a large repository named by CAIRN_BENCH_REPO; run with --release"]
 fn measures_the_refs_snapshot_and_ahead_behind() {

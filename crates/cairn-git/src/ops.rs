@@ -17,12 +17,11 @@
 //!
 //! # How a mutation runs
 //!
-//! Every write goes through the `git` binary rather than gitoxide (design
-//! decision D1): a mutation must run the user's hooks, filters and credential
-//! helpers and honour their configuration, and gix runs none of them. The
-//! process itself is built in the crate-private `process` module and nowhere
-//! else; what it holds, re-exported here because the application owns startup
-//! and the helper's channel:
+//! Every write goes through the `git` binary rather than gitoxide (`docs/design/engine.md`): a
+//! mutation must run the user's hooks, filters and credential helpers and honour their
+//! configuration, and gix runs none of them. The process itself is built in the crate-private
+//! `process` module and nowhere else; what it holds, re-exported here because the application owns
+//! startup and the helper's channel:
 //!
 //! - [`GitBinary`] finds `git` on `PATH` once at startup and refuses one older
 //!   than [`GitVersion::MINIMUM`], loudly, with the required version in the
@@ -154,12 +153,11 @@
 //!
 //! # The cache-invalidation contract
 //!
-//! D1 puts two implementations of git semantics in one process. After a `git`
-//! subprocess writes, the gitoxide handle the worker holds may be looking at a
-//! repository that no longer exists. So every operation declares what it
-//! invalidated, as the [`Invalidated`] on its [`Performed`], and the worker
-//! boundary honours the declaration — the engine states, the worker acts. What
-//! each flag means, checked against gix 0.87.1 as linked:
+//! Writing through `git` while reading through gitoxide puts two implementations of git semantics
+//! in one process. After a `git` subprocess writes, the gitoxide handle the worker holds may be
+//! looking at a repository that no longer exists. So every operation declares what it invalidated,
+//! as the [`Invalidated`] on its [`Performed`], and the worker boundary honours the declaration —
+//! the engine states, the worker acts. What each flag means, checked against gix 0.87.1 as linked:
 //!
 //! - **`refs`** — a ref moved, appeared or vanished. gix re-reads loose refs on
 //!   every lookup and reloads `packed-refs` when its modification time changes
@@ -190,14 +188,12 @@
 //! - **`working_tree`** — files on disk changed. Nothing in gix caches the
 //!   working tree; honouring it means re-running a status or diff query.
 //!
-//! Where it is honoured: the repository worker in `cairn-app` (decision D3),
-//! which owns the handle, the open session and the cursor, and is the only
-//! place a `Performed` arrives. [`fetch`] is the first operation to reach it:
-//! it declares `refs` and `objects`; the worker's network lane compares
-//! the ref tips before and after and tells the window whether anything moved,
-//! and the window asks for the history again from `HEAD`, which the
-//! repository thread answers by dropping its open walk — so the graph stops
-//! showing the pre-fetch refs.
+//! Where it is honoured: the repository worker in `cairn-app`, which owns the handle, the open
+//! session and the cursor, and is the only place a `Performed` arrives. [`fetch`] is the first
+//! operation to reach it: it declares `refs` and `objects`; the worker's network lane compares the
+//! ref tips before and after and tells the window whether anything moved, and the window asks for
+//! the history again from `HEAD`, which the repository thread answers by dropping its open walk —
+//! so the graph stops showing the pre-fetch refs.
 
 mod amend;
 mod authority;
@@ -304,10 +300,9 @@ impl Invalidated {
 /// A mutation that has been performed, for the operation log the UI shows and
 /// for the worker that must honour what it invalidated.
 ///
-/// The fields are private so that a record carrying an acknowledged prompt can
-/// only be built from a [`Confirmed`] token: the log quotes the prompt rendered
-/// from the [`cairn_model::Consequence`] the user agreed to (R1.6), and no
-/// operation can write that quote by hand.
+/// The fields are private so that a record carrying an acknowledged prompt can only be built from a
+/// [`Confirmed`] token: the log quotes the prompt rendered from the [`cairn_model::Consequence`]
+/// the user agreed to, and no operation can write that quote by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Performed {
     description: String,
@@ -316,7 +311,7 @@ pub struct Performed {
     locks: Locks,
 }
 
-/// The lock files under a repository's git directory around a local write (R3.8, #44):
+/// The lock files under a repository's git directory around a local write (#44):
 /// those present before it started — another git's, or a stale one, either of which the
 /// write may have failed on had it needed that file — and those present once it was over.
 /// A finding, not a verdict: a listing cannot tell a lock a running git holds from one a
@@ -371,7 +366,7 @@ impl Performed {
         self.invalidated
     }
 
-    /// The lock files present before the write and after it (R3.8).
+    /// The lock files present before the write and after it.
     pub fn locks(&self) -> &Locks {
         &self.locks
     }

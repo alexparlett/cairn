@@ -1,12 +1,12 @@
-//! C20, Show Lost Commits' half (`docs/prd/staging-and-commit.md` R11.1, R11.2): a walk from
-//! every ref and from the old and the new id of every entry of `HEAD`'s and each local
-//! branch's reflog draws every commit git's `rev-list --reflog --branches --remotes --tags
-//! HEAD` lists, and draws as lost exactly those `git rev-list <every id the log files hold>
-//! --not --branches --remotes --tags HEAD` lists — the ids read out of the files by this
-//! test, and again by git itself (`--reflog`), on a fixture with an amend whose log the amend
-//! created (the replaced commit only an entry's old id), an amend, a reset-away commit, a
-//! commit with a subject past 4 KiB in the middle of the log, a deleted branch's tip, a
-//! commit only a lost commit reaches, and a commit a tag reaches that is in a reflog too.
+//! Show Lost Commits' engine half: a walk from every ref and from the old and the new id of
+//! every entry of `HEAD`'s and each local branch's reflog draws every commit git's `rev-list
+//! --reflog --branches --remotes --tags HEAD` lists, and draws as lost exactly those `git
+//! rev-list <every id the log files hold> --not --branches --remotes --tags HEAD` lists — the
+//! ids read out of the files by this test, and again by git itself (`--reflog`), on a fixture
+//! with an amend whose log the amend created (the replaced commit only an entry's old id), an
+//! amend, a reset-away commit, a commit with a subject past 4 KiB in the middle of the log, a
+//! deleted branch's tip, a commit only a lost commit reaches, and a commit a tag reaches that
+//! is in a reflog too.
 //! Every walk is paged to its end, held and cold, at several page sizes and windows.
 
 #[path = "support/fixtures.rs"]
@@ -87,7 +87,7 @@ fn ids_in_the_log_files(fixture: &Fixture) -> BTreeSet<String> {
     ids
 }
 
-/// C20's oracle: `git rev-list <ids> --not --branches --remotes --tags HEAD`.
+/// The oracle: `git rev-list <ids> --not --branches --remotes --tags HEAD`.
 fn lost_by_git(fixture: &Fixture, ids: &BTreeSet<String>) -> BTreeSet<String> {
     let mut args: Vec<&str> = vec!["rev-list"];
     args.extend(ids.iter().map(String::as_str));
@@ -193,7 +193,7 @@ fn lost_commits_fixture() -> Lost {
     commit(&fixture, &mut clock, "1\n", "c1");
     let replaced_in_own_log = commit(&fixture, &mut clock, "2\n", "c2");
     // An amend whose log it creates itself: no log before it, so the commit it replaces is
-    // only the old id of the one entry it writes (phase 05's measurement).
+    // only the old id of the one entry it writes.
     ok(
         std::fs::remove_dir_all(fixture.path().join(".git").join("logs")),
         "removing the logs",
@@ -293,7 +293,7 @@ fn lost_commits_fixture() -> Lost {
     }
 }
 
-/// C20: what Show Lost Commits draws is git's answer, read from the files and by git itself,
+/// What Show Lost Commits draws is git's answer, read from the files and by git itself,
 /// on every route. Caught by: new ids alone (the replaced commit of an amend that created
 /// its log is missed), a log read through gix's newest-first reader (it stops at the long
 /// subject, and the entries older than it are missed), a lost commit's parent left undrawn,
@@ -464,10 +464,10 @@ fn laid_out(rows: &History) -> Vec<String> {
 }
 
 /// A braided history every reflog entry of which a ref reaches: the toggle draws exactly
-/// the rows, lanes and edges the walk without it draws, none lost, on both routes — so
-/// the compact and slim rows' equivalences (refs-and-status C15, C16), pinned on the walk
-/// without it, hold with it on. Caught by: a reflog tip reordering the walk, a row drawn
-/// as lost that a ref reaches, or the toggle changing what a row keeps.
+/// the rows, lanes and edges the walk without it draws, none lost, on both routes — so the
+/// compact and slim rows' equivalences, pinned on the walk without it, hold with it on.
+/// Caught by: a reflog tip reordering the walk, a row drawn as lost that a ref reaches, or
+/// the toggle changing what a row keeps.
 #[test]
 fn where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows() {
     let fixture = fixtures::braided(14);
@@ -495,7 +495,7 @@ fn where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows() {
     assert!(head.is_subset(&drawn(&held(&repo, &request(&repo, 64, 1024), 64)).0));
 }
 
-/// Phase 10's decision A: with a commit-graph holding some of the tips — the reachable ones
+/// With a commit-graph holding some of the tips — the reachable ones
 /// and some reflog-only ones, not all — Show Lost Commits draws the same rows, lanes, edges and
 /// lost marks in the same order as from the objects alone, on both routes: a date taken from
 /// the graph is the commit's own, as git's walk takes it. Caught by: a graph date read wrong (a
@@ -552,7 +552,7 @@ fn laid_out_lost(rows: &History) -> Vec<String> {
         .collect()
 }
 
-// --- The reporter: Show Lost Commits' first page (phase 10's stopping rule, C21) ---
+// --- The reporter: Show Lost Commits' first page ---
 
 /// The first page of 64 rows from every ref — the snapshot already read, each run a fresh
 /// open — with Show Lost Commits off and on, on the repository `CAIRN_BENCH_REPO` names (read

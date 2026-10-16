@@ -2,11 +2,11 @@
 //! staged, `git diff-files` for what is not, and `git diff --no-index` for a file git does
 //! not track.
 //!
-//! Phase 03 of `diff-engine` (PRD R3). A working-tree side is read by git, never by Cairn:
-//! git converts it to its own form — the clean filter driver the path's attributes name,
-//! line endings, `ident`, a working-tree encoding — exactly as the user's `git diff` does,
-//! and the lines Cairn holds for that side are rebuilt from git's own patch
-//! ([`super::PatchText::new_side`]), so they are that form by construction. Each read runs
+//! A working-tree side is read by git, never by Cairn: git converts it to its own form —
+//! the clean filter driver the path's attributes name, line endings, `ident`, a
+//! working-tree encoding — exactly as the user's `git diff` does, and the lines Cairn holds
+//! for that side are rebuilt from git's own patch ([`super::PatchText::new_side`]), so they
+//! are that form by construction. Each read runs
 //!
 //! ```text
 //! git -c diff.suppressBlankEmpty=false <verb> -z --raw --no-abbrev -p --full-index -U<n>
@@ -62,7 +62,7 @@
 //! **Renames.** Plumbing reads no `diff.renames`, and a pathspec of one path cannot pair it
 //! — `git diff --cached -- <new>` itself shows a staged rename as an addition. What the
 //! user's `git diff --cached` pairs is decided over the whole index, so the staged side asks
-//! twice where the user's detection is on (R2.6, L18):
+//! twice where the user's detection is on:
 //!
 //! 1. [`staged_pairing`]: `git diff-index --cached -z --raw --no-abbrev <-M|-C> -l<n>
 //!    --diff-filter=RC --ita-invisible-in-index --end-of-options <commit>`, over the whole
@@ -80,9 +80,10 @@
 //! `--no-renames`, which is then exactly git's answer. The caller asks the whole index only
 //! for a path absent from `HEAD` or from the index: a path on both sides is in no pair,
 //! since git pairs no modified path as a destination without `-B` and a copy's source keeps
-//! its own record (`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`). Reproduced with git 2.30.9, 2.32.7
-//! and 2.56.0 against `git diff --cached --raw` under `diff.renames` unset, `false` and
-//! `copies` (C7, `crates/cairn-git/tests/diff_engine/diff/staged_renames.rs`). The unstaged side needs no
+//! its own record (`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`). Reproduced
+//! with git 2.30.9, 2.32.7 and 2.56.0 against `git diff --cached --raw` under
+//! `diff.renames` unset, `false` and `copies`
+//! (`crates/cairn-git/tests/diff_engine/diff/staged_renames.rs`). The unstaged side needs no
 //! pairing: `git diff` pairs nothing between the index and the working tree but an
 //! intent-to-add entry, whose own diff is its addition.
 //!
@@ -406,7 +407,7 @@ fn index_against_arguments(
 /// Every path whose index entry differs from `base` — a commit, or the empty tree — as the
 /// user's `git diff --cached <base>` lists them, a rename or a copy paired under
 /// `detection` (the user's `diff.renames` and `diff.renameLimit`), in git's order: amend's
-/// staged list, the index against `HEAD`'s parent (`docs/prd/staging-and-commit.md` R6.3).
+/// staged list, the index against `HEAD`'s parent.
 /// The same plumbing [`staged_pairing`] runs, over the whole index, every record kept.
 /// `cancel` is polled while git runs and a superseded read is [`Error::ContentCancelled`].
 pub(crate) fn staged_since(
@@ -717,7 +718,7 @@ mod tests {
         }
     }
 
-    /// R2.6: the whole-index read asks plumbing for the user's detection, porcelain's view
+    /// The whole-index read asks plumbing for the user's detection, porcelain's view
     /// of an intent-to-add entry and nothing but renames and copies, with no pathspec at all;
     /// the paired content read asks the same across both paths, in place of `--no-renames`.
     /// Caught by: a pathspec on the whole-index read (a one-path pathspec pairs nothing), a

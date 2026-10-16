@@ -1,7 +1,6 @@
-//! Expand All bounded (phase 08, R5.3, the obligation phase 02's QA left it): a page of a
-//! change set's files read in order, each admitted or refused by the line budget BEFORE its
-//! blobs are read, git asked about the page's paths alone, and each file's failure its own
-//! outcome beside the others.
+//! Expand All bounded: a page of a change set's files read in order, each admitted or refused by
+//! the line budget BEFORE its blobs are read, git asked about the page's paths alone, and each
+//! file's failure its own outcome beside the others.
 
 use cairn_git::{
     CancelSignal, ChangesRequest, ContentOptions, LineBudget, Offered, PAGE_FILES, PAGE_LINES,
@@ -105,15 +104,14 @@ fn read_paths(page: &Page, set: &ChangeSet) -> Vec<String> {
         .collect()
 }
 
-/// R5.3 and phase 02 QA's R2: Expand All opens files in the change set's order until its
-/// line budget is spent, and decides each file before reading it — the file after the one
-/// that spent the budget is never read, and git is never asked about it. Each file here costs
-/// 21; a budget of 50 is not spent after two (42) and is after three (63), so three are read
-/// and the fourth, whose blob is gone, is not touched. Taken up again with the budget spent,
-/// nothing more is read. Caught by: the budget checked after a file is read (the fourth
-/// read, and failed), a file charged nothing (every file read), a page asking git about the
-/// whole comparison (the missing blob named on its command line), or the count of files
-/// taken off by one.
+/// Expand All opens files in the change set's order until its line budget is spent, and decides
+/// each file before reading it — the file after the one that spent the budget is never read, and
+/// git is never asked about it. Each file here costs 21; a budget of 50 is not spent after two (42)
+/// and is after three (63), so three are read and the fourth, whose blob is gone, is not touched.
+/// Taken up again with the budget spent, nothing more is read. Caught by: the budget checked after
+/// a file is read (the fourth read, and failed), a file charged nothing (every file read), a page
+/// asking git about the whole comparison (the missing blob named on its command line), or the count
+/// of files taken off by one.
 #[test]
 fn expand_all_stops_at_its_budget_before_reading_the_next_file() {
     let (repo, missing) = five_files();
@@ -177,10 +175,10 @@ fn expand_all_stops_at_its_budget_before_reading_the_next_file() {
     assert_eq!(resumed.spent(), 63);
 }
 
-/// Phase 04 QA's R1: a file that cannot be read is that file's outcome, shown on that file,
+/// A file that cannot be read is that file's outcome, shown on that file,
 /// and every other file of the page is read and answered as it is alone. `f3.txt`'s blob is
 /// gone; asked with no budget, the page answers the other four. Caught by: one failure
-/// failing the page (the old all-or-nothing Expand All), or a failure dropped (a file that
+/// failing the page (an all-or-nothing Expand All), or a failure dropped (a file that
 /// silently vanishes from the expansion).
 #[test]
 fn a_failing_file_is_that_files_outcome_and_the_rest_are_read() {
@@ -280,7 +278,7 @@ fn a_page_ends_at_its_file_count_or_its_line_count() {
     assert_eq!(all.len(), set.files.len());
 }
 
-/// Phase 08 QA's E4: a file git itself fails on — here its diff driver's `xfuncname` is a
+/// A file git itself fails on — here its diff driver's `xfuncname` is a
 /// regular expression git refuses, which git finds only as it diffs that path and dies on
 /// (`fatal: Invalid regexp to look for hunk header`), ending the whole run — fails alone: the
 /// page's one `diff-tree -p` over the three paths fails, each file is then asked on its own,
@@ -334,7 +332,7 @@ fn a_file_git_fails_on_in_a_grouped_run_fails_alone() {
     );
 }
 
-/// Phase 08 QA's E6: a page asked once its query is already superseded reads nothing — no
+/// A page asked once its query is already superseded reads nothing — no
 /// file charged to its budget, no `git` started — and answers `ContentCancelled`, never a
 /// page or a file's failure. Caught by: the cancel checked only after a file is read (the
 /// first file charged), or only while git runs (a `diff-tree` started).
@@ -375,7 +373,7 @@ fn a_page_asked_after_its_cancel_reads_nothing() {
     );
 }
 
-/// Phase 08 QA's E1, the boundaries exactly: a budget is spent when its lines REACH its limit,
+/// The boundaries exactly: a budget is spent when its lines REACH its limit,
 /// not past it — resumed at the limit it is spent, one short it is not — and a page ends at the
 /// file whose cost brings the page's lines to exactly `PAGE_LINES`, as a budget ends at the
 /// file that brings it to exactly its limit. Two files here cost exactly half of `PAGE_LINES`
@@ -430,10 +428,10 @@ fn a_page_and_a_budget_end_exactly_at_their_limits() {
     );
 }
 
-/// Phase 08 QA's E2: a page's two bounds are the numbers measured in phase 08
-/// (`docs/research/diff-engine/c14-measured.md`). Changing either is a measured C14
-/// decision — re-run the engine's sweep and the window check, and record them — never an
-/// edit on its own.
+/// A page's two bounds are the numbers measured on the bench repository
+/// (`docs/research/diff-engine/c14-measured.md`). Changing either is a measured decision —
+/// re-run the engine's sweep and the window check, and record them — never an edit on its
+/// own.
 #[test]
 fn a_pages_bounds_are_the_measured_ones() {
     assert_eq!(PAGE_FILES, 256);

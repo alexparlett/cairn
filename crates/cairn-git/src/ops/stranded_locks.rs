@@ -190,10 +190,10 @@ mod tests {
         assert_eq!(stranded_locks(&git_dir, &git_dir), expected);
     }
 
-    /// Staging-and-commit R4.9's listing as a repository opens can be stopped: a walk
-    /// whose cancel is set answers nothing, rather than walking every ref of a large
-    /// repository for a window that is closing; one never cancelled answers what the plain
-    /// search does. Caught by: a walk that never polls its cancel.
+    /// The listing made as a repository opens can be stopped: a walk whose cancel is set
+    /// answers nothing, rather than walking every ref of a large repository for a window
+    /// that is closing; one never cancelled answers what the plain search does. Caught by: a
+    /// walk that never polls its cancel.
     #[test]
     fn a_cancelled_search_answers_nothing_and_an_uncancelled_one_everything() {
         let layout = Layout::new("cancelled");

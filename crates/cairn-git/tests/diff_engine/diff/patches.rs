@@ -1,4 +1,6 @@
-//! C1, C2 and C3: the patches the model emits, put through real `git apply --cached`.
+//! The patches the model emits, put through real `git apply --cached`: every line selected
+//! gives the commit's tree, a selection gives what the in-memory applier gives, and the same
+//! patches reversed give the parent's tree.
 //!
 //! Every apply goes into a scratch index and a scratch object directory, so the repository
 //! under test is only ever read. What is compared is the resulting TREE, not the patch
@@ -55,8 +57,8 @@ fn diffs_of(engine: &Repository, commit: &Oid) -> Vec<FileDiff> {
         .collect()
 }
 
-/// Every line and the mode change: the whole of a file's change, which since R2.4 is two
-/// items.
+/// Every line and the mode change: the whole of a file's change, which is two items, since a
+/// mode change is selected apart from the lines.
 fn everything(text: &TextDiff) -> Selection {
     let mut selection = Selection::with_every_change(text);
     selection.select_mode();
@@ -123,7 +125,7 @@ fn tree_of(repo: &Repo, commit: &str) -> String {
 }
 
 /// The parent's tree, or the empty tree for a root commit — which is the preimage the
-/// changes query compared against (L5).
+/// changes query compared against.
 fn parent_tree(repo: &Repo, commit: &str) -> String {
     match repo.try_git(&["rev-parse", &format!("{commit}^1^{{tree}}")], &[], None) {
         Ok(tree) => tree.trim().to_owned(),
@@ -134,7 +136,7 @@ fn parent_tree(repo: &Repo, commit: &str) -> String {
     }
 }
 
-/// C1 and C3 for one commit: forward from the parent's tree must give the commit's, and the
+/// One commit's round trip: forward from the parent's tree must give the commit's, and the
 /// same patches in reverse from the commit's tree must give the parent's.
 ///
 /// Returns how many files were staged through a PATCH — not how many changed: a file the
@@ -184,7 +186,7 @@ fn round_trips(repo: &Repo, engine: &Repository, commit: &str) -> usize {
         repo.git(&["log", "-1", "--format=%s", commit]).trim()
     );
 
-    // C3, the same patches in reverse. A copy is left out of the reversed patch: `git
+    // The same patches in reverse. A copy is left out of the reversed patch: `git
     // apply -R` of `copy from A / copy to B` re-creates A from B, and A is still there, so
     // it refuses — and git's OWN patch for a copy refuses the same way
     // (`gits_own_copy_patch_cannot_be_reversed_either`). Undoing a copy is removing its
@@ -222,7 +224,7 @@ fn non_merge_commits(repo: &Repo) -> Vec<String> {
         .collect()
 }
 
-/// C1 and C3 over the crafted fixtures, which hold the shapes a real history rarely has
+/// The round trip over the crafted fixtures, which hold the shapes a real history rarely has
 /// all at once: a missing final newline on each side, CRLF, an added file, a deleted file,
 /// an empty file, a rename with edits, a mode change and a type change.
 #[test]
@@ -263,7 +265,7 @@ fn every_rewrite_commit_round_trips_through_real_git_apply() {
     }
 }
 
-/// C1 and C3 over every non-merge commit of the Cairn checkout itself: real content,
+/// The round trip over every non-merge commit of the Cairn checkout itself: real content,
 /// written by hand, in a repository nobody crafted for this test.
 #[test]
 fn every_commit_of_this_repository_round_trips_through_real_git_apply() {
@@ -301,11 +303,11 @@ impl Seeded {
     }
 }
 
-/// The selections C2 names, in order: every line, no lines, only additions, only removals,
+/// The selections checked, in order: every line, no lines, only additions, only removals,
 /// the first line of every change, the last line of every change, then seeded ones — each
 /// with the mode change selected too, so a file whose mode changed is staged with its new
 /// mode and the check of the staged mode below holds. A selection of lines without the
-/// mode is staging-and-commit's C4 (`staging.rs`).
+/// mode is checked in `staging.rs`.
 fn selections(text: &TextDiff, seeds: usize) -> Vec<(String, Selection)> {
     selections_of_lines(text, seeds)
         .into_iter()
@@ -383,7 +385,7 @@ fn destination(file: &ChangedFile, text: &TextDiff, selection: &Selection) -> (S
     )
 }
 
-/// C2: seeded selections applied by real `git apply --cached`, against what the independent
+/// Seeded selections applied by real `git apply --cached`, against what the independent
 /// in-memory applier says the same patch means — and against what its HEADERS claim.
 ///
 /// The applier discards every header line, so only the staged tree can decide whether
@@ -586,7 +588,7 @@ fn selection_touches_a_change(text: &TextDiff, selection: &Selection) -> bool {
     })
 }
 
-/// The edge C2 names by hand, because a seeded selection may never reach it: the last line
+/// The edge named by hand, because a seeded selection may never reach it: the last line
 /// of a file that never ended in a newline, selected on its own.
 #[test]
 fn the_last_line_of_a_file_with_no_newline_stages_on_its_own() {
@@ -654,8 +656,8 @@ fn the_last_line_of_a_file_with_no_newline_stages_on_its_own() {
     }
 }
 
-/// Why C3 leaves a copy out of its reverse leg: git's own patch for one cannot be reversed
-/// either, so requiring it of Cairn's would be requiring more than git does.
+/// Why the round trip leaves a copy out of its reverse leg: git's own patch for one cannot be
+/// reversed either, so requiring it of Cairn's would be requiring more than git does.
 ///
 /// Without this, the exclusion above would be an unchecked claim, and a real defect in the
 /// copy headers could hide behind it.

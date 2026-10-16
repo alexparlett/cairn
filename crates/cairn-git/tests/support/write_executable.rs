@@ -1,5 +1,5 @@
-//! The one way a `cairn-git` test writes a file it then has git or the engine execute (phase 19's
-//! QA item 6): shared by the test binaries through `#[path]`.
+//! The one way a `cairn-git` test writes a file it then has git or the engine execute: shared by
+//! the test binaries through `#[path]`.
 
 /// Writes `contents` to `path` with `mode` — a stub `git`, a hook, anything a test then has git
 /// or the engine execute — through a child `sh`, so this multi-threaded test process never holds

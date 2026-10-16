@@ -1,20 +1,21 @@
-//! staging-and-commit's C3 and C4: a selection of lines staged, unstaged and discarded through
-//! the engine's own verbs (`cairn_git::ops::stage_lines`, `unstage_lines`, `discard_lines`),
-//! which run `git apply --cached --whitespace=nowarn -` to stage and to unstage and `git apply
-//! --whitespace=nowarn -` to discard, never `-R` — over the engine's own working-tree diffs and
-//! the model's [`action_patch`].
+//! A selection of lines staged, unstaged and discarded through the engine's own verbs
+//! (`cairn_git::ops::stage_lines`, `unstage_lines`, `discard_lines`), which run
+//! `git apply --cached --whitespace=nowarn -` to stage and to unstage and
+//! `git apply --whitespace=nowarn -` to discard, never `-R` — over the engine's own
+//! working-tree diffs and the model's [`action_patch`].
 //!
 //! Each result is held to three oracles, none of which is the code under test:
 //!
 //! 1. the reference applier ([`apply_patch`]), applying the same patch to the side it was
 //!    built for — the index for stage and unstage, the working tree in git's form for
 //!    discard;
-//! 2. an independent derivation from the FORWARD diff and the selection, written here and
-//!    never inverting anything: for stage, the forward rule read straight off the changed
-//!    ranges; for unstage and discard, git's mirrored rule (`patch-mechanics-spike.md` E1b)
-//!    — a whole-file patch of the original diff whose unselected additions are context and
-//!    whose unselected removals are dropped — applied in reverse, by real `git apply -R` and
-//!    by the reference applier, which must agree;
+//! 2. an independent derivation from the FORWARD diff and the selection, written here and never
+//!    inverting anything: for stage, the forward rule read straight off the changed ranges; for
+//!    unstage and discard, git's mirrored rule
+//!    (`docs/research/staging-and-commit/patch-mechanics-spike.md`) — a whole-file patch of the
+//!    original diff whose unselected additions are context and whose unselected removals are
+//!    dropped — applied in reverse, by real `git apply -R` and by the reference applier, which must
+//!    agree;
 //! 3. what `git diff` (or `git diff --cached`) prints afterwards, whose changed lines must be
 //!    exactly the lines the selection left out.
 //!
@@ -176,7 +177,7 @@ fn joined(lines: &[String], ending: &str) -> Vec<u8> {
     )
 }
 
-/// One case of C3: a repository in a state with something to stage, unstage or discard at
+/// One case: a repository in a state with something to stage, unstage or discard at
 /// `path`, and the actions that apply to it.
 struct Case {
     name: String,
@@ -455,7 +456,7 @@ fn forward_rule(text: &TextDiff, selection: &Selection) -> Vec<u8> {
     bytes_of(&out)
 }
 
-/// git's mirrored rule for undoing a selection (E1b): a patch of the ORIGINAL diff, one hunk
+/// git's mirrored rule for undoing a selection: a patch of the ORIGINAL diff, one hunk
 /// over the whole file, in which a selected removal is `-`, an unselected removal is
 /// dropped, a selected addition is `+` and an unselected addition is context — applied in
 /// reverse to the new side. Written here from the format; nothing is inverted.
@@ -523,7 +524,7 @@ fn mirrored_rule(text: &TextDiff, selection: &Selection) -> Vec<u8> {
 }
 
 /// `hunk` applied by real `git apply -R` to a file holding `content`, in a scratch directory
-/// that is no repository: E1b's mirrored patch, reversed by git itself.
+/// that is no repository: the mirrored patch, reversed by git itself.
 fn reversed_by_git(content: &[u8], hunk: &[u8]) -> Vec<u8> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -572,12 +573,11 @@ fn reversed_by_git(content: &[u8], hunk: &[u8]) -> Vec<u8> {
     result
 }
 
-/// `action` run through the verb R3 names for it (`cairn_git::ops`), as the application
-/// runs it — the stale check, `--literal-pathspecs`, the patch on stdin — so every case of C3
-/// is a case of the verbs too. A discard of every line of a new file is the one exception:
-/// the verb refuses it as whole-file only, since deleting the file is the file verb's, whose
-/// prompt says so (phase 02's carry-forward), and the patch's meaning is then still held to
-/// the oracles by applying it with git itself.
+/// `action` run through its verb in `cairn_git::ops`, as the application runs it — the stale
+/// check, `--literal-pathspecs`, the patch on stdin — so every case is a case of the verbs
+/// too. A discard of every line of a new file is the one exception: the verb refuses it as
+/// whole-file only, since deleting the file is the file verb's, whose prompt says so, and the
+/// patch's meaning is then still held to the oracles by applying it with git itself.
 fn through_the_verb(
     case: &Case,
     action: PatchAction,
@@ -899,14 +899,14 @@ fn check(case: &Case) {
     );
 }
 
-/// C3: a modified file with staged and unstaged edits.
+/// A modified file with staged and unstaged edits.
 #[test]
 fn lines_of_a_modification_stage_unstage_and_discard_as_git_says() {
     check(&edited("modification", b"file.txt", "\n", |_| {}));
 }
 
-/// C3: an untracked file, staged as a new file of the selected lines (E3) and discarded as
-/// a partial deletion written as a modification (E4).
+/// An untracked file, staged as a new file of the selected lines and discarded as a partial
+/// deletion written as a modification.
 #[test]
 fn lines_of_an_untracked_file_stage_and_discard_as_git_says() {
     let mut case = Case::new("untracked", b"new.txt");
@@ -918,9 +918,9 @@ fn lines_of_an_untracked_file_stage_and_discard_as_git_says() {
     check(&case);
 }
 
-/// C3: an intent-to-add entry, whose unstaged diff is a new file — so its stage is a `new
-/// file mode` patch applied over the intent-to-add entry, which the packet left open until it
-/// was answered on every git here (see also `a_new_file_patch_applies_over_an_intent_to_add_entry`).
+/// An intent-to-add entry, whose unstaged diff is a new file — so its stage is a `new file
+/// mode` patch applied over the intent-to-add entry, which applies on every git here (see also
+/// `a_new_file_patch_applies_over_an_intent_to_add_entry`).
 #[test]
 fn lines_of_an_intent_to_add_file_stage_and_discard_as_git_says() {
     let mut case = Case::new("intent to add", b"new.txt");
@@ -932,7 +932,7 @@ fn lines_of_an_intent_to_add_file_stage_and_discard_as_git_says() {
     check(&case);
 }
 
-/// C3: CRLF in the working tree under `core.autocrlf=true`, the diff and every patch in
+/// CRLF in the working tree under `core.autocrlf=true`, the diff and every patch in
 /// git's form (LF), the working tree after a discard compared in git's form and kept CRLF.
 #[test]
 fn lines_of_a_crlf_file_under_autocrlf_stage_unstage_and_discard_as_git_says() {
@@ -973,7 +973,7 @@ fn lines_of_a_crlf_file_under_autocrlf_stage_unstage_and_discard_as_git_says() {
     case.restore(&saved);
 }
 
-/// C3: a path under a clean filter driver (rot13 both ways): the diff is in the clean form,
+/// A path under a clean filter driver (rot13 both ways): the diff is in the clean form,
 /// the index holds it, and a discard runs the filter both ways through `git apply`.
 #[test]
 fn lines_of_a_filtered_file_stage_unstage_and_discard_as_git_says() {
@@ -994,7 +994,7 @@ fn lines_of_a_filtered_file_stage_unstage_and_discard_as_git_says() {
     check(&case);
 }
 
-/// C3: an unborn branch, where the staged diff is against the empty tree — every staged
+/// An unborn branch, where the staged diff is against the empty tree — every staged
 /// line an addition, unstaged as a partial deletion of the index entry.
 #[test]
 fn lines_on_an_unborn_branch_stage_unstage_and_discard_as_git_says() {
@@ -1073,8 +1073,9 @@ fn lines_on_an_unborn_branch_stage_unstage_and_discard_as_git_says() {
     check(&case);
 }
 
-/// C3 beside C4: a file whose mode changed on both sides as well as its lines, each line
-/// selection carrying no mode (C4 reads the modes back).
+/// A file whose mode changed on both sides as well as its lines, each line selection
+/// carrying no mode (`a_selection_of_lines_moves_no_mode_and_the_mode_moves_alone` reads the
+/// modes back).
 #[test]
 fn lines_beside_a_mode_change_stage_unstage_and_discard_as_git_says() {
     let case = edited("mode change", b"run.sh", "\n", |_| {});
@@ -1095,7 +1096,7 @@ fn lines_beside_a_mode_change_stage_unstage_and_discard_as_git_says() {
     check(&case);
 }
 
-/// C3 and R2.6: a staged rename with edits, drawn as `git diff --cached` pairs it, its lines
+/// A staged rename with edits, drawn as `git diff --cached` pairs it, its lines
 /// unstaged as content at the new path; the unstaged edits on top staged and discarded.
 #[test]
 fn lines_of_a_staged_rename_unstage_as_content_at_its_new_path() {
@@ -1128,9 +1129,9 @@ fn lines_of_a_staged_rename_unstage_as_content_at_its_new_path() {
     assert_eq!(case.staged(b"old.txt"), None);
 }
 
-/// C3 and R2.6 for a copy: a staged copy of an edited source, drawn as `git diff --cached`
-/// pairs it under `diff.renames=copies`, its lines unstaged as content at the copy's path
-/// with real git — the one place `ChangedFile::inverted`'s copy arm reaches `git apply`.
+/// A staged copy of an edited source, drawn as `git diff --cached` pairs it under
+/// `diff.renames=copies`, its lines unstaged as content at the copy's path with real git —
+/// the one place `ChangedFile::inverted`'s copy arm reaches `git apply`.
 #[test]
 fn lines_of_a_staged_copy_unstage_as_content_at_its_path() {
     let mut case = Case::new("staged copy", b"copy.txt");
@@ -1171,8 +1172,8 @@ fn lines_of_a_staged_copy_unstage_as_content_at_its_path() {
     assert_eq!(case.blob(&id), joined(&source, "\n"));
 }
 
-/// C3: each awkward name, modified, through every action: the path lines are C-quoted as
-/// git quotes them (R2.5), and `git apply` finds the file each names.
+/// Each awkward name, modified, through every action: the path lines are C-quoted as git
+/// quotes them, and `git apply` finds the file each names.
 #[test]
 fn lines_of_awkwardly_named_files_stage_unstage_and_discard_as_git_says() {
     for (name, path) in [
@@ -1229,8 +1230,8 @@ fn lines_of_awkwardly_named_files_stage_unstage_and_discard_as_git_says() {
     }
 }
 
-/// The packet's open question, settled: a `new file mode` patch of part of a file applies over
-/// an intent-to-add entry, on every git, and leaves a real entry holding the lines selected.
+/// A `new file mode` patch of part of a file applies over an intent-to-add entry, on every
+/// git, and leaves a real entry holding the lines selected.
 #[test]
 fn a_new_file_patch_applies_over_an_intent_to_add_entry() {
     let case = Case::new("ita new file", b"n.txt");
@@ -1262,7 +1263,7 @@ fn a_new_file_patch_applies_over_an_intent_to_add_entry() {
     );
 }
 
-/// C4: on a file whose mode changed beside its lines, a selection of lines stages,
+/// On a file whose mode changed beside its lines, a selection of lines stages,
 /// unstages and discards no mode, and the mode alone moves the mode alone — the modes read
 /// back from git's index and from the file.
 #[test]

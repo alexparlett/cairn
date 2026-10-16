@@ -28,11 +28,11 @@ pub(super) enum Event {
     /// Bytes from stdout, in order, as they arrived.
     Stdout(Vec<u8>),
     /// The lines of stderr one read completed, in order, each split whole by [`Lines`] and
-    /// scrubbed of a URL's userinfo as it was split (staging-and-commit R4.10). One event per
-    /// read, not per line, so what git wrote before it exited is a few events however many
-    /// lines it was, and the driver's last look at the queue takes it all; one text, not a
-    /// string per line, so an event costs one allocation of at most a read's bytes and a
-    /// pending line piece, however short its lines.
+    /// scrubbed of a URL's userinfo as it was split. One event per read, not per line, so what
+    /// git wrote before it exited is a few events however many lines it was, and the driver's
+    /// last look at the queue takes it all; one text, not a string per line, so an event costs
+    /// one allocation of at most a read's bytes and a pending line piece, however short its
+    /// lines.
     Lines(ScrubbedLines),
 }
 
@@ -116,13 +116,13 @@ pub(super) fn feed(mut pipe: impl io::Write, input: &[u8], group: &Group) {
 }
 
 /// git's output split into lines across reads — the one line type, for stdout and stderr
-/// alike (staging-and-commit R4.10, C31). A line ends at `\n` or at `\r`, on both streams: git's
-/// progress meters redraw themselves with `\r`, and a hook writing one to stdout redraws the
-/// same way, so each redraw is a line of its own whichever pipe carried it. A line is decoded
-/// whole, so a character is never split across two reads; one longer than [`PIECE_BYTES`] is
-/// handed on in pieces, each cut where a character ends, never inside one. Each line, and each
-/// piece, is scrubbed of a URL's userinfo as it is split (R12.2), before anything keeps or cuts
-/// it: the scrubber carries across the pieces of one line, and nothing across a line's end.
+/// alike. A line ends at `\n` or at `\r`, on both streams: git's progress meters redraw
+/// themselves with `\r`, and a hook writing one to stdout redraws the same way, so each redraw
+/// is a line of its own whichever pipe carried it. A line is decoded whole, so a character is
+/// never split across two reads; one longer than [`PIECE_BYTES`] is handed on in pieces, each
+/// cut where a character ends, never inside one. Each line, and each piece, is scrubbed of a
+/// URL's userinfo as it is split, before anything keeps or cuts it: the scrubber carries across
+/// the pieces of one line, and nothing across a line's end.
 #[derive(Debug, Default)]
 pub(super) struct Lines {
     pending: Vec<u8>,
@@ -190,7 +190,7 @@ fn escape_complete(after: &[u8]) -> bool {
 
 /// How many of `bytes` end at a character's end: all of them, unless they end inside a UTF-8
 /// sequence, whose started bytes are left out to go with the next piece. Bytes that are no
-/// UTF-8 at all are counted, to be read lossily as they always were.
+/// UTF-8 at all are counted, to be read lossily.
 fn whole_characters(bytes: &[u8]) -> usize {
     let length = bytes.len();
     for back in 1..=length.min(3) {
@@ -316,7 +316,7 @@ mod tests {
         assert!(records(&[b""]).is_empty());
     }
 
-    /// The one line definition, pinned (R4.10): a line ends at `\n` or `\r`, on stdout and
+    /// The one line definition, pinned: a line ends at `\n` or `\r`, on stdout and
     /// stderr alike, across reads, the terminator not kept. Caught by: splitting on one
     /// terminator only, or keeping the terminator.
     #[test]
@@ -338,10 +338,10 @@ mod tests {
         assert_eq!(seen[2].len(), 3);
     }
 
-    /// C31, the live bug (R4.10): a line longer than the piece limit, with a multi-byte
-    /// character straddling the limit — every offset of a two-, three- and four-byte one —
-    /// arrives with the character whole, never as U+FFFD; so does one split across two reads.
-    /// Caught by: a piece cut at the byte count and decoded lossily, or a read decoded alone.
+    /// A line longer than the piece limit, with a multi-byte character straddling the limit —
+    /// every offset of a two-, three- and four-byte one — arrives with the character whole,
+    /// never as U+FFFD; so does one split across two reads. Caught by: a piece cut at the byte
+    /// count and decoded lossily, or a read decoded alone.
     #[test]
     fn a_character_straddling_the_piece_limit_arrives_whole() {
         for character in ["é", "€", "😀"] {
@@ -373,9 +373,9 @@ mod tests {
         );
     }
 
-    /// C31: a URL's userinfo is removed as the line is split — across two reads, across the
-    /// piece limit at every byte of the URL, and across a `\r` redraw — so nothing kept or
-    /// handed on ever holds it. Caught by: a scrub after the cut, or none.
+    /// A URL's userinfo is removed as the line is split — across two reads, across the piece
+    /// limit at every byte of the URL, and across a `\r` redraw — so nothing kept or handed on
+    /// ever holds it. Caught by: a scrub after the cut, or none.
     #[test]
     fn a_urls_userinfo_never_survives_the_split() {
         assert_eq!(
@@ -398,7 +398,7 @@ mod tests {
             );
             assert!(seen.ends_with("/r"), "cut {at}: the path lost");
         }
-        // A password holding an `@`, cut at every byte by the piece limit (the phase 12 QA).
+        // A password holding an `@`, cut at every byte by the piece limit.
         let url = "https://u:SEC@RET@host/y";
         for at in 0..url.len() {
             let mut long = vec![b'x'; PIECE_BYTES - at];
@@ -414,9 +414,9 @@ mod tests {
         }
     }
 
-    /// The phase 12 QA: an escape sequence between a scheme and its `://`, straddling the piece
-    /// limit at every byte, neither hides the URL nor reaches the next piece. Caught by: a piece
-    /// cut inside an escape, its tail left between the scheme and the `://`.
+    /// An escape sequence between a scheme and its `://`, straddling the piece limit at every
+    /// byte, neither hides the URL nor reaches the next piece. Caught by: a piece cut inside an
+    /// escape, its tail left between the scheme and the `://`.
     #[test]
     fn an_escape_straddling_the_piece_limit_hides_no_url() {
         let url = "https:\x1b[0m//u:SECRET@host/r";
@@ -465,9 +465,9 @@ mod tests {
         assert_eq!((short.text(), short.older_dropped()), ("all of it", false));
     }
 
-    /// R3.5, while the process runs: what is held never grows past twice the
-    /// window and the line being added, however much stderr goes by. Caught by:
-    /// letting go only at the end.
+    /// While the process runs, what is held never grows past twice the window and
+    /// the line being added, however much stderr goes by. Caught by: letting go
+    /// only at the end.
     #[test]
     fn the_tail_holds_a_bounded_amount_while_stderr_runs_on() {
         let mut tail = Tail::default();

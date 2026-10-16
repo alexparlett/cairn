@@ -1,22 +1,22 @@
-//! One path's working-tree diffs (R3): what is staged, what is not, and an untracked file.
+//! One path's working-tree diffs: what is staged, what is not, and an untracked file.
 //!
 //! git answers all three (`crate::reads::working_tree`), and the side git reads from the
 //! working tree is never read by Cairn: its lines are rebuilt from git's own patch over the
 //! old side, so they are the content in git's form — after the clean filter driver the
 //! path's attributes name, line-ending conversion, `ident` and a working-tree encoding —
-//! exactly what the user's `git diff` compares (L6, D1 as amended in
-//! `docs/design/engine.md`). gix reads the index, fresh for every query (R3.3), to say what
-//! git's answer does not say alone, or what plumbing says otherwise than porcelain: a
-//! conflicted path (answered as conflicted, never diffed against one stage), a sparse index
-//! (unsupported, and said so), an intent-to-add entry (which `git diff --cached` does not
-//! list), and the sizes of the blobs on each side, so a file too large to draw is refused
-//! before git diffs it. gix also reads every blob git names, by the id git names it with.
+//! exactly what the user's `git diff` compares (`docs/design/engine.md`, "Reads see git's
+//! form"). gix reads the index, fresh for every query, to say what git's answer does not
+//! say alone, or what plumbing says otherwise than porcelain: a conflicted path (answered as
+//! conflicted, never diffed against one stage), a sparse index (unsupported, and said so),
+//! an intent-to-add entry (which `git diff --cached` does not list), and the sizes of the
+//! blobs on each side, so a file too large to draw is refused before git diffs it. gix also
+//! reads every blob git names, by the id git names it with.
 //!
 //! The staged side pairs a rename or a copy as the user's `git diff --cached` pairs it, under
-//! their `diff.renames` and `diff.renameLimit` (R2.6, L18): which pair the path belongs to is
-//! asked of the whole index first (`crate::reads::staged_pairing`), and that pair's diff is
-//! then read across both its paths, so a staged rename is drawn as git draws it and not as an
-//! addition beside a deletion (`crate::reads`' working-tree module, "Renames").
+//! their `diff.renames` and `diff.renameLimit`: which pair the path belongs to is asked of
+//! the whole index first (`crate::reads::staged_pairing`), and that pair's diff is then read
+//! across both its paths, so a staged rename is drawn as git draws it and not as an addition
+//! beside a deletion (`crate::reads`' working-tree module, "Renames").
 //!
 //! The stale-read guard is three checks. Every line git prints is checked against the side
 //! it belongs to (`PatchText::new_side`, `PatchText::read_against`). The rebuilt working-tree
@@ -136,7 +136,7 @@ pub(super) fn working_tree_diff(
                     head_side(inner, path)?
                 };
                 staged_commit = Some(commit);
-                // R2.6: the pair `git diff --cached` puts the path in, if any; its sides are
+                // The pair `git diff --cached` puts the path in, if any; its sides are
                 // the pair's two blobs, at two paths. Only a path missing from one side can
                 // be in one — a destination is absent from `HEAD`, a rename's source from the
                 // index — since without `-B` git pairs no modified path as a destination,
@@ -255,7 +255,7 @@ struct Asker<'a, C: Cancel> {
     ignore_submodules: Option<&'static str>,
     /// The user's `diff.interHunkContext`, read once for the query.
     inter_hunk_context: u32,
-    /// R2.6's byte ceiling, or the load-anyway one.
+    /// The diff's byte ceiling, or the load-anyway one.
     ceiling: u64,
 }
 
@@ -315,7 +315,7 @@ impl<C: Cancel> Asker<'_, C> {
             .saturating_add(within(sizes.new))
             .saturating_mul(2)
             .saturating_add(HEADER_ROOM);
-        // R2.6: a blob too large to draw is refused before git diffs it, git asked only
+        // A blob too large to draw is refused before git diffs it, git asked only
         // whether the path changed and how. Only a working-tree modification needs the
         // patch after all, since its record cannot tell an edit from a stat or a mode
         // that alone moved — and `git diff` shows those as nothing and a mode change. A

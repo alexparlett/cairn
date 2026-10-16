@@ -1,5 +1,4 @@
-//! A commit's text in the characters git shows it in (user decision, 2026-10-03: re-encode
-//! like git).
+//! A commit's text in the characters git shows it in, re-encoded as git re-encodes it.
 //!
 //! A commit may name the encoding its text was written in, in an `encoding` header. Before
 //! it prints any of the commit — names, addresses and message alike — git converts the WHOLE
@@ -16,17 +15,16 @@
 //! them once and the setting has nothing left to change.
 //!
 //! ISO-8859-1 is decoded as itself (every byte the code point of its own number), and every
-//! other encoding through `encoding_rs` (user-approved 2026-10-03), whose tables are the
-//! WHATWG encoding standard's rather than glibc's. Every 1- and 2-byte sequence (and
-//! GB18030's 4-byte range from `0x81308130` to `0x8439fe39`) was decoded both ways
-//! (2026-10-03, glibc's iconv against `encoding_rs` 0.8.41), and where the two read a
-//! sequence as different characters, or where one refuses what the other reads, this module
-//! takes glibc's side wherever a [`Quirk`] can: the WHATWG standard reads US-ASCII and
-//! ISO-8859-1 as windows-1252 and ISO-8859-9 and ISO-8859-11 as windows-1254 and
-//! windows-874, decodes the bytes a windows code page leaves undefined, and maps Shift_JIS's
-//! `0x5c` and `0x7e`, six JIS X 0208 codes, two KOI8-U box drawings and two Mac Roman
-//! characters as Microsoft's or its own tables do. What no quirk reaches — bytes one side
-//! refuses in the multi-byte encodings — is a known limit in `docs/systems/diff.md`.
+//! other encoding through `encoding_rs`, whose tables are the WHATWG encoding standard's
+//! rather than glibc's. Every 1- and 2-byte sequence (and GB18030's 4-byte range from
+//! `0x81308130` to `0x8439fe39`) was decoded both ways (glibc's iconv against `encoding_rs`
+//! 0.8.41), and where the two read a sequence as different characters, or where one refuses
+//! what the other reads, this module takes glibc's side wherever a [`Quirk`] can: the WHATWG
+//! standard reads US-ASCII and ISO-8859-1 as windows-1252 and ISO-8859-9 and ISO-8859-11 as
+//! windows-1254 and windows-874, decodes the bytes a windows code page leaves undefined, and
+//! maps Shift_JIS's `0x5c` and `0x7e`, six JIS X 0208 codes, two KOI8-U box drawings and two
+//! Mac Roman characters as Microsoft's or its own tables do. What no quirk reaches — bytes
+//! one side refuses in the multi-byte encodings — is a known limit in `docs/systems/diff.md`.
 
 use encoding_rs::Encoding;
 

@@ -1,6 +1,6 @@
-//! Amend's staged list (`docs/prd/staging-and-commit.md` R6.3): what an amend will commit
-//! that `HEAD`'s parent does not have — the index against `HEAD^`, or against the empty tree
-//! for a root commit — as the user's `git diff --cached HEAD^` lists it.
+//! Amend's staged list: what an amend will commit that `HEAD`'s parent does not have — the
+//! index against `HEAD^`, or against the empty tree for a root commit — as the user's
+//! `git diff --cached HEAD^` lists it.
 //!
 //! Through the plumbing the working-tree query's staged side runs, `git diff-index
 //! --cached`, over the whole index (`crate::reads::staged_since`), a rename paired under the
@@ -43,7 +43,7 @@ impl Repository {
     /// The commit an amend's staged list is against (module docs): `HEAD`'s first parent as
     /// git shows it, or `None` for a root commit or a shallow clone's boundary, whose list is
     /// against the empty tree — and what an unstage out of the amend puts an entry back to
-    /// (`git reset -q <parent> --`, or `git rm --cached` with none, R6.3). An unborn branch,
+    /// (`git reset -q <parent> --`, or `git rm --cached` with none). An unborn branch,
     /// which has nothing to amend, is [`Error::UnbornHead`].
     pub fn amend_parent(&self) -> Result<Option<Oid>, Error> {
         let inner = self.inner();

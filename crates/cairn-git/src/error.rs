@@ -221,16 +221,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the
-    /// user: the last 256 KiB of it as whole lines, each scrubbed of a URL's
-    /// userinfo as the runner split it, older lines let go of whole — and, for
-    /// a commit, its stdout's lines too, in the order they arrived
-    /// (staging-and-commit R4.10).
-    /// `present_locks` is every `*.lock` under the git directory once a WRITE
-    /// had failed — the file another git holds, or a stale one from a crash,
-    /// which is what a write fails on and git does not wait for. Never retried
-    /// and never removed. Filled for a write run in a repository (fetch among
-    /// them); empty for a read, the version probe included, and for a write
+    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the user: the last 256
+    /// KiB of it as whole lines, each scrubbed of a URL's userinfo as the runner split it, older
+    /// lines let go of whole — and, for a commit, its stdout's lines too, in the order they
+    /// arrived. `present_locks` is every `*.lock` under the git directory once a WRITE had failed —
+    /// the file another git holds, or a stale one from a crash, which is what a write fails on and
+    /// git does not wait for. Never retried and never removed. Filled for a write run in a
+    /// repository (fetch among them); empty for a read, the version probe included, and for a write
     /// given no repository to look in.
     #[error(
         "git {arguments} failed ({status}): {stderr}{}",
@@ -361,9 +358,8 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// A write verb was refused before any `git` ran, because what it was asked to do is
-    /// not something it does (`docs/prd/staging-and-commit.md` R3): `why` says what, for
-    /// the caller to show. Nothing was written.
+    /// A write verb was refused before any `git` ran, because what it was asked to do is not
+    /// something it does: `why` says what, for the caller to show. Nothing was written.
     #[error("{path}: {why}")]
     Refused { path: String, why: Refusal },
 
@@ -373,16 +369,16 @@ pub enum Error {
     #[error("no path was given")]
     NoPaths,
 
-    /// What a patch was built from moved after it was read (R3.7): the index entry, or for
-    /// a discard the working-tree file, is no longer the side the drawn diff names. The
-    /// patch was not applied — `git apply` could otherwise land it at an offset, on lines
-    /// the user never saw — and nothing was written; the remedy is to read the diff again.
+    /// What a patch was built from moved after it was read: the index entry, or for a discard the
+    /// working-tree file, is no longer the side the drawn diff names. The patch was not applied —
+    /// `git apply` could otherwise land it at an offset, on lines the user never saw — and nothing
+    /// was written; the remedy is to read the diff again.
     #[error("{path} changed after its diff was read")]
     ChangedSinceRead { path: String },
 
-    /// What a destructive operation's `Consequence` names moved between the confirmation
-    /// and the run (R1.4): a file edited, replaced or removed, an entry restaged. The
-    /// operation refused, writing nothing — an outcome of its own, never git's failure.
+    /// What a destructive operation's `Consequence` names moved between the confirmation and the
+    /// run: a file edited, replaced or removed, an entry restaged. The operation refused, writing
+    /// nothing — an outcome of its own, never git's failure.
     #[error("{path} changed since you confirmed")]
     ChangedSinceConfirmed { path: String },
 
@@ -406,38 +402,35 @@ pub enum Error {
         failure: Option<Box<Error>>,
     },
 
-    /// Create Branch's discard before its checkout was refused before any confirmation or any
-    /// `git` ran (`docs/prd/staging-and-commit.md` R11.3): `why` says what, for the caller to
-    /// show. Nothing was written.
+    /// Create Branch's discard before its checkout was refused before any confirmation or any `git`
+    /// ran: `why` says what, for the caller to show. Nothing was written.
     #[error("{why}")]
     CheckoutRefused { why: CheckoutRefusal },
 
-    /// What Create Branch's Discard was confirmed for moved between the press and the run
-    /// (R1.4; the user's decision of 2026-10-10): `HEAD`, the commit or the name — nothing else
-    /// is compared. The checkout refused, writing nothing — an outcome of its own, never git's
-    /// failure.
+    /// What Create Branch's Discard was confirmed for moved between the press and the run — `HEAD`,
+    /// the commit or the name; nothing else is compared. The checkout refused, writing nothing — an
+    /// outcome of its own, never git's failure.
     #[error("{what}")]
     CheckoutChangedSinceConfirmed { what: CheckoutMoved },
 
-    /// A commit or an amend was refused before any `git` ran (`docs/prd/staging-and-commit.md`
-    /// R6.1, R6.3, R6.9): `why` says what, for the caller to show. Nothing was written.
+    /// A commit or an amend was refused before any `git` ran: `why` says what, for the caller to
+    /// show. Nothing was written.
     #[error("{why}")]
     CommitRefused { why: CommitRefusal },
 
-    /// What an amend's `Consequence` names moved between the confirmation and the run
-    /// (R1.4): `HEAD` is another commit, a remote has it now, or the reflog setting changed.
-    /// The amend refused, writing nothing — an outcome of its own, never git's failure.
+    /// What an amend's `Consequence` names moved between the confirmation and the run — `HEAD` is
+    /// another commit, a remote has it now, or the reflog setting changed. The amend refused,
+    /// writing nothing — an outcome of its own, never git's failure.
     #[error("HEAD changed since you confirmed the amend")]
     AmendChangedSinceConfirmed,
 
-    /// A confirmed amend git ran and failed before amending — a hook refused it, say — so `HEAD`
-    /// is still the commit the confirmation names (staging-and-commit R1.1, R10.5; option (a) of
-    /// 2026-10-10, as (a′)): `failure` is git's, and `unspent` the confirmation handed back, for
-    /// the skip to amend with without asking again; the skip's run re-checks it. A token comes
-    /// back only on git's failure with `HEAD` read unmoved after the reap — never for a refusal
-    /// before git ran, a cancel, or a run that moved `HEAD`. What git writes before a hook runs —
-    /// the index's refreshed stat data and cache tree, unreferenced tree objects — is git's own
-    /// bookkeeping, outside what the `Consequence` names. Its text is `failure`'s.
+    /// A confirmed amend git ran and failed before amending — a hook refused it, say — so `HEAD` is
+    /// still the commit the confirmation names: `failure` is git's, and `unspent` the confirmation
+    /// handed back, for the skip to amend with without asking again; the skip's run re-checks it. A
+    /// token comes back only on git's failure with `HEAD` read unmoved after the reap — never for a
+    /// refusal before git ran, a cancel, or a run that moved `HEAD`. What git writes before a hook
+    /// runs — the index's refreshed stat data and cache tree, unreferenced tree objects — is git's
+    /// own bookkeeping, outside what the `Consequence` names. Its text is `failure`'s.
     #[error("{failure}")]
     AmendNotMade {
         failure: Box<Error>,
@@ -446,22 +439,20 @@ pub enum Error {
 
     /// git made the commit or the amend — `HEAD` read after the reap is the commit it made — and
     /// then exited non-zero: a `die` after the ref update, such as "repository has been updated,
-    /// but unable to write new_index file" (phase 13's QA item #1, R4.7). It was made, the
-    /// refresh after it draws it, and `failure` is git's, for the window to show its words. A
-    /// confirmed amend's token is spent: nothing is handed back. How the window words it is
-    /// staging-and-commit phase 19's.
+    /// but unable to write new_index file". It was made, the refresh after it draws it, and
+    /// `failure` is git's, for the window to show its words. A confirmed amend's token is spent:
+    /// nothing is handed back.
     #[error("git {verb}, but then failed: {failure}")]
     MadeButGitFailed {
         verb: &'static str,
         failure: Box<Error>,
     },
 
-    /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a
-    /// commit whose parent is the `HEAD` it ran on, or for an amend, whose parents are the
-    /// replaced commit's (the carried item #10 of phase 12's QA). Something else moved `HEAD`
-    /// while it ran — for an amend, git may have amended whatever `HEAD` had become (the
-    /// token-free amend's window, `crate::ops::amend_unconfirmed`); what is there now is what
-    /// the refresh after it draws.
+    /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a commit
+    /// whose parent is the `HEAD` it ran on, or for an amend, whose parents are the replaced
+    /// commit's. Something else moved `HEAD` while it ran — for an amend, git may have amended
+    /// whatever `HEAD` had become (the token-free amend's window, `crate::ops::amend_unconfirmed`);
+    /// what is there now is what the refresh after it draws.
     #[error(
         "git said it {verb}, but HEAD is not the commit it made: something else moved HEAD \
          while it ran{}",
@@ -473,15 +464,14 @@ pub enum Error {
     )]
     CommitUnconfirmed { verb: &'static str },
 
-    /// `Remove index.lock…` refused before touching anything (staging-and-commit R12.4): no
-    /// lock to remove, one that is not a plain file, a `git` Cairn runs in the repository, or
-    /// a confirmation of another operation.
+    /// `Remove index.lock…` refused before touching anything: no lock to remove, one that is not a
+    /// plain file, a `git` Cairn runs in the repository, or a confirmation of another operation.
     #[error("index.lock was not removed: {why}")]
     LockRefused { why: LockRefusal },
 
-    /// The lock a removal was confirmed for was removed, replaced or written since the
-    /// confirmation — its size, its time or the file itself differs (R1.4, R12.4). Nothing was
-    /// removed: the lock now there may be a running git's.
+    /// The lock a removal was confirmed for was removed, replaced or written since the confirmation
+    /// — its size, its time or the file itself differs. Nothing was removed: the lock now there may
+    /// be a running git's.
     #[error("{path} changed since you confirmed")]
     LockChangedSinceConfirmed { path: String },
 
@@ -510,10 +500,10 @@ pub enum Error {
 }
 
 impl Error {
-    /// This error as a person reads it, scrubbed of every URL's userinfo (staging-and-commit
-    /// R12.2, R4.10): git's own words in it were scrubbed as the runner split them, and what
-    /// else it quotes — a setting's value, a record git printed — is scrubbed here, once, so the
-    /// application draws an error's text through this and never scrubs it itself.
+    /// This error as a person reads it, scrubbed of every URL's userinfo: git's own words in it
+    /// were scrubbed as the runner split them, and what else it quotes — a setting's value, a
+    /// record git printed — is scrubbed here, once, so the application draws an error's text
+    /// through this and never scrubs it itself.
     pub fn shown(&self) -> ScrubbedLines {
         ScrubbedLines::scrubbing(&self.to_string())
     }
@@ -567,20 +557,19 @@ impl std::fmt::Display for RefusedWrite {
 pub enum Refusal {
     /// A verb of lines was given a selection of nothing: no line and no mode change.
     NothingSelected,
-    /// The change is taken whole, by a file verb, never by a patch of part of it — a
-    /// deletion, a type change, a state that is not text — or the selection is every line
-    /// of a file that is new, whose discard deletes it: that is the file verb's, whose
-    /// prompt says the file is deleted (R2.3, L8).
+    /// The change is taken whole, by a file verb, never by a patch of part of it — a deletion, a
+    /// type change, a state that is not text — or the selection is every line of a file that is
+    /// new, whose discard deletes it: that is the file verb's, whose prompt says the file is
+    /// deleted.
     WholeFileOnly,
-    /// The path is conflicted: it is staged whole with `git add`, which marks it resolved,
-    /// and takes no patch and no discard by any verb (R3.11, L25).
+    /// The path is conflicted: it is staged whole with `git add`, which marks it resolved, and
+    /// takes no patch and no discard by any verb.
     Conflicted,
-    /// A submodule's changes are never discarded: `git restore` leaves its commit where it
-    /// was, only `git submodule update` moves it back, and no prompt can count what is
-    /// dirty inside it (R3.10, L24).
+    /// A submodule's changes are never discarded: `git restore` leaves its commit where it was,
+    /// only `git submodule update` moves it back, and no prompt can count what is dirty inside it.
     Submodule,
-    /// An untracked directory holding a repository of its own: deleting it would take
-    /// every commit only it has, so it is refused before any confirmation (R3.5, L8).
+    /// An untracked directory holding a repository of its own: deleting it would take every commit
+    /// only it has, so it is refused before any confirmation.
     NestedRepository,
     /// The path is a directory or a special file, not a file `git status` lists one per
     /// file: nothing a discard deletes or restores.
@@ -590,8 +579,8 @@ pub enum Refusal {
     /// there (a file no prompt named, or a link), and hashing it would read through a link
     /// to a file outside the working tree.
     Obstructed,
-    /// The path has no unstaged change — the working tree matches the index — so there is
-    /// nothing to discard; staged changes are never discarded (R3.6).
+    /// The path has no unstaged change — the working tree matches the index — so there is nothing
+    /// to discard; staged changes are never discarded.
     NoUnstagedChange,
     /// A destructive operation was handed a confirmation of another operation: a discard
     /// of lines given a discard of files' token, or the reverse.
@@ -682,16 +671,16 @@ impl std::fmt::Display for CheckoutMoved {
 /// Why a commit or an amend refused before any `git` ran; see [`Error::CommitRefused`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRefusal {
-    /// git is in the middle of an operation a commit or an amend is refused during (L25, R6.9):
-    /// a rebase, `git am` or a sequence of cherry-picks or reverts — or, for an amend, any
-    /// operation, a merge and a single pick included, which git itself refuses to amend in. Its
-    /// text names git's command to continue or abort it.
+    /// git is in the middle of an operation a commit or an amend is refused during: a rebase, `git
+    /// am` or a sequence of cherry-picks or reverts — or, for an amend, any operation, a merge and
+    /// a single pick included, which git itself refuses to amend in. Its text names git's command
+    /// to continue or abort it.
     InProgress(cairn_model::OperationInProgress),
-    /// The branch has no commit yet, so there is nothing to amend (R6.3).
+    /// The branch has no commit yet, so there is nothing to amend.
     NothingToAmend,
-    /// `i18n.commitEncoding` names an encoding other than UTF-8 (R6.1): git stores the
-    /// message's bytes as they are under that encoding's name, so a UTF-8 draft would be
-    /// read back as other characters (git-write-verbs.md §5). The value as configured.
+    /// `i18n.commitEncoding` names an encoding other than UTF-8: git stores the message's bytes as
+    /// they are under that encoding's name, so a UTF-8 draft would be read back as other characters
+    /// (git-write-verbs.md §5). The value as configured.
     CommitEncoding { encoding: String },
     /// An amend was handed a confirmation of another operation.
     NotWhatWasConfirmed,
@@ -845,8 +834,8 @@ impl std::fmt::Display for Directories<'_> {
 mod tests {
     use super::*;
 
-    /// R5.3: a failed write's message names the lock files present, and a failure
-    /// with none reads as before.
+    /// A failed write's message names the lock files present, and a failure with none names no
+    /// lock.
     #[test]
     fn a_failure_names_the_locks_present_and_is_silent_when_there_are_none() {
         use std::os::unix::process::ExitStatusExt as _;
@@ -872,8 +861,8 @@ mod tests {
         assert!(text.ends_with("/r/.git/index.lock"), "{text}");
     }
 
-    /// Phase 13's QA item #2(a): an amend reported unconfirmed says git may have amended what
-    /// `HEAD` had become, the token-free amend's window. Caught by: the commit's words reused.
+    /// An amend reported unconfirmed says git may have amended what `HEAD` had become, the
+    /// token-free amend's window. Caught by: the commit's words reused.
     #[test]
     fn an_unconfirmed_amend_says_git_may_have_amended_what_head_became() {
         let amended = Error::CommitUnconfirmed { verb: "amended" }.to_string();
@@ -885,9 +874,9 @@ mod tests {
         assert!(committed.ends_with("while it ran"), "{committed}");
     }
 
-    /// R12.2: an error's text as the application draws it carries no URL's userinfo, whatever
-    /// part of it quoted one — git's words, or a value the engine quotes beside them. Caught by:
-    /// the application handed `to_string`'s text as it is.
+    /// An error's text as the application draws it carries no URL's userinfo, whatever part of it
+    /// quoted one — git's words, or a value the engine quotes beside them. Caught by: the
+    /// application handed `to_string`'s text as it is.
     #[test]
     fn an_errors_shown_text_carries_no_userinfo() {
         let quoting = Error::InvalidConfig {

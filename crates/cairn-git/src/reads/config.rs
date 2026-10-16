@@ -13,13 +13,11 @@
 //! - **A fetch** (`crate::ops::refspec_policy`): the refspec check refuses a fetch whose remote
 //!   is a mirror, whose refspecs write local branches, or whose pruning would delete local tags
 //!   ([`fetch_settings`]).
-//! - **A commit and an amend** (staging-and-commit R6.11, `review-code-engine.md` M4):
-//!   `i18n.commitEncoding`, which a commit is refused for when it names anything but UTF-8, and
-//!   `core.logAllRefUpdates`, which decides whether git logs an amend's move, so whether the
-//!   replaced commit can be recovered ([`commit_settings`]).
+//! - **A commit and an amend**: `i18n.commitEncoding`, which a commit is refused for when it
+//!   names anything but UTF-8, and `core.logAllRefUpdates`, which decides whether git logs an
+//!   amend's move, so whether the replaced commit can be recovered ([`commit_settings`]).
 //!
-//! This is the second porcelain verb a read runs, accepted by the user on 2026-10-04 beside
-//! `git diff --no-index`, and widened to the commit's settings on 2026-10-10
+//! `git config` is one of the porcelain verbs a read may run, beside `git diff --no-index`
 //! (`crate::reads`, "What a read may run").
 //!
 //! Every invocation is `git config --includes --null` and then one named query of one key:
@@ -103,9 +101,9 @@ pub(crate) fn fetch_settings(
     })
 }
 
-/// `i18n.commitEncoding` as written (staging-and-commit R6.1, R6.11): what git names a commit's
-/// encoding, refused before a commit runs unless it names UTF-8; `None` when it is unset. A key
-/// with no value reads as empty, which no encoding is called — git itself dies on it.
+/// `i18n.commitEncoding` as written: what git names a commit's encoding, refused before a
+/// commit runs unless it names UTF-8; `None` when it is unset. A key with no value reads as
+/// empty, which no encoding is called — git itself dies on it.
 pub(crate) fn commit_encoding(
     git: &GitBinary,
     repo: &Repository,
@@ -114,8 +112,8 @@ pub(crate) fn commit_encoding(
     text(git, repo, "i18n.commitEncoding", cancel)
 }
 
-/// `core.logAllRefUpdates` as git reads it (R6.4, R6.11): `always`, in any case, or else the
-/// value as a boolean; `None` when it is unset, where git logs unless the repository is bare.
+/// `core.logAllRefUpdates` as git reads it: `always`, in any case, or else the value as a boolean;
+/// `None` when it is unset, where git logs unless the repository is bare.
 ///
 /// git reads each value in turn, taking `always` before its boolean parse, so the last value
 /// decides. `--type=bool --get` cannot ask that: it parses every value of the key, and fails on
@@ -175,8 +173,8 @@ pub(crate) enum CommitCleanup {
     Scissors,
 }
 
-/// `commit.cleanup` as git reads it (R6.10): [`CommitCleanup::Default`] when it is unset; a
-/// value git refuses is [`Error::InvalidConfig`], as git's commit dies on it.
+/// `commit.cleanup` as git reads it: [`CommitCleanup::Default`] when it is unset; a value git
+/// refuses is [`Error::InvalidConfig`], as git's commit dies on it.
 pub(crate) fn commit_cleanup(
     git: &GitBinary,
     repo: &Repository,
@@ -199,11 +197,11 @@ pub(crate) fn commit_cleanup(
     }
 }
 
-/// Whether the comment character is `auto` (R6.10): `core.commentChar`'s last value — or, on git
-/// 2.45 and later, which read it as an alias, `core.commentString`'s — `auto` in any case
-/// (`git_default_core_config`, `strcasecmp`), so git's commit picks a comment character that
-/// starts no line of the message. Residual: with both keys set, one `auto` and the other not,
-/// which came last is not asked; `auto` is answered.
+/// Whether the comment character is `auto`: `core.commentChar`'s last value — or, on git 2.45 and
+/// later, which read it as an alias, `core.commentString`'s — `auto` in any case
+/// (`git_default_core_config`, `strcasecmp`), so git's commit picks a comment character that starts
+/// no line of the message. Residual: with both keys set, one `auto` and the other not, which came
+/// last is not asked; `auto` is answered.
 pub(crate) fn comment_char_is_auto(
     git: &GitBinary,
     repo: &Repository,
@@ -534,12 +532,12 @@ mod tests {
         )
     }
 
-    /// R6.11: `core.logAllRefUpdates` as git reads it — unset, true and false in git's
-    /// spellings and as numbers, `always` in any case, the bare key (true) and `= ` (false), the
-    /// last of several (an `always` beneath a `true`, as a global setting sits beneath the one
-    /// `git init` writes) — and `i18n.commitEncoding` as written. Caught by: a boolean parse of
-    /// every value (which an `always` fails), `always` read case-sensitively, the first value
-    /// taken, or the bare key and an empty value read alike.
+    /// `core.logAllRefUpdates` as git reads it — unset, true and false in git's spellings and as
+    /// numbers, `always` in any case, the bare key (true) and `= ` (false), the last of several (an
+    /// `always` beneath a `true`, as a global setting sits beneath the one `git init` writes) — and
+    /// `i18n.commitEncoding` as written. Caught by: a boolean parse of every value (which an
+    /// `always` fails), `always` read case-sensitively, the first value taken, or the bare key and
+    /// an empty value read alike.
     #[test]
     fn the_commits_settings_are_read_as_git_reads_them() {
         let fixture = Fixture::new("commit");
@@ -600,9 +598,9 @@ mod tests {
         );
     }
 
-    /// C32: set only through a linked worktree's `includeIf "gitdir:..."`, both settings are
-    /// read in that worktree and not in the main one, as git reads them. Caught by: gix's
-    /// reading of the include, which evaluates it against the common directory.
+    /// Set only through a linked worktree's `includeIf "gitdir:..."`, both settings are read in
+    /// that worktree and not in the main one, as git reads them. Caught by: gix's reading of the
+    /// include, which evaluates it against the common directory.
     #[test]
     fn a_linked_worktrees_conditional_include_sets_the_commits_settings() {
         let fixture = Fixture::new("commit-worktree");

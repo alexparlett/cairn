@@ -1,4 +1,5 @@
-//! C1, C2, C3, C5 and C6, plus the reporter behind C14.
+//! The diff engine and the write verbs against real `git`, one module a surface, plus the
+//! reporter that measures the diff queries on the bench repository.
 
 #[path = "../support/write_executable.rs"]
 mod write_executable;
@@ -37,7 +38,7 @@ pub fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
 }
 
 /// The `git` Cairn itself would find on this machine, found once for the whole binary: what
-/// the changes query runs (decision E). Its environment is the one the application builds,
+/// the changes query runs. Its environment is the one the application builds,
 /// so it reads the same configuration the engine's gix handle does.
 pub fn git() -> &'static cairn_git::ops::GitBinary {
     static GIT: std::sync::OnceLock<cairn_git::ops::GitBinary> = std::sync::OnceLock::new();

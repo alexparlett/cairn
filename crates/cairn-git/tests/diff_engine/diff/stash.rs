@@ -1,8 +1,8 @@
-//! C7's engine half (refs-and-status R6.2): a stash lists what `git stash show --name-status`
-//! lists, with `stash.showIncludeUntracked` off and on — the untracked files paired with
-//! the tracked changes as git pairs them — and each file's content is read from the side it
-//! is on, the untracked commit's included. Run under the host's git and the floors' (git
-//! 2.30.9 ignores the setting, as it ignores it for the user).
+//! A stash lists what `git stash show --name-status` lists, with `stash.showIncludeUntracked`
+//! off and on — the untracked files paired with the tracked changes as git pairs them — and
+//! each file's content is read from the side it is on, the untracked commit's included. Run
+//! under the host's git and the floors' (git 2.30.9 ignores the setting, as it ignores it for
+//! the user).
 
 use std::collections::BTreeSet;
 
@@ -91,7 +91,7 @@ fn stash_changes(repo: &Repo, stash: Oid) -> Result<cairn_model::ChangeSet, Erro
     engine.changes(git(), &ChangesRequest::stash(stash), &CancelSignal::new())
 }
 
-/// C7, R6.2: with `stash.showIncludeUntracked` off, a stash lists its tracked changes
+/// With `stash.showIncludeUntracked` off, a stash lists its tracked changes
 /// alone; set, the untracked files too, a deleted tracked file and an untracked file of its
 /// content paired as the rename git calls them — each exactly what `git stash show
 /// --name-status` lists under the same git. Caught by: a commit's comparison of the stash
@@ -137,7 +137,7 @@ fn a_stash_lists_what_git_stash_show_lists_with_the_setting_off_and_on() {
     }
 }
 
-/// R6.2: each file of a stash reads its content from the side it is on — a tracked edit from
+/// Each file of a stash reads its content from the side it is on — a tracked edit from
 /// the stash commit, an untracked file and a rename into one from the untracked commit —
 /// alone and through Expand All's pages, each side the bytes git stores. Caught by: every
 /// file read between the base and the stash commit, which holds no untracked file (the read
@@ -259,7 +259,7 @@ fn a_stash_read_writes_nothing() {
     );
 }
 
-/// R6.2's Commit tab: a stash's change set carries the stash commit's own details — its
+/// For the Commit tab, a stash's change set carries the stash commit's own details — its
 /// message, and every parent, the untracked commit among them.
 #[test]
 fn a_stash_describes_its_stash_commit() {
@@ -334,9 +334,9 @@ fn a_copy_into_an_untracked_file_is_read_from_the_untracked_commit() {
     assert_eq!(text.new_content(), copied.as_bytes());
 }
 
-/// DO2: the stash read writes nothing and runs no program but what D1 allows a read — the
-/// repository's `core.fsmonitor` — under a hostile configuration: a caching textconv and a
-/// driver `command` (the fixture's trap), `diff.external`, a clean and a smudge filter on
+/// The stash read writes nothing and runs no program but the one a read lets git start —
+/// the repository's `core.fsmonitor` — under a hostile configuration: a caching textconv and
+/// a driver `command` (the fixture's trap), `diff.external`, a clean and a smudge filter on
 /// every `.txt`, `core.pager`, the untracked cache, and `stash.showIncludeUntracked` set,
 /// with the working tree stat-dirty. The git directory is byte-identical after the stash's
 /// list and every file's content, exact and ignoring whitespace, and none of the programs'

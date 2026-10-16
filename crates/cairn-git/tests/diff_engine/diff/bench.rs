@@ -1,9 +1,9 @@
-//! The reporter behind C14, and the check that M1's rename pairs are git's.
+//! The reporter behind the diff queries' measured costs, and the check that the rename
+//! pairs on subject M1 are git's.
 //!
-//! Not an assertion: a timing check in CI is flaky and bound to a machine, which is why
-//! `history-graph`'s A7 was not automated either. This prints numbers; the numbers go into
-//! `docs/research/diff-engine/c14-measured.md` beside git's own from
-//! `docs/research/diff-engine/measured-baseline.md`.
+//! Not an assertion: a timing check in CI is flaky and bound to a machine. This prints
+//! numbers; the numbers go into `docs/research/diff-engine/c14-measured.md` beside git's own
+//! from `docs/research/diff-engine/measured-baseline.md`.
 //!
 //! Run it with a release build, warm, against the repository the bar names:
 //!
@@ -276,7 +276,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
     let id = Oid::parse(hex).expect("an id");
     let set = changes(&mut session, &id);
     let file = file_at(&set, path).clone();
-    // 2.5 MB, so the default query refuses it on R2.6's byte ceiling; what the bar is about
+    // 2.5 MB, so the default query refuses it on its byte ceiling; what the bar is about
     // is the time to ANSWER it, which is the time to load it.
     let anyway = ContentOptions {
         load_anyway: true,
@@ -349,8 +349,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
     report(&format!("{name}, Load Diff"), loading, None, git_ms);
 
     // Expand All over the edit-heavy subject: every file's content in one call, the lines
-    // of every text file from one `git diff-tree -p` over the commit. No bar of its own in
-    // the PRD; measured because phase 08 builds on it.
+    // of every text file from one `git diff-tree -p` over the commit. No bar of its own.
     eprintln!("\nExpand All with no budget (every file, a page at a time):");
     let (name, hex, _, _) = CHANGES_SUBJECTS[0];
     let id = Oid::parse(hex).expect("an id");
@@ -452,7 +451,7 @@ fn expand_all(
     }
 }
 
-/// Q2, the Expand All budget, measured on the subjects of the bar: for each budget, how long
+/// The Expand All budget, measured on the subjects of the bar: for each budget, how long
 /// Expand All takes to its first page and to its end on the heaviest commits, warm, in a
 /// release build — what the window waits for while it stays responsive. Prints; decides
 /// nothing (the choice and its reasons are in `docs/research/diff-engine/c14-measured.md`,

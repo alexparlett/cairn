@@ -98,8 +98,9 @@ impl Repository {
 impl HistorySession<'_> {
     /// `cancel` is polled once per row laid out, per commit looked ahead at, and — on the
     /// page that opens the walk — per tip read but the first; on cancellation the work done
-    /// stays in the session, except a cancelled open, which the next page begins again. `walked` and `decoded` count this
-    /// call only. Any error other than [`Error::Cancelled`] poisons the session.
+    /// stays in the session, except a cancelled open, which the next page begins again.
+    /// `walked` and `decoded` count this call only. Any error other than
+    /// [`Error::Cancelled`] poisons the session.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;

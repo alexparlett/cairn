@@ -1,8 +1,7 @@
-//! What Show Lost Commits adds to a walk's tips (`docs/prd/staging-and-commit.md` R11.1,
-//! R11.2): the old and the new id of every entry of `HEAD`'s reflog and of each local
-//! branch's, as `git rev-list --reflog` and `git fsck` read a reflog — so the commit an
-//! amend replaced is found even where the only entry naming it is the amend's own, as its
-//! old id, in a log the amend itself created.
+//! What Show Lost Commits adds to a walk's tips: the old and the new id of every entry of
+//! `HEAD`'s reflog and of each local branch's, as `git rev-list --reflog` and `git fsck`
+//! read a reflog — so the commit an amend replaced is found even where the only entry naming
+//! it is the amend's own, as its old id, in a log the amend itself created.
 //!
 //! Each log is read whole, as bytes, and each line parsed by git's own rules
 //! (`show_one_reflog_ent` in git's `refs/files-backend.c`), never through gix's newest-first
@@ -23,7 +22,7 @@ use crate::{Cancel, Error};
 /// Every commit an entry of `HEAD`'s reflog or of one of `branches`' names, as its old or
 /// its new id, each once, in the order the logs hold them — `HEAD`'s first, then each
 /// branch's, oldest entry first — with its committer date, so the walk that starts from them
-/// reads none of them again (staging-and-commit phase 10's decision A). The date is the
+/// reads none of them again. The date is the
 /// commit-graph's where the graph holds the commit, as git's own walk takes it; otherwise the
 /// commit is read once, for its kind and its date together. `None` once `cancel` fires, polled
 /// before each log and before each id's date is found. A log that cannot be read is skipped,

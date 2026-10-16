@@ -1,19 +1,17 @@
 //! Discarding: lines and a mode change by patch, and whole files — a tracked file's
-//! unstaged change restored from the index, an untracked file deleted
-//! (`docs/prd/staging-and-commit.md` R3.3, R3.5). Destructive (R1.5): what is discarded was
-//! never hashed into any object, so nothing in the repository can bring it back, and no
-//! backup is made (L2). Each operation takes a [`Confirmed`] by value, is on the guard's
-//! destructive-operation roster, derives every target from the [`Consequence`] the token
-//! carries, and re-reads the repository the moment before it runs, refusing — writing
-//! nothing — when anything that `Consequence` names moved (R1.4,
-//! [`Error::ChangedSinceConfirmed`]).
+//! unstaged change restored from the index, an untracked file deleted. Destructive: what is
+//! discarded was never hashed into any object, so nothing in the repository can bring it
+//! back, and no backup is made. Each operation takes a [`Confirmed`] by value, is on the
+//! guard's destructive-operation roster, derives every target from the [`Consequence`] the
+//! token carries, and re-reads the repository the moment before it runs, refusing — writing
+//! nothing — when anything that `Consequence` names moved ([`Error::ChangedSinceConfirmed`]).
 //!
 //! Each `Consequence` is computed here, from the repository as it is, by
 //! [`discard_lines_consequence`] and [`discard_files_consequence`] — never by a caller —
 //! and refused before one is offered where no honest prompt could be shown: a selection of
-//! nothing (no zero-line prompt, phase 01's QA item 18), no file at all, a conflicted path
-//! (R3.11), a submodule (R3.10), a repository nested in the working tree (R3.5), and staged
-//! changes, which are never discarded (R3.6): a path with no unstaged change is refused.
+//! nothing (no zero-line prompt), no file at all, a conflicted path, a submodule, a
+//! repository nested in the working tree, and staged changes, which are never discarded: a
+//! path with no unstaged change is refused.
 //!
 //! **Lines.** The patch is the model's, from the exact diff the user confirmed — the
 //! unstaged or untracked diff, inverted, never applied with `-R` — given to
@@ -22,30 +20,29 @@
 //! keeps its own form. The patch is emitted once, by [`discard_lines_consequence`], and
 //! carried in the `Consequence` the user confirms; [`discard_lines`] applies exactly those
 //! bytes and takes no diff, so a later diff of the same blobs whose lines align otherwise
-//! can never move the selection onto other lines (phase 03's QA item 5). Every line of a new file is not discarded by patch — that deletes the
-//! file — but by [`discard_files`], whose prompt says the file is deleted
-//! ([`Refusal::WholeFileOnly`]; phase 02's carry-forward).
+//! can never move the selection onto other lines. Every line of a new file is not discarded
+//! by patch — that deletes the file — but by [`discard_files`], whose prompt says the file
+//! is deleted ([`Refusal::WholeFileOnly`]).
 //!
-//! **Files.** Tracked files go by `git restore --worktree` from a pathspec file, untracked
-//! ones by `git clean -f -q -- <paths>` — exactly the paths `git status` listed, each a file:
-//! git lists untracked files one per file (`crate::reads::status`), the one directory it
-//! still lists whole is a nested repository, which is refused, so `-d` is never passed and
-//! a file added beside a deleted one is never taken. `git clean` reads no pathspec file, so
-//! its paths go on `argv`, split into invocations of at most [`CLEAN_ARGUMENT_BYTES`] each,
-//! all after the one re-check made before the first (R3.5). The two verbs are two writes,
-//! and `git clean` deletes what it can before it exits non-zero on the rest, so a failure
-//! after the first write is no bare failure: every confirmed file is read again after the
-//! run, and a discard that did not take every one answers [`Error::DiscardIncomplete`],
-//! carrying the record of what ran (quoting the accepted prompt), git's failure, and the
-//! paths still as they were confirmed — which also names a file git leaves alone, an
-//! ignored one under `git clean -f`.
+//! **Files.** Tracked files go by `git restore --worktree` from a pathspec file, untracked ones
+//! by `git clean -f -q -- <paths>` — exactly the paths `git status` listed, each a file: git
+//! lists untracked files one per file (`crate::reads::status`), the one directory it still
+//! lists whole is a nested repository, which is refused, so `-d` is never passed and a file
+//! added beside a deleted one is never taken. `git clean` reads no pathspec file, so its paths
+//! go on `argv`, split into invocations of at most [`CLEAN_ARGUMENT_BYTES`] each, all after the
+//! one re-check made before the first. The two verbs are two writes, and `git clean` deletes
+//! what it can before it exits non-zero on the rest, so a failure after the first write is no
+//! bare failure: every confirmed file is read again after the run, and a discard that did not
+//! take every one answers [`Error::DiscardIncomplete`], carrying the record of what ran
+//! (quoting the accepted prompt), git's failure, and the paths still as they were confirmed —
+//! which also names a file git leaves alone, an ignored one under `git clean -f`.
 //!
 //! **The re-check** compares the index entry, read with gix from the index file now, and the
 //! working-tree file, hashed as its bytes are now — so any byte changed since the
-//! confirmation refuses, a line ending included, which git's form would not show (phase 01's
-//! QA item 25) — and, for lines, the file's git form too, since that is what the patch was
-//! built against (R3.7). Between the re-check and git's run is a window no check closes; it
-//! is the user's own `git checkout -p`'s window too.
+//! confirmation refuses, a line ending included, which git's form would not show — and, for
+//! lines, the file's git form too, since that is what the patch was built against. Between
+//! the re-check and git's run is a window no check closes; it is the user's own
+//! `git checkout -p`'s window too.
 
 use std::ffi::OsString;
 
@@ -167,11 +164,11 @@ pub fn discard_lines_consequence(
 
 /// Discards the lines `confirmed` names, applying the patch its `Consequence` carries —
 /// emitted from the diff the user confirmed, never rebuilt — with `git apply
-/// --whitespace=nowarn -` on the working tree (R3.3).
+/// --whitespace=nowarn -` on the working tree.
 ///
 /// Re-reads the index entry, the file's bytes, its executable bit and its git form first,
 /// and refuses with [`Error::ChangedSinceConfirmed`], writing nothing, when any differs from
-/// the `Consequence` (R1.4). The [`Performed`] records the prompt the user accepted.
+/// the `Consequence`. The [`Performed`] records the prompt the user accepted.
 pub fn discard_lines(
     git: &GitBinary,
     repo: &Repository,
@@ -338,13 +335,13 @@ pub fn discard_files_consequence(
     Ok(Consequence::DiscardFiles { files })
 }
 
-/// Discards the changes in the files `confirmed` names (R3.5): each tracked file restored
+/// Discards the changes in the files `confirmed` names: each tracked file restored
 /// from the index with `git restore --worktree`, from a pathspec file, then each untracked
 /// file deleted with `git clean -f -q --`, its paths split past [`CLEAN_ARGUMENT_BYTES`].
 ///
 /// Re-reads every file and its index entry first — all of them, before the first write —
 /// and refuses with [`Error::ChangedSinceConfirmed`], writing nothing, when any differs from
-/// the `Consequence` (R1.4). The [`Performed`] records the prompt the user accepted.
+/// the `Consequence`. The [`Performed`] records the prompt the user accepted.
 pub fn discard_files(
     git: &GitBinary,
     repo: &Repository,
@@ -444,7 +441,7 @@ fn write_the_discard(
     }
     for batch in clean_batches(untracked) {
         // `-q`: git prints a line per file it deletes, and a `git clean` whose reader has gone —
-        // left running by a second close (R4.9) — dies of `SIGPIPE` at that line, part way
+        // left running by a second close — dies of `SIGPIPE` at that line, part way
         // through its batch. Quiet, it has nothing to write and finishes.
         let mut arguments: Vec<OsString> = ["clean", "-f", "-q", "--"].map(OsString::from).into();
         arguments.extend(batch.iter().map(|path| {
@@ -456,7 +453,7 @@ fn write_the_discard(
     Ok(())
 }
 
-/// Whether one file of a discard is still exactly as it was confirmed (R1.4): a tracked
+/// Whether one file of a discard is still exactly as it was confirmed: a tracked
 /// file's index entry, bytes and executable bit, an untracked file's absence from the index,
 /// bytes, executable bit and size. Before the run, `false` refuses it; after, `true` says it
 /// was not discarded.
@@ -604,7 +601,7 @@ mod tests {
         RepoPath::new(format!("{n:0length$}"))
     }
 
-    /// R3.5's bound: every path in exactly one batch, in order, no batch past the bound
+    /// The argument bound: every path in exactly one batch, in order, no batch past the bound
     /// unless it is one path, and a list under the bound one batch. Caught by: dropping the
     /// last batch, an off-by-one at the boundary, or an empty batch.
     #[test]
@@ -631,8 +628,8 @@ mod tests {
         assert!(clean_batches(&[]).is_empty());
     }
 
-    /// C9 for a discard of lines: its re-check's git form asked of `git hash-object --path`
-    /// as a read, then `git --literal-pathspecs apply --whitespace=nowarn -` as a write —
+    /// A discard of lines asks its re-check's git form of `git hash-object --path` as a
+    /// read, then runs `git --literal-pathspecs apply --whitespace=nowarn -` as a write —
     /// no `--cached`, no `-R` — with the model's inverted patch on stdin.
     #[test]
     fn a_discard_of_lines_runs_as_r3_names_it() {
@@ -662,7 +659,7 @@ mod tests {
         recorded[1].assert_a_write();
     }
 
-    /// C9 for a discard of files: `git --literal-pathspecs restore --worktree` from a
+    /// A discard of files runs `git --literal-pathspecs restore --worktree` from a
     /// pathspec file for the tracked file, then `git --literal-pathspecs clean -f -- <path>`
     /// for the untracked one — no `-d`, no second `-f` — each a write, and nothing read in
     /// between: the re-check reads the index with gix and hashes the bytes itself.
@@ -725,12 +722,12 @@ mod tests {
         }
     }
 
-    /// Phase 07's QA item 1: the count of what a discard of files would lose is polled for a
-    /// cancel before each path and stops — no prompt offered, no further `git` read — once it
-    /// trips: before the first path nothing runs, and between paths the tracked file's
-    /// `git diff-files` read is never started. A count left to run reads it. Caught by: a count
-    /// that ignores its cancel (it held the local lane and the close for as long as the
-    /// selection was wide), or one that reads the next path's diff after the cancel.
+    /// The count of what a discard of files would lose is polled for a cancel before each
+    /// path and stops — no prompt offered, no further `git` read — once it trips: before the
+    /// first path nothing runs, and between paths the tracked file's `git diff-files` read is
+    /// never started. A count left to run reads it. Caught by: a count that ignores its
+    /// cancel (which holds the local lane and the close for as long as the selection is
+    /// wide), or one that reads the next path's diff after the cancel.
     #[test]
     fn a_cancelled_count_stops_between_paths_and_runs_no_further_read() {
         let stub = RecordingStub::new();
@@ -756,7 +753,7 @@ mod tests {
     }
 
     /// Each path is counted once however often it is named, by a set rather than a scan of
-    /// what was counted (phase 07's QA item 1: the scan was quadratic in the selection).
+    /// what was counted, which would be quadratic in the selection.
     #[test]
     fn a_path_named_twice_is_counted_once() {
         let stub = RecordingStub::new();

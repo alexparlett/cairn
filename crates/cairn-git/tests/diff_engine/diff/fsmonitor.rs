@@ -1,5 +1,5 @@
 //! `core.fsmonitor=true`: git's own fsmonitor daemon, which a read starts as the user's own
-//! `git diff` does (the user's decision of 2026-10-04, accepted as parity).
+//! `git diff` does.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -81,7 +81,7 @@ fn no_daemon_here() -> Option<String> {
 /// index or config is written. And the daemon is still running once Cairn's handle on the
 /// repository is gone, because it is git's, in a session of its own, outside every process
 /// Cairn starts and ends. Caught by: a read that writes the index or an object under the
-/// daemon, and the daemon no longer started (the claim the docs make would then be stale).
+/// daemon, and the daemon not started (the claim the docs make would then be stale).
 ///
 /// It skips where the git or the machine has no daemon — git 2.55 brought one to Linux —
 /// and a passing test's stderr is hidden, so a skip reads `ok`. Where

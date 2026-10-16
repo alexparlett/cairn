@@ -1,14 +1,12 @@
-//! C16 on real repositories: every row a history pages out draws the subject, author, date,
-//! short id and merge marker it drew before rows were slimmed.
+//! On real repositories, every row a history pages out draws the subject, author, date,
+//! short id and merge marker its table records.
 //!
-//! The tables below are what the rows drew before: each was asserted against the old rows'
-//! own fields (their full parents, their author's address beside the name) while those
-//! fields still rode on every row — commit `4205d5d`, the one before the rows were slimmed
-//! — and the tests now hold the slimmed rows to them. The
-//! crafted fixture is built by `git commit-tree`, so its ids are the same on every machine;
-//! the Cairn checkout's table is the walk from `main` as it stood when the rows were
-//! slimmed, which is never rewritten. Every row of both, and of the Cairn checkout from
-//! `HEAD`, is also checked against the details query, which reads the commit afresh.
+//! The tables below are a fixed oracle: each was asserted against rows that carried their
+//! full parents and their author's address beside the name, and the tests hold the slim
+//! rows to them. The crafted fixture is built by `git commit-tree`, so its ids are the same
+//! on every machine; the Cairn checkout's table is the walk from a fixed commit of `main`,
+//! which is never rewritten. Every row of both, and of the Cairn checkout from `HEAD`, is
+//! also checked against the details query, which reads the commit afresh.
 
 #[path = "support/fixtures.rs"]
 mod fixtures;
@@ -324,7 +322,7 @@ fn crafted() -> (Crafted, String) {
     (repo, tip)
 }
 
-/// What the crafted fixture's rows drew before rows were slimmed.
+/// What the crafted fixture's rows draw, as rows that carried every field drew them.
 const CRAFTED_BEFORE: &[Row] = &[
     (
         "d64374098f705d852a54acdbf504e5354bb69fdb",
@@ -422,10 +420,11 @@ fn every_crafted_row_draws_what_it_drew_before_rows_were_slimmed() {
 
 // --- The Cairn checkout ---
 
-/// `main` when rows were slimmed: the squash-merged planning of this packet.
+/// The commit of `main` the Cairn checkout's table walks from.
 const MAIN_WHEN_SLIMMED: &str = "0cfd746";
 
-/// What the Cairn checkout's rows from [`MAIN_WHEN_SLIMMED`] drew before rows were slimmed.
+/// What the Cairn checkout's rows from [`MAIN_WHEN_SLIMMED`] draw, as rows that carried every
+/// field drew them.
 const CAIRN_BEFORE: &[Row] = &[
     (
         "0cfd746b5a913529bbd1a9684f8e92f1cb364c84",

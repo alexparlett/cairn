@@ -167,7 +167,7 @@ pub(super) struct Registration {
 
 impl Registration {
     /// Booked as starting now, with what the invocation was given: its
-    /// arguments as `cli` scrubbed them for every report of it (R12.2).
+    /// arguments as `cli` scrubbed them for every report of it.
     /// Nothing from its environment: the record has nowhere to put it.
     pub(super) fn new(
         processes: &Arc<Processes>,
@@ -242,10 +242,10 @@ pub(super) fn exit_of(status: std::process::ExitStatus) -> CommandExit {
     }
 }
 
-/// G17's engine half and R6.2: one record per invocation however it ends, and a
-/// registry that holds exactly the invocations still running. Against a stub
-/// `git` run in the Cairn checkout, each test with a repository handle of its
-/// own, so its registry and log are its own.
+/// One record per invocation however it ends, and a registry that holds
+/// exactly the invocations still running. Against a stub `git` run in the
+/// Cairn checkout, each test with a repository handle of its own, so its
+/// registry and log are its own.
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -360,7 +360,7 @@ mod tests {
             .map(drop)
     }
 
-    /// R8.1 field by field, from an invocation that finished: what it was
+    /// The record field by field, from an invocation that finished: what it was
     /// given, where it ran, when, for how long, its status, not cancelled, and
     /// what it said on stderr — and it was in the registry from the spawn until
     /// it was over, not after. Caught by: entering at the finish rather than the
@@ -399,12 +399,12 @@ mod tests {
         assert_eq!(record.stderr, "said this");
     }
 
-    /// C31 through the runner (R4.10): read as lines, stdout and stderr are split by the one line
-    /// type — a character straddling the piece limit arrives whole on both — and a URL's userinfo
+    /// Through the runner, read as lines, stdout and stderr are split by the one line type — a
+    /// character straddling the piece limit arrives whole on both — and a URL's userinfo
     /// written across two reads is never handed on, kept in the failure or recorded; the kept
     /// output lets go of whole older lines and says so; and the record's arguments carry no
-    /// userinfo either. Caught by: stdout and stderr split by two rules, a scrub after the cut, a
-    /// tail that starts part-way through a line, or an argument recorded as it was given.
+    /// userinfo either. Caught by: stdout and stderr split by two rules, a scrub after the cut,
+    /// a tail that starts part-way through a line, or an argument recorded as it was given.
     #[test]
     fn git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams() {
         let stub = stub(
@@ -479,7 +479,7 @@ mod tests {
     }
 
     /// stdout read as lines: its last line, written with no newline, is handed on, kept in the
-    /// failure and recorded (the phase 12 QA). Caught by: the stdout splitter's last line left
+    /// failure and recorded. Caught by: the stdout splitter's last line left
     /// unfinished when the stream ends.
     #[test]
     fn stdouts_last_line_without_a_newline_is_handed_on_kept_and_recorded() {
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(processes.running(), 0);
     }
 
-    /// R6.2 across handles: every worker handle on a repository books into the
+    /// Across handles, every worker handle on a repository books into the
     /// one registry and log the shared repository answers for.
     #[test]
     fn every_handle_on_a_repository_shares_its_log() {
@@ -771,10 +771,10 @@ mod tests {
         assert_eq!(shared.command_log().len(), 2);
     }
 
-    /// staging-and-commit R12.1: what one thread ran since its mark is its own invocations,
-    /// not another thread's run meanwhile, nor its own from before the mark; and the registry
-    /// counts what runs on any thread. Caught by: the log's tail handed out whole, a filter by
-    /// time alone, or a running count of one thread's.
+    /// What one thread ran since its mark is its own invocations, not another thread's run
+    /// meanwhile, nor its own from before the mark; and the registry counts what runs on any
+    /// thread. Caught by: the log's tail handed out whole, a filter by time alone, or a running
+    /// count of one thread's.
     #[test]
     fn an_operations_commands_are_what_its_thread_built_since_its_mark() {
         let quick = stub("echo \"ran $1\" >&2; exit 0");
@@ -821,11 +821,11 @@ mod tests {
         assert!(eventually(|| lane.running_invocations() == 0));
     }
 
-    /// R6.3, the engine half: ending every invocation reaches those being
-    /// driven and those dropped to a reaper, and returns once they are all
-    /// reaped, well inside the bound, with each recorded once as cancelled.
-    /// Caught by: ending only what is driven, waiting the whole bound whatever
-    /// happens, or returning before the reaps.
+    /// Ending every invocation reaches those being driven and those dropped to
+    /// a reaper, and returns once they are all reaped, well inside the bound,
+    /// with each recorded once as cancelled. Caught by: ending only what is
+    /// driven, waiting the whole bound whatever happens, or returning before
+    /// the reaps.
     #[test]
     fn ending_every_invocation_ends_them_all_and_waits_for_their_reaps() {
         let stub = stub(HANGING);
@@ -951,7 +951,7 @@ mod tests {
         );
     }
 
-    /// The bounds this phase fixed, as `state.md` records them.
+    /// The log's bounds, a thousand records and 4 MiB, and the close's, three seconds.
     #[test]
     fn the_log_and_close_bounds_have_the_values_the_packet_recorded() {
         assert_eq!(LOG_ENTRIES, 1000);

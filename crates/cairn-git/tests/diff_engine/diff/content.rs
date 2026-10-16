@@ -1,4 +1,4 @@
-//! C6: the content query against `git diff -U3`, git's binary rules, and R2.6's ceilings.
+//! The content query against `git diff -U3`, git's binary rules, and the size ceilings.
 
 use std::time::Instant;
 
@@ -86,11 +86,11 @@ fn changed(repo: &Repo, commit: &str) -> Vec<ChangedFile> {
     .files
 }
 
-/// C6's first half, over every path of every commit in the crafted history — a missing
-/// final newline on each side, CRLF content, an added file, a deleted file, an empty file,
-/// a one-line file, a rename, a type change and adjacent hunks all pass through here — at
-/// three lines of context and at one, each against the user's own `git diff`, header,
-/// function context and line (`super::parity`).
+/// Over every path of every commit in the crafted history — a missing final newline on each
+/// side, CRLF content, an added file, a deleted file, an empty file, a one-line file, a
+/// rename, a type change and adjacent hunks all pass through here — at three lines of
+/// context and at one, each against the user's own `git diff`, header, function context and
+/// line (`super::parity`).
 #[test]
 fn every_crafted_file_diff_is_the_one_git_prints() {
     let repo = repositories::crafted();
@@ -221,10 +221,10 @@ fn binary_verdicts(repo: &Repo, head: &str) -> Vec<(String, bool)> {
     seen
 }
 
-/// R2.5: git's ways of calling a file binary — the `-diff` attribute, a `diff` driver
-/// with `binary` set, the built-in `binary` macro, and a NUL in the first 8,000 bytes,
-/// at the last byte git looks at — and the files that are none of them, a NUL at the
-/// first byte git does NOT look at among them.
+/// git's ways of calling a file binary — the `-diff` attribute, a `diff` driver with
+/// `binary` set, the built-in `binary` macro, and a NUL in the first 8,000 bytes, at the
+/// last byte git looks at — and the files that are none of them, a NUL at the first byte
+/// git does NOT look at among them.
 #[test]
 fn binary_detection_agrees_with_git() {
     let repo = repositories::attributes();
@@ -245,8 +245,8 @@ fn binary_detection_agrees_with_git() {
     );
 }
 
-/// R2.5's last rule: `core.bigFileThreshold`, past which git calls a file binary without
-/// reading it, beside a file under it that is text.
+/// git's last binary rule: `core.bigFileThreshold`, past which git calls a file binary
+/// without reading it, beside a file under it that is text.
 #[test]
 fn a_file_past_big_file_threshold_is_binary_as_git_says() {
     let repo = repositories::big_file_threshold();
@@ -276,8 +276,8 @@ fn binary_to_git_show(repo: &Repo, head: &str, path: &str) -> bool {
     .contains("Binary files")
 }
 
-/// R2.5 where git reads the attributes: a commit's diff takes them from the working tree's
-/// `.gitattributes` first, the index's where the working tree has none, and
+/// Where git reads the attributes its binary rules use: a commit's diff takes them from the
+/// working tree's `.gitattributes` first, the index's where the working tree has none, and
 /// `$GIT_DIR/info/attributes` above both — never from the index alone. An unstaged `-diff`
 /// makes a text file binary; an unstaged edit that drops a committed `-diff` makes a binary
 /// one text; `info/attributes` does the first too. Each answer is a fresh repository's,
@@ -328,11 +328,11 @@ fn binary_detection_reads_the_attributes_where_git_reads_them() {
     assert!(verdict("no-diff.txt"), "the committed -diff was lost");
 }
 
-/// R2.5 where git reads NO attributes: a repository with no index file, and a bare one,
-/// read none from `HEAD`'s tree — on every git from the floor up — so a `-diff` committed
-/// there leaves the file text, as `git show` prints it. Caught by: a session that falls
-/// back to `HEAD`'s tree for its attributes (`index_or_load_from_head_or_empty`), which
-/// answered both binary without asking git.
+/// Where git reads NO attributes: a repository with no index file, and a bare one, read
+/// none from `HEAD`'s tree — on every git from the floor up — so a `-diff` committed there
+/// leaves the file text, as `git show` prints it. Caught by: a session that falls back to
+/// `HEAD`'s tree for its attributes (`index_or_load_from_head_or_empty`), which answered
+/// both binary without asking git.
 #[test]
 fn where_git_reads_no_attributes_the_commit_reads_none() {
     let repo = repositories::attributes();
@@ -380,7 +380,7 @@ fn where_git_reads_no_attributes_the_commit_reads_none() {
     );
 }
 
-/// R2.3: neither a textconv nor an external diff program runs, whatever the config says.
+/// Neither a textconv nor an external diff program runs, whatever the config says.
 #[test]
 fn neither_a_textconv_nor_an_external_diff_program_is_started() {
     let repo = repositories::attributes();
@@ -418,7 +418,7 @@ fn neither_a_textconv_nor_an_external_diff_program_is_started() {
     assert!(repositories::trap_ran(&repo));
 }
 
-/// R2.6: each ceiling fires, and says which one and what it measured.
+/// Each size ceiling fires, and says which one and what it measured.
 #[test]
 fn every_size_ceiling_fires_and_names_itself() {
     let repo = repositories::oversized();
@@ -485,7 +485,8 @@ fn every_size_ceiling_fires_and_names_itself() {
     assert_eq!(crossed.len(), 3, "{crossed:?}");
 }
 
-/// The other half of R2.6: a caller may ask for it anyway, and then gets the lines.
+/// The other half of a size ceiling: a caller may ask for the file anyway, and then gets the
+/// lines.
 #[test]
 fn a_file_past_a_ceiling_can_be_asked_for_anyway() {
     let repo = repositories::oversized();
@@ -508,8 +509,8 @@ fn a_file_past_a_ceiling_can_be_asked_for_anyway() {
     }
 }
 
-/// R2.6's ordering, and the product rule behind it: a file too large is refused BEFORE it
-/// is read, never after the window has stalled on it.
+/// The size ceilings' ordering, and the product rule behind it: a file too large is refused
+/// BEFORE it is read, never after the window has stalled on it.
 ///
 /// The fixture's over-limit blob is a loose object truncated after its header, so its size
 /// is readable and its content is not. Answering "too large" therefore proves the content
@@ -559,11 +560,11 @@ fn the_size_ceiling_is_decided_before_the_content_is_read() {
     );
 }
 
-/// R2.6's last ceiling: past `load_anyway_bytes` nothing is offered, and a caller asking
+/// The last size ceiling: past `load_anyway_bytes` nothing is offered, and a caller asking
 /// anyway is refused before the content is read, told which ceiling it crossed. Over the
-/// truncated object, so an answer that read the content fails rather than passing, and
-/// with the ceiling set either side of the object's size. Caught by: `loadable` answered
-/// true past the ceiling, or the ceiling not applied to a load anyway.
+/// truncated object, so an answer that read the content fails rather than passing, and with
+/// the ceiling set either side of the object's size. Caught by: `loadable` answered true
+/// past the ceiling, or the ceiling not applied to a load anyway.
 #[test]
 fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
     let (repo, blob) = repositories::truncated_object();
@@ -642,8 +643,8 @@ fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
     );
 }
 
-/// R2.6's byte ceiling at its edge: a file exactly `max_bytes` long is inside it, and one
-/// byte less of ceiling refuses it. Caught by: `>` turned `>=`.
+/// The byte ceiling at its edge: a file exactly `max_bytes` long is inside it, and one byte
+/// less of ceiling refuses it. Caught by: `>` turned `>=`.
 #[test]
 fn a_file_exactly_at_the_byte_ceiling_is_drawn() {
     let repo = Repo::new("exact-bytes");
@@ -693,8 +694,8 @@ fn a_file_exactly_at_the_byte_ceiling_is_drawn() {
     );
 }
 
-/// R2.8, through the engine: the second set of ranges is display-only and beside the exact
-/// one, and the lines it points at are still the original bytes.
+/// Ignoring whitespace, through the engine: the second set of ranges is display-only and
+/// beside the exact one, and the lines it points at are still the original bytes.
 #[test]
 fn ignoring_whitespace_answers_a_second_set_of_ranges_and_keeps_the_lines() {
     let repo = Repo::new("whitespace");
@@ -759,7 +760,7 @@ fn ignoring_whitespace_answers_a_second_set_of_ranges_and_keeps_the_lines() {
     );
 }
 
-/// R2.7: the ranges inside a pair of lines, computed by the engine and always on.
+/// The ranges inside a pair of lines, computed by the engine and always on.
 #[test]
 fn a_changed_pair_of_lines_carries_its_intra_line_ranges() {
     let repo = Repo::new("intraline");
@@ -888,8 +889,8 @@ fn a_session_answers_the_same_as_a_query_on_its_own() {
     }
 }
 
-/// The timing claim R2.6 rests on, kept honest: refusing a large file must not cost what
-/// reading it costs.
+/// The timing claim the size ceilings rest on, kept honest: refusing a large file must not
+/// cost what reading it costs.
 #[test]
 fn refusing_a_large_file_costs_far_less_than_reading_it() {
     let repo = repositories::oversized();
@@ -944,19 +945,19 @@ fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::Path
 
 /// The content query's reads write nothing and run nothing the user configured but the
 /// repository's `core.fsmonitor`, which every read with a working tree runs as the user's
-/// own `git diff` runs it (the user's decision, QA round 3): with a textconv that caches
-/// (`cachetextconv`, which `--textconv` would write a notes ref for), an external diff
-/// (`diff.external`) and a driver's `command`, a clean and a smudge filter on every text
-/// file, a driver naming its own algorithm (so `git check-attr` runs, from git 2.40, which
-/// the command log is shown to record), `core.fsmonitor` naming a program, and the working
-/// tree both stat-dirty and content-dirty, every file's content query — exact and ignoring
-/// whitespace, alone and through Expand All — leaves the git directory byte-identical, the
-/// fsmonitor program's mark the only one behind. The programs are then run by hand, so
-/// their not running decides something. Which flags the reads pass is pinned on their
-/// argument vectors (`crates/cairn-git/src/reads/patches.rs`,
-/// `crates/cairn-git/src/reads/attributes.rs`). Caught by: `--textconv` or `--ext-diff` on
-/// a read, porcelain `git diff` in place of `diff-tree` (which refreshes the index), a read
-/// of the working tree through a filter, or the driver's `check-attr` not run.
+/// own `git diff` runs it: with a textconv that caches (`cachetextconv`, which `--textconv`
+/// would write a notes ref for), an external diff (`diff.external`) and a driver's
+/// `command`, a clean and a smudge filter on every text file, a driver naming its own
+/// algorithm (so `git check-attr` runs, from git 2.40, which the command log is shown to
+/// record), `core.fsmonitor` naming a program, and the working tree both stat-dirty and
+/// content-dirty, every file's content query — exact and ignoring whitespace, alone and
+/// through Expand All — leaves the git directory byte-identical, the fsmonitor program's
+/// mark the only one behind. The programs are then run by hand, so their not running
+/// decides something. Which flags the reads pass is pinned on their argument vectors
+/// (`crates/cairn-git/src/reads/patches.rs`, `crates/cairn-git/src/reads/attributes.rs`).
+/// Caught by: `--textconv` or `--ext-diff` on a read, porcelain `git diff` in place of
+/// `diff-tree` (which refreshes the index), a read of the working tree through a filter, or
+/// the driver's `check-attr` not run.
 #[test]
 fn the_content_query_writes_nothing_and_runs_nothing() {
     let repo = repositories::attributes();
@@ -1183,11 +1184,11 @@ impl cairn_git::Cancel for AfterThePatchRead<'_> {
     }
 }
 
-/// R2 (phase 04 QA): Expand All superseded after git has answered stops at the next file
-/// as it assembles the answers, rather than building every file's lines and highlights for
-/// nobody. The cancel fires only once git's one patch read over the commit is over, so no
-/// read is what notices it. Caught by: an assembly with no check between files, which ran
-/// to the end and answered.
+/// Expand All superseded after git has answered stops at the next file as it assembles the
+/// answers, rather than building every file's lines and highlights for nobody. The cancel
+/// fires only once git's one patch read over the commit is over, so no read is what notices
+/// it. Caught by: an assembly with no check between files, which ran to the end and
+/// answered.
 #[test]
 fn expand_all_superseded_while_its_answers_are_assembled_ends_there() {
     let repo = repositories::discriminating(&[]);

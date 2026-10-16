@@ -55,8 +55,7 @@ pub(crate) fn open<'repo>(
 /// [`open`], with the committer dates of some tips known already — read with their ids, as
 /// Show Lost Commits' reflog tips are (`reflogs::reflog_tips`), so no tip is read twice. A
 /// tip whose date is not known is taken from the commit-graph where the graph holds it, as
-/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise
-/// (staging-and-commit phase 10's decision A).
+/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise.
 pub(crate) fn open_dated<'repo>(
     repo: &'repo gix::Repository,
     tips: &[gix::hash::ObjectId],
@@ -198,13 +197,13 @@ pub(crate) fn hiding<'a, C: Cancel>(
 }
 
 /// Whether any of `hidden` reaches `tip`, answered from the commit-graph alone, as git's
-/// `repo_is_descendant_of` answers it with generation numbers (staging-and-commit phase 05's QA
-/// item 4): a walk down from the hidden tips through the graph's parents that never descends
-/// below `tip`'s generation, since a commit of a lower generation cannot reach it. No object is
-/// read, `cancel` is polled before each commit the walk visits, and what it visited is counted
-/// in `visited`. `None` — answer by the object walk ([`hiding`]) instead — where the repository
-/// is shallow, no graph is enabled or opens, or the graph does not hold `tip` and every hidden
-/// tip. `Some(Err(..))` once cancelled, or on a graph that does not parse.
+/// `repo_is_descendant_of` answers it with generation numbers: a walk down from the hidden tips
+/// through the graph's parents that never descends below `tip`'s generation, since a commit of
+/// a lower generation cannot reach it. No object is read, `cancel` is polled before each
+/// commit the walk visits, and what it visited is counted in `visited`. `None` — answer by the
+/// object walk ([`hiding`]) instead — where the repository is shallow, no graph is enabled or
+/// opens, or the graph does not hold `tip` and every hidden tip. `Some(Err(..))` once
+/// cancelled, or on a graph that does not parse.
 pub(crate) fn reaches_through_graph<C: Cancel>(
     repo: &gix::Repository,
     tip: gix::hash::ObjectId,
@@ -401,11 +400,11 @@ parent 3333333333333333333333333333333333333333\n";
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
-    /// Phase 11's QA (TC1): the graph answers alone exactly when it holds the tip and every
-    /// hidden tip — true where a hidden tip reaches the tip, false where none does — and steps
-    /// aside (`None`) when it holds the tip but not a hidden tip, or not the tip, so the object
-    /// walk answers. Caught by: hidden tips the graph lacks skipped rather than handing over (a
-    /// pushed `HEAD` called unpublished), or the graph route never taken.
+    /// The graph answers alone exactly when it holds the tip and every hidden tip — true where
+    /// a hidden tip reaches the tip, false where none does — and steps aside (`None`) when it
+    /// holds the tip but not a hidden tip, or not the tip, so the object walk answers. Caught
+    /// by: hidden tips the graph lacks skipped rather than handing over (a pushed `HEAD` called
+    /// unpublished), or the graph route never taken.
     #[test]
     fn the_graph_answers_only_for_commits_it_holds_all_of() {
         let dir = std::env::temp_dir().join(format!("cairn-graph-reach-{}", std::process::id()));

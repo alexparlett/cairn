@@ -1,13 +1,12 @@
-//! `git check-ref-format --branch <name>`: whether git takes `name` as a new branch's name
-//! (`docs/prd/staging-and-commit.md` R11.3; the user's decision, 2026-10-09: Create Branch
-//! refuses a name inline, before git runs, by git's own rules). git answers a name it takes by
-//! printing the branch it names, and refuses one with its reason on stderr — the reason the
-//! dialog shows, as the user's own `git branch` would say it.
+//! `git check-ref-format --branch <name>`: whether git takes `name` as a new branch's name,
+//! so Create Branch refuses a name inline, before git runs, by git's own rules. git answers a
+//! name it takes by printing the branch it names, and refuses one with its reason on stderr —
+//! the reason the dialog shows, as the user's own `git branch` would say it.
 //!
 //! Query plumbing: it reads configuration, and for `@{-N}` the reflog, and writes nothing,
 //! takes no lock and runs nothing (`checking_a_branch_name_writes_nothing`,
-//! `crates/cairn-git/tests/diff_engine/diff/branch.rs`). The name is the argument after `--branch` and is
-//! read by git as the name whatever it begins with.
+//! `crates/cairn-git/tests/diff_engine/diff/branch.rs`). The name is the argument after
+//! `--branch` and is read by git as the name whatever it begins with.
 
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};

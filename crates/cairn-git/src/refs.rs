@@ -1,6 +1,6 @@
 //! The refs snapshot: every local branch, remote-tracking ref and tag, the stash list and
 //! `HEAD`, read through gitoxide as `git for-each-ref`, `git stash list`,
-//! `git symbolic-ref` and `git rev-parse` answer them (PRD R1).
+//! `git symbolic-ref` and `git rev-parse` answer them.
 //!
 //! gix enumerates the refs — loose and packed merged, bytewise by full name, an invalid
 //! name skipped as git skips it — and five rules make its answer git's
@@ -20,11 +20,10 @@
 //!    `merge` where git takes the first, maps a short `merge` git maps to nothing, and of
 //!    two refspecs mapping the merge does not take the first.
 //!
-//! A ref that cannot be read — content that is not a ref, a symbolic chain past git's
-//! depth — is skipped and counted, never a failure of the whole snapshot: git skips it too,
-//! warning `ignoring broken ref`. So is a ref naming an object that is not there, which is
-//! a deliberate divergence (the user's decision): git's `for-each-ref` refuses to list
-//! anything at all, `fatal: missing object`.
+//! A ref that cannot be read — content that is not a ref, a symbolic chain past git's depth — is
+//! skipped and counted, never a failure of the whole snapshot: git skips it too, warning `ignoring
+//! broken ref`. So is a ref naming an object that is not there, which is a deliberate divergence:
+//! git's `for-each-ref` refuses to list anything at all, `fatal: missing object`.
 //!
 //! `GIT_NAMESPACE` is not honoured: the repository is opened without it
 //! (`SharedRepository::discover_for`), so these are the refs the `git` Cairn runs sees.
@@ -52,7 +51,7 @@ pub struct RefsRead {
     pub cost: RefsCost,
 }
 
-/// What a refs query paid (R1.7).
+/// What a refs query paid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RefsCost {
     /// Ref entries read from the store: every listed, hidden or skipped ref, each level of

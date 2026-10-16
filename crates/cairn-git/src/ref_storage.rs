@@ -5,9 +5,9 @@
 //! extension git reads from `$GIT_COMMON_DIR/config` alone (not the system or global file,
 //! and not through an include), whose values are `files` and `reftable`. gix 0.87 reads no
 //! such setting: it opens a reftable repository as if its refs were files, and then fails
-//! on the first ref it reads (`HEAD` names `refs/heads/.invalid`). Reftable is not built
-//! here (PRD R1.9), so such a repository is refused as it is opened, before the snapshot
-//! or anything Cairn runs reads a ref (gix's open itself reads `HEAD`, which in a reftable
+//! on the first ref it reads (`HEAD` names `refs/heads/.invalid`). Cairn does not read
+//! reftable, so such a repository is refused as it is opened, before the snapshot or
+//! anything Cairn runs reads a ref (gix's open itself reads `HEAD`, which in a reftable
 //! repository is a placeholder it reads without failing), with a reason the window draws.
 
 use std::path::Path;

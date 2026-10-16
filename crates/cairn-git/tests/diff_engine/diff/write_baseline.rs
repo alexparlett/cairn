@@ -1,15 +1,15 @@
-//! git's own time for the writes staging-and-commit's C21 bounds (R13.2): stage a hunk,
-//! unstage it, discard it and commit — each the `git` Cairn runs for it — and one status
-//! read, as Cairn reads it, so C21's margin is written against git before any Cairn number
-//! exists. Numbers go into `docs/research/staging-and-commit/measured-baseline.md`.
+//! git's own time for the writes whose time Cairn bounds: stage a hunk, unstage it, discard
+//! it and commit — each the `git` Cairn runs for it — and one status read, as Cairn reads it,
+//! so the bound's margin is written against git, not against Cairn's own numbers. Numbers go
+//! into `docs/research/staging-and-commit/measured-baseline.md`.
 //!
-//! Not an assertion, for the reason C14's reporter is not: a timing check in CI is flaky and
-//! bound to a machine. It WRITES — every verb it times changes the repository — so it runs
-//! only on a scratch clone named by `CAIRN_BENCH_SCRATCH_CLONE`: a plain, non-shared clone of
-//! rust-lang/rust checked out at `c999cef531e`, on tmpfs, never the bench repository itself
-//! (refused when it is the one `CAIRN_BENCH_REPO` names, when it borrows objects through
-//! `objects/info/alternates`, when `HEAD` is not that commit, and when its working tree is
-//! not clean). Everything it changes it puts back between runs and at the end.
+//! Not an assertion: a timing check in CI is flaky and bound to a machine. It WRITES — every
+//! verb it times changes the repository — so it runs only on a scratch clone named by
+//! `CAIRN_BENCH_SCRATCH_CLONE`: a plain, non-shared clone of rust-lang/rust checked out at
+//! `c999cef531e`, on tmpfs, never the bench repository itself (refused when it is the one
+//! `CAIRN_BENCH_REPO` names, when it borrows objects through `objects/info/alternates`, when
+//! `HEAD` is not that commit, and when its working tree is not clean). Everything it changes
+//! it puts back between runs and at the end.
 //!
 //! ```text
 //! git clone --no-hardlinks --no-checkout ~/Development/bench/rust /tmp/<scratch>/rust
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// R13.1's subject: rust-lang/rust at this commit.
+/// The bench repository: rust-lang/rust at this commit.
 const SUBJECT: &str = "c999cef531ea9059e189e82fe0e82c5daf249bc9";
 
 /// The file a hunk is staged, unstaged and discarded in, and where a line goes into it.
@@ -171,7 +171,7 @@ fn scratch_clone() -> Option<Clone> {
     Some(clone)
 }
 
-/// R13.2: git's own time for each verb C21 bounds, and one status read.
+/// git's own time for each verb whose time Cairn bounds, and one status read.
 #[test]
 #[ignore = "a reporter: needs CAIRN_BENCH_SCRATCH_CLONE, a writable clone of the bench"]
 fn write_baseline() {
@@ -311,12 +311,12 @@ fn write_baseline() {
     }
 }
 
-/// What Cairn's own verbs cost on the same clone and hunk (staging-and-commit phase 11, C21's
-/// engine half and #87): each through `cairn_git::ops` as the local lane calls it — the stale
-/// check, the lock listings before and after, git — and the lock listing alone, a walk of
-/// `refs/`, which every local write makes twice. The repository is opened before each run,
-/// untimed, as the lane holds its handle. C21's bar is the window's (press to the refreshed
-/// lists drawn), measured by `window_check`; this says where the engine's share goes.
+/// What Cairn's own verbs cost on the same clone and hunk, the engine's share of the write
+/// bound (#87): each through `cairn_git::ops` as the local lane calls it — the stale check,
+/// the lock listings before and after, git — and the lock listing alone, a walk of `refs/`,
+/// which every local write makes twice. The repository is opened before each run, untimed, as
+/// the lane holds its handle. The bound itself is the window's (press to the refreshed lists
+/// drawn), measured by `window_check`; this says where the engine's share goes.
 #[test]
 #[ignore = "a reporter: needs CAIRN_BENCH_SCRATCH_CLONE, a writable clone of the bench"]
 fn cairn_write_costs() {
@@ -382,9 +382,9 @@ fn cairn_write_costs() {
         },
     );
 
-    // What the commit box asks of the lane while Amend is ticked, per status today (phase 09's
-    // QA item 9): what an amend would replace — the pushed check among it — and amend's staged
-    // list, `git diff-index --cached` against `HEAD`'s parent.
+    // What the commit box asks of the lane on each status while Amend is ticked: what an
+    // amend would replace — the pushed check among it — and amend's staged list,
+    // `git diff-index --cached` against `HEAD`'s parent.
     let reading = open();
     let consequence_read = time(
         "ops::amend_consequence (HEAD, the pushed check, the reflog)",
@@ -571,11 +571,11 @@ fn cairn_write_costs() {
     );
 }
 
-/// What a discard's count costs per path on the bench clone (staging-and-commit phase 07's QA,
-/// carried to phase 11: "batch the discard count's per-path reads — measure first"):
-/// `ops::discard_files_consequence` over 10, 100 and 1,000 modified files, each one line
-/// appended, every file put back afterwards. Each tracked path is a working-tree diff of its
-/// own — a `git diff-files -p` read and the line diff — so this says what that costs per path.
+/// What a discard's count costs per path on the bench clone, the measurement that decides
+/// whether the count's per-path reads need batching: `ops::discard_files_consequence` over 10,
+/// 100 and 1,000 modified files, each one line appended, every file put back afterwards. Each
+/// tracked path is a working-tree diff of its own — a `git diff-files -p` read and the line
+/// diff — so this says what that costs per path.
 #[test]
 #[ignore = "a reporter: needs CAIRN_BENCH_SCRATCH_CLONE, a writable clone of the bench"]
 fn discard_count_costs() {

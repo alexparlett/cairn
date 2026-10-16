@@ -1,43 +1,39 @@
 //! Reads that `git` answers: one named function per read, and nothing else.
 //!
 //! Every repository read goes through gitoxide, in process, unless gix's
-//! answer differs from git's (D1, `docs/design/engine.md`). Where showing what
+//! answer differs from git's (`docs/design/engine.md`). Where showing what
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
 //! nowhere else but `ops/`. For `crate::diff`:
-//! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
-//! decision E); [`patches`], `git diff-tree -p` for the content query's
-//! changed ranges and function context, which gix's line diff placed
-//! differently from git's (the content-parity decision of 2026-10-03,
-//! `docs/research/diff-engine/content-parity-spike.md`);
+//! [`changes`], `git diff-tree --raw` for the changes query; [`patches`], `git diff-tree -p`
+//! for the content query's changed ranges and function context, which gix's line diff
+//! places differently from git's (`docs/research/diff-engine/content-parity-spike.md`);
 //! [`diff_attributes`], `git check-attr diff`, which says whether a path's
 //! diff driver names an algorithm of its own; and [`working_tree_patch`], one
 //! path's staged, unstaged or untracked diff — `git diff-index --cached`,
 //! `git diff-files`, `git diff --no-index` — which reads the working tree
-//! through git, so its side is git's form of the file (`diff-engine` phase 03),
+//! through git, so its side is git's form of the file,
 //! with [`staged_pairing`] beside it, `git diff-index --cached --raw` over the
 //! whole index, the rename or copy the user's `git diff --cached` pairs a path
 //! into, since plumbing reads no `diff.renames` and a one-path pathspec pairs
-//! nothing (`staging-and-commit` R2.6);
+//! nothing;
 //! and the config read, `git config` in query form — [`fetch_settings`], what a fetch of a
 //! remote will read, because fetch's refspec check must decide on exactly what the fetch's own
 //! git reads and gix's reading of a linked worktree's `includeIf`, of the system file and of
-//! trust is not git's (the user's decision of 2026-10-04), and [`commit_encoding`] and
-//! [`log_all_ref_updates`], what a commit and an amend will read (staging-and-commit R6.11); and
-//! one for the working tree's status,
+//! trust is not git's, and [`commit_encoding`] and [`log_all_ref_updates`], what a commit and
+//! an amend will read; and one for the working tree's status,
 //! [`status()`], `git status --porcelain=v2 -z`, because gix's status differs from
 //! git's wherever status is hard — staged renames past its limit, conflicted paths,
 //! sparse checkouts, a lying fsmonitor hook — and starts clean filters outside
-//! `process/` (the refs-and-status packet's L1); and one for a stash's changes,
+//! `process/`; and one for a stash's changes,
 //! [`stash_changes`], `git stash show --raw`, because with `stash.showIncludeUntracked` set
 //! git pairs a stash's untracked files with its tracked changes in one diff, which no
-//! plumbing can ask without writing a tree (refs-and-status R6.2); and one for a merge's
+//! plumbing can ask without writing a tree; and one for a merge's
 //! message, [`as_the_editor_leaves`], `git stripspace`, git's own cleaning of `MERGE_MSG` as its
-//! editor session leaves it, under `commit.cleanup` and the comment character it reads
-//! (staging-and-commit R6.10); and one for
-//! Create Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git
-//! takes a name as a branch's is git's rule to apply (staging-and-commit R11.3) — and resolves
+//! editor session leaves it, under `commit.cleanup` and the comment character it reads; and
+//! one for Create Branch's name, [`branch_name`], `git check-ref-format --branch`, because
+//! whether git takes a name as a branch's is git's rule to apply — and resolves
 //! `@{-N}` exactly as `git branch` and `git checkout -b` do, where `check-ref-format
 //! refs/heads/<name>` would take `-x` and `HEAD`, which both verbs refuse
 //! (`a_name_is_taken_or_refused_as_gits_verbs_take_it`).
@@ -47,31 +43,30 @@
 //! **Query plumbing, or `git status`, and four named porcelain exceptions.**
 //!
 //! **The fourth, `git stripspace` with `--strip-comments`, `--comment-lines` or no option, the
-//! message on stdin** (accepted by the user on 2026-10-10, C2), built only in `stripspace.rs`,
-//! whose module docs carry its
+//! message on stdin**, built only in `stripspace.rs`, whose module docs carry its
 //! evidence: it reads its stdin and the configuration, takes no lock, reads no index or object
 //! and runs no program (`the_stripspace_read_writes_nothing_and_runs_nothing`).
 //!
 //! **The third, `git stash show --raw -z --no-abbrev --no-color --no-ext-diff
-//! --no-textconv --no-relative --end-of-options <stash commit>`** (accepted by the user on
-//! 2026-10-07), built only in [`stash_changes`], whose module docs carry its evidence: it
+//! --no-textconv --no-relative --end-of-options <stash commit>`**, built only in
+//! [`stash_changes`], whose module docs carry its evidence: it
 //! takes no lock, reads no index and runs no program in raw form, and
 //! `a_stash_read_writes_nothing` holds the git directory byte-identical after it; git
 //! reads `stash.showIncludeUntracked` itself, so git 2.30 and 2.31, which do not know it,
 //! list what the user's own `git stash show` lists there.
 //!
 //! **The second, `git config --includes --null` with `--type=bool --get <key>`,
-//! `--get <key>` or `--get-all <key>`** (accepted by the user on 2026-10-04, and widened to a
-//! commit's settings on 2026-10-10): query form only, never a setter, built only in
-//! `config.rs`, whose module docs carry its evidence — it takes no lock, reads no index and runs no program,
+//! `--get <key>` or `--get-all <key>`**, for a fetch's and a commit's settings: query form
+//! only, never a setter, built only in `config.rs`, whose module docs carry its evidence —
+//! it takes no lock, reads no index and runs no program,
 //! and `the_refspec_checks_reads_write_nothing` holds the git directory
 //! byte-identical after it; the flags are all in git 2.18 and later, and git
 //! 2.56 takes the form without a word.
 //!
 //! **The first, `git diff --no-index -- /dev/null <path>`, for an untracked
 //! file, `<path>` work-tree-relative and given as `./-` when it is `-`**
-//! (accepted by the user on 2026-10-03; [`working_tree::work_tree_relative`] refuses an empty or
-//! absolute path, or one with a `.` or `..` component, before git runs). Why: an untracked file's git form — after the clean
+//! ([`working_tree::work_tree_relative`] refuses an empty or absolute path, or one with a `.`
+//! or `..` component, before git runs). Why: an untracked file's git form — after the clean
 //! filter driver and the line-ending conversion its attributes name — has no
 //! plumbing that prints it. `diff-files` and `diff-index` list only what the
 //! index holds, and putting the path in an index to ask them is a write; `git
@@ -104,7 +99,7 @@
 //! refreshes it too, each taking `index.lock` to write it whatever the
 //! variable says. The diff plumbing — `diff-tree`, `diff-index`,
 //! `diff-files` — never writes the index (evidence:
-//! `docs/research/process-manager/platform-and-git-behaviour.md`, C3). So a
+//! `docs/research/process-manager/platform-and-git-behaviour.md`). So a
 //! read that wants a diff runs `diff-tree` or `diff-index`, never `diff`; and
 //! a refresh, if one is ever wanted, is a write, built in `ops/`.
 //!
@@ -116,7 +111,7 @@
 //! git 2.56: `diff-tree --raw` and `diff-tree -p` leave the refs alone,
 //! `diff-tree --textconv -p` and the porcelain `log -p` create the notes ref). Any other
 //! query plumbing a read adds (`ls-files`, `rev-parse`, `cat-file`, ...) brings
-//! its own evidence that it writes nothing, because C3 does not cover it.
+//! its own evidence that it writes nothing, because that evidence does not cover it.
 //!
 //! Plumbing is not the same as a query: `update-ref`, `update-index` (its
 //! `--refresh` included), `read-tree`, `write-tree`, `hash-object -w` and
@@ -128,8 +123,7 @@
 //! the index, and as they do git consults the fsmonitor exactly as the user's
 //! own `git diff` and `git status` do; nothing a read passes turns it off (only
 //! `-c core.fsmonitor=false` would, which would make Cairn's read differ from
-//! the user's). The user accepted both forms as the parity they are (the hook
-//! on 2026-10-03, QA round 3; the daemon on 2026-10-04):
+//! the user's). Both forms are parity with the user's own `git`:
 //!
 //! - **A hook**, `core.fsmonitor` naming a program: git runs it as a child of
 //!   the read's `git` (reproduced with git 2.30.9, 2.32.7, 2.40.0 and 2.56.0),
@@ -155,8 +149,8 @@
 //! A planted repository naming a hook is the opening's to refuse, as git
 //! refuses it (`crate::bare_discovery`), not the read's.
 //!
-//! **A read of the working tree also runs the path's clean filter driver** —
-//! L6, D1 as amended (`docs/design/engine.md`, "Reads see git's form"): `git
+//! **A read of the working tree also runs the path's clean filter driver**
+//! (`docs/design/engine.md`, "Reads see git's form"): `git
 //! diff-files` and `git diff --no-index` convert the file to git's form as the
 //! user's `git diff` does, so git starts the driver the path's attributes name
 //! and the configuration defines — a `filter.<driver>.clean` command, or the
@@ -174,9 +168,9 @@
 //! **A read never lazily fetches — on git 2.44 or later.** In a partial
 //! clone, asking for an object only the promisor remote holds fetches it,
 //! writing a pack and reaching the network. A read runs with
-//! `GIT_NO_LAZY_FETCH=1`, so git answers that the object is missing instead
-//! (decided by the user on 2026-10-02, keeping the 2.30 floor). Git older than
-//! 2.44 ignores the variable: there, a read in a partial clone may still
+//! `GIT_NO_LAZY_FETCH=1`, so git answers that the object is missing instead.
+//! The floor is git 2.30, and git older than 2.44 ignores the variable: there,
+//! a read in a partial clone may still
 //! lazy-fetch. Carrying no askpass token, it fails closed only where the
 //! promisor needs a prompt; one a configured credential helper or the ssh
 //! agent answers fetches. That is a constraint each read here designs around — a read that
@@ -586,7 +580,7 @@ mod diff_engine_path_forward {
 
     /// The content read superseded while `git` is still diffing: `git` is stopped rather
     /// than waited for — the command log says it was ended — the caller hears a cancelled
-    /// content query, and nothing is left running (R2.9, as the changes query is).
+    /// content query, and nothing is left running, as with the changes query.
     #[test]
     fn a_content_read_superseded_by_a_newer_epoch_stops_git_and_reports_it() {
         let fixture = Fixture::new("content-superseded");

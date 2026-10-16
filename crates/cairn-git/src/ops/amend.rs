@@ -1,9 +1,8 @@
-//! What an amend will cost, computed from the repository as it is
-//! (`docs/prd/staging-and-commit.md` R6.4, R10.6): the [`Consequence::Amend`] an amend is
-//! confirmed with when it must be, and re-checked against before a confirmed one runs (R1.4).
-//! It is read when Amend is pressed, in the job that then runs the amend — never on a refresh —
-//! and holds only what the amend's freshness rests on, no display field (`review-code-engine.md`
-//! M2).
+//! What an amend will cost, computed from the repository as it is: the
+//! [`Consequence::Amend`] an amend is confirmed with when it must be, and re-checked against
+//! before a confirmed one runs. It is read when Amend is pressed, in the job that then runs
+//! the amend — never on a refresh — and holds only what the amend's freshness rests on, no
+//! display field.
 //!
 //! - **The commit** it replaces: `HEAD`'s id.
 //! - **Whether a remote already has it.** With an upstream — the current branch's, a
@@ -25,18 +24,18 @@
 //!   or, whatever it is set to, when that ref's log file already exists, since git appends
 //!   to a log it finds (`should_autocreate_reflog` and `log_ref_setup` in git's
 //!   `refs/files-backend.c`). The setting is git's answer, `git config` in query form
-//!   (`crate::reads::log_all_ref_updates`, R6.11), so a linked worktree's `includeIf`, the
+//!   (`crate::reads::log_all_ref_updates`), so a linked worktree's `includeIf`, the
 //!   system file and trust are read as the amend's own git reads them; gix's configuration is
 //!   not asked. Only the files backend is opened (`crate::ref_storage`).
 //!
 //! An amend git logs and no remote has is recoverable — Show Lost Commits finds the replaced
-//! commit in the reflog — so it runs at once, unconfirmed ([`super::amend_unconfirmed`], R1.5);
+//! commit in the reflog — so it runs at once, unconfirmed ([`super::amend_unconfirmed`]);
 //! any other is confirmed first ([`Consequence::needs_confirming`]) and run by
 //! [`super::amend`] with the token.
 //!
 //! Refused before any of it ([`Error::CommitRefused`]): an unborn branch, which has nothing
 //! to amend, and any operation in progress — a merge among them, which git refuses to amend
-//! in (R6.3, R6.9).
+//! in.
 
 use cairn_model::{Consequence, HeadState, Oid, Publication, RefKind, RefName, Reflog, Upstream};
 use gix::bstr::ByteSlice as _;
@@ -86,12 +85,12 @@ pub fn amend_consequence(
     })
 }
 
-/// What an amend run at the press turned out to cost, read again after git was reaped
-/// (staging-and-commit R1.5, C35, the user's ratification of 2026-10-10, option B): whether a
-/// remote now has `replaced` — the same walk [`amend_consequence`] ran, over the refs as they
-/// are now, a push made while a hook ran among them — and whether git logged the move away
-/// from it, read from the reflog itself: an entry whose old id is `replaced` in `HEAD`'s log or
-/// the current branch's ([`logged_away_from`]), which is what Show Lost Commits finds it by.
+/// What an amend run at the press turned out to cost, read again after git was reaped:
+/// whether a remote now has `replaced` — the same walk [`amend_consequence`] ran, over the
+/// refs as they are now, a push made while a hook ran among them — and whether git logged the
+/// move away from it, read from the reflog itself: an entry whose old id is `replaced` in
+/// `HEAD`'s log or the current branch's ([`logged_away_from`]), which is what Show Lost
+/// Commits finds it by.
 /// It reports and does not prevent: the amend is made whatever this says.
 pub(super) fn amend_after(
     repo: &Repository,

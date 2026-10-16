@@ -1,7 +1,7 @@
 //! `safe.bareRepository`: a bare repository found by searching is opened exactly where the
 //! git in use would open it from the same directory, with the same configuration, and a
 //! planted one is refused before anything in it runs (`crate::bare_discovery` in
-//! `cairn-git`, S1).
+//! `cairn-git`).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -349,8 +349,8 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
 
 /// The attack the setting exists for, end to end: a bare repository planted inside a
 /// working tree, whose configuration names `core.fsmonitor`. Without the setting the user's
-/// git opens it and runs the program on every read, and so does Cairn — the parity the
-/// user decided (a read runs the repository's `core.fsmonitor`, as their own git does).
+/// git opens it and runs the program on every read, and so does Cairn, for parity (a read
+/// runs the repository's `core.fsmonitor`, as their own git does).
 /// Under `safe.bareRepository = explicit` git refuses it, and Cairn refuses it as it is
 /// opened, so no read starts and the program never runs. Caught by: the check skipped, or
 /// made after the repository is in use.
@@ -647,14 +647,14 @@ fn some_parent(path: &Path) -> String {
         .to_string()
 }
 
-/// `GIT_DIR` and `GIT_WORK_TREE` in the launch environment are ignored BY DESIGN (the
-/// user's decision of 2026-10-04): Cairn is a multi-repository tool whose every tab opens
-/// the repository at the path it names, so the per-repository pointers that make git skip
-/// discovery altogether never redirect an open, while the session-wide variables beside
-/// them are honoured as git honours them (`docs/systems/git-processes.md`, opening
-/// section). The oracle shows the variables decide something for git — run from the same
-/// directory with them set, it opens the other repository — and Cairn opens the one at the
-/// path. Caught by: the open reading either variable.
+/// `GIT_DIR` and `GIT_WORK_TREE` in the launch environment are ignored BY DESIGN: Cairn is
+/// a multi-repository tool whose every tab opens the repository at the path it names, so
+/// the per-repository pointers that make git skip discovery altogether never redirect an
+/// open, while the session-wide variables beside them are honoured as git honours them
+/// (`docs/systems/git-processes.md`, opening section). The oracle shows the variables decide
+/// something for git — run from the same directory with them set, it opens the other
+/// repository — and Cairn opens the one at the path. Caught by: the open reading either
+/// variable.
 #[test]
 fn the_launch_environments_git_dir_and_work_tree_are_ignored_by_design() {
     let named = Repo::new("named-by-path");

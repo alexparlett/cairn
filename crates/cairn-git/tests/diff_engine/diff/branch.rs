@@ -1,12 +1,11 @@
-//! staging-and-commit's `Create Branch Here…` against real `git` (R11.3, C20): the branch
-//! `ops::create_branch` makes is the one `git branch -- <name> <commit>` makes — at the same
-//! commit, logged with the same message — on a commit only a reflog still reaches, and a
-//! name git refuses is refused with git's reason and nothing written; a name is taken or
-//! refused as `git branch` and `git checkout -b` take it (C32); and Create Branch's Discard
-//! runs Fork's forced checkout, leaving what Fork's command leaves, re-checking `HEAD`, the
-//! commit and the name and nothing else, and refusing an operation in progress before git runs
-//! (C34; the user's decision of 2026-10-10). Run on the host's git and, through
-//! `scripts/git-floor.sh`, on 2.30.9 and 2.32.7.
+//! `Create Branch Here…` against real `git`: the branch `ops::create_branch` makes is the one `git
+//! branch -- <name> <commit>` makes — at the same commit, logged with the same message — on a
+//! commit only a reflog still reaches, and a name git refuses is refused with git's reason and
+//! nothing written; a name is taken or refused as `git branch` and `git checkout -b` take it; and
+//! Create Branch's Discard runs Fork's forced checkout, leaving what Fork's command leaves,
+//! re-checking `HEAD`, the commit and the name and nothing else, and refusing an operation in
+//! progress before git runs. Run on the host's git and, through `scripts/git-floor.sh`, on 2.30.9
+//! and 2.32.7.
 
 use std::path::{Path, PathBuf};
 
@@ -148,11 +147,10 @@ fn gits_own_refusal(repo: &Repo, name: &str) -> Option<String> {
     Some(first.strip_prefix("fatal: ").unwrap_or(first).to_owned())
 }
 
-/// The user's decision (2026-10-09): Create Branch refuses a name inline, before git runs, by
-/// git's own rules — a name git takes and no branch has is free, one a branch has is taken,
-/// and one git refuses is refused with git's own words — and the read writes nothing. Caught
-/// by: a rule of git's left out or one of Cairn's own added, a taken name passed as free, or a
-/// read that writes.
+/// Create Branch refuses a name inline, before git runs, by git's own rules — a name git takes and
+/// no branch has is free, one a branch has is taken, and one git refuses is refused with git's own
+/// words — and the read writes nothing. Caught by: a rule of git's left out or one of Cairn's own
+/// added, a taken name passed as free, or a read that writes.
 #[test]
 fn a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing() {
     let (repo, _) = amended();
@@ -209,10 +207,10 @@ fn two_commits() -> (Repo, Oid) {
     (repo, older)
 }
 
-/// "Don't change" (the user's decision, 2026-10-09): the branch is made and checked out with
-/// the working tree's changes carried over; where a change would be overwritten git refuses
-/// with its words, and neither a branch nor a change is written. Caught by: `-f` on the kept
-/// checkout (the change lost), or a branch left behind by a refused checkout.
+/// "Don't change": the branch is made and checked out with the working tree's changes carried over;
+/// where a change would be overwritten git refuses with its words, and neither a branch nor a
+/// change is written. Caught by: `-f` on the kept checkout (the change lost), or a branch left
+/// behind by a refused checkout.
 #[test]
 fn a_kept_checkout_carries_the_changes_or_is_refused_by_git_writing_nothing() {
     let (repo, older) = two_commits();
@@ -294,15 +292,14 @@ fn tree(repo: &Repo) -> Vec<(PathBuf, Vec<u8>)> {
         .collect()
 }
 
-/// C34, B1 and the user's decision of 2026-10-10: Discard runs Fork's command, and leaves
-/// exactly what Fork's own command leaves — staged and unstaged changes and a staged new file
-/// gone, an untracked file at a path the commit holds overwritten, an untracked file it holds
-/// nothing at kept — on the new branch at the commit; the consequence it was confirmed with is
-/// fixed, naming no file, and is the prompt recorded. The oracle is Fork's observed command,
-/// `git checkout --no-track -b <name> <commit> --force`, run on an identical fixture. Caught by:
-/// a kept checkout run, a prediction put back, or anything lost or kept otherwise than Fork's
-/// command does. (`--no-track` is held by the literal argv of `the_checkouts_run_as_r11_names_them`:
-/// from a full id git sets no upstream with or without it.)
+/// Discard runs Fork's command, and leaves exactly what Fork's own command leaves — staged and
+/// unstaged changes and a staged new file gone, an untracked file at a path the commit holds
+/// overwritten, an untracked file it holds nothing at kept — on the new branch at the commit; the
+/// consequence it was confirmed with is fixed, naming no file, and is the prompt recorded. The
+/// oracle is Fork's observed command, `git checkout --no-track -b <name> <commit> --force`, run on
+/// an identical fixture. Caught by: a kept checkout run, a prediction put back, or anything lost or
+/// kept otherwise than Fork's command does. (`--no-track` is held by the literal argv of
+/// `the_checkouts_run_as_r11_names_them`: from a full id git sets no upstream with or without it.)
 #[test]
 fn a_discarding_checkout_leaves_what_forks_command_leaves() {
     let (repo, older) = dirty();
@@ -369,11 +366,10 @@ fn a_discarding_checkout_leaves_what_forks_command_leaves() {
     );
 }
 
-/// The user's decision of 2026-10-10 on phase 14's stopping rule: over a submodule's change,
-/// Discard runs as Fork's does — git discards the rest and leaves the submodule's change in
-/// place, its checkout on the moved commit and a staged change of its commit listed again as
-/// unstaged — and over a conflicted path with no operation in progress git discards the
-/// conflict. Neither is refused before git runs. Caught by: either refused, or git's handling
+/// Over a submodule's change, Discard runs as Fork's does — git discards the rest and leaves the
+/// submodule's change in place, its checkout on the moved commit and a staged change of its commit
+/// listed again as unstaged — and over a conflicted path with no operation in progress git discards
+/// the conflict. Neither is refused before git runs. Caught by: either refused, or git's handling
 /// of them differing on this git from the probe's.
 #[test]
 fn a_submodules_change_survives_the_discard_and_a_conflict_is_discarded() {
@@ -435,13 +431,12 @@ fn a_submodules_change_survives_the_discard_and_a_conflict_is_discarded() {
     assert_eq!(repo.rev("HEAD"), base);
 }
 
-/// The user's decision of 2026-10-10 on phase 14's QA (DO#1), Fork's behaviour knowingly
-/// accepted: an untracked nested repository — a folder holding its own `.git` — at a path the
-/// commit holds a file at is deleted, its history with it, silently, exactly as Fork's Discard
-/// deletes it; no refusal and no extra line. This asserts git's own result (exit 0, the folder
-/// and its `.git` gone, the commit's file in its place), so changing it — refusing such a
-/// repository, or naming it — is a visible decision (#126).
-/// Caught by: a refusal added before git runs, or git on this version keeping the repository.
+/// Fork's behaviour, kept knowingly: an untracked nested repository — a folder holding its own
+/// `.git` — at a path the commit holds a file at is deleted, its history with it, silently, exactly
+/// as Fork's Discard deletes it; no refusal and no extra line. This asserts git's own result (exit
+/// 0, the folder and its `.git` gone, the commit's file in its place), so changing it — refusing
+/// such a repository, or naming it — is a visible decision (#126). Caught by: a refusal added
+/// before git runs, or git on this version keeping the repository.
 #[test]
 fn an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes_it() {
     let repo = Repo::new("nested-in-the-way");
@@ -484,11 +479,10 @@ fn an_untracked_nested_repository_in_the_way_is_deleted_as_forks_discard_deletes
     assert_eq!(status(&repo), "", "nothing left behind");
 }
 
-/// The user's decision of 2026-10-10: an operation in progress is refused before git runs,
-/// since git's forced checkout would abandon it without a word — at the confirmation, and again
-/// at the run when one began after it. Nothing is written and no `git checkout` runs: the merge
-/// and its conflict stay. Caught by: the refusal dropped (the merge silently abandoned), or a
-/// checkout started anyway.
+/// An operation in progress is refused before git runs, since git's forced checkout would abandon
+/// it without a word — at the confirmation, and again at the run when one began after it. Nothing
+/// is written and no `git checkout` runs: the merge and its conflict stay. Caught by: the refusal
+/// dropped (the merge silently abandoned), or a checkout started anyway.
 #[test]
 fn a_merge_in_progress_is_refused_with_git_not_run() {
     let repo = Repo::new("merging");
@@ -534,11 +528,10 @@ fn a_merge_in_progress_is_refused_with_git_not_run() {
     assert_eq!(status(&repo), "UU a.txt\n");
 }
 
-/// C34, R1.4 as the user decided it (2026-10-10): between the press and the run, `HEAD` moved,
-/// the commit gone or the name taken each refuses, writing nothing — and nothing else is
-/// compared, so a file edited after the press is discarded with the rest. Caught by: a checkout
-/// run on what was confirmed then, a re-check left out, or the old prediction's comparison
-/// (any edit refusing) kept.
+/// Between the press and the run, `HEAD` moved, the commit gone or the name taken each refuses,
+/// writing nothing — and nothing else is compared, so a file edited after the press is discarded
+/// with the rest. Caught by: a checkout run on what was confirmed then, a re-check left out, or the
+/// old prediction's comparison (any edit refusing) kept.
 #[test]
 fn the_recheck_refuses_head_the_commit_or_the_name_moved_and_nothing_else() {
     // HEAD moved.
@@ -611,14 +604,13 @@ fn the_recheck_refuses_head_the_commit_or_the_name_moved_and_nothing_else() {
     );
 }
 
-/// C32 and the review's M3, dismissed against real git: a name is taken or refused as `git
-/// branch -- <name>` and `git checkout -b <name>` take it. Both verbs resolve `@{-N}` to the
-/// previous branch's name, as `git check-ref-format --branch` does — so it is the oracle they
-/// agree with — while `git check-ref-format refs/heads/<name>`, the review's proposal, takes
-/// `-x` and `HEAD`, which both verbs refuse. Cairn refuses a name holding `@{` before git is
-/// asked (decision F), and every name it answers free both verbs take, every one it refuses
-/// both refuse. Caught by: the oracle swapped for `refs/heads/<name>`, a taken name or a folder
-/// clash passed as free, or a name the verbs take refused.
+/// A name is taken or refused as `git branch -- <name>` and `git checkout -b <name>` take it. Both
+/// verbs resolve `@{-N}` to the previous branch's name, as `git check-ref-format --branch` does —
+/// so it is the oracle they agree with — while `git check-ref-format refs/heads/<name>` takes `-x`
+/// and `HEAD`, which both verbs refuse. Cairn refuses a name holding `@{` before git is asked, and
+/// every name it answers free both verbs take, every one it refuses both refuse. Caught by: the
+/// oracle swapped for `refs/heads/<name>`, a taken name or a folder clash passed as free, or a name
+/// the verbs take refused.
 #[test]
 fn a_name_is_taken_or_refused_as_gits_verbs_take_it() {
     let (repo, _) = amended();
@@ -707,11 +699,10 @@ fn a_name_is_taken_or_refused_as_gits_verbs_take_it() {
     }
 }
 
-/// Phase 10's QA, item 15: a name a branch's directory holds (`foo` beside `foo/bar`), or one
-/// under a branch's name (`baz/qux` beside `baz`), is refused before git runs, the
-/// branch each clashes with named, as git's own refusal names it — git cannot lock such a ref —
-/// and a name beside them is free.
-/// Caught by: only `refs/heads/<name>` looked up.
+/// A name a branch's directory holds (`foo` beside `foo/bar`), or one under a branch's name
+/// (`baz/qux` beside `baz`), is refused before git runs, the branch each clashes with named, as
+/// git's own refusal names it — git cannot lock such a ref — and a name beside them is free. Caught
+/// by: only `refs/heads/<name>` looked up.
 #[test]
 fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
     let (repo, _) = amended();
@@ -751,9 +742,8 @@ fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
     }
 }
 
-/// The user's decision F (2026-10-09): a name holding `@{` is refused before git is asked —
-/// git would read `@{-1}` as another branch's name. Caught by: the name handed to git, or a
-/// name with `@` alone or `{` alone refused.
+/// A name holding `@{` is refused before git is asked — git would read `@{-1}` as another branch's
+/// name. Caught by: the name handed to git, or a name with `@` alone or `{` alone refused.
 #[test]
 fn a_name_holding_at_brace_is_refused_in_cairns_words() {
     let (repo, _) = amended();

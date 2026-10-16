@@ -1,8 +1,7 @@
-//! The operation a repository is in the middle of, as git records it
-//! (`docs/prd/staging-and-commit.md` R6.9, L25): what `git status` reads to say "You are
-//! currently rebasing", and what decides whether a commit concludes it or is refused — and the
-//! message git prepared for the commit that concludes one, cleaned as git's editor cleans it
-//! (R6.10).
+//! The operation a repository is in the middle of, as git records it: what `git status` reads
+//! to say "You are currently rebasing", and what decides whether a commit concludes it or is
+//! refused — and the message git prepared for the commit that concludes one, cleaned as git's
+//! editor cleans it.
 //!
 //! gix has `Repository::state`, and it is not used: it checks in another order than git
 //! (a cherry-pick ahead of a merge, a bisect ahead of a revert) and never reads the
@@ -32,9 +31,9 @@
 //!
 //! A commit concludes a merge, a single cherry-pick or a single revert as `git commit` does — the
 //! picked commit's author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD` removed by git
-//! (`tests/diff_engine/diff/commit.rs`, on git 2.30.9, 2.32.7 and the host's). A detached `HEAD` is no
-//! operation: the refs snapshot reports it (`HeadState::Detached`), and a commit there is made
-//! on no branch, refused by nothing (C8).
+//! (`tests/diff_engine/diff/commit.rs`, on git 2.30.9, 2.32.7 and the host's). A detached
+//! `HEAD` is no operation: the refs snapshot reports it (`HeadState::Detached`), and a commit
+//! there is made on no branch, refused by nothing.
 
 use std::path::Path;
 
@@ -52,7 +51,7 @@ impl Repository {
 
     /// The message git prepared for the commit that concludes a merge, a cherry-pick or a revert
     /// — `MERGE_MSG` — as git's own editor session would leave it under the repository's
-    /// `commit.cleanup` and comment character (R6.10, `crate::reads::as_the_editor_leaves`):
+    /// `commit.cleanup` and comment character (`crate::reads::as_the_editor_leaves`):
     /// `None` where git prepared none. The commit box fills an empty draft with it, so what it
     /// shows is what `git commit` would commit.
     pub fn prepared_message(

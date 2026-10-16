@@ -2,19 +2,20 @@
 //!
 //! gix reads the two versions — through its resource cache in `Mode::ToGit`, the mode that
 //! never runs a textconv program and the form `git diff` compares and `git apply --cached`
-//! expects (R2.3), built with `skip_internal_diff_if_external_is_configured` off, so a
+//! expects, built with `skip_internal_diff_if_external_is_configured` off, so a
 //! `diff.<driver>.command` in the user's config is read and never run — and decides, before
 //! any line is read, what is not text: a submodule, a mode change alone, a file too large
 //! (from the object's header), a binary one by git's rules, an LFS pointer.
 //!
-//! Which lines changed is git's answer (the content-parity decision of 2026-10-03, which
-//! amends packet decision L3): `git diff-tree -p` run as a read (`crate::reads::patches`),
-//! every line it prints checked against the lines gix read. So are the whitespace-ignoring
-//! ranges (`-w`) and each hunk's function context. Where there is only one answer git could
-//! give, git is not asked: a file added, deleted or changed in type is one change of every
-//! line (git's patch for a type change is a deletion and an addition), a side with no lines
-//! makes the other side's every line the change, and two sides with the same blob have
-//! none. Intra-line highlights stay gix's: git has no equivalent.
+//! Which lines changed is git's answer, since gix's line diff places changes differently
+//! (`docs/research/diff-engine/content-parity-spike.md`): `git diff-tree -p` run as a read
+//! (`crate::reads::patches`), every line it prints checked against the lines gix read. So
+//! are the whitespace-ignoring ranges (`-w`) and each hunk's function context. Where there
+//! is only one answer git could give, git is not asked: a file added, deleted or changed in
+//! type is one change of every line (git's patch for a type change is a deletion and an
+//! addition), a side with no lines makes the other side's every line the change, and two
+//! sides with the same blob have none. Intra-line highlights stay gix's: git has no
+//! equivalent.
 
 use std::collections::BTreeMap;
 
@@ -43,7 +44,7 @@ const LFS_MAX_BYTES: usize = 1024;
 
 /// The two commits a content query's file changed between, as `git` is given them, and —
 /// for a stash that holds untracked files — the third parent they are in, which is the new
-/// side of a file `git stash show` listed from them (refs-and-status R6.2).
+/// side of a file `git stash show` listed from them.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Trees {
     pub(super) old: Oid,
@@ -129,7 +130,7 @@ enum Prepared {
     },
 }
 
-/// One file's content query (R2.3 through R2.8).
+/// One file's content query.
 pub(super) fn file_diff(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
@@ -180,7 +181,7 @@ pub(super) fn file_diff(
 /// its blobs is read, from what the files before it cost; a file costs one, for itself, and
 /// every line of both its versions it holds (a state that is not text, refused before its
 /// lines are split, holds none), so the overshoot past a budget is at most the one file that
-/// crossed it, which R2.6's ceilings bound.
+/// crossed it, which the size and line limits (`DiffLimits`) bound.
 ///
 /// The lines of the page's text files git has to read are asked of git in as few `diff-tree
 /// -p` runs as the algorithms allow, each over the page's paths alone (`Scope::Paths`) with
@@ -388,15 +389,16 @@ pub struct Page {
 }
 
 /// The most files one page reads: what its blobs, its patch and the paths on its `git`
-/// command line are bounded by. Measured against C14 in phase 08, with [`PAGE_LINES`]: a
-/// change to either is a measured decision, pinned by `a_pages_bounds_are_the_measured_ones`.
+/// command line are bounded by. Measured on the bench repository with [`PAGE_LINES`]
+/// (`docs/research/diff-engine/c14-measured.md`): a change to either is measured again, and
+/// pinned by `a_pages_bounds_are_the_measured_ones`.
 pub const PAGE_FILES: usize = 256;
 
 /// The most lines one page reads, both versions of every file counted: past it the page ends
 /// at the file that crossed it, so a page of large files is answered before the next is read.
 pub const PAGE_LINES: u64 = 20_000;
 
-/// A total line budget, and how much of it is spent: what Expand All opens files until (R5.3).
+/// A total line budget, and how much of it is spent: what Expand All opens files until.
 /// A file costs one, for itself, and the lines of both its versions it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineBudget {
@@ -744,7 +746,7 @@ fn prepare(
         options.limits.max_bytes
     };
 
-    // R2.6: the size limit is tested BEFORE the content is read. An object's header
+    // The size limit is tested BEFORE the content is read. An object's header
     // carries its size, so a file too large to draw is refused without inflating it.
     for id in [file.old_id, file.new_id].into_iter().flatten() {
         let size = blob_size(inner, &id, file)?;
@@ -771,7 +773,7 @@ fn prepare(
     })?;
     match prepared.operation {
         // git's own rule: the `diff`/`binary` attribute, `core.bigFileThreshold`, or a NUL
-        // byte in the first 8,000 bytes (R2.5). gix clears the buffer of a binary resource,
+        // byte in the first 8,000 bytes. gix clears the buffer of a binary resource,
         // so the size is all there is to show.
         Operation::SourceOrDestinationIsBinary => {
             return Ok(Prepared::Done(DiffContent::Binary {
@@ -780,8 +782,8 @@ fn prepare(
             }));
         }
         // Unreachable while the cache is built with `skip_internal_diff_if_external_is_configured`
-        // off, which is what `gix::diff::resource_cache` does and what R2.3 requires: the
-        // configured program is read and never started. Answered rather than asserted, so a
+        // off, which is what `gix::diff::resource_cache` does, so the configured program is
+        // read and never started. Answered rather than asserted, so a
         // gix that changed that default draws a notice instead of running a program.
         Operation::ExternalCommand { command } => {
             return Ok(Prepared::Done(DiffContent::Unsupported {
@@ -887,8 +889,9 @@ fn byte_size(data: gix::diff::blob::platform::resource::Data<'_>) -> u64 {
     }
 }
 
-/// R2.6's two line rules, over git's form of the content. Measured without splitting the
-/// file into lines, so refusing a file costs a scan and no allocation.
+/// The two line limits — lines per side and bytes per line — over git's form of the
+/// content. Measured without splitting the file into lines, so refusing a file costs a scan
+/// and no allocation.
 pub(super) fn crossed_line_limit(old: &[u8], new: &[u8], limits: &DiffLimits) -> Option<SizeLimit> {
     let mut lines = 0u32;
     let mut longest = 0u32;

@@ -1,7 +1,6 @@
 //! `git stripspace`, the message on stdin: a merge's, a cherry-pick's or a revert's `MERGE_MSG`
-//! cleaned as git's own editor session would clean it before the commit box shows it
-//! (`docs/prd/staging-and-commit.md` R6.10, C2, C32 — the fourth porcelain read, accepted by the
-//! user on 2026-10-10).
+//! cleaned as git's own editor session would clean it before the commit box shows it — a
+//! porcelain verb, run as a read.
 //!
 //! **Why git cleans it.** `MERGE_MSG` carries git's commentary for the editor — `# Conflicts:`
 //! and the paths under it, and, under `commit.cleanup=scissors`, a scissors line and what follows
@@ -309,7 +308,7 @@ mod tests {
         found
     }
 
-    /// C32: `stripspace` runs no program — not a filter, a textconv, an external diff, a hook or
+    /// `stripspace` runs no program — not a filter, a textconv, an external diff, a hook or
     /// an fsmonitor, each configured to leave a marker — and writes nothing under the git
     /// directory. Caught by: a verb that reads the index or runs what the configuration names.
     #[test]

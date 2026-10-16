@@ -1,47 +1,45 @@
-//! Staging and unstaging: lines and a mode change by patch, and whole files
-//! (`docs/prd/staging-and-commit.md` R3.1, R3.2, R3.4). Not destructive (R1.5, the user's
-//! classification, as git and Fork classify them), so none takes a [`cairn_model::Confirmed`]:
-//! a stage leaves the working tree as it was, and an unstage puts the index back to `HEAD`
-//! while the working tree keeps the file as it is. A wrong stage is undone by its opposite.
-//! A wrong unstage is too while the file still holds what was staged; once the file has been
-//! edited since, staging again stages the edit, and what was staged survives only as a
-//! dangling blob in the object store — found by `git fsck --lost-found`, never by Cairn —
-//! until git prunes it.
+//! Staging and unstaging: lines and a mode change by patch, and whole files. Not destructive
+//! (as git and Fork classify them), so none takes a [`cairn_model::Confirmed`]: a stage leaves
+//! the working tree as it was, and an unstage puts the index back to `HEAD` while the working
+//! tree keeps the file as it is. A wrong stage is undone by its opposite. A wrong unstage is
+//! too while the file still holds what was staged; once the file has been edited since,
+//! staging again stages the edit, and what was staged survives only as a dangling blob in the
+//! object store — found by `git fsck --lost-found`, never by Cairn — until git prunes it.
 //!
 //! **Lines** are a patch the model emits from the exact diff the user selected in
 //! ([`cairn_model::action_patch`]) — the unstaged or untracked diff for a stage, the staged
 //! diff for an unstage, inverted, so nothing is ever applied with `-R` — given to
 //! `git apply --cached --whitespace=nowarn -` on stdin. `--whitespace=nowarn` overrides the
 //! user's `apply.whitespace`, which would otherwise strip what was staged (`fix`) or refuse it
-//! (`error`): what is staged is what was selected, byte for byte (C5). Never `--recount`,
-//! `--3way`, `--unidiff-zero`, `-C` or `--allow-overlap`: the patch's counts and context are
-//! exact, and a patch that does not apply as it is must not be made to. `apply.ignoreWhitespace`
-//! is left to the user: measured on git 2.30.9, 2.32.7 and 2.56.0 over 400 selections, it
-//! changes nothing a fresh patch stages — it matters only where the index moved under a
-//! patch's context, which the stale check refuses first (`docs/prd/staging-and-commit.md`,
-//! "Out of scope").
+//! (`error`): what is staged is what was selected, byte for byte. Never `--recount`, `--3way`,
+//! `--unidiff-zero`, `-C` or `--allow-overlap`: the patch's counts and context are exact, and a
+//! patch that does not apply as it is must not be made to. `apply.ignoreWhitespace` is left to
+//! the user: measured on git 2.30.9, 2.32.7 and 2.56.0 over 400 selections, it changes nothing
+//! a fresh patch stages — it matters only where the index moved under a patch's context, which
+//! the stale check refuses first.
 //!
-//! **The stale check** (R3.7, L17f): before git runs, the index entry is read again with
+//! **The stale check**: before git runs, the index entry is read again with
 //! gix and must be the side the patch was built from — for a stage, the diff's old id and
 //! mode (or, for a new file, no entry or an intent-to-add one); for an unstage, the staged
 //! diff's new id and mode at its path. Otherwise the patch is not applied: `git apply` would
-//! land it at an offset on lines the user never selected (spike E6), so the answer is
+//! land it at an offset on lines the user never selected, so the answer is
 //! [`Error::ChangedSinceRead`], naming the path, and nothing is written.
 //!
 //! **Files** go by git's own verbs, every path in a pathspec file on stdin
 //! (`--pathspec-from-file=- --pathspec-file-nul`): stage with `git add`, which also stages a
-//! deletion and marks a conflicted path resolved (R3.11); unstage with `git reset -q`, which
-//! works on an unborn branch where `git restore --staged` does not ([`UnstageTo::Head`]);
-//! out of an amend, against `HEAD`'s parent ([`UnstageTo::Commit`]); and out of a root
-//! commit's amend, which has no parent to reset to, with `git rm --cached -f -q`
-//! ([`UnstageTo::Nothing`]): `-f` because `git rm --cached` alone refuses a path whose staged
-//! content differs from both the file and `HEAD` — exactly the path an amend's staged list
-//! shows edited — where an unstage of it, as `git reset` would make one, drops the staged
-//! content and keeps the file. `--cached` leaves the working tree alone either way. A staged rename is unstaged whole by naming both its paths;
-//! one path alone unstages that side alone, as `git reset -- <path>` does.
+//! deletion and marks a conflicted path resolved; unstage with `git reset -q`, which works on
+//! an unborn branch where `git restore --staged` does not ([`UnstageTo::Head`]); out of an
+//! amend, against `HEAD`'s parent ([`UnstageTo::Commit`]); and out of a root commit's amend,
+//! which has no parent to reset to, with `git rm --cached -f -q` ([`UnstageTo::Nothing`]):
+//! `-f` because `git rm --cached` alone refuses a path whose staged content differs from both
+//! the file and `HEAD` — exactly the path an amend's staged list shows edited — where an
+//! unstage of it, as `git reset` would make one, drops the staged content and keeps the file.
+//! `--cached` leaves the working tree alone either way. A staged rename is unstaged whole by
+//! naming both its paths; one path alone unstages that side alone, as `git reset -- <path>`
+//! does.
 //!
 //! Every verb runs with git's global `--literal-pathspecs` (`super::local_write`), and its
-//! [`Performed`] declares the index invalid and carries the lock files around it (R3.8).
+//! [`Performed`] declares the index invalid and carries the lock files around it.
 
 use std::ffi::OsString;
 
@@ -56,7 +54,7 @@ use crate::{Error, Refusal, Repository};
 const APPLY_CACHED: [&str; 4] = ["apply", "--cached", "--whitespace=nowarn", "-"];
 
 /// Stages `selection` of `diff` — the path's unstaged or untracked diff, as the engine
-/// answered it — into the index (R3.1).
+/// answered it — into the index.
 ///
 /// Refused before git runs ([`Error::Refused`]) when nothing is selected, when the change is
 /// one only a file verb takes whole, or when the path is conflicted; [`Error::ChangedSinceRead`]
@@ -85,9 +83,9 @@ pub fn stage_lines(
 }
 
 /// Unstages `selection` of `diff` — the path's staged diff, as the engine answered it, a
-/// rename or a copy paired as `git diff --cached` pairs it — out of the index (R3.2). The
-/// lines go back at the path the change has now: unstaging lines of a rename never moves
-/// the path, whichever of its rows asked (R2.6).
+/// rename or a copy paired as `git diff --cached` pairs it — out of the index. The lines go
+/// back at the path the change has now: unstaging lines of a rename never moves the path,
+/// whichever of its rows asked.
 ///
 /// Refused as [`stage_lines`] is; [`Error::ChangedSinceRead`] when the index entry at the
 /// path is no longer the staged diff's new side.
@@ -126,7 +124,7 @@ pub fn unstage_lines(
 }
 
 /// The patch `action` applies for `selection` of `diff`, or the refusal that stands in for an
-/// empty one: nothing selected, or part of a change only a file verb takes (R2.3).
+/// empty one: nothing selected, or part of a change only a file verb takes.
 pub(super) fn patch_of(
     action: PatchAction,
     diff: &FileDiff,
@@ -178,9 +176,9 @@ fn apply_cached(
     Ok(locks_around(repo, before))
 }
 
-/// Stages every one of `paths` whole with `git add`, from a pathspec file (R3.4): a
-/// modification, a new file, a deletion, a submodule's new commit, and a conflicted path —
-/// which `git add` marks resolved (R3.11). Paths are work-tree-relative, as `git status`
+/// Stages every one of `paths` whole with `git add`, from a pathspec file: a modification, a
+/// new file, a deletion, a submodule's new commit, and a conflicted path — which `git add`
+/// marks resolved. Paths are work-tree-relative, as `git status`
 /// lists them; an empty list is [`Error::NoPaths`].
 pub fn stage_files(
     git: &GitBinary,
@@ -205,7 +203,7 @@ pub fn stage_files(
 pub enum UnstageTo {
     /// `HEAD`'s entries, or none on an unborn branch: `git reset -q`.
     Head,
-    /// A commit's entries: `HEAD`'s parent, for a file unstaged out of an amend (R6.3) —
+    /// A commit's entries: `HEAD`'s parent, for a file unstaged out of an amend —
     /// `git reset -q <commit>`, the commit given by its id, which is never an option.
     Commit(Oid),
     /// No entry at all: a file unstaged out of the amend of a root commit, which has no
@@ -214,7 +212,7 @@ pub enum UnstageTo {
     Nothing,
 }
 
-/// Unstages every one of `paths` whole, back to `to`, from a pathspec file (R3.4). A staged
+/// Unstages every one of `paths` whole, back to `to`, from a pathspec file. A staged
 /// rename is unstaged whole by naming both its paths. An empty list is [`Error::NoPaths`].
 pub fn unstage_files(
     git: &GitBinary,
@@ -265,7 +263,7 @@ fn files(count: usize) -> String {
     }
 }
 
-/// Against a `git` that records what it was given and runs the real one (C9's argv,
+/// Against a `git` that records what it was given and runs the real one (the argv,
 /// environment and stdin for each verb here, since the runner is crate-private). What the
 /// verbs do to a repository is pinned against real git alone in
 /// `crates/cairn-git/tests/diff_engine/diff/write_verbs.rs`.
@@ -320,7 +318,7 @@ mod tests {
         );
     }
 
-    /// C9 for the file verbs: `--literal-pathspecs` before the verb on argv, the paths in a
+    /// The file verbs: `--literal-pathspecs` before the verb on argv, the paths in a
     /// NUL-separated pathspec file on stdin and nowhere on argv, and the write's environment
     /// — no `GIT_LITERAL_PATHSPECS`, no read pin.
     #[test]
@@ -381,9 +379,9 @@ mod tests {
         }
     }
 
-    /// Phase 07's QA, carried to phase 11: a stage or an unstage of 50,000 paths runs one
-    /// `git` whose argv is the same handful of words as one path's — the paths go on stdin, as
-    /// a pathspec file — so no selection is too wide for `ARG_MAX`. (`git restore` reads its
+    /// A stage or an unstage of 50,000 paths runs one `git` whose argv is the same handful of
+    /// words as one path's — the paths go on stdin, as a pathspec file — so no selection is too
+    /// wide for `ARG_MAX`. (`git restore` reads its
     /// paths the same way, `discard.rs`; `git clean`, which reads no pathspec file, is batched
     /// by `CLEAN_ARGUMENT_BYTES`.) Caught by: paths put on argv.
     #[test]
@@ -409,7 +407,7 @@ mod tests {
         }
     }
 
-    /// C9 for the patch verbs: `git --literal-pathspecs apply --cached --whitespace=nowarn -`,
+    /// The patch verbs: `git --literal-pathspecs apply --cached --whitespace=nowarn -`,
     /// never `-R`, `--recount`, `--3way` or `--unidiff-zero`, the model's patch on stdin, run
     /// as a write; and the stale check reads the index with gix, so no read runs beside it.
     #[test]

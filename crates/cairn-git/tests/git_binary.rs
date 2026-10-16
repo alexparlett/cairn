@@ -122,7 +122,7 @@ fn failure(result: Result<GitBinary, Error>, case: &str) -> Error {
     }
 }
 
-/// PRD B2: a missing git is refused, and the message names the required version.
+/// A missing git is refused, and the message names the required version.
 #[test]
 fn a_missing_git_is_refused_naming_the_required_version() {
     let stub = StubPath::empty();
@@ -157,7 +157,7 @@ fn an_unset_path_is_reported_rather_than_searched_nowhere_silently() {
     assert!(message.contains("2.30.0"), "{message}");
 }
 
-/// PRD B2: one minor version under the floor is refused, and the message names both versions.
+/// One minor version under the floor is refused, and the message names both versions.
 #[test]
 fn a_git_older_than_the_floor_is_refused_naming_both_versions() {
     let stub = StubPath::printing_version("git version 2.29.2");
@@ -315,10 +315,10 @@ fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
     );
 }
 
-/// PRD R6.1: the application finds git once, as it starts, and later points
-/// each repository's invocations at that repository's askpass channel. Caught
-/// by: `with_environment` searching or probing again (the count moves), or
-/// keeping the environment git was found with.
+/// The application finds git once, as it starts, and later points each
+/// repository's invocations at that repository's askpass channel. Caught by:
+/// `with_environment` searching or probing again (the count moves), or keeping
+/// the environment git was found with.
 #[test]
 fn a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again() {
     static NEXT: AtomicUsize = AtomicUsize::new(0);

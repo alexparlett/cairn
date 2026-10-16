@@ -1,5 +1,5 @@
-//! `Create Branch Here…` (`docs/prd/staging-and-commit.md` R11.3): a branch put on a commit —
-//! the way back to a commit Show Lost Commits draws — as `git branch -- <name> <commit>`.
+//! `Create Branch Here…`: a branch put on a commit — the way back to a commit Show Lost
+//! Commits draws — as `git branch -- <name> <commit>`.
 //!
 //! The name follows `--`, so a name beginning with `-` is a name git judges and never an
 //! option; the commit is given by its full id, never a revision expression. git refuses a
@@ -48,9 +48,9 @@ mod tests {
     use super::*;
     use crate::ops::recording_stub::RecordingStub;
 
-    /// C9's rule for a write, and R11.3's argv: `--literal-pathspecs` ahead of the verb, the
-    /// name after `--` whatever it begins with, the commit by its full id, nothing on stdin,
-    /// and a write's environment. Caught by: a name read as an option, a short or symbolic
+    /// The argv every write is held to, and this verb's: `--literal-pathspecs` ahead of the
+    /// verb, the name after `--` whatever it begins with, the commit by its full id, nothing on
+    /// stdin, and a write's environment. Caught by: a name read as an option, a short or symbolic
     /// commit, a missing `--`, or the verb run as a read.
     #[test]
     fn a_branch_is_created_by_git_branch_after_a_double_dash() {

@@ -118,9 +118,9 @@ impl Write {
 pub(crate) trait Kind {
     /// What a ceiling on this kind's stdout can be: a byte count for a read,
     /// and no value at all for a write — `Infallible` has none, so the only
-    /// ceiling a write's invocation can be driven under is no ceiling (R4.8 of
-    /// `docs/prd/staging-and-commit.md`). A crossed ceiling outranks a clean
-    /// exit, and a write's completed change must never be reported refused.
+    /// ceiling a write's invocation can be driven under is no ceiling. A crossed
+    /// ceiling outranks a clean exit, and a write's completed change must never be
+    /// reported refused.
     type Ceiling: Copy;
 
     /// The bytes a ceiling allows.
@@ -136,7 +136,7 @@ pub(crate) trait Kind {
 }
 
 /// A read writes nothing, so it leaves nothing behind and fails on no lock of
-/// its own: its cancellation is that and nothing else (R5.2).
+/// its own: its cancellation is that and nothing else.
 impl Kind for Read {
     type Ceiling = usize;
 
@@ -159,7 +159,7 @@ impl Kind for Read {
 
 /// A write's cancellation lists the lock files present once it is reaped —
 /// what a `SIGKILL` stranded, or a lock another git holds — and its failure
-/// names those present, which is what a write fails on (R5.2, R5.3). Listed,
+/// names those present, which is what a write fails on. Listed,
 /// never removed.
 impl Kind for Write {
     type Ceiling = std::convert::Infallible;
@@ -291,13 +291,13 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Its own group, so ending it reaches everything it started (R3.1).
+            // Its own group, so ending it reaches everything it started.
             .process_group(0);
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
         // The one copy of the arguments anything keeps or reports — the log's record and every
-        // error the runner builds — scrubbed of a URL's userinfo here, once (R12.2).
+        // error the runner builds — scrubbed of a URL's userinfo here, once.
         let arguments = scrubbed_arguments(&self.arguments);
         let registration = self.processes.as_ref().map(|processes| {
             Registration::new(processes, arguments.clone(), self.directory.clone())
@@ -376,7 +376,7 @@ fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> 
 }
 
 /// The arguments as a user would have typed them, lossily decoded, each scrubbed of a URL's
-/// userinfo (R12.2) though Cairn passes none: what the command log records and, joined by
+/// userinfo though Cairn passes none: what the command log records and, joined by
 /// spaces, what every error about the invocation names — so neither carries a token.
 fn scrubbed_arguments(arguments: &[OsString]) -> Vec<String> {
     let mut scrubber = Scrubber::new();
@@ -470,7 +470,7 @@ mod tests {
     }
 
     /// The arguments as typed, each scrubbed of a URL's userinfo: the one copy the log records
-    /// and the runner's errors name (R12.2). Caught by: a raw argument reported.
+    /// and the runner's errors name. Caught by: a raw argument reported.
     #[test]
     fn arguments_are_described_as_typed_and_scrubbed() {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
@@ -539,7 +539,7 @@ mod stub_tests {
         ))
     }
 
-    /// PRD B1 and G3 end to end, for a read: what the child actually sees is
+    /// End to end, for a read: what the child actually sees is
     /// the base, the editor pinned, optional locks and lazy fetching off, no
     /// token — spelled out variable by variable — and nothing from this
     /// process. The test process is full of `CARGO_*` variables, which is what

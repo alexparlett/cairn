@@ -1,8 +1,8 @@
 //! History requests, cursors and pages.
 //!
 //! A walk starts from `HEAD`, from given commits, or from a refs snapshot — every branch,
-//! remote-tracking ref, tag and `HEAD` (PRD R4.1) — whose rows then carry the refs that
-//! label them (R4.3) and whose stashes are rows of their own (R4.2; `stream`).
+//! remote-tracking ref, tag and `HEAD` — whose rows then carry the refs that label them and
+//! whose stashes are rows of their own (`stream`).
 
 mod reach;
 mod reflogs;
@@ -56,8 +56,7 @@ impl HistoryOrder {
 /// Shared, so paging clones a pointer rather than the tip set.
 type Tips = Arc<[gix::hash::ObjectId]>;
 
-/// Whether a walk marks the commits no ref reaches — Show Lost Commits
-/// (`docs/prd/staging-and-commit.md` R11.1) — and where it stands.
+/// Whether a walk marks the commits no ref reaches — Show Lost Commits — and where it stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Marking {
     /// Every commit is reached: the walk's tips are the refs'.
@@ -161,7 +160,7 @@ enum Start {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRequest {
     start: Start,
-    /// Show Lost Commits: the reflogs' ids join the tips (R11.1).
+    /// Show Lost Commits: the reflogs' ids join the tips.
     lost: bool,
     order: HistoryOrder,
     limit: usize,
@@ -181,8 +180,8 @@ impl HistoryRequest {
     /// Every commit the snapshot's local branches, remote-tracking refs and tags identify,
     /// and `HEAD`'s — git's `rev-list --branches --remotes --tags HEAD` — each row carrying
     /// the refs that point at it and whether it is `HEAD`'s, and each stash whose base the
-    /// walk reaches a row of its own (PRD R4.1-R4.3). A tag on a tree or a blob seeds
-    /// nothing; nothing about a stash seeds the walk.
+    /// walk reaches a row of its own. A tag on a tree or a blob seeds nothing; nothing about
+    /// a stash seeds the walk.
     pub fn from_refs(snapshot: &RefsSnapshot, limit: usize) -> Self {
         Self::starting(Start::Refs(Box::new(RefSeeds::of(snapshot))), limit)
     }
@@ -221,14 +220,13 @@ impl HistoryRequest {
         self
     }
 
-    /// Show Lost Commits (`docs/prd/staging-and-commit.md` R11.1): a walk from refs also
-    /// starts from the old and the new id of every entry of `HEAD`'s reflog and of each
-    /// local branch's — as `git rev-list --reflog` reads them, each log read whole — and
-    /// each row of a commit no ref reaches is carried as lost ([`RowsPage::push_lost`]), or,
-    /// when the walk finds a ref reaches it only after its row was carried, named reached by
-    /// a later page ([`RowsPage::reached`]). The reflogs are read when the walk opens, under
-    /// the first page's cancel. Ignored unless the walk starts from refs; a resumed walk
-    /// keeps what its cursor began with.
+    /// Show Lost Commits: a walk from refs also starts from the old and the new id of every
+    /// entry of `HEAD`'s reflog and of each local branch's — as `git rev-list --reflog` reads
+    /// them, each log read whole — and each row of a commit no ref reaches is carried as lost
+    /// ([`RowsPage::push_lost`]), or, when the walk finds a ref reaches it only after its row
+    /// was carried, named reached by a later page ([`RowsPage::reached`]). The reflogs are
+    /// read when the walk opens, under the first page's cancel. Ignored unless the walk
+    /// starts from refs; a resumed walk keeps what its cursor began with.
     pub fn with_lost_commits(mut self) -> Self {
         self.lost = true;
         self

@@ -1,6 +1,6 @@
-//! Which commits of a Show Lost Commits walk no ref reaches (`docs/prd/staging-and-commit.md`
-//! R11.1): those `git rev-list <reflog ids> --not --branches --remotes --tags HEAD` lists,
-//! drawn dimmed. Decided as the walk goes, never by a walk of its own before the first page.
+//! Which commits of a Show Lost Commits walk no ref reaches: those
+//! `git rev-list <reflog ids> --not --branches --remotes --tags HEAD` lists, drawn dimmed.
+//! Decided as the walk goes, never by a walk of its own before the first page.
 //!
 //! A commit pulled off the walk is reached when it is a tip a ref names or the parent of a
 //! commit pulled before it that a ref reaches; otherwise it is lost, so far. The walk

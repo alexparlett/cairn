@@ -207,7 +207,7 @@ impl Drop for Repo {
     }
 }
 
-/// The edge cases C2 names, each in a commit of its own so a test can reach it by subject.
+/// The diff's edge cases, each in a commit of its own so a test can reach it by subject.
 ///
 /// Commit order, oldest first: `seed`, `edits`, `endings`, `newlines`, `add and delete`,
 /// `rename with edits`, `far apart`, `crlf edit`, `delete a line`, `one line edit`,
@@ -216,7 +216,7 @@ impl Drop for Repo {
 pub fn crafted() -> Repo {
     let repo = Repo::new("crafted");
 
-    // A root commit, so the empty-tree comparison of L5 has a subject.
+    // A root commit, so the comparison against the empty tree has a subject.
     repo.write(
         "plain.txt",
         b"alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\n",
@@ -422,7 +422,8 @@ pub fn run_trap(repo: &Repo) {
     assert!(status.success(), "the trap program does not run at all");
 }
 
-/// One file past each of R2.6's three ceilings, and one comfortably inside them.
+/// One file past each of the diff's three ceilings — 1 MiB, 50,000 lines and a line of 2,048
+/// bytes — and one comfortably inside them.
 pub fn oversized() -> Repo {
     let repo = Repo::new("oversized");
     repo.write("small.txt", b"inside every limit\n");
@@ -651,8 +652,8 @@ pub fn merged() -> Repo {
 }
 
 /// A commit whose author and committer differ in name, address and time zone, with a
-/// message of several paragraphs — the fields R5.3 draws and `CommitSummary` does not
-/// carry.
+/// message of several paragraphs — the fields the Commit tab draws and `CommitSummary` does
+/// not carry.
 pub fn signed_by_two_people() -> Repo {
     let repo = Repo::new("signatures");
     repo.write("f.txt", b"one\n");
@@ -1329,9 +1330,9 @@ pub fn whitespace() -> Repo {
     let mut real_new = real.clone();
     real_new[10] = "    bravo_step(different);".to_owned();
     pairs.push(("only-real.c".to_owned(), joined(&real), joined(&real_new)));
-    // Last lines that did not end (phase 06): a real edit beside a last line that gained
-    // its newline; a last line, never ended, changed only in whitespace; and a context line
-    // changed in whitespace beside a real edit, above an unended last line.
+    // Last lines that did not end: a real edit beside a last line that gained its newline; a
+    // last line, never ended, changed only in whitespace; and a context line changed in
+    // whitespace beside a real edit, above an unended last line.
     pairs.push((
         "eof-gained.c".to_owned(),
         b"x\ny\nz".to_vec(),

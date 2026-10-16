@@ -1,8 +1,7 @@
 //! A `git` that records what it was given — its arguments, its environment, its stdin — and
-//! then runs the machine's real `git` with exactly that, for the write verbs' argv tests
-//! (staging-and-commit C9). The runner is crate-private, so these tests live in the crate;
-//! the effect of each verb is pinned again against real git alone in
-//! `crates/cairn-git/tests/diff_engine/diff/write_verbs.rs`.
+//! then runs the machine's real `git` with exactly that, for the write verbs' argv tests.
+//! The runner is crate-private, so these tests live in the crate; the effect of each verb is
+//! pinned again against real git alone in `crates/cairn-git/tests/diff_engine/diff/write_verbs.rs`.
 //!
 //! Recording before running is what lets one test both read the exact `argv` a verb built
 //! and have the verb's own reads (`hash-object`) answered truly, so a discard runs its
@@ -39,7 +38,7 @@ impl Recorded {
     }
 
     /// A write's environment: the pins every invocation has, and none of a read's — and no
-    /// `GIT_LITERAL_PATHSPECS`, which is git's global option on argv instead (C9).
+    /// `GIT_LITERAL_PATHSPECS`, which is git's global option on argv instead.
     pub(crate) fn assert_a_write(&self) {
         let get = |name: &str| self.environment.get(name).map(String::as_str);
         assert_eq!(get("GIT_TERMINAL_PROMPT"), Some("0"), "{self:?}");

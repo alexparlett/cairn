@@ -1,8 +1,9 @@
-//! C7: one path's staged, unstaged and untracked diffs are what the user's `git diff
-//! --cached`, `git diff` and `git diff --no-index /dev/null` show, on fixtures that make a
-//! working tree differ from git's form of it — a `text=auto` file with CRLF endings, a path
-//! under a clean filter driver the fixture writes — and every state of R3.4 is answered,
-//! with the git directory byte-identical after every query (R3.5).
+//! One path's staged, unstaged and untracked diffs are what the user's `git diff --cached`,
+//! `git diff` and `git diff --no-index /dev/null` show, on fixtures that make a working tree
+//! differ from git's form of it — a `text=auto` file with CRLF endings, a path under a clean
+//! filter driver the fixture writes — and every state that is not text (a deletion, a type
+//! change, a mode-only change, a conflict, a submodule, a sparse index) is answered, with the
+//! git directory byte-identical after every query.
 //!
 //! The reference is porcelain, run with the fixture's own configuration and nothing of the
 //! machine's (`Repo::run`), and only AFTER Cairn's queries and the snapshot taken around
@@ -169,7 +170,7 @@ pub(super) fn same_as_git(
 ) {
     for whitespace in [false, true] {
         let extra: &[&str] = if whitespace { &["-w"] } else { &[] };
-        // A staged rename or copy is what `git diff --cached` pairs (R2.6); a pathspec of
+        // A staged rename or copy is what `git diff --cached` pairs; a pathspec of
         // its destination alone would show git an addition.
         let theirs = match answer {
             Some(diff)
@@ -262,11 +263,11 @@ fn base(name: &str) -> Repo {
     repo
 }
 
-/// C7, the case that silently regresses: a `text=auto` file whose working tree has CRLF
-/// where the index has LF is no change at all — not every line changed — staged or not;
-/// an edit in it is one line, held in git's form (no `\r`); and an untracked CRLF file is
-/// added in that form too, as `git diff --no-index` converts it. Caught by: reading the
-/// working tree's bytes (every line differs by its `\r`), or `None` for the edited file.
+/// The case that silently regresses: a `text=auto` file whose working tree has CRLF where
+/// the index has LF is no change at all — not every line changed — staged or not; an edit
+/// in it is one line, held in git's form (no `\r`); and an untracked CRLF file is added in
+/// that form too, as `git diff --no-index` converts it. Caught by: reading the working
+/// tree's bytes (every line differs by its `\r`), or `None` for the edited file.
 #[test]
 fn a_text_auto_file_with_crlf_endings_is_no_change_and_an_edit_is_one_line() {
     let repo = base("crlf");
@@ -323,7 +324,7 @@ fn upper_filter(repo: &Repo, driver: &str) -> PathBuf {
     marks
 }
 
-/// C7, the filter: a path under a clean filter driver the fixture writes is diffed in the
+/// The filter: a path under a clean filter driver the fixture writes is diffed in the
 /// driver's form, which is distinctive — the working tree holds lower case, git and Cairn
 /// see upper case — staged, unstaged and untracked, each as `git diff` shows it. The driver
 /// ran (its mark), through git (its environment is a read's: `GIT_OPTIONAL_LOCKS=0`, no
@@ -434,10 +435,10 @@ while :; do
 done
 "#;
 
-/// D1 as amended, for the driver git-lfs installs: a `filter.<driver>.process` runs on the
-/// reads of the working tree — `diff-files` and `diff --no-index` — and git sends it
-/// `command=clean` and nothing else, so its form is what is diffed, as `git diff` shows
-/// it; a staged read starts it not at all. Caught by: a working-tree side read without
+/// The driver git-lfs installs: a `filter.<driver>.process` runs on the reads of the
+/// working tree — `diff-files` and `diff --no-index` — and git sends it `command=clean` and
+/// nothing else, so its form is what is diffed, as `git diff` shows it; a staged read starts
+/// it not at all. Caught by: a working-tree side read without
 /// git's conversion (lower case), or a read that makes git smudge.
 #[test]
 fn a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed() {
@@ -499,13 +500,13 @@ fn a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed() {
     same_as_git(&repo, "staged.pf", WorkingTreeDiff::Staged, &staged);
 }
 
-/// The QA brief's failing driver: a required clean filter that exits non-zero, or whose
-/// program does not exist, is git's failure with its diagnostic — `fatal`, status 128, and
-/// what git said on stderr — from every read that runs it, never an empty diff; one that
-/// is not required is what git does with it, the unfiltered content diffed, exactly as
-/// `git diff` shows it. Caught by: a failed read answered as no change, or git's
-/// diagnostic dropped from the error (the message names the path anyway, through the
-/// arguments, so only the stderr decides that).
+/// A failing driver: a required clean filter that exits non-zero, or whose program does
+/// not exist, is git's failure with its diagnostic — `fatal`, status 128, and what git said
+/// on stderr — from every read that runs it, never an empty diff; one that is not required
+/// is what git does with it, the unfiltered content diffed, exactly as `git diff` shows it.
+/// Caught by: a failed read answered as no change, or git's diagnostic dropped from the error
+/// (the message names the path anyway, through the arguments, so only the stderr decides
+/// that).
 #[test]
 fn a_failing_clean_filter_is_gits_failure_with_its_diagnostic_or_what_git_shows() {
     let repo = base("failing");
@@ -571,9 +572,9 @@ fn a_failing_clean_filter_is_gits_failure_with_its_diagnostic_or_what_git_shows(
     same_as_git(&repo, "optional.opt", WorkingTreeDiff::Unstaged, &optional);
 }
 
-/// C7's states that are not text, each answered rather than errored and each what `git
-/// diff` says: a deleted file, a type change (a file become a symlink), a mode-only change,
-/// and the same three staged. Caught by: a deletion answered as no change, a mode change
+/// The states that are not text, each answered rather than errored and each what `git diff`
+/// says: a deleted file, a type change (a file become a symlink), a mode-only change, and
+/// the same three staged. Caught by: a deletion answered as no change, a mode change
 /// read as content, or a symlink's target not taken from git.
 #[test]
 fn a_deleted_file_a_type_change_and_a_mode_change_answer_their_state() {
@@ -677,10 +678,10 @@ fn type_change_is_gits(repo: &Repo, path: &str, which: WorkingTreeDiff, diff: &F
     assert_eq!(new, marked(sections[1], '+'));
 }
 
-/// C7, conflicted: a path the index holds unmerged answers conflicted from both the staged
-/// and the unstaged query — never a diff against one stage — where git itself shows a
-/// combined diff and "Unmerged path". Caught by: reading stage 0 (absent) as a deletion,
-/// or stage 2 as the old side.
+/// Conflicted: a path the index holds unmerged answers conflicted from both the staged and
+/// the unstaged query — never a diff against one stage — where git itself shows a combined
+/// diff and "Unmerged path". Caught by: reading stage 0 (absent) as a deletion, or stage 2
+/// as the old side.
 #[test]
 fn a_conflicted_path_answers_conflicted() {
     let repo = base("conflict");
@@ -712,9 +713,9 @@ fn a_conflicted_path_answers_conflicted() {
     assert!(git_diff(&repo, "f", WorkingTreeDiff::Staged, &[]).contains("Unmerged path f"));
 }
 
-/// C7, a submodule: its commit on each side and whether its checkout is dirty, read from
-/// git — moved, dirty, moved and dirty, staged — and hidden exactly where the user's `git
-/// diff` hides it under `diff.ignoreSubmodules`, which plumbing does not read, and under a
+/// A submodule: its commit on each side and whether its checkout is dirty, read from git —
+/// moved, dirty, moved and dirty, staged — and hidden exactly where the user's `git diff`
+/// hides it under `diff.ignoreSubmodules`, which plumbing does not read, and under a
 /// submodule's own `ignore`, which beats it. Caught by: the `-dirty` mark dropped or read
 /// into the id, or `diff.ignoreSubmodules` not passed (plumbing shows what porcelain hides).
 #[test]
@@ -823,7 +824,7 @@ fn a_submodule_answers_its_commits_and_whether_it_is_dirty_as_git_diff_shows_it(
     );
 }
 
-/// C7, a sparse index: unsupported, and said so — for a path inside the sparse cone and
+/// A sparse index: unsupported, and said so — for a path inside the sparse cone and
 /// one outside it — rather than an answer read from an index Cairn does not read. Skipped
 /// on a git that cannot write one (before 2.32), and only there: on any other git, a
 /// sparse checkout that cannot be set up is a failure, never a skip. The index is written
@@ -1035,12 +1036,11 @@ fn staged_and_unstaged_edits_read_as_git_diff_shows_them() {
     }
 }
 
-/// Staging-and-commit R6.3, R10.3 (the amend diff phase 05 carried to phase 09): a file of
-/// amend's staged list reads as `git diff --cached HEAD^` shows it — a file the amended commit
-/// edited and the index edits again, one it added and the index leaves, one it left and the
-/// index deletes — and where the index is what `HEAD`'s parent has, nothing; the staged diff
-/// of the same path is still against `HEAD`. Caught by: the amend's diff read against `HEAD`
-/// (the edit `HEAD` made missing, the added file reading as no change).
+/// A file of amend's staged list reads as `git diff --cached HEAD^` shows it — a file the
+/// amended commit edited and the index edits again, one it added and the index leaves, one it
+/// left and the index deletes — and where the index is what `HEAD`'s parent has, nothing; the
+/// staged diff of the same path is still against `HEAD`. Caught by: the amend's diff read
+/// against `HEAD` (the edit `HEAD` made missing, the added file reading as no change).
 #[test]
 fn a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent() {
     let repo = base("amending");
@@ -1173,11 +1173,11 @@ fn a_staged_file_on_an_unborn_branch_and_beside_a_directory_is_that_file() {
     assert_eq!(lines(&answer).1, ["now a file"]);
 }
 
-/// R2.6 on the working tree. A file past the ceiling in the index is refused before git
-/// diffs it; one past it only in the working tree is refused once git's output passes what
-/// both sides could hold; loading anyway reads both. And a clean filter that makes a large
-/// file small — as git-lfs's does — is diffed in that small form, as `git diff` shows it,
-/// where judging by the file on disk would refuse it. Caught by: the size taken from the
+/// The size limits on the working tree. A file past the ceiling in the index is refused
+/// before git diffs it; one past it only in the working tree is refused once git's output
+/// passes what both sides could hold; loading anyway reads both. And a clean filter that makes
+/// a large file small — as git-lfs's does — is diffed in that small form, as `git diff` shows
+/// it, where judging by the file on disk would refuse it. Caught by: the size taken from the
 /// working tree's bytes before the filter, or no ceiling on git's output.
 #[test]
 fn the_size_ceiling_is_judged_on_gits_form_of_the_working_tree() {
@@ -1281,7 +1281,7 @@ fn the_size_ceiling_is_judged_on_gits_form_of_the_working_tree() {
     );
 }
 
-/// R2.6's ceiling on git's output counts a side Cairn has not measured — the working tree,
+/// The ceiling on git's output counts a side Cairn has not measured — the working tree,
 /// which only git reads — at the size limit, so an untracked file and a large edit of a
 /// small indexed file, each well inside the DEFAULT limits, are read whole and are what
 /// `git diff` shows. Caught by: an unmeasured side counted as nothing (git ended once its
@@ -1440,11 +1440,11 @@ fn a_whitespace_ignoring_read_of_other_content_is_the_error_a_caller_retries() {
     }
 }
 
-/// R3.5 against the programs a read must not run: with a textconv that caches, an external
-/// diff, a driver's `command` and a smudge filter configured, and `core.fsmonitor` naming a
-/// hook, every query on every kind of side leaves the git directory byte-identical and runs
-/// none of them — the fsmonitor hook, which every read with a working tree runs as `git
-/// diff` does, and the clean filter of the paths read from the working tree are the only
+/// A read writes nothing, against the programs it must not run: with a textconv that caches,
+/// an external diff, a driver's `command` and a smudge filter configured, and `core.fsmonitor`
+/// naming a hook, every query on every kind of side leaves the git directory byte-identical
+/// and runs none of them — the fsmonitor hook, which every read with a working tree runs as
+/// `git diff` does, and the clean filter of the paths read from the working tree are the only
 /// programs that ran. Caught by: `--textconv` or `--ext-diff` on a read, or porcelain `git
 /// diff` for a tracked path (which refreshes the index).
 #[test]
@@ -1477,7 +1477,7 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
     repo.write("d.txt", lines.as_bytes());
     repo.commit("two files");
     // A staged rename with an edit, staged before any filter is configured: its staged
-    // diff runs the whole-index pairing read and the paired content read (R2.6).
+    // diff runs the whole-index pairing read and the paired content read.
     repo.git(&["mv", "d.txt", "e.txt"]);
     repo.write("e.txt", lines.replace("line 4", "line four").as_bytes());
     repo.git(&["add", "e.txt"]);
@@ -1917,7 +1917,7 @@ fn an_untracked_answer_is_the_same_under_hostile_presentation_settings() {
     );
     // Every setting but one is presentation and changes nothing. `diff.interHunkContext`
     // is how the user's `git diff` groups hunks, which the answer carries for the view to
-    // group with (phase 06); the lines, ranges and texts it holds are the same.
+    // group with; the lines, ranges and texts it holds are the same.
     let (hostile_diff, calm_diff) = (
         some(hostile.as_ref(), "an answer"),
         some(calm.as_ref(), "an answer"),

@@ -127,7 +127,7 @@ mod script_writer {
     /// multi-threaded test process never holds a writable descriptor to a file a test then has git
     /// execute: one held while a parallel test forks would make that exec fail "Text file busy" (os
     /// error 26). The same writer as `crates/cairn-git/tests/support/write_executable.rs`, for the
-    /// crate's unit tests (phase 19's QA item 6).
+    /// crate's unit tests.
     pub(crate) fn write_executable(path: &Path, contents: &str, mode: u32) {
         use std::io::Write as _;
         if let Some(parent) = path.parent() {

@@ -16,9 +16,9 @@ use cairn_model::CommandRecord;
 ///
 /// A record is a few hundred bytes when git said little, which is nearly
 /// always, so the count is what bounds the log in the common case. A thousand
-/// is a long session's worth: a fetch is one, and the reads `diff-engine` adds
-/// are one per selection the user makes, so the user scrolling back through
-/// the log finds the afternoon's work, not the last minute's.
+/// is a long session's worth: a fetch is one, and a diff's reads are one per
+/// selection the user makes, so the user scrolling back through the log finds
+/// the afternoon's work, not the last minute's.
 pub(crate) const LOG_ENTRIES: usize = 1000;
 
 /// How many bytes of arguments, directories and stderr the log keeps: 4 MiB.
@@ -35,8 +35,8 @@ pub(crate) const LOG_BYTES: usize = 4 * 1024 * 1024;
 
 /// Where an invocation was asked from: the thread that built it, and its place in the order
 /// invocations were built in, in its repository. Kept beside a record, never in it, so the
-/// record stays exactly what R8.1 lists; it is what lets an operation name the `git` it ran
-/// itself among what other threads ran meanwhile (staging-and-commit R12.1).
+/// record stays exactly what a [`CommandRecord`] holds; it is what lets an operation name the
+/// `git` it ran itself among what other threads ran meanwhile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Origin {
     pub(crate) thread: ThreadId,
@@ -152,7 +152,7 @@ mod tests {
         log.records().iter().map(CommandRecord::held_bytes).sum()
     }
 
-    /// R8.2, the count: past `LOG_ENTRIES` the oldest go first, and what is kept
+    /// The count bound: past `LOG_ENTRIES` the oldest go first, and what is kept
     /// is the newest, in order. Caught by: no bound, dropping the newest, or
     /// an off-by-one at the bound.
     #[test]
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(log.bytes, held(&log), "the running count drifted");
     }
 
-    /// R8.2, the bytes: records whose stderr is a full 256 KiB tail push the
+    /// The byte bound: records whose stderr is a full 256 KiB tail push the
     /// oldest out once their sum would pass `LOG_BYTES`, long before the count
     /// does. Caught by: bounding by count alone, or a running total that
     /// forgets what a dropped record held.
@@ -195,11 +195,11 @@ mod tests {
     }
 
     /// A record that alone is over the byte bound is kept, trimmed to fit, and
-    /// says so: its stderr keeps its newest whole lines and says older ones went
-    /// (R4.10); past that, its arguments keep their start and a last argument
-    /// counts what went. Caught by: keeping it whole (the bound breaks), dropping
-    /// it (an invocation goes unrecorded), a cut inside a line, or cutting the
-    /// arguments without a word.
+    /// says so: its stderr keeps its newest whole lines and says older ones
+    /// went; past that, its arguments keep their start and a last argument
+    /// counts what went. Caught by: keeping it whole (the bound breaks),
+    /// dropping it (an invocation goes unrecorded), a cut inside a line, or
+    /// cutting the arguments without a word.
     #[test]
     fn a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so() {
         let mut log = CommandLog::default();

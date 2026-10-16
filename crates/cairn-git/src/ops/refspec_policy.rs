@@ -18,11 +18,11 @@
 //! passed, and that flag only withholds the tag refspec git would ADD. A
 //! remote whose own refspecs already write `refs/tags/` would have `--prune`
 //! delete local tags through them, so with pruning on such a remote is
-//! refused too, and without pruning it fetches as before.
+//! refused too, and without pruning it fetches as usual.
 //!
 //! The check reads the remote as the fetch's own git will, because git answers it
-//! (`crate::reads::fetch_settings`, `git config` in query form — the second
-//! porcelain read, accepted by the user on 2026-10-04): the same binary, the same
+//! (`crate::reads::fetch_settings`, `git config` in query form, a porcelain verb
+//! run as a read): the same binary, the same
 //! built environment, the same `--git-dir` and `--work-tree`, a moment before the
 //! fetch, and afresh on every fetch, because `git` reads configuration on every run
 //! and a refspec added in a terminal since Cairn started must be seen by the fetch
@@ -30,7 +30,7 @@
 //! evaluates a linked worktree's `includeIf "gitdir:..."` against the common
 //! directory where git uses the worktree's own git directory, reads the system file
 //! from its own path, and decides trust by an owner rule of its own, and each of
-//! those once let a fetch through that git then made as a mirror or a pruner of
+//! those can let through a fetch that git then makes as a mirror or a pruner of
 //! tags. The check FAILS CLOSED: a read that fails — no `git`, a value git will not
 //! parse, an answer that is not one — refuses the fetch as [`Error::RemoteConfig`], and
 //! so does a refspec that does not parse; a read ended because the repository is

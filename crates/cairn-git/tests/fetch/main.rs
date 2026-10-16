@@ -1,10 +1,10 @@
 //! Fetch, end to end: real `git`, a real remote demanding a credential, the
 //! built askpass helper, and a real channel answered from a test thread.
 //!
-//! PRD B3 (a prompt is answered and the fetch succeeds), B4 (a helper or
-//! agent that already answers means no prompt at all — the regression that
-//! protects L7) and B5 (a refused prompt fails cleanly, once, with nothing
-//! left running), each over HTTPS-shaped HTTP and over SSH, because git
+//! A prompt is answered and the fetch succeeds; a helper or agent that already
+//! answers means no prompt at all — the regression that keeps a working
+//! credential setup undegraded; and a refused prompt fails cleanly, once, with
+//! nothing left running — each over HTTPS-shaped HTTP and over SSH, because git
 //! shares no code between the two. Credentials are generated per fixture and
 //! never written into this file.
 
@@ -126,7 +126,7 @@ fn refusing_only_the_password(username: String) -> Answers {
 /// The ssh fixture could not be built. Named on stderr (which `cargo test`
 /// shows only with `--nocapture` or on failure), and a FAILURE where
 /// `CAIRN_REQUIRE_SSH_FIXTURE` is set — which is how a CI job that provides
-/// `sshd` turns a skipped criterion from an invisible `ok` into a red run.
+/// `sshd` turns a skipped test from an invisible `ok` into a red run.
 fn skipped(test: &str, why: &Unavailable) {
     if std::env::var_os("CAIRN_REQUIRE_SSH_FIXTURE").is_some() {
         panic!(
@@ -149,7 +149,7 @@ fn no_secret_in(text: &str, secret: &str, what: &str) {
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
-/// PRD B3: a username and a password, each asked once through the helper,
+/// A username and a password, each asked once through the helper,
 /// and the fetch brings the remote's history across.
 #[test]
 fn a_fetch_over_http_prompts_for_each_half_of_the_credential_and_succeeds() {
@@ -202,7 +202,7 @@ fn a_fetch_over_http_prompts_for_each_half_of_the_credential_and_succeeds() {
     }
 }
 
-/// PRD B4, the criterion that protects L7: a `credential.helper` the user
+/// A working credential setup is not degraded: a `credential.helper` the user
 /// configured answers, and Cairn's helper is never asked. The stub helper is
 /// the only thing that knows the password, and the askpass channel REFUSES
 /// anything it is asked — so if Cairn prompted, the fetch would fail and the
@@ -264,7 +264,7 @@ fn a_credential_helper_that_answers_means_no_prompt_at_all() {
     );
 }
 
-/// PRD B5: the user declines, and the fetch fails at once — one prompt, no
+/// The user declines, and the fetch fails at once — one prompt, no
 /// second ask, no hang, a message naming what git could not read, and no
 /// secret anywhere in what a user would see.
 #[test]
@@ -321,7 +321,7 @@ fn refusing_the_http_prompt_fails_the_fetch_cleanly_and_asks_nothing_again() {
     );
 }
 
-/// PRD B5, the half a refusal at the FIRST prompt cannot reach. `refusing()` makes
+/// The half of a refusal that one at the FIRST prompt cannot reach. `refusing()` makes
 /// git fail at the username, so it never presents a credential and never gets one
 /// rejected — but git retries a rejected credential, which is exactly where a second
 /// dialog would appear. Here the username is answered and the password refused: the
@@ -380,7 +380,7 @@ fn refusing_the_password_after_answering_the_username_asks_for_neither_again() {
     );
 }
 
-/// PRD R4.3, the cancel: git is killed while it waits on a prompt nobody has
+/// The cancel: git is killed while it waits on a prompt nobody has
 /// answered; the wait ends promptly, the outcome says cancelled, and once the
 /// pending prompt is refused (as closing the dialog does) nothing is left.
 #[test]
@@ -525,7 +525,7 @@ fn a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those() {
 }
 
 /// A fetch that fails names the lock files present under the git directory
-/// once it is over, as every failed write does (process-manager R5.3): the
+/// once it is over, as every failed write does: the
 /// lock another git holds, or one a crash left, is what a write fails on and
 /// git does not wait for. The remote is a path with no repository behind it,
 /// so git fails at once and on its own, and the lock is planted, as a crash
@@ -1437,9 +1437,9 @@ fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
 /// not, so the probe is that `chown`; where there is none the test says so and decides
 /// nothing — unless `CAIRN_REQUIRE_SECOND_OWNER` is set, which `scripts/gate.sh`'s
 /// `test-full` sets wherever the same `chown` succeeds, and then the skip is a failure
-/// (`the_user_namespace_tests_are_required_wherever_they_can_run`). Caught by: the check leaving trust to
-/// gix's own rule, which loads the repository's configuration at reduced trust and then
-/// filters its remote out of the lookup.
+/// (`the_user_namespace_tests_are_required_wherever_they_can_run`). Caught by: the check
+/// leaving trust to gix's own rule, which loads the repository's configuration at reduced
+/// trust and then filters its remote out of the lookup.
 #[test]
 fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git() {
     let inner = "the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_inner";
@@ -1562,7 +1562,7 @@ fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_in
 
 // ── SSH ─────────────────────────────────────────────────────────────────────
 
-/// PRD B3 over ssh: the key's passphrase is asked once, through the helper,
+/// Over ssh, the key's passphrase is asked once, through the helper,
 /// even though this test process has a terminal or not (`SSH_ASKPASS_REQUIRE=force`).
 #[test]
 fn a_fetch_over_ssh_prompts_for_the_key_passphrase_and_succeeds() {
@@ -1631,7 +1631,7 @@ fn an_unknown_host_key_is_confirmed_through_the_helper_before_the_passphrase() {
     assert_eq!(fetched_main(&local), head_of(&source));
 }
 
-/// PRD B4 over ssh: an agent holding the key means no prompt at all.
+/// Over ssh, an agent holding the key means no prompt at all.
 #[test]
 fn an_agent_that_holds_the_key_means_no_prompt_at_all() {
     let source = fixtures::braided(4);
@@ -1658,7 +1658,7 @@ fn an_agent_that_holds_the_key_means_no_prompt_at_all() {
     assert_eq!(fetched_main(&local), head_of(&source));
 }
 
-/// PRD B5 over ssh: refusing the passphrase fails the fetch cleanly.
+/// Over ssh, refusing the passphrase fails the fetch cleanly.
 #[test]
 fn refusing_the_passphrase_fails_the_ssh_fetch_cleanly() {
     let source = fixtures::braided(4);

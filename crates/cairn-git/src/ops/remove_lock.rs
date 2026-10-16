@@ -1,5 +1,5 @@
-//! `Remove index.lock…` (staging-and-commit R12.4, L23): the one mutation Cairn makes without
-//! `git`, because git has no verb that removes a lock.
+//! `Remove index.lock…`: the one mutation Cairn makes without `git`, because git has no verb
+//! that removes a lock.
 //!
 //! A `git` that is killed past its grace (`SIGKILL`, a crash, a power cut) leaves
 //! `<gitdir>/index.lock` behind, and every later write to the index fails on it until someone
@@ -8,8 +8,8 @@
 //! ([`crate::Repository::running_invocations`]), confirmed like every destructive operation:
 //! its [`Consequence::RemoveLock`] names the lock's path and age and carries what identifies
 //! the file — its time, size, device and inode — so the removal re-checks each of them first
-//! and refuses a lock removed and made again since the prompt, which may be a running git's
-//! (R1.4). It removes exactly that one path, with `std::fs::remove_file`, and nothing else:
+//! and refuses a lock removed and made again since the prompt, which may be a running git's.
+//! It removes exactly that one path, with `std::fs::remove_file`, and nothing else:
 //! not another lock, not a directory, not through a symbolic link.
 //!
 //! What a check cannot close: another program — a `git` in a terminal, an editor's git
@@ -79,8 +79,8 @@ fn no_git_running(repo: &Repository) -> Result<(), Error> {
 }
 
 /// When `repo`'s `<gitdir>/index.lock` was last changed, if one is there as a plain file: the
-/// leftover lock as a state of the repository (staging-and-commit R12.4, F6), read by one `stat`
-/// on every refresh, which writes nothing. `None` when there is none — or what is there is not
+/// leftover lock as a state of the repository, read by one `stat` on every refresh, which
+/// writes nothing. `None` when there is none — or what is there is not
 /// a plain file, or cannot be looked at: nothing the removal would offer to remove.
 pub fn index_lock_changed(repo: &Repository) -> Option<SystemTime> {
     look(&index_lock(repo))
@@ -101,7 +101,7 @@ pub struct LockIdentity {
 
 /// `repo`'s `<gitdir>/index.lock`'s identity, if one is there as a plain file: what the local
 /// lane compares before and after a write's attempt, to run again only a write git refused for a
-/// lock that stood, the same file, throughout it (staging-and-commit F5). Writes nothing.
+/// lock that stood, the same file, throughout it. Writes nothing.
 pub fn index_lock_identity(repo: &Repository) -> Option<LockIdentity> {
     look(&index_lock(repo))
         .ok()
@@ -117,7 +117,7 @@ pub fn index_lock_identity(repo: &Repository) -> Option<LockIdentity> {
 /// What removing `repo`'s `index.lock` would destroy, for its confirmation: the lock's path,
 /// its age as of now, and what identifies it. Refused — [`Error::LockRefused`] — when there is
 /// no lock, when it is not a plain file, or while Cairn runs a `git` in the repository, so the
-/// removal is offered only then (R12.4).
+/// removal is offered only then.
 pub fn remove_lock_consequence(repo: &Repository) -> Result<Consequence, Error> {
     no_git_running(repo)?;
     let path = index_lock(repo);
@@ -238,10 +238,10 @@ mod tests {
         SharedRepository::discover(dir.path()).unwrap().to_worker()
     }
 
-    /// C30's state: the leftover lock is read as its time while `<gitdir>/index.lock` is a plain
-    /// file, and as nothing once it is gone, is a directory, or stands only in the work tree.
-    /// The look removes nothing. Caught by: a look at the work tree's file, a directory read as
-    /// a lock, or the lock's time not the file's.
+    /// The leftover lock is read as its time while `<gitdir>/index.lock` is a plain file, and as
+    /// nothing once it is gone, is a directory, or stands only in the work tree. The look
+    /// removes nothing. Caught by: a look at the work tree's file, a directory read as a lock,
+    /// or the lock's time not the file's.
     #[test]
     fn the_leftover_lock_is_its_time_while_it_is_a_file_and_nothing_otherwise() {
         let dir = scratch();
@@ -268,10 +268,10 @@ mod tests {
         );
     }
 
-    /// Phase 19's QA item 2: the lock's identity is its time, size, device and inode — a lock
-    /// swapped for another of the same time but another size, or another inode, reads as another
-    /// lock, as the removal's own re-check reads it; one left alone reads the same. Caught by: an
-    /// identity of the time alone.
+    /// The lock's identity is its time, size, device and inode — a lock swapped for another of
+    /// the same time but another size, or another inode, reads as another lock, as the removal's
+    /// own re-check reads it; one left alone reads the same. Caught by: an identity of the time
+    /// alone.
     #[test]
     fn a_lock_swapped_at_the_same_time_reads_as_another() {
         let dir = scratch();
@@ -317,9 +317,9 @@ mod tests {
         );
     }
 
-    /// C20's removal half: the lock confirmed is removed — exactly `<gitdir>/index.lock`,
-    /// nothing beside it — and the record quotes the prompt. Caught by: a removal of anything
-    /// else, or the prompt not recorded.
+    /// The lock confirmed is removed — exactly `<gitdir>/index.lock`, nothing beside it — and
+    /// the record quotes the prompt. Caught by: a removal of anything else, or the prompt not
+    /// recorded.
     #[test]
     fn the_confirmed_lock_and_nothing_else_is_removed() {
         let dir = scratch();
@@ -344,9 +344,9 @@ mod tests {
         );
     }
 
-    /// C2's lock half: a lock removed and made again since the prompt — even at the same size
-    /// and time — is refused and left; so is one rewritten in place, and one gone. Caught by:
-    /// a re-check by path alone, or none.
+    /// A lock removed and made again since the prompt — even at the same size and time — is
+    /// refused and left; so is one rewritten in place, and one gone. Caught by: a re-check by
+    /// path alone, or none.
     #[test]
     fn a_lock_removed_and_made_again_since_the_prompt_is_refused() {
         let dir = scratch();
@@ -379,7 +379,7 @@ mod tests {
         assert!(matches!(refused, Error::LockChangedSinceConfirmed { .. }));
         assert!(lock.exists());
 
-        // Rewritten in place: the same inode and size, another time (phase 11's QA, TC2).
+        // Rewritten in place: the same inode and size, another time.
         let consequence = remove_lock_consequence(&repo).unwrap();
         let written = std::fs::metadata(&lock).unwrap();
         std::fs::File::options()
@@ -420,8 +420,8 @@ mod tests {
         assert!(matches!(refused, Error::LockChangedSinceConfirmed { .. }));
     }
 
-    /// Phase 11's QA (QC4): a lock that cannot be read — its directory's search permission gone
-    /// — is refused as unreadable, never as "not a file". Skipped as root, who reads it anyway.
+    /// A lock that cannot be read — its directory's search permission gone — is refused as
+    /// unreadable, never as "not a file". Skipped as root, who reads it anyway.
     #[test]
     fn an_unreadable_lock_is_said_to_be_unreadable() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -448,7 +448,7 @@ mod tests {
         );
     }
 
-    /// R12.4: nothing to offer with no lock, or a lock that is a directory or a link; and a
+    /// Nothing to offer with no lock, or a lock that is a directory or a link; and a
     /// confirmation of another repository's lock is refused, leaving both.
     #[test]
     fn no_lock_a_lock_that_is_no_file_and_another_repositorys_lock_are_refused() {
@@ -491,9 +491,9 @@ mod tests {
         assert!(lock.exists() && other.path().join(".git/index.lock").exists());
     }
 
-    /// The QA brief's case: while a `git` Cairn started holds the lock and runs, the removal is
-    /// not offered — and a confirmation made before it started is refused, the lock left; once
-    /// it is over, the removal is offered. Caught by: offering on the lock alone, or a registry
+    /// While a `git` Cairn started holds the lock and runs, the removal is not offered — and a
+    /// confirmation made before it started is refused, the lock left; once it is over, the
+    /// removal is offered. Caught by: offering on the lock alone, or a registry
     /// that cannot tell its own running git from none.
     #[test]
     fn no_removal_is_offered_or_made_while_cairns_git_holds_the_lock() {

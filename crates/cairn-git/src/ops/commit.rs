@@ -1,51 +1,49 @@
-//! Commit and amend (`docs/prd/staging-and-commit.md` R6.1, R6.2, R6.4, R6.5, R6.8, R6.9,
-//! R6.11): `git commit -q -F -` and `git commit -q --amend -F -`, the message on stdin, byte
-//! for byte.
+//! Commit and amend: `git commit -q -F -` and `git commit -q --amend -F -`, the message on
+//! stdin, byte for byte.
 //!
 //! **The message is git's to clean.** No `--cleanup` is passed, so `commit.cleanup` and git's
 //! default for a message given with `-F` (`whitespace`: trailing spaces and blank lines go,
 //! `#` lines stay) decide what is stored, exactly as the user's `git commit -F <file>` would
 //! store it — compared byte for byte under every value on git 2.30.9, 2.32.7 and the host's
-//! (`crates/cairn-git/tests/diff_engine/diff/commit.rs`). The message never reaches `argv`, so neither
-//! the process table nor the command log holds it. A non-UTF-8 `i18n.commitEncoding` — as
-//! `git config` answers it (`crate::reads::commit_encoding`, R6.11), a linked worktree's
-//! `includeIf` included — is refused before git runs: git stores the bytes it is given under
-//! that encoding's name, and a draft is UTF-8 (git-write-verbs.md §5).
+//! (`crates/cairn-git/tests/diff_engine/diff/commit.rs`). The message never reaches `argv`,
+//! so neither the process table nor the command log holds it. A non-UTF-8
+//! `i18n.commitEncoding` — as `git config` answers it (`crate::reads::commit_encoding`), a
+//! linked worktree's `includeIf` included — is refused before git runs: git stores the bytes
+//! it is given under that encoding's name, and a draft is UTF-8 (git-write-verbs.md §5).
 //!
 //! **Hooks run as git runs them.** `--no-verify` — which skips `pre-commit` and `commit-msg`
 //! and nothing else — is passed only for [`Hooks::Skip`], the skip a failed commit or amend
-//! offers (R10.5). No `--literal-pathspecs` either: a commit takes no pathspec, and git would
+//! offers. No `--literal-pathspecs` either: a commit takes no pathspec, and git would
 //! export the mode to every hook it runs (`GIT_LITERAL_PATHSPECS=1`), where a `pre-commit`
 //! hook's own `git diff -- '*.rs'` would then match nothing. `-q` leaves out the summary git
 //! prints once the commit is made — nothing Cairn reads, and a line an orphaned commit could
 //! die writing.
 //!
-//! **The identity is git's** (R6.8, L26): no author or committer is passed and none is read,
+//! **The identity is git's**: no author or committer is passed and none is read,
 //! so git uses the configuration and the inherited identity variables a terminal's commit
 //! would; with none, git's own error is the failure.
 //!
-//! **An operation in progress** (R6.9, L25): during a merge the commit is the merge commit, as
+//! **An operation in progress**: during a merge the commit is the merge commit, as
 //! git makes it from `MERGE_HEAD`; during a single cherry-pick or revert it concludes it, as
 //! `git commit` does — the picked commit's author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD`
 //! removed by git; during a rebase, `git am` or a sequence of picks or reverts — and, for an
 //! amend, during any of them — it is refused before git runs, naming git's command to continue
 //! or abort it. A detached `HEAD` refuses nothing: the commit is made on no branch.
 //!
-//! **An amend is read at the press** (R6.4, rules 2 and 3 of the redesign): what it costs
-//! ([`super::amend_consequence`]) is read in the job that runs it. One git logs and no remote
-//! has is recoverable from Show Lost Commits, so [`amend_unconfirmed`] runs it at once, taking
-//! no token — it is not destructive (R1.5) and not on the destructive-operation roster; any
-//! other ends without running git, answering its `Consequence`
-//! ([`AmendAnswer::NeedsConfirming`]) for the confirmation dialog, and runs through [`amend`]
-//! with the token the dialog builds. [`amend`] re-computes that `Consequence` before git runs
-//! and refuses, writing nothing, when anything in it moved — `HEAD`, whether a remote has it,
-//! the reflog setting — ([`Error::AmendChangedSinceConfirmed`], R1.4), and records the prompt
-//! the user accepted. Between the re-check and git's run is a window no check closes, as for a
-//! discard.
+//! **An amend is read at the press**: what it costs ([`super::amend_consequence`]) is read in
+//! the job that runs it. One git logs and no remote has is recoverable from Show Lost Commits,
+//! so [`amend_unconfirmed`] runs it at once, taking no token — it is not destructive and not
+//! on the destructive-operation roster; any other ends without running git, answering its
+//! `Consequence` ([`AmendAnswer::NeedsConfirming`]) for the confirmation dialog, and runs
+//! through [`amend`] with the token the dialog builds. [`amend`] re-computes that
+//! `Consequence` before git runs and refuses, writing nothing, when anything in it moved —
+//! `HEAD`, whether a remote has it, the reflog setting ([`Error::AmendChangedSinceConfirmed`])
+//! — and records the prompt the user accepted. Between the re-check and git's run is a window
+//! no check closes, as for a discard.
 //!
-//! **Made is read from `HEAD`** (R4.7, and phase 12's QA item #10). After git is reaped `HEAD`
-//! is read again: a commit is made when `HEAD` is a commit whose first parent is the `HEAD` it
-//! ran on (none, on an unborn branch), an amend when `HEAD`'s parents are the replaced commit's.
+//! **Made is read from `HEAD`.** After git is reaped `HEAD` is read again: a commit is made
+//! when `HEAD` is a commit whose first parent is the `HEAD` it ran on (none, on an unborn
+//! branch), an amend when `HEAD`'s parents are the replaced commit's.
 //! git's exit 0 with `HEAD` anything else is [`Error::CommitUnconfirmed`] — something else moved
 //! `HEAD` while it ran, and for an amend, git may have amended whatever `HEAD` had become; a
 //! commit or amend the user cancelled that git had already made is reported made, one it had not
@@ -58,16 +56,16 @@
 //! git is reaped the cost is read again for the replaced commit (`super::amend::amend_after`:
 //! the same walk, over the refs as they are now, and whether git's reflog holds a move away
 //! from it) and returned beside it ([`AmendAnswer::Amended`]), so the activity entry can say
-//! the amended commit was published meanwhile, or can't be recovered (R1.5, C35). It reports
-//! and does not prevent: nothing is undone.
+//! the amended commit was published meanwhile, or can't be recovered. It reports and does not
+//! prevent: nothing is undone.
 //!
-//! **While it runs** a commit is the one write that can be cancelled (R4.3): once git is
+//! **While it runs** a commit is the one write that can be cancelled: once git is
 //! running, [`CommitWatch::running`] is handed a [`CommitCancel`], which ends git's process
 //! group as a fetch's cancel does; before then, [`CommitWatch::cancel`] is polled through the
 //! checks, and a commit cancelled there writes nothing
 //! ([`Error::CommitCancelledBeforeRunning`]). git's output — a hook's lines, on stdout and
 //! stderr alike — is read by the runner as whole lines, each scrubbed as it is split, and handed
-//! to [`CommitWatch::output`] a read at a time as it arrives (R6.5, R4.10); a failure carries
+//! to [`CommitWatch::output`] a read at a time as it arrives; a failure carries
 //! the runner's tail of both, in the order the lines arrived, since git says "nothing to
 //! commit" and "would make it empty" on stdout; the command log records the same.
 
@@ -85,7 +83,7 @@ use crate::{Cancel, CancelSignal, CommitRefusal, Error, Repository};
 pub enum Hooks {
     /// As git runs them: the default.
     Run,
-    /// `--no-verify`: only from the skip a failed commit or amend offers (R10.5).
+    /// `--no-verify`: only from the skip a failed commit or amend offers.
     Skip,
 }
 
@@ -93,16 +91,15 @@ pub enum Hooks {
 pub struct CommitWatch<'a> {
     /// Polled through the checks before git runs; a cancel there writes nothing.
     pub cancel: &'a dyn Cancel,
-    /// What ends a read made after git is reaped — an amend at the press's cost read again (R1.5,
-    /// C35): the repository's close alone, never the write's own cancel, so an amend git made
+    /// What ends a read made after git is reaped — an amend at the press's cost read again: the
+    /// repository's close alone, never the write's own cancel, so an amend git made
     /// after a cancel was pressed still answers what it cost.
     pub closing: &'a dyn Cancel,
     /// Called once, as git starts, with what ends it from another thread.
     pub running: &'a mut dyn FnMut(CommitCancel),
     /// The lines git or a hook writes, stdout's and stderr's alike, as they arrive: each call
-    /// the lines one read of one pipe completed, whole and scrubbed, never empty
-    /// (staging-and-commit phase 05's QA item 3 — a caller that sends each call on sends one
-    /// message a read, not a line; R4.10).
+    /// the lines one read of one pipe completed, whole and scrubbed, never empty (a caller that
+    /// sends each call on sends one message a read, not a line).
     pub output: &'a mut dyn FnMut(&ScrubbedLines),
 }
 
@@ -125,13 +122,13 @@ impl std::fmt::Debug for CommitWatch<'_> {
     }
 }
 
-/// What an amend asked at the press came to (R6.4): run, being recoverable, or not run, its
+/// What an amend asked at the press came to: run, being recoverable, or not run, its
 /// `Consequence` answered for the confirmation dialog.
 #[derive(Debug)]
 pub enum AmendAnswer {
     /// git logs it and no remote has `HEAD`: amended at once, asking nothing. `replaced` is the
-    /// commit it replaced — the way back to it (R12.1) — and `after` what that amend turned out
-    /// to cost, read again once git was reaped (R1.5, C35): a remote that came to have
+    /// commit it replaced — the way back to it — and `after` what that amend turned out to
+    /// cost, read again once git was reaped: a remote that came to have
     /// `replaced` while a hook ran, or a reflog git did not write, makes it a consequence that
     /// would now need confirming (`Consequence::needs_confirming`). It reports and prevents
     /// nothing. `None` where that read failed or was cancelled: the amend is made either way.
@@ -184,7 +181,7 @@ pub fn commit(
 
 /// Amends `HEAD` with `message` and what is staged, at the press (module docs): what it costs is
 /// read first, and it runs only where it is recoverable — git logs it and no remote has `HEAD` —
-/// taking no token, since nothing it replaces is lost (R1.5). Otherwise nothing runs and the
+/// taking no token, since nothing it replaces is lost. Otherwise nothing runs and the
 /// `Consequence` is answered, for the dialog. Refused as [`amend`] is.
 pub fn amend_unconfirmed(
     git: &GitBinary,
@@ -272,7 +269,7 @@ pub fn amend(
     ) {
         Ok(()) => {}
         // git failed, and `HEAD` is still the commit confirmed: nothing the confirmation names
-        // moved, so it is handed back unspent, for the skip (R1.1's option (a)).
+        // moved, so it is handed back unspent, for the skip.
         Err(failure @ Error::GitFailed { .. })
             if head_commit(repo).ok().flatten() == Some(replaced) =>
         {
@@ -492,8 +489,8 @@ mod tests {
         );
     }
 
-    /// C9 for commit and amend, against a `git` that records what it is given and runs the
-    /// real one (phase 05's QA item 2): the argv each actually runs, the message on stdin byte
+    /// Commit and amend against a `git` that records what it is given and runs the real one:
+    /// the argv each actually runs, the message on stdin byte
     /// for byte, a write's environment, and the message nowhere in the command log. Caught by:
     /// the message given with `-m` (which stores the same bytes under the default cleanup),
     /// `--literal-pathspecs`, `--no-verify` without the skip, or a `--cleanup` passed.
@@ -561,7 +558,7 @@ mod tests {
             assert_eq!(record.stdin, message.as_bytes(), "{record:?}");
             record.assert_a_write();
         }
-        // What each asks first is git's configuration (R6.11), read as reads, the message on no
+        // What each asks first is git's configuration, read as reads, the message on no
         // stdin of theirs.
         assert!(!reads.is_empty());
         for record in &reads {
@@ -625,14 +622,14 @@ mod tests {
         panic!("the hook stayed busy");
     }
 
-    /// C31 for a commit (R4.10, R6.5): a hook's output reaches the commit's output and its
-    /// failure as the runner's whole lines — a URL's userinfo written across two writes never
-    /// handed on, kept or recorded; a multi-byte character whole; a `\r` redraw split as a line
-    /// of its own — and the failure keeps what was handed on, in order. git runs a hook with its
-    /// stdout sent to git's stderr, so every line here, the hook's "stdout" ones included,
-    /// travels git's stderr; git's own stdout is the next test's, and `\r` on stdout is
-    /// `pipes.rs`'s `lines_end_at_either_terminator_across_reads`. Caught by: a scrub after the
-    /// cut, or a failure built from another text.
+    /// A hook's output reaches the commit's output and its failure as the runner's whole lines —
+    /// a URL's userinfo written across two writes never handed on, kept or recorded; a
+    /// multi-byte character whole; a `\r` redraw split as a line of its own — and the failure
+    /// keeps what was handed on, in order. git runs a hook with its stdout sent to git's stderr,
+    /// so every line here, the hook's "stdout" ones included, travels git's stderr; git's own
+    /// stdout is the next test's, and `\r` on stdout is `pipes.rs`'s
+    /// `lines_end_at_either_terminator_across_reads`. Caught by: a scrub after the cut, or a
+    /// failure built from another text.
     #[test]
     fn a_hooks_output_reaches_the_commit_as_whole_scrubbed_lines() {
         let stub = super::super::recording_stub::RecordingStub::new();
@@ -680,7 +677,7 @@ mod tests {
         );
     }
 
-    /// R6.5's other stream: git's own words on stdout — "no changes added to commit" — reach the
+    /// The other stream: git's own words on stdout — "no changes added to commit" — reach the
     /// commit's output and its failure as lines, as stderr's do. Caught by: stdout read as bytes
     /// and dropped, or kept apart from the failure.
     #[test]

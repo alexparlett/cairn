@@ -1,10 +1,8 @@
-//! Where a removed line and the added line it was paired with differ inside themselves
-//! (R2.7).
+//! Where a removed line and the added line it was paired with differ inside themselves.
 //!
-//! Always on, by decision L4, and display-only: the ranges land in
-//! [`cairn_model::DisplayOverlay`], which the patch emitter cannot reach. The pairing is
-//! the i-th removed line of a changed range with its i-th added line, the same pairing a
-//! side-by-side view draws.
+//! Always on, and display-only: the ranges land in [`cairn_model::DisplayOverlay`], which
+//! the patch emitter cannot reach. The pairing is the i-th removed line of a changed range
+//! with its i-th added line, the same pairing a side-by-side view draws.
 
 use std::ops::Range;
 
@@ -22,7 +20,7 @@ pub(super) fn highlights<'a>(text: &'a TextDiff, max_line_bytes: u32) -> Vec<Int
                 continue;
             };
             // A pair over the long-line limit is skipped: the word diff of two lines that
-            // long costs more than the row it decorates is worth (R2.7).
+            // long costs more than the row it decorates is worth.
             if too_long(old.bytes(), max_line_bytes) || too_long(new.bytes(), max_line_bytes) {
                 continue;
             }
@@ -199,7 +197,7 @@ mod tests {
         assert!(highlight_of("same", "same").is_none());
     }
 
-    /// R2.7's skip. Caught by: running the word diff anyway, which is the cost the limit
+    /// The long-line skip. Caught by: running the word diff anyway, which is the cost the limit
     /// exists to refuse.
     #[test]
     fn a_pair_over_the_long_line_limit_is_skipped() {

@@ -1,5 +1,5 @@
-//! The walk with each stash's row merged into it (PRD R4.2): what both history routes lay
-//! out, entry by entry.
+//! The walk with each stash's row merged into it: what both history routes lay out, entry
+//! by entry.
 //!
 //! A stash's row goes where its commit's date falls among the walk's commits — newest
 //! committed first, as the walk orders them — but never after the commit it was made on,

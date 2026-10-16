@@ -120,7 +120,7 @@ enum Flow {
 
 /// Where stdout goes: to the caller as bytes, or split into lines by the one line type
 /// ([`Lines`]) and handled as stderr's are — handed on with them and kept in the same tail, in
-/// the order the reads arrived (staging-and-commit R4.10).
+/// the order the reads arrived.
 enum StdoutSink<'a> {
     Bytes(&'a mut dyn FnMut(&[u8]) -> Flow),
     Lines(Lines),
@@ -166,10 +166,9 @@ struct Ended {
 }
 
 impl Ended {
-    /// Whether this end is a cancellation: asked for, and not beaten by a
-    /// clean exit (R4.5), and neither a crossed ceiling nor an end whose
-    /// status was lost, which are the runner's own outcomes. The one rule
-    /// [`Invocation::drive`]'s outcome and the command log both read.
+    /// Whether this end is a cancellation: asked for, and not beaten by a clean exit, and neither a
+    /// crossed ceiling nor an end whose status was lost, which are the runner's own outcomes. The
+    /// one rule [`Invocation::drive`]'s outcome and the command log both read.
     fn cancelled(&self) -> bool {
         !self.stopped
             && self.status.as_ref().is_ok_and(|status| {
@@ -366,7 +365,7 @@ impl<K: Kind> Invocation<K> {
     /// lines, whole and scrubbed, handed to `output` as they arrive, and both kept in one tail
     /// in that order — what a failure carries ([`Error::GitFailed`]) and the command log
     /// records. For a verb whose stdout is said to a person, not parsed: a commit's, where git
-    /// and its hooks write to both (staging-and-commit R6.5, R4.10).
+    /// and its hooks write to both.
     pub(crate) fn lines(
         self,
         cancel: &impl Cancel,
@@ -463,7 +462,7 @@ impl<K: Kind> Invocation<K> {
             Ok(status) => status,
             Err(source) => return Err(ended_here(arguments, RunnerEnded::Lost(source))),
         };
-        // A cancel that lost the race to a clean exit is that exit's success (R4.5).
+        // A cancel that lost the race to a clean exit is that exit's success.
         if ended.cancelled() {
             return Err(self.kind.cancelled(arguments, self.dirs.as_ref()));
         }
@@ -479,8 +478,7 @@ impl<K: Kind> Invocation<K> {
     }
 }
 
-/// The bounded-output helpers, on a read alone (R4.8 of
-/// `docs/prd/staging-and-commit.md`, #45 item 2). A ceiling ends the process
+/// The bounded-output helpers, on a read alone. A ceiling ends the process
 /// the moment stdout crosses it and reports [`Error::GitOutputTooLarge`]
 /// whatever git does next, so a write collected under one could complete its
 /// change and still be reported refused. A write is driven with
@@ -609,8 +607,8 @@ impl Driver {
         // The tick is part of the bound: the exit is noticed at most a tick late.
         let drain = DRAIN_BOUND.saturating_sub(TICK);
 
-        // The lines one read completed, kept and handed on together (staging-and-commit phase
-        // 05's QA item 3): a caller that sends them on sends one message a read.
+        // The lines one read completed, kept and handed on together: a caller that sends them on
+        // sends one message a read.
         let mut said = |lines: &ScrubbedLines, tail: &mut Tail| {
             if !lines.is_empty() {
                 tail.push(lines);
@@ -804,9 +802,9 @@ impl Drop for Driver {
     }
 }
 
-/// Against a stub `git` that does what each test needs, and real `git` where a
-/// criterion is about git itself. Linux reads the process table to see that
-/// nothing an invocation started is left alive or unreaped.
+/// Against a stub `git` that does what each test needs, and real `git` where a test is about git
+/// itself. Linux reads the process table to see that nothing an invocation started is left alive or
+/// unreaped.
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -842,17 +840,15 @@ mod tests {
         CancelSignal::new()
     }
 
-    /// R4.8 at the type (#45 item 2): the bounded-output helpers exist on a read
-    /// alone. Stable Rust has no in-crate `compile_fail` test and a doctest cannot
-    /// name a crate-private type, so the pin is a function that compiles only while
-    /// it holds. `Fallback` gives every kind a method of each helper's name that
-    /// answers `Absent`; an inherent method is chosen over a trait's wherever one
-    /// applies. So a write's calls resolve to `Fallback`'s and must answer
-    /// `Absent`, which stops compiling the moment either helper is given to an
-    /// `Invocation<Write>` (its inherent method answers a `Result`); and a read's
-    /// resolve to the real helpers, whose `Result` is spelled out, so a fallback
-    /// standing in for a helper a read lost does not compile either. Never called:
-    /// type-checking it is the test.
+    /// At the type: the bounded-output helpers exist on a read alone. Stable Rust has no in-crate
+    /// `compile_fail` test and a doctest cannot name a crate-private type, so the pin is a function
+    /// that compiles only while it holds. `Fallback` gives every kind a method of each helper's
+    /// name that answers `Absent`; an inherent method is chosen over a trait's wherever one
+    /// applies. So a write's calls resolve to `Fallback`'s and must answer `Absent`, which stops
+    /// compiling the moment either helper is given to an `Invocation<Write>` (its inherent method
+    /// answers a `Result`); and a read's resolve to the real helpers, whose `Result` is spelled
+    /// out, so a fallback standing in for a helper a read lost does not compile either. Never
+    /// called: type-checking it is the test.
     fn helpers_by_kind(
         write: Invocation<Write>,
         another_write: Invocation<Write>,
@@ -1007,7 +1003,7 @@ mod tests {
         );
     }
 
-    /// R3.1: the leader of a new group. Caught by: dropping `process_group(0)`,
+    /// The stub is the leader of a new group. Caught by: dropping `process_group(0)`,
     /// after which the stub is in this test process's group and every group
     /// signal below would go nowhere — or, worse, here.
     #[test]
@@ -1025,7 +1021,7 @@ mod tests {
         assert!(eventually(DEADLINE, || group_gone(pid)));
     }
 
-    /// G6, the stub half: over 5 MiB of `-z` records, with stderr written all the
+    /// Against a stub: over 5 MiB of `-z` records, with stderr written all the
     /// while by another process in the group — many times a pipe's capacity of
     /// it, so neither stream fits in a buffer while the other is read — arrive
     /// whole and in order, and every stderr line reaches the progress callback.
@@ -1075,7 +1071,7 @@ mod tests {
         assert_eq!(lines, expected);
     }
 
-    /// G6, the ceiling: a collect told to take less than git writes fails with the
+    /// The ceiling: a collect told to take less than git writes fails with the
     /// ceiling's own error, which carries no output, and the process is ended at
     /// once rather than left writing to nobody — the stub writes past the ceiling
     /// and then hangs, so only the runner ending it returns in time. Caught by:
@@ -1109,7 +1105,7 @@ mod tests {
         let _ = pid;
     }
 
-    /// R3.3: crossing the ceiling is the error, not reaching it. Caught by: `>=`
+    /// Crossing the ceiling is the error, not reaching it. Caught by: `>=`
     /// in place of `>`.
     #[test]
     fn output_exactly_at_the_ceiling_is_collected_and_one_byte_over_is_refused() {
@@ -1201,7 +1197,7 @@ mod tests {
             .collect()
     }
 
-    /// G7, the stub half: 64 MiB written to stdin while the process writes stdout
+    /// Against a stub: 64 MiB written to stdin while the process writes stdout
     /// and stderr all the while — many times a pipe's capacity of stderr — completes,
     /// every byte back in order. Caught by: writing stdin on the thread that reads
     /// stdout (the stub's `cat` blocks on a full stdout, the write on a full stdin,
@@ -1240,7 +1236,7 @@ mod tests {
         assert_eq!(lines, 20_000);
     }
 
-    /// G7, end of input and id parity, with real `git`: `hash-object --stdin` over
+    /// End of input and id parity, with real `git`: `hash-object --stdin` over
     /// 64 MiB returns, so it saw the end of its input, and its id is git's id for
     /// those bytes — computed here by gitoxide, which shares no code with git.
     /// Caught by: stdin never closed (git waits, `within` fails) or a byte lost.
@@ -1339,9 +1335,9 @@ mod tests {
         let _ = pid;
     }
 
-    /// G8, by the kill handle. Caught by: signalling the leader alone (its `sleep`
-    /// lives on holding stderr, so the group is not gone and the cancel waits for
-    /// the grace), not reaping, or reporting the cancel as a failure.
+    /// A cancel ends the whole group, by the kill handle. Caught by: signalling the leader alone
+    /// (its `sleep` lives on holding stderr, so the group is not gone and the cancel waits for the
+    /// grace), not reaping, or reporting the cancel as a failure.
     #[test]
     fn a_kill_handle_ends_the_whole_group_and_reaps_it() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);
@@ -1351,8 +1347,8 @@ mod tests {
         assert_ended_whole(&outcome, &seen, took, pid);
     }
 
-    /// G8, by a superseded cancel signal, polled on the tick. Caught by: a driver
-    /// that never polls the signal (the stub hangs for 30 s and `within` fails).
+    /// A cancel ends the whole group by a superseded cancel signal, polled on the tick. Caught by:
+    /// a driver that never polls the signal (the stub hangs for 30 s and `within` fails).
     #[test]
     fn a_superseded_cancel_signal_ends_the_whole_group_and_reaps_it() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);
@@ -1394,7 +1390,7 @@ mod tests {
         let _ = pid;
     }
 
-    /// G8, by dropping it: the drop returns at once, even though the stub is still
+    /// A cancel by dropping the invocation: the drop returns at once, even though the stub is still
     /// running, and the reaper thread ends and reaps the group within the grace
     /// plus a tick; then every thread the invocation started has ended. Caught by:
     /// a drop that waits for the process, or one that leaves it running or a zombie.
@@ -1461,7 +1457,7 @@ mod tests {
         );
     }
 
-    /// G9, `SIGTERM` first: a stub that traps it says so and ends well inside the
+    /// `SIGTERM` first: a stub that traps it says so and ends well inside the
     /// grace, so it was not `SIGKILL`ed (which runs no trap). Caught by: `SIGKILL`
     /// first, or no signal to a process that is waiting rather than running.
     #[test]
@@ -1484,7 +1480,7 @@ mod tests {
         );
     }
 
-    /// G9, the escalation: a stub that ignores `SIGTERM` is `SIGKILL`ed once the
+    /// The escalation: a stub that ignores `SIGTERM` is `SIGKILL`ed once the
     /// grace has passed, and not before. Caught by: no escalation (`within` fails)
     /// or escalating early.
     #[test]
@@ -1574,7 +1570,7 @@ mod tests {
         let _ = pid;
     }
 
-    /// G10: a stub that exits while its grandchild holds stdout and stderr returns
+    /// A stub that exits while its grandchild holds stdout and stderr returns
     /// within 250 ms of the exit — what it wrote before exiting included — and the
     /// grandchild, which nobody cancelled, is left alone. The exit is timed by the
     /// stub's last line arriving, written the moment before it exits. Then a kill
@@ -1725,7 +1721,7 @@ mod tests {
         );
     }
 
-    /// G11, a failure: the arguments, the status and what stderr said; a read names
+    /// A failure carries the arguments, the status and what stderr said; a read names
     /// no locks.
     #[test]
     fn a_failure_carries_the_arguments_the_status_and_stderr() {
@@ -1749,8 +1745,8 @@ mod tests {
         }
     }
 
-    /// G12, a cancel after a clean exit is the success it was. The exit is
-    /// observed (a zombie) before the cancel. Caught by: deciding by the flag alone.
+    /// A cancel after a clean exit is the success it was. The exit is observed (a zombie) before
+    /// the cancel. Caught by: deciding by the flag alone.
     #[test]
     fn a_cancel_after_a_clean_exit_is_reported_as_success() {
         let stub = stub("echo done >&2; exit 0");
@@ -1765,7 +1761,7 @@ mod tests {
         assert_eq!(output.stderr(), "done");
     }
 
-    /// G12, the other side: a cancelled stub that exits 0 after the signal is a
+    /// The other side: a cancelled stub that exits 0 after the signal is a
     /// cancel, not a success — its status may be the signal's doing. Caught by:
     /// deciding by the exit status alone, as the old runner did.
     #[test]
@@ -1785,7 +1781,7 @@ mod tests {
         );
     }
 
-    /// G12, nonzero: a cancelled stub that exits with a failure of its own is a
+    /// Nonzero: a cancelled stub that exits with a failure of its own is a
     /// cancel, not that failure.
     #[test]
     fn a_cancelled_process_that_exits_nonzero_is_reported_cancelled() {
@@ -1857,7 +1853,7 @@ mod tests {
         );
     }
 
-    /// Phase 05's QA item 3: `finish` hands on the lines one read completed together — a burst
+    /// `finish` hands on the lines one read completed together — a burst
     /// of lines written at once is far fewer calls than lines, none empty — and every line, in
     /// order. Caught by: one call a line, an empty call, or a line lost between reads.
     #[test]
@@ -2357,9 +2353,9 @@ mod tests {
         );
     }
 
-    /// The values the packet fixed, spelled out, so a retune is a reviewed change
-    /// rather than a silent one: the 2 s grace (R4.4), the 256 KiB stderr tail
-    /// (R3.5) and the 250 ms drain bound recorded in the packet's state.
+    /// The runner's fixed bounds, spelled out, so a retune is a reviewed change
+    /// rather than a silent one: the 2 s grace before `SIGKILL`, the 256 KiB
+    /// stderr tail and the 250 ms drain bound.
     #[test]
     fn the_fixed_bounds_have_the_values_the_packet_recorded() {
         assert_eq!(TERMINATION_GRACE, Duration::from_secs(2));
@@ -2367,18 +2363,17 @@ mod tests {
         assert_eq!(DRAIN_BOUND, Duration::from_millis(250));
     }
 
-    /// R4.2 at the type level: the handle crosses threads and is shared.
+    /// At the type level: the handle crosses threads and is shared.
     #[test]
     fn the_kill_handle_is_send_and_clone() {
         fn send_and_clone<T: Send + Sync + Clone + 'static>() {}
         send_and_clone::<super::KillHandle>();
     }
 
-    /// G19's reporter: the runner's cost over a bare `std::process::Command` for
-    /// the same read, on the bench repository. Not a check — a timing assertion is
-    /// bound to a machine — so it reports, and `progress.md` records what it said.
-    /// Run in release: `CAIRN_BENCH_REPO=<rust checkout> cargo test --release -p
-    /// cairn-git g19 -- --ignored --nocapture`.
+    /// A reporter: the runner's cost over a bare `std::process::Command` for the same read, on the
+    /// bench repository. Not a check — a timing assertion is bound to a machine — so it reports.
+    /// Run in release: `CAIRN_BENCH_REPO=<rust checkout> cargo test --release -p cairn-git g19 --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore = "a measurement for G19, driven by CAIRN_BENCH_REPO; run by hand in release"]
     fn g19_reports_the_runners_overhead_over_a_bare_command() {
@@ -2388,7 +2383,7 @@ mod tests {
             return;
         };
         let git = GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None)).unwrap();
-        // M1 against its first parent, as the measured baseline compares it: a merge
+        // The merge against its first parent, as the measured baseline compares it: a merge
         // alone prints nothing to diff-tree. Then the floor — a commit against itself,
         // an empty diff — where the process is all there is, so the overhead shows.
         for (what, arguments) in [

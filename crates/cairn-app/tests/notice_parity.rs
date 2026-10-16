@@ -1,12 +1,10 @@
-//! Parity of what stands in place of rows with what `git diff` prints (phase 07 QA, T4;
-//! PRD R6.8, criterion C11): every state that is not text, built in a real repository by
-//! real `git`, read by the engine, prepared as the diff thread prepares it
-//! (`ShownDiff::new`) and turned into its notice (`DiffNotice::of`) — the whole road from
-//! the repository to the words drawn, which only this crate links. Each notice's lines are
-//! compared with the lines `git show` prints for the same file: the mode, rename and copy
-//! lines of its extended header, a submodule's `Subproject commit` lines, an LFS pointer's
-//! text, a binary's and a too-large file's sizes. Diverging from git is a critical bug, not
-//! a gap.
+//! Parity of what stands in place of rows with what `git diff` prints: every state that is not
+//! text, built in a real repository by real `git`, read by the engine, prepared as the diff thread
+//! prepares it (`ShownDiff::new`) and turned into its notice (`DiffNotice::of`) — the whole road
+//! from the repository to the words drawn, which only this crate links. Each notice's lines are
+//! compared with the lines `git show` prints for the same file: the mode, rename and copy lines of
+//! its extended header, a submodule's `Subproject commit` lines, an LFS pointer's text, a binary's
+//! and a too-large file's sizes. Diverging from git is a critical bug, not a gap.
 //!
 //! An integration test rather than a module of `src/`, so it may run `git` itself: the
 //! guards hold `src/` to the rule that only `cairn-git`'s `process/` starts a process.
@@ -186,16 +184,15 @@ fn pointer(oid_byte: char, size: u64) -> String {
     )
 }
 
-/// T4: every state that stands in place of rows, read from a real repository through the
-/// engine and prepared as the diff thread prepares it, says what `git show` says of the
-/// same file. A mode-only change, a rename and a copy with no content change, and a rename
-/// whose mode moved draw git's own extended header lines, in git's order, under the user's
-/// titles; a submodule bump draws git's two `Subproject commit` lines and is never called
-/// binary; a binary draws git's two blob sizes; an LFS pointer draws each side's pointer
-/// text as git prints it; a file past the drawing limit draws the size git records and
-/// offers Load Diff. Caught by: a header line Cairn spells or orders differently from git
-/// (the rename's mode lines after its rename lines; `copy` written `rename`), a submodule
-/// titled binary, a size that is not the blob's, or a notice from another state.
+/// Every state that stands in place of rows, read from a real repository through the engine and
+/// prepared as the diff thread prepares it, says what `git show` says of the same file. A mode-only
+/// change, a rename and a copy with no content change, and a rename whose mode moved draw git's own
+/// extended header lines, in git's order, under Cairn's titles; a submodule bump draws git's two
+/// `Subproject commit` lines and is never called binary; a binary draws git's two blob sizes; an
+/// LFS pointer draws each side's pointer text as git prints it; a file past the drawing limit draws
+/// the size git records and offers Load Diff. Caught by: a header line Cairn spells or orders
+/// differently from git (the rename's mode lines after its rename lines; `copy` written `rename`),
+/// a submodule titled binary, a size that is not the blob's, or a notice from another state.
 #[test]
 fn every_notice_says_what_git_diff_says_of_the_same_file() {
     let repo = Fixture::new("notice-parity");

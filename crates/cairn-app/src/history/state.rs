@@ -70,9 +70,9 @@ impl Progress {
         self.in_flight = true;
     }
 
-    /// A find in the sidebar was stopped (refs-and-status R8.5): no page is waited for, so the
-    /// list's next visibility change may ask one. A page the find laid out before it stopped
-    /// may still arrive, and is appended as any page is.
+    /// A find in the sidebar was stopped: no page is waited for, so the list's next
+    /// visibility change may ask one. A page the find laid out before it stopped may still
+    /// arrive, and is appended as any page is.
     pub fn stopped_finding(&mut self) {
         self.in_flight = false;
     }
@@ -296,7 +296,7 @@ mod tests {
         );
     }
 
-    /// QA's QC1: a history that can hold no more ends the scroll — it asks for nothing
+    /// A history that can hold no more ends the scroll — it asks for nothing
     /// more, says why, and a page that arrives anyway does not unsay it. Caught by: treating
     /// it as a failed page, which is asked for again and appends after the dropped rows.
     #[test]

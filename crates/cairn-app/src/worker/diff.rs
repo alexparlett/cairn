@@ -1,4 +1,4 @@
-//! The diff thread (PRD R4.2, R4.3, R4.5): its lane, the answers it keeps and whether they
+//! The diff thread: its lane, the answers it keeps and whether they
 //! are still fresh, and Expand All's line budget.
 
 pub(super) mod answers;

@@ -8,9 +8,9 @@ mod gesture;
 
 use super::*;
 
-/// R7.4, R8.4: an answer is for the confirmation opened for the discard asked last, and
-/// one for an earlier ask is dropped; letting go of the ask drops its answer too. Caught by:
-/// a stale consequence filling a newer confirmation.
+/// An answer is for the confirmation opened for the discard asked last, and one for an earlier
+/// ask is dropped; letting go of the ask drops its answer too. Caught by: a stale consequence
+/// filling a newer confirmation.
 #[test]
 fn only_the_discard_asked_last_is_answered() {
     let mut acting = Acting::default();

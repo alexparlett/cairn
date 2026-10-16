@@ -1,9 +1,8 @@
-//! The sidebar in the window, headless (refs-and-status R8, criterion C8): pressing a ref
-//! selects its row and brings it into view, or finds it by paging the walk — saying so while
-//! it looks — and the next press or a scroll supersedes the find; a tag on a tree and a stash
-//! with no row say why; the filter is asked of a worker and its answer drawn; Local Changes and
-//! All Commits switch the main region. Updates are applied through `session::apply`, as the
-//! worker's stream applies them.
+//! The sidebar in the window, headless: pressing a ref selects its row and brings it into view, or
+//! finds it by paging the walk — saying so while it looks — and the next press or a scroll
+//! supersedes the find; a tag on a tree and a stash with no row say why; the filter is asked of a
+//! worker and its answer drawn; Local Changes and All Commits switch the main region. Updates are
+//! applied through `session::apply`, as the worker's stream applies them.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -347,9 +346,9 @@ fn changes_asked(submitted: &Submitted) -> Vec<Comparison> {
         .collect()
 }
 
-/// R8.5: a ref whose row is loaded is selected, its changes asked, its row brought into view,
-/// and no page walked. Caught by: a press that selects nothing, scrolls nowhere, or asks the
-/// worker to find what is already loaded.
+/// A ref whose row is loaded is selected, its changes asked, its row brought into view, and no page
+/// walked. Caught by: a press that selects nothing, scrolls nowhere, or asks the worker to find
+/// what is already loaded.
 #[test]
 fn pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view() {
     let (mut test, view, submitted) = launch(200, false);
@@ -362,11 +361,10 @@ fn pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view() {
     assert_eq!(*view.history_cursor.read(), 150);
 }
 
-/// R8.5, R8.6: a ref past the loaded rows is found by paging the walk — "Finding <ref>…" said
-/// while it looks — and selected and brought into view when the page holding it arrives,
-/// the find stopped then; the pages before it select nothing. Caught by: a press that does
-/// nothing past the loaded rows (Fork's), a find never stopped, or a row looked for only in
-/// the first page.
+/// A ref past the loaded rows is found by paging the walk — "Finding <ref>…" said while it looks —
+/// and selected and brought into view when the page holding it arrives, the find stopped then; the
+/// pages before it select nothing. Caught by: a press that does nothing past the loaded rows
+/// (Fork's), a find never stopped, or a row looked for only in the first page.
 #[test]
 fn pressing_a_ref_past_the_loaded_rows_finds_it_by_paging() {
     let (mut test, view, submitted) = launch(10, false);
@@ -400,9 +398,9 @@ fn pressing_a_ref_past_the_loaded_rows_finds_it_by_paging() {
     assert_eq!(*view.history_cursor.read(), 150, "the list was not told");
 }
 
-/// The QA brief: a press during a find supersedes it, and two quick presses draw only the
-/// second — the first's row, arriving first, is passed over. Caught by: a find that selects
-/// whatever it was first asked for, or both in turn.
+/// A press during a find supersedes it, and two quick presses draw only the second — the first's
+/// row, arriving first, is passed over. Caught by: a find that selects whatever it was first asked
+/// for, or both in turn.
 #[test]
 fn two_quick_presses_draw_only_the_second() {
     let (mut test, view, submitted) = launch(10, false);
@@ -422,9 +420,9 @@ fn two_quick_presses_draw_only_the_second() {
     assert_eq!(changes_asked(&submitted), [Comparison::Commit(oid(180))]);
 }
 
-/// R8.5: a scroll of the list supersedes a find — stopped, its notice gone — and the row
-/// arriving after selects nothing. Caught by: a find a scroll leaves running, which jumps the
-/// list away from where the user scrolled.
+/// A scroll of the list supersedes a find — stopped, its notice gone — and the row arriving after
+/// selects nothing. Caught by: a find a scroll leaves running, which jumps the list away from where
+/// the person scrolled.
 #[test]
 fn a_scroll_of_the_list_supersedes_a_find() {
     let (mut test, view, submitted) = launch(60, false);
@@ -447,8 +445,8 @@ fn a_scroll_of_the_list_supersedes_a_find() {
     );
 }
 
-/// R8.5: a row chosen in the list during a find supersedes it, and the entry pressed is let
-/// go of. Caught by: a find that selects its row over the user's choice.
+/// A row chosen in the list during a find supersedes it, and the entry pressed is let go of. Caught
+/// by: a find that selects its row over the person's choice.
 #[test]
 fn a_row_chosen_during_a_find_supersedes_it() {
     let (mut test, view, submitted) = launch(20, false);
@@ -467,8 +465,8 @@ fn a_row_chosen_during_a_find_supersedes_it() {
     assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(3))));
 }
 
-/// R8.5: a ref naming no commit — a tag on a tree — says so at once and walks nothing.
-/// Caught by: a find for a commit that is not there, which pages the whole history.
+/// A ref naming no commit — a tag on a tree — says so at once and walks nothing. Caught by: a find
+/// for a commit that is not there, which pages the whole history.
 #[test]
 fn a_tag_on_a_tree_says_it_is_not_in_the_graph() {
     let (mut test, view, submitted) = launch(10, false);
@@ -482,10 +480,10 @@ fn a_tag_on_a_tree_says_it_is_not_in_the_graph() {
     assert_eq!(*view.selected.read(), None);
 }
 
-/// R8.5, R4.2: a stash whose base no ref reaches is found nowhere — the find pages to the
-/// walk's end — and then its changes are shown, with no row selected, and the sidebar says it
-/// is not in the graph; with the history complete already it says so at once. Caught by: a
-/// stash press that shows nothing, or a row drawn selected for it.
+/// A stash whose base no ref reaches is found nowhere — the find pages to the walk's end — and then
+/// its changes are shown, with no row selected, and the sidebar says it is not in the graph; with
+/// the history complete already it says so at once. Caught by: a stash press that shows nothing, or
+/// a row drawn selected for it.
 #[test]
 fn a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph() {
     let (mut test, view, submitted) = launch(10, false);
@@ -507,9 +505,8 @@ fn a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph() {
     assert_eq!(changes_asked(&submitted), [Comparison::Stash(oid(950))]);
 }
 
-/// R8.3: typing in the sidebar's filter asks a worker for the rows (never laid out here), and
-/// the answer drawn is the worker's. Caught by: a filter run on the UI thread, or an answer
-/// that is not drawn.
+/// Typing in the sidebar's filter asks a worker for the rows (never laid out here), and the answer
+/// drawn is the worker's. Caught by: a filter run on the UI thread, or an answer that is not drawn.
 #[test]
 fn typing_in_the_sidebars_filter_asks_a_worker_and_draws_its_answer() {
     let (mut test, view, submitted) = launch(10, false);
@@ -587,8 +584,8 @@ fn typing_in_the_sidebars_filter_asks_a_worker_and_draws_its_answer() {
     );
 }
 
-/// R8.7: Local Changes puts its view in the main region and All Commits the history back; a
-/// press of a ref returns to the history. Caught by: entries that switch nothing.
+/// Local Changes puts its view in the main region and All Commits the history back; a press of a
+/// ref returns to the history. Caught by: entries that switch nothing.
 #[test]
 fn local_changes_and_all_commits_switch_the_main_region() {
     let (mut test, view, _) = launch(10, false);
@@ -609,9 +606,9 @@ fn local_changes_and_all_commits_switch_the_main_region() {
     assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(5))));
 }
 
-/// R8.5: while a find looks, the list's end coming into view asks no page of its own — one
-/// would supersede the find. Caught by: the list asking for more as a find's short pages
-/// arrive, which stops the find after its first page.
+/// While a find looks, the list's end coming into view asks no page of its own — one would
+/// supersede the find. Caught by: the list asking for more as a find's short pages arrive, which
+/// stops the find after its first page.
 #[test]
 fn a_find_is_not_superseded_by_the_list_reaching_its_end() {
     let (mut test, view, submitted) = launch(10, false);
@@ -627,10 +624,10 @@ fn a_find_is_not_superseded_by_the_list_reaching_its_end() {
     assert!(asked.is_empty(), "the list asked {asked:?} during a find");
 }
 
-/// R8.5, R10.4: a refresh that reopens the history while a find looks asks the find again of
-/// the new walk, after the open, and the new history's pages are looked through from its
-/// first row. Caught by: a find lost to a reopen (the press does nothing), or one that looks
-/// past the new history's rows by the count the old one had.
+/// A refresh that reopens the history while a find looks asks the find again of the new walk, after
+/// the open, and the new history's pages are looked through from its first row. Caught by: a find
+/// lost to a reopen (the press does nothing), or one that looks past the new history's rows by the
+/// count the old one had.
 #[test]
 fn a_reopen_during_a_find_asks_it_again_of_the_new_walk() {
     let (mut test, view, submitted) = launch(10, false);

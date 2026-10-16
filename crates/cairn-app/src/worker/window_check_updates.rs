@@ -1,4 +1,4 @@
-//! What C14's window check (`crate::window_check`) needs of the worker side of the partition:
+//! What the window check (`crate::window_check`) needs of the worker side of the partition:
 //! the next update within a frame's time. The window check paces frames by it and, being a
 //! render-side file, may not wait itself; the waiting is here.
 

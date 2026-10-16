@@ -1,19 +1,18 @@
-//! The detail pane under the commit list (PRD R5.1, R5.2): its strip of tabs, and the tab
+//! The detail pane under the commit list: its strip of tabs, and the tab
 //! shown. A component of its own, so an answer arriving redraws the pane and not the window.
 //!
 //! What it draws is decided against the selection, not against whatever the diff state
 //! holds: the Commit tab draws a change set only when it is the answer for the row
-//! selected now (R4.4), so a fast click never shows one commit's files under another, and
+//! selected now, so a fast click never shows one commit's files under another, and
 //! the Changes tab draws a file's diff only when it is the answer for the file and the
 //! settings selected now.
 //!
-//! The Changes tab is a component of its own (`changes_tab`, phase 07): the summary, the
-//! filtered file list and one file's diff. So is the Commit tab's body (`CommitBody`, phase
-//! 08): a file pressed there opens its diff in place under its row, as Fork's Commit tab does
-//! (Finding 4), and closes it when pressed again; Expand All opens the files in order until its
-//! line budget is spent. The Changes tab keeps its own file, chosen from its own list: Fork's
-//! Commit tab does not switch to Changes, and the buttons Fork added to reveal a file there are
-//! not recorded (Finding 4), so none is drawn.
+//! The Changes tab is a component of its own (`changes_tab`): the summary, the filtered file
+//! list and one file's diff. So is the Commit tab's body (`CommitBody`): a file pressed there
+//! opens its diff in place under its row, as Fork's Commit tab does, and closes it when
+//! pressed again; Expand All opens the files in order until its line budget is spent. The
+//! Changes tab keeps its own file, chosen from its own list: Fork's Commit tab does not switch
+//! to Changes, and no button to reveal a file there is drawn.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,8 +34,7 @@ use crate::{diff, shortcuts};
 pub const NOTHING_SELECTED: &str = "Select a commit to see its details.";
 /// Said while the selected commit's answer is on its way.
 pub const READING: &str = "Reading the commit…";
-/// Said in the Commit tab over a comparison of two commits, which it does not describe
-/// (R7.3).
+/// Said in the Commit tab over a comparison of two commits, which it does not describe.
 pub const NOT_ONE_COMMIT: &str = "The Commit tab describes one commit.";
 
 pub struct DetailPane {
@@ -78,7 +76,7 @@ impl Component for DetailPane {
             mut pane_collapsed,
             ..
         } = view;
-        // Two commits selected: the Changes tab, the Commit tab unavailable (R7.3) — the tab
+        // Two commits selected: the Changes tab, the Commit tab unavailable — the tab
         // chosen for the session is kept for when one is selected again.
         let comparing = view.pair.read().is_some();
         let tab = if comparing {
@@ -212,7 +210,7 @@ fn commit_body(
     }
 }
 
-/// The REFS row of the row selected (R6.1): the chips its row in the history draws, in its
+/// The REFS row of the row selected: the chips its row in the history draws, in its
 /// lane, laid out for the window's width — the most the pane can show — and none while the row
 /// is not loaded. The row is found once per history (`RowFinder`); its chips are laid out as
 /// the history list lays out a row's, reading at most what fits.

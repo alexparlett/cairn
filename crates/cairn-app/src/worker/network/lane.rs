@@ -1,11 +1,11 @@
-//! The network lane: the thread where a network operation runs — fetch,
-//! today — so it neither blocks the history walk nor the window. One at a
-//! time, in the order asked (PRD R7, `docs/design/concurrency.md`,
+//! The network lane: the thread where a network operation runs — fetch is
+//! the one there is — so it neither blocks the history walk nor the window.
+//! One at a time, in the order asked (`docs/design/concurrency.md`,
 //! "Operations").
 //!
 //! The lane is chosen per operation ([`Operation::lane`]), never assumed:
 //! the local lane, for writes to the index, the working tree and local refs,
-//! lands beside this one with the first local write. A second copy of an
+//! runs beside this one, reached by the routing table directly. A second copy of an
 //! operation already running or waiting in its lane is refused with a reason
 //! the window draws ([`Refusal`]), never dropped.
 
@@ -25,8 +25,8 @@ pub(crate) enum Operation {
     Fetch { remote: String },
 }
 
-/// The write lanes an operation can run in. One, until the first local write
-/// adds `Local` and the table below routes it.
+/// The write lanes an operation the repository thread forwards can run in. A local
+/// write is not among them: the routing table sends it to the local lane directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Lane {
     /// Fetch, push, and the transfer half of pull.
@@ -99,7 +99,7 @@ impl FetchControl {
     /// refuses it, naming the fetch already in flight: nothing is forwarded
     /// then, and the refusal is the window's to draw. The window hides its
     /// button while a fetch is in flight, so this is what a second fetch
-    /// meets when anything else asks for one (PRD R7.2).
+    /// meets when anything else asks for one.
     pub(crate) fn arm(&self, remote: &str) -> Result<(), Refusal> {
         let mut stage = self.lock();
         let cancelled = match &*stage {
@@ -186,11 +186,11 @@ pub(crate) fn serve_network_lane(
         match operation {
             Operation::Fetch { remote } => {
                 // Whether anything moved is not this lane's to say: the window refreshes on
-                // every outcome (refs-and-status R10.1), and the refresh decides.
+                // every outcome, and the refresh decides.
                 // One token for the whole invocation, retired below before the outcome
                 // goes out, so no helper of a dead git is accepted afterwards.
                 let authorised = channel.and_then(|channel| channel.begin_for(remote.clone()).ok());
-                // What this fetch runs on this thread from here is its own (R12.1).
+                // What this fetch runs on this thread from here is its own.
                 let mark = repo.command_mark();
                 let outcome = fetch(
                     git,
@@ -208,11 +208,10 @@ pub(crate) fn serve_network_lane(
                             remote: remote.clone(),
                         },
                     );
-                    // Each read's lines as the engine split and scrubbed them (R4.10, R12.2): a
+                    // Each read's lines as the engine split and scrubbed them: a
                     // remote URL with a token in it is never drawn.
                     // They wait in the lane's tap, the window woken once for whatever waits
-                    // (`output_tap`, phase 12's QA #16): a progress meter's redraws never
-                    // queue one update a read.
+                    // (`output_tap`): a progress meter's redraws never queue one update a read.
                     started.finish(|lines| {
                         if tap.hold(lines) {
                             outbox.send(None, Update::FetchProgress { tap: tap.clone() });
@@ -238,8 +237,8 @@ pub(crate) fn serve_network_lane(
     }
 }
 
-/// The update for how a fetch ended: a cancel quietly (R14.5), a failure as the Git Error dialog
-/// draws one (R14.3) — saying, where no prompt could have been answered, why, since git's own
+/// The update for how a fetch ended: a cancel quietly, a failure as the Git Error dialog
+/// draws one — saying, where no prompt could have been answered, why, since git's own
 /// message ("terminal prompts disabled") does not.
 fn fetch_outcome(
     remote: String,
@@ -265,7 +264,7 @@ mod tests {
         std::path::PathBuf::from("/r/.git/index.lock")
     }
 
-    /// R14.5: a fetch that succeeds or is cancelled opens nothing — the update carries the remote
+    /// A fetch that succeeds or is cancelled opens nothing — the update carries the remote
     /// alone. Caught by: a cancel carrying what the window would draw.
     #[test]
     fn every_outcome_names_how_the_fetch_ended() {
@@ -288,7 +287,7 @@ mod tests {
         );
     }
 
-    /// R14.3: a fetch git failed carries its command and output for the Git Error dialog, and
+    /// A fetch git failed carries its command and output for the Git Error dialog, and
     /// Fork's sentence. Caught by: the engine's text in their place.
     #[test]
     fn a_failed_fetch_carries_gits_command_and_words() {
@@ -374,7 +373,7 @@ mod tests {
         assert_eq!(control.arm("origin"), Ok(()));
     }
 
-    /// PRD R7.2: a second fetch is refused naming the fetch in flight and how far it has
+    /// A second fetch is refused naming the fetch in flight and how far it has
     /// got, and the refusal leaves that fetch as it was. Caught by: refusing in silence
     /// (no reason to draw), naming the refused remote instead of the one in flight, or a
     /// refusal that disarms or re-arms the fetch it was refused for.

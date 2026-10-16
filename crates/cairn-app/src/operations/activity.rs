@@ -1,28 +1,25 @@
-//! Fork's Activity Manager as the window keeps it (staging-and-commit R12, C29): one entry per
-//! operation of the session — every local write and every fetch — newest first, bounded, with
-//! its one name, Fork's result line, when it started and how long it took, how it ended — one of
-//! four words, R14.2 — its one sentence when it failed or was cancelled, the prompt it confirmed
-//! when it ran, each `git` it ran with what that said, and an amend's way back. Nothing of it
-//! outlives the window (R12.3, L14).
+//! Fork's Activity Manager as the window keeps it: one entry per operation of the session — every
+//! local write and every fetch — newest first, bounded, with its one name, Fork's result line, when
+//! it started and how long it took, how it ended — one of four words — its one sentence when it
+//! failed or was cancelled, the prompt it confirmed when it ran, each `git` it ran with what that
+//! said, and an amend's way back. Nothing of it outlives the window.
 //!
-//! Fed by `session::apply` from the updates the lanes send: a write's start, its output as it
-//! is drained from the lane's tap (R10.4: a hook's lines while it runs), what it ran
-//! (`Update::OperationRan`, the command log's records of its own `git`), and its ending; a
-//! fetch's the same. Every text of git's kept here arrives as `cairn_model::ScrubbedLines`,
-//! scrubbed of a URL's userinfo by the engine's runner as it split git's output (R12.2, R4.10),
-//! so no entry can draw a token; it is only stripped of escape sequences here
-//! (`crate::operations::shown_output`). Each line is cut, as the diff view cuts one, at
-//! `cairn_model::LINE_CUT_BYTES` on a character with the diff view's marker after it
+//! Fed by `session::apply` from the updates the lanes send: a write's start, its output as it is
+//! drained from the lane's tap (a hook's lines while it runs), what it ran (`Update::OperationRan`,
+//! the command log's records of its own `git`), and its ending; a fetch's the same. Every text of
+//! git's kept here arrives as `cairn_model::ScrubbedLines`, scrubbed of a URL's userinfo by the
+//! engine's runner as it split git's output, so no entry can draw a token; it is only stripped of
+//! escape sequences here (`crate::operations::shown_output`). Each line is cut, as the diff view
+//! cuts one, at `cairn_model::LINE_CUT_BYTES` on a character with the diff view's marker after it
 //! (`cairn_ui::cut_marker`), so no row holds or shapes a 256 KiB piece.
 //!
-//! **One append-only list** (phase 20): an entry's lines are one bounded tail
-//! (`crate::operations::output_tail`) — what it wrote as it ran, then each `$ git …` it ran as its records
-//! arrive, with each command's ending in one form; nothing already drawn is replaced. An
-//! operation whose output streamed (a commit's hooks, a fetch's progress) keeps what streamed
-//! as that output, and its records add their `$ git …` lines and endings beneath. An entry past
-//! the tail's bound keeps its latest lines and says "Earlier output not kept." first; past
-//! [`LOG_BYTES`] together, whole oldest entries go, never one still running and never the
-//! newest.
+//! **One append-only list**: an entry's lines are one bounded tail
+//! (`crate::operations::output_tail`) — what it wrote as it ran, then each `$ git …` it ran as its
+//! records arrive, with each command's ending in one form; nothing already drawn is replaced. An
+//! operation whose output streamed (a commit's hooks, a fetch's progress) keeps what streamed as
+//! that output, and its records add their `$ git …` lines and endings beneath. An entry past the
+//! tail's bound keeps its latest lines and says "Earlier output not kept." first; past
+//! [`LOG_BYTES`] together, whole oldest entries go, never one still running and never the newest.
 //!
 //! On the UI thread, each update costs what it carries, counted as lines go in and out; the
 //! open popover reads a snapshot (`ActivityLog::shown`), the selected entry's lines shared by
@@ -55,7 +52,7 @@ pub const ACTIVITY_ENTRIES: usize = 200;
 /// it, whole oldest operations go.
 pub const LOG_BYTES: usize = 4 * OUTPUT_BYTES;
 
-/// A cancelled write's one sentence: a commit or an amend git had not made (R4.7).
+/// A cancelled write's one sentence: a commit or an amend git had not made.
 pub const WRITE_CANCELLED: &str = "Cancelled before git made it. Nothing was changed.";
 /// A cancelled fetch's one sentence: what git had fetched before it was stopped stays, and the
 /// refresh after it shows any ref it moved.
@@ -81,7 +78,7 @@ pub enum ActivityKey {
     Fetch(u64),
 }
 
-/// How an operation stands, in one of the four words (rule 5, R14.2): running, succeeded,
+/// How an operation stands, in one of the four words: running, succeeded,
 /// failed, cancelled — a refusal and a partly done discard among the failures — with the one
 /// sentence a failure or a cancel says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,13 +111,13 @@ pub struct Activity {
     outcome: Outcome,
     /// Fork's result line for each way it can end.
     results: ResultLines,
-    /// The prompt its confirmation recorded: drawn once it ran (F3).
+    /// The prompt its confirmation recorded: drawn once it ran.
     prompt: Option<String>,
     /// It ran — git started, or it succeeded — so the prompt it confirmed is drawn.
     ran: bool,
     /// What Create Branch's Discard did, said once it succeeded in place of a prompt.
     happened: Option<String>,
-    /// What an amend run at the press turned out to cost, said once beside its result (C35).
+    /// What an amend run at the press turned out to cost, said once beside its result.
     reported: Option<String>,
     /// The commit an amend replaced: offered as the way back once the amend succeeded.
     replaced: Option<Oid>,
@@ -414,7 +411,7 @@ impl ActivityLog {
         self.push(Activity::of_write(asked));
     }
 
-    /// What a running operation wrote, drained from its lane's tap (R10.4): its spoken lines
+    /// What a running operation wrote, drained from its lane's tap: its spoken lines
     /// after the rest, "Earlier output not kept." first once older ones went — the lane's or
     /// the entry's own.
     pub fn output(&mut self, key: ActivityKey, drained: &OutputTail<ScrubbedLines>) {
@@ -455,7 +452,7 @@ impl ActivityLog {
 
     /// A local write has ended, as `ending` says (already scrubbed by the engine); `asked` is
     /// the write as the window asked it, if it saw it asked: its name, for one that never
-    /// started (the user's decision N, 2026-10-09).
+    /// started.
     pub fn write_ended(&mut self, id: OperationId, ending: &WriteEnding, asked: Option<&Asked>) {
         let key = ActivityKey::Write(id);
         // An amend at the press that must be confirmed ran nothing: no entry; the amend
@@ -476,9 +473,9 @@ impl ActivityLog {
             return;
         };
         let (outcome, ran) = match ending {
-            // An amend's way back is the commit its run answered it replaced (R12.1), never one
+            // An amend's way back is the commit its run answered it replaced, never one
             // read from the request; and what it turned out to cost, read after git was
-            // reaped, is said once, where it would now have needed confirming (C35).
+            // reaped, is said once, where it would now have needed confirming.
             WriteEnding::Done(done) => {
                 entry.replaced = done.replaced;
                 entry.reported = done
@@ -496,7 +493,7 @@ impl ActivityLog {
                 Outcome::Failed(failure.said.clone()),
                 failure.command.is_some(),
             ),
-            // A cancel heard before git ran ran nothing, and quotes no prompt (F3).
+            // A cancel heard before git ran ran nothing, and quotes no prompt.
             WriteEnding::Cancelled { ran, .. } => {
                 (Outcome::Cancelled(WRITE_CANCELLED.to_owned()), *ran)
             }
@@ -522,7 +519,7 @@ impl ActivityLog {
         self.fetching.map(ActivityKey::Fetch)
     }
 
-    /// The fetch running, for the status box (R14.1, F9): its number, its one name and when it
+    /// The fetch running, for the status box: its number, its one name and when it
     /// started.
     pub fn fetch_running(&self) -> Option<(u64, String, Instant)> {
         let n = self.fetching?;
@@ -635,10 +632,9 @@ fn ending_line(record: &CommandRecord) -> Option<String> {
     }
 }
 
-/// `argument` as a POSIX shell needs it written to read it back whole (the user's decision L,
-/// 2026-10-09), so a `$ git …` line pastes into a terminal: bare when every character is one
-/// no shell treats specially, otherwise in single quotes, an embedded `'` written `'\''`; an
-/// empty argument is `''`.
+/// `argument` as a POSIX shell needs it written to read it back whole, so a `$ git …` line pastes
+/// into a terminal: bare when every character is one no shell treats specially, otherwise in single
+/// quotes, an embedded `'` written `'\''`; an empty argument is `''`.
 pub fn shell_quoted(argument: &str) -> String {
     let bare = !argument.is_empty()
         && argument.chars().all(|c| {
@@ -653,7 +649,7 @@ pub fn shell_quoted(argument: &str) -> String {
 }
 
 /// When an operation started, as the popover says it: the time of day, UTC, as the history's
-/// dates are drawn (F7).
+/// dates are drawn.
 fn started_text(started: SystemTime) -> String {
     let seconds = started
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -667,7 +663,7 @@ fn started_text(started: SystemTime) -> String {
     )
 }
 
-/// How long an operation took, as the popover says it (F8).
+/// How long an operation took, as the popover says it.
 pub fn took_text(took: Duration) -> String {
     let millis = took.as_millis();
     if millis < 1_000 {
@@ -680,7 +676,7 @@ pub fn took_text(took: Duration) -> String {
     }
 }
 
-/// The popover, while it is open (R12.1): a child of the window, the one reader of the log, so
+/// The popover, while it is open: a child of the window, the one reader of the log, so
 /// only it is drawn again as an operation's lines arrive. A cancel asks the write's or the
 /// fetch's cancel; the way back shows the replaced commit in Show Lost Commits.
 pub struct ActivityLayer {
@@ -745,7 +741,7 @@ impl Component for ActivityLayer {
     }
 }
 
-/// The way back from an amend (R12.1, F4): Show Lost Commits turned on, if it is not, and the
+/// The way back from an amend: Show Lost Commits turned on, if it is not, and the
 /// replaced commit found in the history and selected, as a ref's press finds its row.
 fn show_in_lost_commits(commit: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
     crate::history::ref_find::find_commit(commit, commit.short().as_str().to_owned(), view, submit);
@@ -829,7 +825,7 @@ mod tests {
             .collect()
     }
 
-    /// C29: an entry per operation, newest first — its name and Fork's result line, the four
+    /// An entry per operation, newest first — its name and Fork's result line, the four
     /// words, its one sentence on a failure; what it wrote as it ran, then its `$ git …` lines
     /// appended beneath without replacing a line, git's stderr not drawn twice for an operation
     /// whose output streamed; and an amend's way back once it succeeded. Caught by: entries
@@ -951,13 +947,11 @@ mod tests {
         assert_eq!(entries[1].sentence.as_deref(), Some("git refused it."));
     }
 
-    /// F3 and the user's decision of 2026-10-10 on phase 14's item 11: the prompt an operation
-    /// confirmed is drawn whole only once it ran — git ran it, failed, was cancelled while it
-    /// ran, partly did it, or succeeded — never for one refused, stale, not run or cancelled
-    /// before git ran (phase 20's QA items 7 and 8); and Create Branch's Discard quotes none,
-    /// saying once it succeeded what it did instead. Caught by: "Confirmed:" over an operation
-    /// that never happened, a partly done discard's prompt hidden, or the forced checkout's
-    /// question quoted.
+    /// The prompt an operation confirmed is drawn whole only once it ran — git ran it, failed, was
+    /// cancelled while it ran, partly did it, or succeeded — never for one refused, stale, not run
+    /// or cancelled before git ran; and Create Branch's Discard quotes none, saying once it
+    /// succeeded what it did instead. Caught by: "Confirmed:" over an operation that never
+    /// happened, a partly done discard's prompt hidden, or the forced checkout's question quoted.
     #[test]
     fn the_prompt_is_drawn_only_for_an_operation_that_ran() {
         let prompt = "Discard all changes in a.rs? You can't undo this.";
@@ -1045,8 +1039,8 @@ mod tests {
         );
     }
 
-    /// C35: an amend run at the press whose cost, read once git was reaped, says it would now
-    /// have needed confirming reports so in its entry, once, beside its result — and one still
+    /// An amend run at the press whose cost, read once git was reaped, says it would now have
+    /// needed confirming reports so in its entry, once, beside its result — and one still
     /// recoverable, or whose read failed, reports nothing. Caught by: the engine's answer never
     /// drawn, or drawn for a recoverable amend.
     #[test]
@@ -1097,7 +1091,7 @@ mod tests {
         }
     }
 
-    /// C29's bounds: at most [`ACTIVITY_ENTRIES`] operations; one operation's lines the one
+    /// The log's bounds: at most [`ACTIVITY_ENTRIES`] operations; one operation's lines the one
     /// tail's latest, "Earlier output not kept." heading them — whether the lane or the entry let
     /// go; and past [`LOG_BYTES`] together, whole oldest operations go, never one still running
     /// and never the newest. Caught by: an unbounded log, lines of an old entry trimmed instead
@@ -1163,7 +1157,7 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect();
         // Exactly as many whole commits as fit under the bound, the newest of them, then the
-        // running fetch (phase 20's QA item 5).
+        // running fetch.
         let each: usize = wide.iter().map(String::len).sum();
         let fit = LOG_BYTES / each;
         assert!(
@@ -1194,11 +1188,10 @@ mod tests {
         );
     }
 
-    /// Fork's fetch rows (observed 2026-10-11, `fork-activity-result-lines-2026-10-11.md`):
-    /// "Already up to date" when git updated no branch, "Fetched 1 branch" or "Fetched N
-    /// branches" counted from git's own ref-update lines — a tag, a branch found up to date, one
-    /// refused or one pruned not counted — "fetch failed" on a failure and "cancelled" on a
-    /// cancel; a write cancelled says "cancelled" too. Caught by: a count of every `->` line, a
+    /// Fork's fetch rows: "Already up to date" when git updated no branch, "Fetched 1 branch" or
+    /// "Fetched N branches" counted from git's own ref-update lines — a tag, a branch found up to
+    /// date, one refused or one pruned not counted — "fetch failed" on a failure and "cancelled" on
+    /// a cancel; a write cancelled says "cancelled" too. Caught by: a count of every `->` line, a
     /// fetch that moved nothing said to have fetched, or a cancel with no line.
     #[test]
     fn a_fetch_says_how_many_branches_it_fetched_as_fork_does() {
@@ -1296,9 +1289,8 @@ mod tests {
         assert_eq!(texts(&after[0].lines), ["one", "two"]);
     }
 
-    /// Phase 11's QA (app item 3): a line past the long-line limit is kept cut on a character,
-    /// with the diff view's marker saying how much more there was. Caught by: a 256 KiB piece
-    /// kept, or cut inside a character.
+    /// A line past the long-line limit is kept cut on a character, with the diff view's marker
+    /// saying how much more there was. Caught by: a 256 KiB piece kept, or cut inside a character.
     #[test]
     fn a_long_line_is_kept_cut_with_the_diff_views_marker() {
         let mut log = ActivityLog::default();
@@ -1318,7 +1310,7 @@ mod tests {
         assert_eq!(cut_line("short".to_owned()), "short");
     }
 
-    /// C29: each command ends in one form — `exit code N`, `killed by signal N`, `cancelled` —
+    /// Each command ends in one form — `exit code N`, `killed by signal N`, `cancelled` —
     /// a clean exit, one never started and one whose end is not known saying nothing; and the
     /// times read as the popover draws them. Caught by: "(not started)", "(how it ended is not
     /// known)", "exit status", or two forms for one end.
@@ -1374,7 +1366,7 @@ mod tests {
         );
     }
 
-    /// Rule 5 (R14.2): every ending is one of four words — a refusal, a stale patch, a write
+    /// Every ending is one of four words — a refusal, a stale patch, a write
     /// never run and a partly done discard all failed, with their sentence; a cancel is
     /// cancelled with its own — and an amend asking to be confirmed, which ran nothing, leaves
     /// no entry. Caught by: another word drawn, a cancel with nothing said, or a pending amend
@@ -1441,11 +1433,11 @@ mod tests {
         }
     }
 
-    /// The user's decision L: each argument of a `$ git …` line is written as a POSIX shell
-    /// reads it back whole — bare when nothing in it is special, single-quoted otherwise, an
-    /// embedded quote `'\''`, an empty argument `''`, non-ASCII quoted. Checked against `sh`
-    /// itself: each quoted argument, read back by the shell, is the argument. Caught by: a line
-    /// that splits an argument with a space, or drops an empty one, when pasted.
+    /// Each argument of a `$ git …` line is written as a POSIX shell reads it back whole — bare
+    /// when nothing in it is special, single-quoted otherwise, an embedded quote `'\''`, an empty
+    /// argument `''`, non-ASCII quoted. Checked against `sh` itself: each quoted argument, read
+    /// back by the shell, is the argument. Caught by: a line that splits an argument with a space,
+    /// or drops an empty one, when pasted.
     #[test]
     fn each_argument_is_quoted_as_a_shell_reads_it_back() {
         let cases = [

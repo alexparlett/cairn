@@ -1,5 +1,5 @@
 //! Where a row sits in the history, looked for once per history and row and never again:
-//! what the Commit tab's REFS row reads the selected row's chips from (refs-and-status R6.1).
+//! what the Commit tab's REFS row reads the selected row's chips from.
 //!
 //! Rows only append to one history, and a reopen builds another (`History::serial`), so a row
 //! found stays where it was found, and a row not found yet is looked for only among the rows

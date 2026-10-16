@@ -1,9 +1,8 @@
 //! The one sentence a person reads for each way a write, a count or a fetch can end other than
-//! as asked (staging-and-commit R14.2, rule 5 of the redesign): worded here, from the engine's
-//! typed error, never from its `Display` — the engine says why once, and the view adds at most
-//! "Nothing was changed." to a refusal. Every path is drawn through `cairn_model::shown_path`,
-//! so a name holding a newline or a bidirectional control cannot reshape the sentence (phase
-//! 15's QA item 3).
+//! as asked: worded here, from the engine's typed error, never from its `Display` — the engine
+//! says why once, and the view adds at most "Nothing was changed." to a refusal. Every path is
+//! drawn through `cairn_model::shown_path`, so a name holding a newline or a bidirectional
+//! control cannot reshape the sentence.
 //!
 //! An error with no sentence of its own here — one a write never meets, or a failure of the
 //! machinery beneath git — is the engine's text of it, scrubbed there ([`Error::shown`]), as one
@@ -100,8 +99,7 @@ pub(super) fn sentence(error: &Error) -> String {
             LockRefusal::NotWhatWasConfirmed => not_what_was_confirmed(),
         },
         // A working-tree file a stage's or a discard's check could not read, or a file's diff
-        // that could not be made: its path C-quoted, never the engine's text (phase 19's QA
-        // item 7).
+        // that could not be made: its path C-quoted, never the engine's text.
         Error::ReadWorkingTree { path, source } => {
             format!("{} could not be read ({source})", shown_path(path))
         }
@@ -111,7 +109,7 @@ pub(super) fn sentence(error: &Error) -> String {
         Error::LockNotRemoved { path, source } => {
             format!("{} could not be removed ({source})", shown_path(path))
         }
-        // Made, and then git failed (phase 13's QA item #1): said apart from Fork's sentence, so
+        // Made, and then git failed: said apart from Fork's sentence, so
         // nobody makes the commit again.
         Error::MadeButGitFailed { verb, .. } => {
             return format!(
@@ -124,7 +122,7 @@ pub(super) fn sentence(error: &Error) -> String {
             );
         }
         // git said it made the commit, and `HEAD` is something else: said as what is known, with
-        // the history to look at (phase 13's QA item 10).
+        // the history to look at.
         Error::CommitUnconfirmed { verb } => {
             return if *verb == "amended" {
                 "Something else moved HEAD while the amend ran, so git may have amended another \
@@ -187,9 +185,9 @@ fn not_what_was_confirmed() -> String {
 mod tests {
     use super::*;
 
-    /// Phase 15's QA item 3 and U1: every path in a sentence is C-quoted where it could reshape
-    /// it — a newline, a right-to-left override — and each sentence is one, with one stop and no
-    /// engine tail. Caught by: the raw path drawn, the engine's Display drawn, or a stop missing.
+    /// Every path in a sentence is C-quoted where it could reshape it — a newline, a
+    /// right-to-left override — and each sentence is one, with one stop and no engine tail.
+    /// Caught by: the raw path drawn, the engine's Display drawn, or a stop missing.
     #[test]
     fn a_sentence_names_its_path_escaped_and_ends_once() {
         for (path, shown) in [
@@ -250,9 +248,9 @@ mod tests {
         assert_eq!(other, "The commit was cancelled before git ran.");
     }
 
-    /// Phase 13's QA: a commit git made and then failed, and one git made while something else
-    /// moved `HEAD`, each say what is known — never Fork's "unexpected error", which would have
-    /// the person commit again. Caught by: the engine's text drawn, or the two sharing words.
+    /// A commit git made and then failed, and one git made while something else moved `HEAD`,
+    /// each say what is known — never Fork's "unexpected error", which would have the person
+    /// commit again. Caught by: the engine's text drawn, or the two sharing words.
     #[test]
     fn a_commit_made_then_failed_or_unconfirmed_says_so() {
         use std::os::unix::process::ExitStatusExt as _;

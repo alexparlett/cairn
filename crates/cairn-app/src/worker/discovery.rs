@@ -1,4 +1,4 @@
-//! Finding `git` once per application (PRD R6.1, process-manager L10).
+//! Finding `git` once per application.
 //!
 //! `git` is found and its version checked as the application starts, on a
 //! thread of its own, and every repository the application opens takes a

@@ -1,4 +1,4 @@
-//! The Changes tab's filter as the window holds it (PRD R5.4): the text, what was last asked
+//! The Changes tab's filter as the window holds it: the text, what was last asked
 //! of a worker, and the files the list shows — for the change set selected now and no other.
 //!
 //! Matching is a pass over every path (55,184 on the largest subject), so it is never done
@@ -143,7 +143,7 @@ mod tests {
         })
     }
 
-    /// R5.4: a text is asked of a worker once per change set, an answer is kept only for the
+    /// A text is asked of a worker once per change set, an answer is kept only for the
     /// change set and text asked last, the last answer stands while the next is on its way,
     /// another change set shows nothing of the last one's, and an empty text shows every file
     /// without asking. Caught by: asking again for the same text (a keystroke that changes

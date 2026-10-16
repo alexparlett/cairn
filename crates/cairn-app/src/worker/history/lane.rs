@@ -1,6 +1,5 @@
 //! The history lane's state on the repository thread: the walk held open across pages, the
-//! cursor a cold restart resumes from, and the refs it walks from (refs-and-status R4.1,
-//! R10, R11.2).
+//! cursor a cold restart resumes from, and the refs it walks from.
 //!
 //! The refs are read here, on the thread that owns the walk. A refresh reads them in the
 //! refs lane and compares what they would draw with the snapshot the open walk began from
@@ -15,7 +14,7 @@
 //! commit deleted and pruned between the refresh and the open — when the refs read again
 //! differ: the open is then made once more, from them.
 //!
-//! A find (R8.5) pages the same walk forward, a page at a time, until a page holds the row
+//! A find pages the same walk forward, a page at a time, until a page holds the row
 //! looked for or the walk ends; `pool::serve` walks one of its pages whenever no other job is
 //! waiting. Every page — a scroll's or a find's — is answered under the number of the walk it
 //! belongs to (`QueryLane::Walk`), not the query's: a page laid out before its find was
@@ -45,7 +44,7 @@ pub(crate) struct HistoryLane<'repo> {
     /// The walk lane's number for the walk open: what its pages are answered under.
     walk: Option<Epoch>,
     /// Whether the walk open — and the next one opened, should it fail — is Show Lost
-    /// Commits' (staging-and-commit R11.1): the open that began it said so.
+    /// Commits': the open that began it said so.
     lost: bool,
 }
 
@@ -72,7 +71,7 @@ pub(crate) struct Answering<'a> {
 }
 
 impl<'repo> HistoryLane<'repo> {
-    /// A refresh's first read (R10.1): the refs as they stand, under the refs lane's
+    /// A refresh's first read: the refs as they stand, under the refs lane's
     /// `epoch`, which also cancels it. Answered as [`Update::Refs`] — `reopen` when what the
     /// history draws differs from the snapshot its walk began from, or no walk has begun —
     /// and handed on to the refresh thread for ahead/behind, under `ahead_behind`. A snapshot
@@ -357,7 +356,7 @@ mod tests {
     use crate::worker::Refreshable;
     use crate::worker::epoch::QueryLane;
 
-    /// The cancel a scroll and a find share (R8.5): a page asked under a number already
+    /// The cancel a scroll and a find share: a page asked under a number already
     /// superseded stops at its first commit and sends nothing, the walk keeping its place, and
     /// the next page asked under the current number takes the walk up where the last one sent
     /// left it. Driven on the lane itself, over a line of commits written for it (not this
@@ -435,7 +434,7 @@ mod tests {
         }
     }
 
-    /// staging-and-commit R11.1, R11.4: an open asked as Show Lost Commits' walks from the
+    /// An open asked as Show Lost Commits' walks from the
     /// reflog too and carries the commits only it reaches as lost; and the open after it,
     /// asked plainly, walks from the refs alone. `main` moved back two commits, `HEAD`'s log
     /// naming the newest as an entry's old id only. Caught by: the open's `lost` dropped

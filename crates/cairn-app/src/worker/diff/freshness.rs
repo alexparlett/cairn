@@ -1,6 +1,6 @@
 //! Whether what the diff thread keeps is still what git would answer: a stamp of every file
 //! a kept answer was read from ([`cairn_git::DiffInputs`]), taken before each query, in
-//! three tiers by what a change to them costs (PRD R4.5, amended in phase 04's QA).
+//! three tiers by what a change to them costs.
 //!
 //! - **The configuration** — every file git or gix reads it from, includes and files that
 //!   do not exist yet among them. Moved, the diff thread's repository handle is opened

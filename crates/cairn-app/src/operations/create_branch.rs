@@ -1,29 +1,28 @@
-//! Create Branch as the window keeps it (`docs/prd/staging-and-commit.md` R11.3; the user's
-//! decisions of 2026-10-09 and 2026-10-10): Fork's dialog, opened by "New Branch…" on any
-//! commit row, or at `HEAD` by Fork's New Branch chord (`Action::NewBranch`).
+//! Create Branch as the window keeps it: Fork's dialog, opened by "New Branch…" on any commit row,
+//! or at `HEAD` by Fork's New Branch chord (`Action::NewBranch`).
 //!
 //! - **The name** is the window's text; each change asks the engine whether git takes it and
 //!   whether a branch has it (`Request::CheckBranchName`, the branch-name lane, the latest ask
 //!   superseding the one before), and the button is enabled only for the answer to the text
 //!   shown. The engine's answer is typed, and the dialog words it (`cairn_ui::name_refusal`).
-//! - **"Check out after create"** is sticky for the session (decision 1); kept across restarts
-//!   once Cairn has a settings store (a later roadmap item). "Local changes:" is drawn while it
-//!   is ticked and a tracked path has a change (`WorkingTreeStatus::has_tracked_changes`); each
-//!   opening starts on "Don't change", so "Discard" is never the remembered choice.
+//! - **"Check out after create"** is sticky for the session, and not kept across restarts: Cairn
+//!   has no settings store. "Local changes:" is drawn while it is ticked and a tracked path has a
+//!   change (`WorkingTreeStatus::has_tracked_changes`); each opening starts on "Don't change", so
+//!   "Discard" is never the remembered choice.
 //! - **The writes**: unticked, `LocalWrite::CreateBranch`; ticked with "Don't change",
 //!   `LocalWrite::CreateBranchAndCheckout`; ticked with "Discard", the dialog's press is the
-//!   confirmation (B2): while Discard is chosen the engine is asked what it would be confirmed
+//!   confirmation: while Discard is chosen the engine is asked what it would be confirmed
 //!   as for the name shown (`Request::CheckoutConsequence`, again as the name changes), the
 //!   button is enabled once it has answered, and the press builds the token in the dialog from
 //!   that `Consequence` — `LocalWrite::CreateBranchDiscarding`, no second dialog. An operation in
 //!   progress is said in the dialog's refusal row (`cairn_ui::discard_refusal`), the button
 //!   disabled.
-//! - **The dialog stays open** while its write is asked, and closes when it is done. git's
-//!   failure opens Fork's Git Error over it, and a refusal found while it ran — a discard whose
-//!   `HEAD`, commit or name moved since the press — "Couldn't Create branch '<name>'" with its one
-//!   sentence (`crate::operations::ending_dialog`, R14.3); the dialog beneath is kept as it was left, drawn
-//!   again once that is closed (the one modal state, `crate::modal`). A stale Discard asks its
-//!   consequence again, so the next press confirms what is there now (phase 14's QA item 13).
+//! - **The dialog stays open** while its write is asked, and closes when it is done. git's failure
+//!   opens Fork's Git Error over it, and a refusal found while it ran — a discard whose `HEAD`,
+//!   commit or name moved since the press — "Couldn't Create branch '<name>'" with its one sentence
+//!   (`crate::operations::ending_dialog`); the dialog beneath is kept as it was left, drawn again
+//!   once that is closed (the one modal state, `crate::modal`). A stale Discard asks its
+//!   consequence again, so the next press confirms what is there now.
 
 use std::rc::Rc;
 
@@ -91,7 +90,7 @@ struct Opened {
 }
 
 impl CreateBranchState {
-    /// Whether the dialog is up: the window's keys are inert (R11.3, C28).
+    /// Whether the dialog is up: the window's keys are inert.
     pub fn is_up(&self) -> bool {
         self.open.is_some()
     }
@@ -296,10 +295,9 @@ fn refusal(opened: &Opened, typed: &str, discarding: bool) -> Option<String> {
     })
 }
 
-/// What the check of `typed` waits behind, said beside the buttons (the user's decision D,
-/// 2026-10-09): the local lane runs one thing at a time, so a name asked and not yet answered
-/// waits for the write running, or the first queued. `None` once the answer for `typed` is in,
-/// for an empty name, or while no write is asked.
+/// What the check of `typed` waits behind, said beside the buttons: the local lane runs one thing
+/// at a time, so a name asked and not yet answered waits for the write running, or the first
+/// queued. `None` once the answer for `typed` is in, for an empty name, or while no write is asked.
 fn waiting(opened: &Opened, typed: &str, writes: &LocalWrites) -> Option<String> {
     let answered = matches!(&opened.checked, Some((name, _)) if name == typed);
     if typed.is_empty() || answered {
@@ -319,8 +317,8 @@ pub fn create(view: View, submit: Option<&dyn Fn(Request)>) {
     };
     let typed = view.branch.name.peek().clone();
     let write = {
-        // Nothing is asked while a dialog is over this one (phase 14's QA, RS#1): the one modal
-        // state must name Create Branch.
+        // Nothing is asked while a dialog is over this one: the one modal state must name
+        // Create Branch.
         if !on_top(view) {
             return;
         }
@@ -347,12 +345,12 @@ pub fn create(view: View, submit: Option<&dyn Fn(Request)>) {
     asked(view, submit, write);
 }
 
-/// The dialog's button, or Return in its field, with Discard chosen: the press built `token`
-/// from the consequence the dialog was handed, and the discarding write is asked with it — only
-/// while Discard is still chosen, the token's consequence is the one asked for the name shown,
-/// no write of this opening's runs and no create's Git Error is up (phase 14's QA, DO#3, RS#1):
-/// the dialog's handler was built at its last render, and a radio press or a keystroke handled
-/// since must not spend a token for a state no longer shown. Otherwise the token is let go of.
+/// The dialog's button, or Return in its field, with Discard chosen: the press built `token` from
+/// the consequence the dialog was handed, and the discarding write is asked with it — only while
+/// Discard is still chosen, the token's consequence is the one asked for the name shown, no write
+/// of this opening's runs and no create's Git Error is up: the dialog's handler was built at its
+/// last render, and a radio press or a keystroke handled since must not spend a token for a state
+/// no longer shown. Otherwise the token is let go of.
 pub fn discard_confirmed(view: View, token: Confirmed, submit: Option<&dyn Fn(Request)>) {
     let Some(submit) = submit else {
         return;
@@ -417,10 +415,10 @@ pub fn cancel(view: View) {
     state.write().open = None;
 }
 
-/// A local write ended: when it is the dialog's, a success closes the dialog; anything else is
-/// the window's endings' to say over it (`crate::operations::ending_dialog`), the dialog left as it was — and
-/// a Discard refused as stale asks its consequence again, so the next press confirms what is
-/// there now rather than being refused again (phase 14's QA item 13).
+/// A local write ended: when it is the dialog's, a success closes the dialog; anything else is the
+/// window's endings' to say over it (`crate::operations::ending_dialog`), the dialog left as it was
+/// — and a Discard refused as stale asks its consequence again, so the next press confirms what is
+/// there now rather than being refused again.
 pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding, submit: &dyn Fn(Request)) {
     let mut state = view.branch.state;
     if state.peek().asked != Some(id) {

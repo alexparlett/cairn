@@ -1,10 +1,10 @@
-//! The activity popover in the window, headless (staging-and-commit R12, C20's popover half):
-//! the status box opens it over the session's operations; each draws its name, its `git` and
-//! what that said with no token in it; an amend's way back finds the replaced commit in Show
-//! Lost Commits. And the leftover lock (C30): its banner exactly while the stat finds the lock and
-//! no git of Cairn's runs or waits, `Remove index.lock…` in a write's Git Error where git could
-//! not create it, both opening "Remove Stale Lock" over the consequence read at the press. Updates are applied through `session::apply`, as the
-//! worker's stream applies them.
+//! The activity popover in the window, headless: the status box opens it over the session's
+//! operations; each draws its name, its `git` and what that said with no token in it; an amend's
+//! way back finds the replaced commit in Show Lost Commits. And the leftover lock: its banner
+//! exactly while the stat finds the lock and no git of Cairn's runs or waits, `Remove index.lock…`
+//! in a write's Git Error where git could not create it, both opening "Remove Stale Lock" over the
+//! consequence read at the press. Updates are applied through `session::apply`, as the worker's
+//! stream applies them.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -132,12 +132,11 @@ fn open(test: &mut TestingRunner) {
     click(test, "engine");
 }
 
-/// C20's popover half and R12.2: the status box opens the popover; before anything has run it
-/// says so; a write that ran draws its name, its status, its `$ git` and what git said — as the
-/// engine hands them on, git's text in `ScrubbedLines` and the arguments scrubbed as they were
-/// recorded (R4.10), so no token anywhere — and Escape closes it. Caught by: a status box that
-/// opens nothing, a popover drawing an operation without its `git`, or git's text drawn other
-/// than through the type.
+/// The status box opens the popover; before anything has run it says so; a write that ran draws its
+/// name, its status, its `$ git` and what git said — as the engine hands them on, git's text in
+/// `ScrubbedLines` and the arguments scrubbed as they were recorded, so no token anywhere — and
+/// Escape closes it. Caught by: a status box that opens nothing, a popover drawing an operation
+/// without its `git`, or git's text drawn other than through the type.
 #[test]
 fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     let (mut test, view, submitted) = launch();
@@ -182,7 +181,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
             unspent: crate::worker::Unspent::none(),
         },
     );
-    // Its Git Error first (R14.3): the popover opens once it is closed — one modal state.
+    // Its Git Error first: the popover opens once it is closed — one modal state.
     assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
     assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered with no lock");
     click_lowest(&mut test, CLOSE_CAPTION);
@@ -234,14 +233,13 @@ fn removals(submitted: &Submitted) -> Vec<String> {
         .collect()
 }
 
-/// C30, the Git Error's route (R12.4, F5, G; Fork observed `lk2`, `lk3`): a write git refused for
-/// the lock opens its Git Error with `Remove index.lock…` beside Close; pressed, it closes the
-/// dialog and asks the local lane what the removal would cost NOW; only that press's answer opens
-/// "Remove Stale Lock" over decision G's prompt, whose button asks the removal with the token
-/// built from it — never the failed write again; a refusal at the press is "Couldn't Remove
-/// index.lock" with its sentence. Caught by: the removal offered on a failure git did not have
-/// for the lock, asked without its confirmation, an older press's answer opening it, the write
-/// run again, or a refusal that says nothing.
+/// The Git Error's route, as Fork takes it: a write git refused for the lock opens its Git Error
+/// with `Remove index.lock…` beside Close; pressed, it closes the dialog and asks the local lane
+/// what the removal would cost NOW; only that press's answer opens "Remove Stale Lock" over its
+/// prompt, whose button asks the removal with the token built from it — never the failed write
+/// again; a refusal at the press is "Couldn't Remove index.lock" with its sentence. Caught by: the
+/// removal offered on a failure git did not have for the lock, asked without its confirmation, an
+/// older press's answer opening it, the write run again, or a refusal that says nothing.
 #[test]
 fn a_write_refused_for_the_lock_offers_its_removal_through_the_confirmation() {
     let (mut test, view, submitted) = launch();
@@ -346,10 +344,10 @@ fn a_write_refused_for_the_lock_offers_its_removal_through_the_confirmation() {
     );
 }
 
-/// C30, the banner (R12.4, F6): drawn exactly while the stat finds `<gitdir>/index.lock`, no git
-/// of Cairn's runs or waits and the lock is older than about ten seconds; gone when a stat finds
-/// it gone, whoever removed it. Caught by: a banner over Cairn's own write, over a fresh lock, or
-/// one left after the file went.
+/// The leftover lock's banner: drawn exactly while the stat finds `<gitdir>/index.lock`, no git of
+/// Cairn's runs or waits and the lock is older than about ten seconds; gone when a stat finds it
+/// gone, whoever removed it. Caught by: a banner over Cairn's own write, over a fresh lock, or one
+/// left after the file went.
 #[test]
 fn the_leftover_lock_banner_shows_exactly_while_it_should() {
     let (mut test, view, submitted) = launch();
@@ -421,8 +419,8 @@ fn the_leftover_lock_banner_shows_exactly_while_it_should() {
     assert!(!drawn(&test, LOCK_BANNER_TEXT), "left after the file went");
 }
 
-/// The user's decision N of 2026-10-09: a write refused before it started keeps its own name.
-/// Caught by: "A write" drawn for a write the window asked by name.
+/// A write refused before it started keeps its own name. Caught by: "A write" drawn for a write the
+/// window asked by name.
 #[test]
 fn a_write_refused_before_it_started_keeps_its_name() {
     let (mut test, view, submitted) = launch();
@@ -449,7 +447,7 @@ fn a_write_refused_before_it_started_keeps_its_name() {
             unspent: crate::worker::Unspent::none(),
         },
     );
-    // R14.3: closing is a refusal found while it waited — "Couldn't <its name>".
+    // Closing is a refusal found while it waited — "Couldn't <its name>".
     assert!(
         drawn(&test, "Couldn't Stage 2 Files"),
         "{:?}",
@@ -464,12 +462,12 @@ fn a_write_refused_before_it_started_keeps_its_name() {
     assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
-/// F3 (R12.1 as amended 2026-10-10): a destructive write quotes the prompt the user accepted —
-/// copied as it was asked, since the verb spent the token — whole, only once it ran: an amend
-/// cancelled while git ran does, a removal never run does not; and Create Branch's Discard
-/// quotes none, its entry saying once it succeeded what it did, under Fork's "Switched to
-/// branch 'topic'", or git's failure where it failed. Caught by: "Confirmed:" over an
-/// operation that never happened, or the forced checkout's question quoted.
+/// A destructive write quotes the prompt the person accepted — copied as it was asked, since the
+/// verb spent the token — whole, only once it ran: an amend cancelled while git ran does, a removal
+/// never run does not; and Create Branch's Discard quotes none, its entry saying once it succeeded
+/// what it did, under Fork's "Switched to branch 'topic'", or git's failure where it failed. Caught
+/// by: "Confirmed:" over an operation that never happened, or the forced checkout's question
+/// quoted.
 #[test]
 fn a_destructive_write_quotes_its_prompt_only_once_it_ran() {
     let (mut test, view, submitted) = launch();
@@ -632,10 +630,10 @@ fn a_destructive_write_quotes_its_prompt_only_once_it_ran() {
     assert!(drawn(&test, crate::operations::activity::WRITE_CANCELLED));
 }
 
-/// R12.1's way back (F4): an amend that succeeded draws the prompt it confirmed and offers
-/// "Show in Lost Commits", whose press switches to All Commits, turns Show Lost Commits on and looks
-/// for the commit in the walk that draws it. Caught by: a way back that changes nothing, or one
-/// offered for an amend that did not run.
+/// An amend's way back: an amend that succeeded draws the prompt it confirmed and offers "Show in
+/// Lost Commits", whose press switches to All Commits, turns Show Lost Commits on and looks for the
+/// commit in the walk that draws it. Caught by: a way back that changes nothing, or one offered for
+/// an amend that did not run.
 #[test]
 fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
     let (mut test, view, submitted) = launch();
@@ -653,7 +651,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             },
         );
     });
-    // An amend's asked state names no commit: its way back is what its run answered (phase 18).
+    // An amend's asked state names no commit: its way back is what its run answered.
     apply(&mut test, view, &submitted, Update::WriteStarted { id });
     let mut activity = view.activity.log;
     test.run_in(|| {
@@ -719,9 +717,9 @@ fn area(test: &TestingRunner, text: &str) -> Area {
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
 }
 
-/// The user's decision A of 2026-10-09: the popover hangs from the status box as the window
-/// lays it out — its title just under the box, at the box's left edge — never centred. Caught
-/// by: a popover placed without the box's laid-out position.
+/// The popover hangs from the status box as the window lays it out — its title just under the box,
+/// at the box's left edge — never centred. Caught by: a popover placed without the box's laid-out
+/// position.
 #[test]
 fn the_popover_hangs_under_the_status_box() {
     let (mut test, _, _) = launch();
@@ -750,10 +748,10 @@ fn acted(submitted: &Submitted) -> bool {
         .any(|request| matches!(request, Request::Write { .. } | Request::Refresh))
 }
 
-/// The user's decision I of 2026-10-09: while the popover is open the window's chords and the
-/// focused list's keys do nothing, as under a dialog — Enter stages nothing, F5 refreshes
-/// nothing — and Escape closes it, after which they act again. Caught by: a chord heard through
-/// the popover, or a list acting on a key pressed while it is open.
+/// While the popover is open the window's chords and the focused list's keys do nothing, as under a
+/// dialog — Enter stages nothing, F5 refreshes nothing — and Escape closes it, after which they act
+/// again. Caught by: a chord heard through the popover, or a list acting on a key pressed while it
+/// is open.
 #[test]
 fn while_the_popover_is_open_the_keys_do_nothing_but_close_it() {
     let (mut test, view, submitted) = launch();
@@ -827,13 +825,12 @@ fn output(
     );
 }
 
-/// C29, Fork's Activity Manager as the window draws it (observed `am1`, `am2`): each row its
-/// name, Fork's result line under it ("staged", "stage failed"), its start time as `HH:MM:SS
-/// UTC`, ⚠ on a failure and a shape of its own on a cancel, and no status word; the selected
-/// one's header its name, one of four words with its time, and how long it took; a failure's
-/// one sentence; and an operation whose output passed its bound headed "Earlier output not
-/// kept." over its latest lines. Caught by: a status word in a row, a result line or glyph
-/// missing, or the latest output dropped instead of the oldest.
+/// Fork's Activity Manager as the window draws it: each row its name, Fork's result line under it
+/// ("staged", "stage failed"), its start time as `HH:MM:SS UTC`, ⚠ on a failure and a shape of its
+/// own on a cancel, and no status word; the selected one's header its name, one of four words with
+/// its time, and how long it took; a failure's one sentence; and an operation whose output passed
+/// its bound headed "Earlier output not kept." over its latest lines. Caught by: a status word in a
+/// row, a result line or glyph missing, or the latest output dropped instead of the oldest.
 #[test]
 fn the_activity_manager_draws_forks_rows_and_header() {
     let (mut test, view, submitted) = launch();
@@ -912,8 +909,8 @@ fn the_activity_manager_draws_forks_rows_and_header() {
             "{text:?}: {shown:?}"
         );
     }
-    // The running entry, selected as the popover opens, opens at the end of its output so far
-    // (Fork, observed 2026-10-11): its newest line built.
+    // The running entry, selected as the popover opens, opens at the end of its output so far,
+    // as Fork's does: its newest line built.
     let newest = format!(
         "hook line {}",
         crate::operations::output_tail::OUTPUT_LINES + 49
@@ -1002,9 +999,9 @@ fn the_activity_manager_draws_forks_rows_and_header() {
     assert!(!drawn(&test, &newest), "a finished entry opened at its end");
 }
 
-/// C35 (the user's ratification of 2026-10-10, option B): an amend run at the press that git
-/// made while its replaced commit was pushed says so in its entry, once — and opens no dialog.
-/// Caught by: the engine's answer never drawn, or a dialog opened for it.
+/// An amend run at the press that git made while its replaced commit was pushed says so in its
+/// entry, once — and opens no dialog. Caught by: the engine's answer never drawn, or a dialog
+/// opened for it.
 #[test]
 fn an_amend_pushed_while_it_ran_says_so_in_its_entry() {
     let (mut test, view, submitted) = launch();
@@ -1056,12 +1053,12 @@ fn an_amend_pushed_while_it_ran_says_so_in_its_entry() {
     assert!(drawn(&test, SHOW_IN_LOST_COMMITS_CAPTION));
 }
 
-/// The merge bar's responsiveness 3 and phase 20's QA item 4: the window's root reads whether
-/// the popover is open, never the log, and the commit box's streamed output is kept apart from
-/// the state the root reads, so the commit box's own commit streaming its hook's lines draws
-/// nothing again while the popover is closed — and, while it is open, only the popover, which
-/// shows them. Caught by: the root subscribed to the log (`is_open` read from it, or the
-/// fetch's entry read with `read`), or the commit's output written into the box's state.
+/// The window's root reads whether the popover is open, never the log, and the commit box's
+/// streamed output is kept apart from the state the root reads, so the commit box's own commit
+/// streaming its hook's lines draws nothing again while the popover is closed — and, while it is
+/// open, only the popover, which shows them. Caught by: the root subscribed to the log (`is_open`
+/// read from it, or the fetch's entry read with `read`), or the commit's output written into the
+/// box's state.
 #[test]
 fn a_streamed_line_never_draws_the_window_again() {
     let (mut test, view, submitted, drawn_root) = launch_counted();
@@ -1116,10 +1113,9 @@ fn a_streamed_line_never_draws_the_window_again() {
     );
 }
 
-/// Phase 20's QA item 1, as Fork does it (observed 2026-10-11,
-/// `fork-activity-result-lines-2026-10-11.md`): a running entry opens at the end of its output so
-/// far and does not follow the lines that arrive after. Caught by: a pane that opens at its top,
-/// or one that scrolls to each new line.
+/// As Fork does it, a running entry opens at the end of its output so far and does not follow the
+/// lines that arrive after. Caught by: a pane that opens at its top, or one that scrolls to each
+/// new line.
 #[test]
 fn a_running_entry_opens_at_its_end_and_does_not_follow() {
     let (mut test, view, submitted) = launch();

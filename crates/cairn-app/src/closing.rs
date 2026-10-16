@@ -1,4 +1,4 @@
-//! Closing the window closes its repository (PRD R6.3).
+//! Closing the window closes its repository.
 //!
 //! The window's close hook runs on the UI thread, so it asks and never
 //! waits: the first request sends [`Request::Close`] and keeps the window
@@ -10,7 +10,7 @@
 //! that has stopped answering cannot keep the window open for good.
 //!
 //! A local write running when the window is asked to close — a commit in its
-//! hooks — is waited for and never ended (staging-and-commit R4.9): the
+//! hooks — is waited for and never ended: the
 //! worker ends nothing until it has, and the window says which write it is
 //! waiting for, through what [`Closing::when_requested`] was given.
 
@@ -54,7 +54,7 @@ impl Closing {
     }
 
     /// `tell` is called as the first close is asked of an open repository: what
-    /// the window uses to say which write it is waiting on (R4.9).
+    /// the window uses to say which write it is waiting on.
     pub fn when_requested(&self, tell: impl Fn() + 'static) {
         *self.1.borrow_mut() = Some(Rc::new(tell));
     }
@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(closing.requested(), CloseDecision::Close);
     }
 
-    /// PRD R6.3 on the UI thread: the first request asks the worker to close and keeps
+    /// On the UI thread, the first request asks the worker to close and keeps
     /// the window open; the stream's end is what closes it; a second request before the
     /// patience runs out changes nothing, and one after it closes. Caught by: closing at
     /// once (the git and the socket outlive the window), not asking the worker, asking it
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(closing.requested(), CloseDecision::Close);
     }
 
-    /// Staging-and-commit R4.9: the window is told as the first close is asked of an open
+    /// The window is told as the first close is asked of an open
     /// repository — what it says which write it waits on with — and only then: not again on
     /// the second request, not for a window with no repository. Caught by: a close that waits
     /// on a write in silence, or one told on every request.

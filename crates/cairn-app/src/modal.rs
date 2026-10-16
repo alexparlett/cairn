@@ -1,16 +1,15 @@
-//! The one modal state (staging-and-commit R14.8, `review-code-app-ui.md` M5): which dialog, or
-//! the activity popover, owns the keys and the pointer now. Each keeps its own state — a
-//! confirmation its consequence, the commit box its Git Error and token, Create Branch its
-//! name — and this decides, from all of them, the one on top: the only one the window draws,
-//! and, while there is one, the window's chords and the lists' keys do nothing
-//! (`shortcuts::keys_inert`).
+//! The one modal state: which dialog, or the activity popover, owns the keys and the pointer
+//! now. Each keeps its own state — a confirmation its consequence, the commit box its Git Error
+//! and token, Create Branch its name — and this decides, from all of them, the one on top: the
+//! only one the window draws, and, while there is one, the window's chords and the lists' keys
+//! do nothing (`shortcuts::keys_inert`).
 //!
 //! The order is what must be answered first: a credential prompt (a git waits on it), then a
 //! confirmation (the person's own question), then a Git Error or "Couldn't <name>" — the commit
 //! box's first, then the others, oldest first — then Create Branch, then the popover. So a
 //! commit's Git Error that arrives while Create Branch is up is drawn over it, and alone: its
-//! Escape closes it, and Create Branch is drawn again as it was left (phase 14's QA item 7). A
-//! dialog under another is kept, not drawn, so no key reaches it.
+//! Escape closes it, and Create Branch is drawn again as it was left. A dialog under another is
+//! kept, not drawn, so no key reaches it.
 
 use crate::window::View;
 

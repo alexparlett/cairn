@@ -1,16 +1,15 @@
-//! Where Local Changes' selection goes (staging-and-commit R8.3, the redesign's L3 and L5,
-//! C25): one pure rule, run after an action and as each status or filter's rows arrive — never
-//! from a render effect — whoever moved the files: a stage, a commit made in a terminal, a
-//! filter.
+//! Where Local Changes' selection goes: one pure rule, run after an action and as each status
+//! or filter's rows arrive — never from a render effect — whoever moved the files: a stage, a
+//! commit made in a terminal, a filter.
 //!
 //! **The rule.** The selected paths the lists still show, and the action did not take, stay
 //! selected, the primary kept or moved to the nearest of them and the anchor kept or moved to
 //! the primary. When none stays, the row that took the first selected path's place is selected
 //! — the first row shown at or after it in the lists' order, past any the action took — else
 //! the nearest row above; with no row left in the list, nothing (Fork leaves the diff blank
-//! once the last file is staged, Tracker #1663). With nothing selected, the first row shown —
-//! Unstaged's, else Staged's — is selected only when the lists before showed none: as the view
-//! opens and when files appear (Fork, Tracker #2333), never after an action emptied the list.
+//! once the last file is staged). With nothing selected, the first row shown — Unstaged's, else
+//! Staged's — is selected only when the lists before showed none: as the view opens and when
+//! files appear, as Fork does, never after an action emptied the list.
 //!
 //! **In the lists' order, not by rows.** Both lists are in `cairn_model::path_order`, before a
 //! refresh and after it, so a path's place is found in the new lists by a binary search
@@ -19,8 +18,8 @@
 //! before only to know whether they showed a row, and costs the selection and the paths the
 //! action took, each a binary search, never the lists.
 //!
-//! **Through the filter** (L3): a path is kept only while the filter shows it, so the filter
-//! prunes the selection to the rows it shows and nothing hidden is ever acted on.
+//! **Through the filter**: a path is kept only while the filter shows it, so the filter prunes
+//! the selection to the rows it shows and nothing hidden is ever acted on.
 
 use cairn_model::{ChangeList, LocalChanges, RepoPath, path_order};
 use cairn_ui::{LocalSelection, ShownFiles, nearest_remaining};
@@ -248,11 +247,11 @@ mod tests {
         })
     }
 
-    /// C25 after an action (observed `lc4`): the selection staged leaves, so the row that takes
-    /// the first one's place is selected — f3 after f2 and f4 are staged out of f1..f5, the
-    /// gap's row, not the row after the last one — and with nothing below, the nearest above;
-    /// every row taken, nothing. Caught by: the row after the last acted row chosen for a
-    /// selection with a gap, the list's first row chosen, or a leaving row kept.
+    /// After an action, as Fork does: the selection staged leaves, so the row that takes the
+    /// first one's place is selected — f3 after f2 and f4 are staged out of f1..f5, the gap's
+    /// row, not the row after the last one — and with nothing below, the nearest above; every
+    /// row taken, nothing. Caught by: the row after the last acted row chosen for a selection
+    /// with a gap, the list's first row chosen, or a leaving row kept.
     #[test]
     fn after_an_action_the_row_in_the_first_acted_rows_place_is_selected() {
         let drawn = lists(&["f1", "f2", "f3", "f4", "f5"], &[]);
@@ -287,11 +286,11 @@ mod tests {
         );
     }
 
-    /// C25, the QA brief: a refresh with nothing changed — or one that only adds rows — leaves
-    /// the selection, its primary and its anchor exactly as they were; one that takes a
-    /// selected path away keeps the rest, the primary moved to the nearest kept path. Caught
-    /// by: a refresh that resets the selection to its first row or moves its primary or anchor
-    /// though both are listed, or a vanished path kept selected unseen.
+    /// A refresh with nothing changed — or one that only adds rows — leaves the selection, its
+    /// primary and its anchor exactly as they were; one that takes a selected path away keeps
+    /// the rest, the primary moved to the nearest kept path. Caught by: a refresh that resets
+    /// the selection to its first row or moves its primary or anchor though both are listed, or
+    /// a vanished path kept selected unseen.
     #[test]
     fn after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor() {
         let before = lists(&["a", "b", "c", "d"], &[]);
@@ -336,12 +335,12 @@ mod tests {
         assert_eq!(next.anchor(), &path("b"), "the anchor kept");
     }
 
-    /// C25, observed `lc5`: every selected path vanished — committed in a terminal — selects
-    /// the row that took the first one's place: f6 for f5, and still f6 when rows above went
-    /// too (a place found in the lists' order, not counted in rows); with every path after it
-    /// gone, the nearest above; with the list empty, nothing — even with rows in the other
-    /// list. Caught by: the place counted by rows (f7 chosen when a row above went too), the
-    /// first row of the list chosen, or the other list's row chosen.
+    /// Every selected path vanished — committed in a terminal — selects the row that took the
+    /// first one's place: f6 for f5, and still f6 when rows above went too (a place found in
+    /// the lists' order, not counted in rows); with every path after it gone, the nearest
+    /// above; with the list empty, nothing — even with rows in the other list. Caught by: the
+    /// place counted by rows (f7 chosen when a row above went too), the first row of the list
+    /// chosen, or the other list's row chosen.
     #[test]
     fn a_vanished_selection_gives_its_place_to_the_row_that_took_it() {
         let before = lists(&["f1", "f2", "f3", "f4", "f5", "f6", "f7"], &[]);
@@ -368,10 +367,10 @@ mod tests {
         );
     }
 
-    /// C25, L3: the filter prunes the selection to the rows it shows, keeping the primary where
-    /// it is shown; a filter hiding every selected path selects the shown row in the first
-    /// one's place; with a filter on, an action's next row is found among the rows shown, never
-    /// a hidden one. Caught by: a hidden path kept selected (acted on unseen), or a hidden row
+    /// The filter prunes the selection to the rows it shows, keeping the primary where it is
+    /// shown; a filter hiding every selected path selects the shown row in the first one's
+    /// place; with a filter on, an action's next row is found among the rows shown, never a
+    /// hidden one. Caught by: a hidden path kept selected (acted on unseen), or a hidden row
     /// chosen to move to.
     #[test]
     fn a_filter_prunes_the_selection_to_the_rows_it_shows() {
@@ -409,9 +408,9 @@ mod tests {
         );
     }
 
-    /// R9.3, Fork's Tracker #2333 and #1663: with nothing selected, the first row shown —
-    /// Unstaged's, else Staged's — is selected when the lists before showed none (the view's
-    /// first status, files appearing); after an action emptied a list, nothing stays nothing.
+    /// As Fork does: with nothing selected, the first row shown — Unstaged's, else Staged's — is
+    /// selected when the lists before showed none (the view's first status, files appearing);
+    /// after an action emptied a list, nothing stays nothing.
     /// Caught by: a selection forced onto Staged's first row once Unstaged's last was staged,
     /// or none chosen as the lists first appear.
     #[test]

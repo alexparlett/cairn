@@ -1,50 +1,47 @@
-//! What Local Changes' lists and diff do when a person acts on them (staging-and-commit R8):
-//! the selection's presses, Fork's five routes to stage and unstage files, the discard on the
-//! unstaged side through the confirmation.
+//! What Local Changes' lists and diff do when a person acts on them: the selection's presses,
+//! Fork's five routes to stage and unstage files, the discard on the unstaged side through the
+//! confirmation.
 //!
-//! **Every route acts on the selection, wherever focus is** (rule 8, R8.2): the one
-//! `cairn_ui::LocalSelection` the lists' state keeps. A chord on either list or on the diff,
-//! the heading's button (greyed while the selection is in the other list), the menu (a
-//! right-press outside the selection selects its row first, R7.4a), a double press (whose first
-//! press made its row the selection) and a drag (whose row, unselected, becomes the selection
-//! as it is dropped, as a native list's drag carries the row it began on) all take the
-//! selected paths the lists drawn still show — each found by a binary search, so a refresh that
-//! took a path away and a filter that hides one both leave it out — and nothing else; a chord
-//! on the diff takes the lines a drag across it selected first, when it selected any. A
-//! whole-file action names each path with a rename's source beside it
-//! (`LocalChanges::whole_file_paths`). Stage All and Unstage All take every row the list shows,
-//! gathered on the local lane from the lists drawn, never here. Every path is one `git status`
-//! listed: the window never asks a write, or a discard's consequence, for a path the lists
-//! drawn do not hold.
+//! **Every route acts on the selection, wherever focus is**: the one `cairn_ui::LocalSelection`
+//! the lists' state keeps. A chord on either list or on the diff, the heading's button (greyed
+//! while the selection is in the other list), the menu (a right-press outside the selection
+//! selects its row first), a double press (whose first press made its row the selection) and a
+//! drag (whose row, unselected, becomes the selection as it is dropped, as a native list's drag
+//! carries the row it began on) all take the selected paths the lists drawn still show — each
+//! found by a binary search, so a refresh that took a path away and a filter that hides one
+//! both leave it out — and nothing else; a chord on the diff takes the lines a drag across it
+//! selected first, when it selected any. A whole-file action names each path with a rename's
+//! source beside it (`LocalChanges::whole_file_paths`). Stage All and Unstage All take every
+//! row the list shows, gathered on the local lane from the lists drawn, never here. Every path
+//! is one `git status` listed: the window never asks a write, or a discard's consequence, for a
+//! path the lists drawn do not hold.
 //!
-//! **After an action** the selection moves by the one rule (`next_selection`, R8.3, L5), the
-//! paths the action took leaving — the row that slides into the first acted row's place, else
-//! the nearest above it — and the new primary's diff is asked at once
-//! (`diff::actions::show_primary`); the status that shows the write then runs the same rule.
+//! **After an action** the selection moves by the one rule (`next_selection`), the paths the
+//! action took leaving — the row that slides into the first acted row's place, else the nearest
+//! above it — and the new primary's diff is asked at once (`diff::actions::show_primary`); the
+//! status that shows the write then runs the same rule.
 //!
-//! **Nothing is said under the lists** (R14.6): a write running or queued shows in the status
-//! box, and its ending, when it is not a success or a cancel, in its dialog
+//! **Nothing is said under the lists**: a write running or queued shows in the status box, and
+//! its ending, when it is not a success or a cancel, in its dialog
 //! (`crate::operations::ending_dialog`).
 //!
-//! **A discard** (R8.4) is only ever offered on the unstaged side, and never takes a submodule,
-//! a conflicted path or a nested repository: a selection mixing them with paths that can be
+//! **A discard** is only ever offered on the unstaged side, and never takes a submodule, a
+//! conflicted path or a nested repository: a selection mixing them with paths that can be
 //! discarded asks for those alone, and the confirmation says in one line what is left
-//! (`cairn_ui::Left`, the redesign's D1 and the user's decision of 2026-10-10 on nested
-//! repositories); a selection with nothing that can be discarded asks nothing, and the chord
-//! over it does nothing, as Fork's does — the menu says why (`cairn_ui::no_discard`). The
-//! confirmation opens at the press, counting (R7.4, rule 3), while the engine computes what the
-//! discard would lose on the local lane, behind the writes asked before it
-//! (`Request::DiscardConsequence`); its answer fills the same dialog, whose token asks the
-//! discard, and a refusal the engine makes while counting turns it into "Couldn't Discard
-//! Changes" with the engine's sentence and "Nothing was changed." (rule 4). No route reaches a
-//! discard without the dialog.
+//! (`cairn_ui::Left`); a selection with nothing that can be discarded asks nothing, and the
+//! chord over it does nothing, as Fork's does — the menu says why (`cairn_ui::no_discard`). The
+//! confirmation opens at the press, counting, while the engine computes what the discard would
+//! lose on the local lane, behind the writes asked before it (`Request::DiscardConsequence`);
+//! its answer fills the same dialog, whose token asks the discard, and a refusal the engine
+//! makes while counting turns it into "Couldn't Discard Changes" with the engine's sentence and
+//! "Nothing was changed." No route reaches a discard without the dialog.
 //!
-//! **The diff's gesture** (R9) acts on lines of the diff drawn, copied as the lane will apply
-//! it: staged or unstaged by patch (`LocalWrite::StageLines`, `UnstageLines`), discarded through
+//! **The diff's gesture** acts on lines of the diff drawn, copied as the lane will apply it:
+//! staged or unstaged by patch (`LocalWrite::StageLines`, `UnstageLines`), discarded through
 //! the confirmation of what the engine says the lines' discard would lose
 //! (`Request::DiscardLinesConsequence`) — but every line of a new file is the file, whose
-//! discard deletes it, and is confirmed as the files' route confirms it (phase 03's
-//! `Refusal::WholeFileOnly`).
+//! discard deletes it, and is confirmed as the files' route confirms it
+//! (`Refusal::WholeFileOnly`).
 //!
 //! On the UI thread: an action asks and returns. While any dialog or the popover is open — the
 //! one modal state (`crate::modal`) — nothing here acts.
@@ -71,7 +68,7 @@ use crate::operations::local_writes;
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request, UnstageTarget};
 
-/// The confirmation's title, in Title Case (the redesign's D3), where Fork for Windows writes
+/// The confirmation's title, in Title Case, where Fork for Windows writes
 /// "Discard changes"; a refusal while counting is titled "Couldn't Discard Changes" from it.
 pub const DISCARD_TITLE: &str = "Discard Changes";
 
@@ -117,11 +114,10 @@ impl Acting {
     }
 }
 
-/// What the engine answered for the discard asked under `asked` (R7.4, R8.4): the confirmation
-/// opened counting at the press becomes the confirmation, or — the engine refused while
-/// counting — "Couldn't Discard Changes" with the engine's one sentence (rule 4, the user's
-/// decision of 2026-10-10 on phase 15's Q2). An answer for an ask superseded, or for a
-/// confirmation already let go of, is dropped.
+/// What the engine answered for the discard asked under `asked`: the confirmation opened
+/// counting at the press becomes the confirmation, or — the engine refused while counting —
+/// "Couldn't Discard Changes" with the engine's one sentence. An answer for an ask superseded,
+/// or for a confirmation already let go of, is dropped.
 pub fn consequence_arrived(view: View, asked: OperationId, outcome: Result<Consequence, String>) {
     let mut acting = view.local.acting;
     let Some(serial) = acting.write().answered(asked) else {
@@ -209,7 +205,7 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
         }
         ListIntent::Act(list, action) => act(Some(list), action, view, submit.as_ref()),
         // A drag carries the selection when it began on a selected row, and otherwise the row
-        // it began on, which becomes the selection as it is dropped (F26).
+        // it began on, which becomes the selection as it is dropped.
         ListIntent::Drop { from, path } => {
             let held = view
                 .local
@@ -226,12 +222,11 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
     }
 }
 
-/// An action of the table heard on Local Changes' diff (R7.3): on the lines a drag across the
-/// diff selected (R9.2), or, with none selected, on the selection, whole, wherever it is (rule
-/// 8, R9.2 as amended) — the paths of it the lists show (`selected_rows`), as the same chord on
-/// a list takes them; hovering is not selecting (Fork, Tracker #103). Return is not heard here
-/// (observed `lc3`): the stage chord from the diff is ⌘S or Ctrl+S, which stages the whole
-/// selection (`lc4`).
+/// An action of the table heard on Local Changes' diff: on the lines a drag across the diff
+/// selected, or, with none selected, on the selection, whole, wherever it is — the paths of it
+/// the lists show (`selected_rows`), as the same chord on a list takes them; hovering is not
+/// selecting, as in Fork. Return is not heard here, as in Fork: the stage chord from the diff
+/// is ⌘S or Ctrl+S, which stages the whole selection.
 pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
     if crate::shortcuts::keys_inert(view) {
         return;
@@ -272,7 +267,7 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&Submit>) {
     act(None, action, view, submit);
 }
 
-/// What the diff's staging gesture asked (R9): `verb` on the lines it names of the diff drawn,
+/// What the diff's staging gesture asked: `verb` on the lines it names of the diff drawn,
 /// in the list of the primary whose diff it is — staged into the index from the unstaged diff,
 /// unstaged out of it from the staged one, or discarded from the working tree through the
 /// confirmation. The selection the gesture or the chord acted on goes.
@@ -286,7 +281,7 @@ pub fn on_gesture(act: GestureAct, view: View, submit: Option<&Submit>) {
     }
     // The primary's diff — shared, since the lane applies exactly what was drawn — and only
     // while it is the text the act was made over: a selection names that text's lines, and
-    // against other text it would name others (phase 08 QA item 1, R9.6).
+    // against other text it would name others.
     let drawn = {
         let diff = view.diff.peek();
         // The primary's list, the diff drawn being the primary's.
@@ -339,11 +334,11 @@ fn act_on_lines(
     }
 }
 
-/// A discard of `selection` of `diff` (R9.1, R8.4): nothing on the staged side, a submodule
-/// or a conflict — the chord doing nothing, as Fork's does; every line of a new file is the
-/// file, whose discard deletes it and is confirmed as a deletion by the files' route (phase 03's
-/// `WholeFileOnly`); otherwise the confirmation opens at once, counting, and what the discard
-/// would lose is asked of the engine (R7.4, rule 3).
+/// A discard of `selection` of `diff`: nothing on the staged side, a submodule or a conflict —
+/// the chord doing nothing, as Fork's does; every line of a new file is the file, whose discard
+/// deletes it and is confirmed as a deletion by the files' route (`WholeFileOnly`); otherwise
+/// the confirmation opens at once, counting, and what the discard would lose is asked of the
+/// engine.
 fn discard_lines(
     list: ChangeList,
     diff: Arc<FileDiff>,
@@ -357,7 +352,7 @@ fn discard_lines(
         let local = view.local.state.peek();
         no_discard(drawn_changes(&local), list, [&path])
     };
-    // Nothing here can be discarded: the chord does nothing, as Fork's does (R8.4, rule 4).
+    // Nothing here can be discarded: the chord does nothing, as Fork's does.
     if refused.is_some() {
         return;
     }
@@ -389,9 +384,8 @@ fn discard_lines(
     });
 }
 
-/// The confirmation opened at the press, counting (R7.4, rule 3), the discard asked under
-/// `asked` waiting on it; let go of unanswered, the count is ended so it stops holding the
-/// local lane.
+/// The confirmation opened at the press, counting, the discard asked under `asked` waiting on
+/// it; let go of unanswered, the count is ended so it stops holding the local lane.
 fn open_counting(confirming: Confirming, asked: OperationId, view: View, submit: Submit) {
     let mut acting = view.local.acting;
     let confirming = confirming.on_let_go(move || {
@@ -407,7 +401,7 @@ fn open_counting(confirming: Confirming, asked: OperationId, view: View, submit:
 }
 
 /// A discard of `paths`, leaving what `left` says: the confirmation opened at once, counting,
-/// its token asking the discard and moving the selection on (R8.3), and what it would lose
+/// its token asking the discard and moving the selection on, and what it would lose
 /// asked of the engine.
 fn ask_discard_files(paths: Vec<RepoPath>, left: Option<String>, view: View, submit: Submit) {
     let asked = OperationId::next();
@@ -426,8 +420,8 @@ fn ask_discard_files(paths: Vec<RepoPath>, left: Option<String>, view: View, sub
 }
 
 /// `action` of the table — heard on a list, the heading, the menu or the diff — on the
-/// selection, wherever focus is (rule 8). Stage All and Unstage All take `list`, the list they
-/// were asked of, or the selection's when heard on the diff.
+/// selection, wherever focus is. Stage All and Unstage All take `list`, the list they were
+/// asked of, or the selection's when heard on the diff.
 fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Submit>) {
     match action {
         Action::StageOrUnstage => stage_or_unstage(view, now(submit)),
@@ -448,7 +442,7 @@ fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Sub
                 discard_rows(list, rows, view, submit);
             }
         }
-        // No other action is heard on Local Changes' lists or diff (R7.3).
+        // No other action is heard on Local Changes' lists or diff.
         Action::PreviousChange
         | Action::NextChange
         | Action::ToggleSideBySide
@@ -479,7 +473,7 @@ fn ask(view: View, submit: Option<&dyn Fn(Request)>, write: LocalWrite) {
 }
 
 /// Stages (from Unstaged) or unstages (from Staged) the selection, whole — a conflicted path
-/// by `git add`, which marks it resolved (R8.7) — and moves the selection on.
+/// by `git add`, which marks it resolved — and moves the selection on.
 fn stage_or_unstage(view: View, submit: Option<&dyn Fn(Request)>) {
     if let Some((list, rows)) = selected_rows(view) {
         stage_or_unstage_rows(list, rows, view, submit);
@@ -515,8 +509,8 @@ fn stage_or_unstage_rows(
     moved_on(leaving, view, submit);
 }
 
-/// The selection moved on by the rule once `leaving` leaves its list (R8.3, L5), and the new
-/// primary's diff asked at once.
+/// The selection moved on by the rule once `leaving` leaves its list, and the new primary's
+/// diff asked at once.
 fn moved_on(leaving: Leaving, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut local = view.local.state;
     local.write().acted(&leaving);
@@ -524,8 +518,8 @@ fn moved_on(leaving: Leaving, view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// Stage All (from Unstaged) or Unstage All (from Staged): every row of the list — or, with a
-/// filter on, every row it shows and none it hides (the user's decision, 2026-10-09) — gathered
-/// on the local lane from the lists drawn. Nothing while the filter's rows are on their way.
+/// filter on, every row it shows and none it hides — gathered on the local lane from the lists
+/// drawn. Nothing while the filter's rows are on their way.
 fn everything(list: ChangeList, view: View, submit: Option<&dyn Fn(Request)>) {
     let (changes, shown) = {
         let local = view.local.state.peek();
@@ -556,9 +550,9 @@ fn everything(list: ChangeList, view: View, submit: Option<&dyn Fn(Request)>) {
     moved_on(Leaving::every(list), view, submit);
 }
 
-/// What a whole-file unstage from the lists drawn puts an entry back to (R3.4, R6.3): `HEAD`'s,
-/// or — while Amend is ticked and the Staged list is amend's — `HEAD`'s parent's, so the file
-/// leaves the amended commit (`git reset -q <parent> --`), or none for a root commit's amend
+/// What a whole-file unstage from the lists drawn puts an entry back to: `HEAD`'s, or — while
+/// Amend is ticked and the Staged list is amend's — `HEAD`'s parent's, so the file leaves the
+/// amended commit (`git reset -q <parent> --`), or none for a root commit's amend
 /// (`git rm --cached -f -q --`).
 pub fn unstage_target(lists: &LocalChanges) -> UnstageTarget {
     match lists.staged_against() {
@@ -569,7 +563,7 @@ pub fn unstage_target(lists: &LocalChanges) -> UnstageTarget {
 }
 
 /// A ⌘- or Ctrl-press: the row toggled in or out of the selection of its list — toggled in
-/// with the primary left the file clicked first (observed `lc2`), toggled out with the primary
+/// with the primary left the file clicked first, as Fork leaves it, toggled out with the primary
 /// moved to the nearest path still selected — and the primary's diff asked.
 fn toggle(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     let Some(path) = path_on(view, list, row) else {
@@ -616,8 +610,7 @@ fn range(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Reques
     make_selection(Some(spanned), view, submit, false);
 }
 
-/// A discard of `rows` of `list` (R8.4, the redesign's D1 and the user's decision of
-/// 2026-10-10 on phase 15's Q6): nothing asked — the chord doing nothing, as Fork's does — on
+/// A discard of `rows` of `list`: nothing asked — the chord doing nothing, as Fork's does — on
 /// the staged side or where every row is a submodule, a conflict or a nested repository;
 /// otherwise the rows that can be discarded asked, its confirmation opened at once with one
 /// line saying what the rest leave.

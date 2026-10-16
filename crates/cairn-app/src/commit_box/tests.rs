@@ -1,10 +1,9 @@
-//! The commit box in the window, headless (staging-and-commit R10; criteria C13, C14 and C24's
-//! view halves): the draft kept through Amend's toggling, a failed hook and its skip, the
-//! amend's button and its token naming one `HEAD`, the dialog asked first exactly when a remote
-//! has it or git keeps no reflog, a commit running drawn with its Cancel, a merge's message and the operations
-//! that disable the box, amend's staged list drawn and unstaged from, and the recent messages.
-//! Updates are applied through `session::apply`, as the worker's stream applies them, and
-//! requests read back from the window's submit.
+//! The commit box in the window, headless: the draft kept through Amend's toggling, a failed hook
+//! and its skip, the amend's button and its token naming one `HEAD`, the dialog asked first exactly
+//! when a remote has it or git keeps no reflog, a commit running drawn with its Cancel, a merge's
+//! message and the operations that disable the box, amend's staged list drawn and unstaged from,
+//! and the recent messages. Updates are applied through `session::apply`, as the worker's stream
+//! applies them, and requests read back from the window's submit.
 
 use std::sync::Arc;
 
@@ -283,13 +282,13 @@ fn type_into(test: &mut TestingRunner, showing: &str, typed: &str) {
     settle(test);
 }
 
-/// R10.3, R10.7, C7 and the QA brief's first case: a draft typed in both fields, Amend ticked
-/// and unticked, is back exactly as typed — the amend's read, arriving meanwhile, never writing
-/// over it, even emptied, since the person touched it; an empty, untouched draft is filled with
-/// `HEAD`'s message, which unticking takes away again; and a fill the person edited and cleared
-/// stays cleared through the next read. Each tick asks amend's lists over the status drawn, and
-/// each untick draws the status's own lists again. Caught by: the draft lost to `HEAD`'s
-/// message, a draft not restored, a cleared fill filled again, or amend's lists left drawn.
+/// A draft typed in both fields, Amend ticked and unticked, is back exactly as typed — the amend's
+/// read, arriving meanwhile, never writing over it, even emptied, since the person touched it; an
+/// empty, untouched draft is filled with `HEAD`'s message, which unticking takes away again; and a
+/// fill the person edited and cleared stays cleared through the next read. Each tick asks amend's
+/// lists over the status drawn, and each untick draws the status's own lists again. Caught by: the
+/// draft lost to `HEAD`'s message, a draft not restored, a cleared fill filled again, or amend's
+/// lists left drawn.
 #[test]
 fn a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly() {
     let (mut test, view, submitted) = opened();
@@ -391,12 +390,12 @@ fn a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly() {
     );
 }
 
-/// R10.6, C1, C6 and C14's view half, and the QA brief's third case: Amend ticked, the one
-/// button reads Fork's "Amend Last Commit", with no line under it, and is ready with a subject
-/// even with nothing new staged; its press, or the commit chord in either field, asks the amend at
-/// the press once — no token, no dialog; drawn amending while it runs; and made, the draft it
-/// took is cleared and Amend unticks itself. Caught by: a token built in the box, a dialog for a
-/// recoverable amend, the chord doing other than the button, or two amends for two presses.
+/// Amend ticked, the one button reads Fork's "Amend Last Commit", with no line under it, and is
+/// ready with a subject even with nothing new staged; its press, or the commit chord in either
+/// field, asks the amend at the press once — no token, no dialog; drawn amending while it runs; and
+/// made, the draft it took is cleared and Amend unticks itself. Caught by: a token built in the
+/// box, a dialog for a recoverable amend, the chord doing other than the button, or two amends for
+/// two presses.
 #[test]
 fn amend_last_commit_asks_the_amend_at_the_press_by_button_and_chord() {
     for by_chord in [false, true] {
@@ -443,12 +442,11 @@ fn amend_last_commit_asks_the_amend_at_the_press_by_button_and_chord() {
     }
 }
 
-/// R10.6 and C14: an amend at the press that must be confirmed — a remote has `HEAD`, or git
-/// keeps no reflog — ends asking, and the confirmation dialog "Amend Commit" opens in the fixed
-/// sentences; Cancel returns to the box unchanged — the draft, Amend ticked, the button ready —
-/// and the dialog's Amend asks the confirmed amend of the pressed message under its token.
-/// Caught by: a dialog for neither reason, a Cancel that loses the draft or amends, or a token
-/// recording other words.
+/// An amend at the press that must be confirmed — a remote has `HEAD`, or git keeps no reflog —
+/// ends asking, and the confirmation dialog "Amend Commit" opens in the fixed sentences; Cancel
+/// returns to the box unchanged — the draft, Amend ticked, the button ready — and the dialog's
+/// Amend asks the confirmed amend of the pressed message under its token. Caught by: a dialog for
+/// neither reason, a Cancel that loses the draft or amends, or a token recording other words.
 #[test]
 fn an_amend_that_must_be_confirmed_opens_the_dialog_and_cancel_returns_unchanged() {
     for consequence in [
@@ -507,9 +505,9 @@ fn press_commit_chord(test: &mut TestingRunner, showing: &str) {
     settle(test);
 }
 
-/// QA item 5: the commit chord does nothing the button could not — not during a rebase, not
-/// with an empty subject, amending or not: no write and no dialog. Caught by: a chord that
-/// ignores the box's readiness.
+/// The commit chord does nothing the button could not — not during a rebase, not with an empty
+/// subject, amending or not: no write and no dialog. Caught by: a chord that ignores the box's
+/// readiness.
 #[test]
 fn the_commit_chord_asks_nothing_while_the_box_is_not_ready() {
     // A rebase in progress.
@@ -543,8 +541,8 @@ fn the_commit_chord_asks_nothing_while_the_box_is_not_ready() {
     }
 }
 
-/// R10.8 and C8: on a detached `HEAD` one line says the commit will be on no branch, and the
-/// commit is asked with no dialog. Caught by: a detached commit asking, or the line missing.
+/// On a detached `HEAD` one line says the commit will be on no branch, and the commit is asked with
+/// no dialog. Caught by: a detached commit asking, or the line missing.
 #[test]
 fn a_detached_head_commits_under_one_line() {
     let (mut test, view, submitted) = opened();
@@ -603,11 +601,10 @@ fn done(id: OperationId) -> Update {
     }
 }
 
-/// R10.5, R10.7, phase 05's QA item 8 and the QA brief's second case: a commit a `pre-commit`
-/// hook fails opens the Git Error dialog — the command, and the hook's output as it streamed,
-/// ANSI stripped — the draft kept; the skip commits the same message with `--no-verify` for
-/// that one commit; and the commit after it runs its hooks again. Caught by: the skip kept for
-/// later commits, a message other than the draft's, or the draft lost to the failure.
+/// A commit a `pre-commit` hook fails opens the Git Error dialog — the command, and the hook's
+/// output as it streamed, ANSI stripped — the draft kept; the skip commits the same message with
+/// `--no-verify` for that one commit; and the commit after it runs its hooks again. Caught by: the
+/// skip kept for later commits, a message other than the draft's, or the draft lost to the failure.
 #[test]
 fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     let (mut test, view, submitted) = opened();
@@ -685,12 +682,12 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
     );
 }
 
-/// R12.2 and phase 09's QA item 11, at the dialog: a hook that prints a remote URL with a token
-/// — in the reads streamed and in the output the engine kept, each as the engine hands it on,
-/// scrubbed as its runner split it (R4.10; a URL split over two reads is the engine's to join,
-/// `process::registry`'s `git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams`) —
-/// opens the Git Error dialog with the URLs drawn and no token anywhere in it. Caught by: the
-/// dialog drawing other than what the type holds.
+/// A hook that prints a remote URL with a token — in the reads streamed and in the output the
+/// engine kept, each as the engine hands it on, scrubbed as its runner split it (a URL split over
+/// two reads is the engine's to join, `process::registry`'s
+/// `git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams`) — opens the Git Error dialog
+/// with the URLs drawn and no token anywhere in it. Caught by: the dialog drawing other than what
+/// the type holds.
 #[test]
 fn the_git_error_draws_no_token_a_hook_printed() {
     for streamed in [true, false] {
@@ -741,10 +738,9 @@ fn the_git_error_draws_no_token_a_hook_printed() {
     }
 }
 
-/// R10.5 as C4 amended it: the skip is offered on every failed commit — Cairn keeps no hook
-/// model, and where no hook ran it fails the same way again, harmlessly — even one no hook
-/// caused, git's own error drawn; Escape closes the dialog, the draft kept. Caught by: a skip
-/// withheld for want of a hook Cairn found.
+/// The skip is offered on every failed commit — Cairn keeps no hook model, and where no hook ran it
+/// fails the same way again, harmlessly — even one no hook caused, git's own error drawn; Escape
+/// closes the dialog, the draft kept. Caught by: a skip withheld for want of a hook Cairn found.
 #[test]
 fn every_failed_commit_offers_the_skip() {
     let (mut test, view, submitted) = opened();
@@ -770,12 +766,11 @@ fn every_failed_commit_offers_the_skip() {
     assert_eq!(draft(view).0, "No identity");
 }
 
-/// R14.8 and phase 14's QA item 7: one modal state — a commit's Git Error that arrives while
-/// Create Branch is up (New Branch is not inert while a commit's hook runs) is drawn over it,
-/// alone, so Escape closes the top one, the Git Error, and Create Branch is drawn again as it
-/// was left; a second Escape closes Create Branch. And the window's chords are inert under
-/// each. Caught by: the Git Error beneath the visible dialog taking Escape first, or both closed
-/// by one press.
+/// One modal state — a commit's Git Error that arrives while Create Branch is up (New Branch is not
+/// inert while a commit's hook runs) is drawn over it, alone, so Escape closes the top one, the Git
+/// Error, and Create Branch is drawn again as it was left; a second Escape closes Create Branch.
+/// And the window's chords are inert under each. Caught by: the Git Error beneath the visible
+/// dialog taking Escape first, or both closed by one press.
 #[test]
 fn a_commits_git_error_beneath_create_branch_is_on_top_and_escape_closes_it_alone() {
     let (mut test, view, submitted) = opened();
@@ -824,11 +819,11 @@ fn a_commits_git_error_beneath_create_branch_is_on_top_and_escape_closes_it_alon
     assert!(!crate::shortcuts::keys_inert(view));
 }
 
-/// R10.4, C5 and R4.3: a commit asked behind a write that runs waits, its button's place saying
-/// what it waits for in the one form every queued write uses, with no Cancel; once it runs it
-/// reads "Committing 0:00" with its Cancel, which cancels it by its id and nothing else, and then
-/// reads "Cancelling…" until it ends — which opens no dialog and keeps the draft. Caught by: a
-/// Cancel offered for a queued commit, one naming another write, or a cancel that opens a dialog.
+/// A commit asked behind a write that runs waits, its button's place saying what it waits for in
+/// the one form every queued write uses, with no Cancel; once it runs it reads "Committing 0:00"
+/// with its Cancel, which cancels it by its id and nothing else, and then reads "Cancelling…" until
+/// it ends — which opens no dialog and keeps the draft. Caught by: a Cancel offered for a queued
+/// commit, one naming another write, or a cancel that opens a dialog.
 #[test]
 fn cancel_reaches_only_the_running_commit() {
     let (mut test, view, submitted) = opened();
@@ -904,11 +899,10 @@ fn cancel_reaches_only_the_running_commit() {
     assert!(drawn(&test, "Commit 1 File"), "{:?}", labels(&test));
 }
 
-/// R10.8, C24 and C32's view half: with a merge in progress the box fills an empty draft with
-/// the message git prepared, cleaned of its comment lines as git's editor cleans it (R6.10),
-/// under the one line saying so; the commit is asked with that text, whatever is staged; and
-/// Amend is greyed, its reason on that line. Caught by: a merge commit refused for nothing
-/// staged, or an amend offered during a merge.
+/// With a merge in progress the box fills an empty draft with the message git prepared, cleaned of
+/// its comment lines as git's editor cleans it, under the one line saying so; the commit is asked
+/// with that text, whatever is staged; and Amend is greyed, its reason on that line. Caught by: a
+/// merge commit refused for nothing staged, or an amend offered during a merge.
 #[test]
 fn a_merge_fills_the_draft_with_the_cleaned_message_and_disables_amend() {
     let cleaned = "Merge branch 'feature'\n\nWith its body.\n";
@@ -954,10 +948,10 @@ fn a_merge_fills_the_draft_with_the_cleaned_message_and_disables_amend() {
     );
 }
 
-/// R10.8, C24 and C33's view half: during a rebase, `git am` or a sequence of picks or reverts
-/// the box is disabled and names the operation; nothing it offers asks a write. A single
-/// cherry-pick fills the draft with its cleaned message and is committed. Caught by: a commit
-/// asked during a refusing operation, or a single pick refused.
+/// During a rebase, `git am` or a sequence of picks or reverts the box is disabled and names the
+/// operation; nothing it offers asks a write. A single cherry-pick fills the draft with its cleaned
+/// message and is committed. Caught by: a commit asked during a refusing operation, or a single
+/// pick refused.
 #[test]
 fn during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it() {
     for (operation, named) in [
@@ -1029,9 +1023,9 @@ fn during_a_rebase_am_or_sequence_the_box_is_disabled_and_names_it() {
     );
 }
 
-/// R10.1, R6.3, C13 and rule 4: on an unborn branch Amend is greyed, its reason on the box's
-/// line — ticking it asks nothing — and a first commit is offered. Caught by: an amend read
-/// asked with no `HEAD` to amend, or Amend greyed without its reason.
+/// On an unborn branch Amend is greyed, its reason on the box's line — ticking it asks nothing —
+/// and a first commit is offered. Caught by: an amend read asked with no `HEAD` to amend, or Amend
+/// greyed without its reason.
 #[test]
 fn amend_is_disabled_on_an_unborn_branch() {
     let (mut test, view, submitted) = opened_with(
@@ -1054,11 +1048,10 @@ fn amend_is_disabled_on_an_unborn_branch() {
     assert_eq!(writes(&submitted).len(), 1);
 }
 
-/// R6.3 and R10.3 (phase 05's carry): while amending, Staged lists amend's staged list — a file
-/// `HEAD` added among it — whose diff is asked against `HEAD`'s parent, and unstaging a file of
-/// it puts the parent's entry back; a root commit's amend unstages to nothing. Caught by: the
-/// staged diff asked against `HEAD`, or an unstage out of an amend that resets to `HEAD`
-/// (the file would stay in the amended commit).
+/// While amending, Staged lists amend's staged list — a file `HEAD` added among it — whose diff is
+/// asked against `HEAD`'s parent, and unstaging a file of it puts the parent's entry back; a root
+/// commit's amend unstages to nothing. Caught by: the staged diff asked against `HEAD`, or an
+/// unstage out of an amend that resets to `HEAD` (the file would stay in the amended commit).
 #[test]
 fn amends_staged_list_is_drawn_diffed_against_heads_parent_and_unstaged_to_it() {
     for (parent, to) in [
@@ -1096,10 +1089,9 @@ fn amends_staged_list_is_drawn_diffed_against_heads_parent_and_unstaged_to_it() 
     }
 }
 
-/// Phase 05's QA item 6 under rule 6: when amend's staged list cannot be read (a partial
-/// clone's missing blob on git 2.44 and later), the box's one line says so and why, the lists
-/// stay the status's against `HEAD`, and the amend itself is still offered. Caught by: a failure
-/// dropped silently, or amend's lists half-drawn.
+/// When amend's staged list cannot be read (a partial clone's missing blob on git 2.44 and later),
+/// the box's one line says so and why, the lists stay the status's against `HEAD`, and the amend
+/// itself is still offered. Caught by: a failure dropped silently, or amend's lists half-drawn.
 #[test]
 fn amends_staged_list_unread_is_said_and_the_status_lists_stay() {
     let (mut test, view, submitted) = opened();
@@ -1125,10 +1117,10 @@ fn amends_staged_list_unread_is_said_and_the_status_lists_stay() {
     assert!(drawn(&test, AMEND_BUTTON_CAPTION));
 }
 
-/// R10.2: the `≡` lists the recent messages' subjects and a choice fills both fields; ↑ in an
-/// empty subject recalls the newest, ↑ again the next older, ↓ back, and ↓ from the newest
-/// empties the draft; in a subject the person typed, ↑ is the editor's. Caught by: a recall over
-/// a typed subject, or a choice filling the subject alone.
+/// The `≡` lists the recent messages' subjects and a choice fills both fields; ↑ in an empty
+/// subject recalls the newest, ↑ again the next older, ↓ back, and ↓ from the newest empties the
+/// draft; in a subject the person typed, ↑ is the editor's. Caught by: a recall over a typed
+/// subject, or a choice filling the subject alone.
 #[test]
 fn recent_messages_fill_both_fields_from_the_menu_and_the_arrows() {
     let (mut test, view, submitted) = opened();
@@ -1164,12 +1156,11 @@ fn recent_messages_fill_both_fields_from_the_menu_and_the_arrows() {
     assert_eq!(draft(view).0, "typed", "a typed subject was recalled over");
 }
 
-/// R10.5, C4 and R1.1's option (a), the user's answer of 2026-10-10, and the QA brief's second
-/// case: a confirmed amend a hook fails hands its token back on the ending; the Git Error dialog
-/// draws no prompt, and its skip — in the footer — asks the amend with `--no-verify` once, under
-/// that very token, no dialog asked again. An amend at the press that a hook fails is skipped at
-/// the press again. Caught by: the skip asking the dialog again, committing rather than amending,
-/// a token other than the one handed back, or a prompt drawn in the Git Error dialog.
+/// A confirmed amend a hook fails hands its token back on the ending; the Git Error dialog draws no
+/// prompt, and its skip — in the footer — asks the amend with `--no-verify` once, under that very
+/// token, no dialog asked again. An amend at the press that a hook fails is skipped at the press
+/// again. Caught by: the skip asking the dialog again, committing rather than amending, a token
+/// other than the one handed back, or a prompt drawn in the Git Error dialog.
 #[test]
 fn a_failed_amends_skip_amends_once_without_asking_again() {
     let (mut test, view, submitted) = opened();
@@ -1203,7 +1194,7 @@ fn a_failed_amends_skip_amends_once_without_asking_again() {
         Update::WriteStarted { id: confirmed },
     );
     // The token handed back is told from any the window could build afresh: it names another
-    // commit, so its prompt is its own (phase 18's QA item 7).
+    // commit, so its prompt is its own.
     let handed_back = amend_consequence_of(
         0xcd,
         Publication::Upstream(RefName::new("refs/remotes/origin/main")),
@@ -1258,9 +1249,9 @@ fn a_failed_amends_skip_amends_once_without_asking_again() {
     );
 }
 
-/// QA item 1: a draft typed while a commit runs is the person's next message, and the commit's
-/// ending keeps it — only the draft the commit was asked with is cleared. Caught by: every
-/// draft wiped when a commit is made.
+/// A draft typed while a commit runs is the person's next message, and the commit's ending keeps it
+/// — only the draft the commit was asked with is cleared. Caught by: every draft wiped when a
+/// commit is made.
 #[test]
 fn a_draft_typed_while_a_commit_runs_outlives_its_ending() {
     let (mut test, view, submitted) = opened();
@@ -1287,9 +1278,8 @@ fn a_draft_typed_while_a_commit_runs_outlives_its_ending() {
     assert_eq!(draft(view), (String::new(), String::new()));
 }
 
-/// QA item 7: Cancel with the commit still queued behind a running stage asks no cancel — the
-/// write running is the stage's. Caught by: a cancel sent for whatever runs, or for the queued
-/// commit.
+/// Cancel with the commit still queued behind a running stage asks no cancel — the write running is
+/// the stage's. Caught by: a cancel sent for whatever runs, or for the queued commit.
 #[test]
 fn a_cancel_while_the_commit_is_queued_asks_nothing() {
     let (mut test, view, submitted) = opened();
@@ -1316,10 +1306,10 @@ fn a_cancel_while_the_commit_is_queued_asks_nothing() {
     );
 }
 
-/// Phase 18's QA item 1: an amend at the press that ends asking to be confirmed never replaces a
-/// confirmation already open — a discard's, opened while the amend's cost was read — which stays
-/// drawn, the amend's waiting; once that one is answered, "Amend Commit" opens. Caught by: a
-/// dialog swapped under the person's pointer, its acknowledgement then another prompt's.
+/// An amend at the press that ends asking to be confirmed never replaces a confirmation already
+/// open — a discard's, opened while the amend's cost was read — which stays drawn, the amend's
+/// waiting; once that one is answered, "Amend Commit" opens. Caught by: a dialog swapped under the
+/// person's pointer, its acknowledgement then another prompt's.
 #[test]
 fn the_amend_dialog_waits_for_a_confirmation_already_open() {
     let (mut test, view, submitted) = opened();
@@ -1360,10 +1350,9 @@ fn the_amend_dialog_waits_for_a_confirmation_already_open() {
     assert!(!view.local.commit.state.peek().is_confirming());
 }
 
-/// Phase 18's QA item 6: a commit asked while the lane is busy with no write — a read — is drawn
-/// without a Cancel nothing would hear, and "Waiting for" names only a write ahead of it, never
-/// one asked after it. Caught by: a dead Cancel, or a queued stage behind the commit named as
-/// what it waits for.
+/// A commit asked while the lane is busy with no write — a read — is drawn without a Cancel nothing
+/// would hear, and "Waiting for" names only a write ahead of it, never one asked after it. Caught
+/// by: a dead Cancel, or a queued stage behind the commit named as what it waits for.
 #[test]
 fn a_queued_commit_offers_no_dead_cancel_and_waits_only_on_writes_ahead() {
     let (mut test, view, submitted) = opened();
@@ -1387,9 +1376,8 @@ fn a_queued_commit_offers_no_dead_cancel_and_waits_only_on_writes_ahead() {
     assert!(!drawn(&test, CANCEL_COMMIT_CAPTION));
 }
 
-/// The coordinator's ruling under rule 4 (phase 18's QA item 8): on a detached `HEAD` the
-/// detached line wins over amend's unread one, since it says what the press will do. Caught by:
-/// the unread line drawn in its place.
+/// On a detached `HEAD` the detached line wins over amend's unread one, since it says what the
+/// press will do. Caught by: the unread line drawn in its place.
 #[test]
 fn the_detached_line_wins_over_amends_unread_one() {
     let (mut test, view, submitted) = opened();

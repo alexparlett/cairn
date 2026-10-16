@@ -1,4 +1,4 @@
-//! The commit and comparison answers the diff thread has already given (PRD R4.5), newest
+//! The commit and comparison answers the diff thread has already given, newest
 //! last, each bounded, each with what its attributes were read from.
 //!
 //! Keyed by everything Cairn asks the answer with: a change set by its [`Comparison`] —
@@ -249,7 +249,7 @@ pub(in crate::worker) mod tests {
         true
     }
 
-    /// R4.5: a kept answer is found only under everything it was asked with. Caught by: a
+    /// A kept answer is found only under everything it was asked with. Caught by: a
     /// key that leaves out the context or the whitespace option (the view would draw an
     /// answer at another context, with function context git printed for other hunks), the
     /// file (another file's lines), or the comparison.
@@ -272,7 +272,7 @@ pub(in crate::worker) mod tests {
         if let FileTarget::Committed { file: f, .. } = &mut other_file.target {
             f.new_id = Some(oid(99));
         }
-        // T9: the same new side against another old one is another diff.
+        // The same new side against another old one is another diff.
         if let FileTarget::Committed { file: f, .. } = &mut other_old_side.target {
             f.old_id = Some(oid(98));
         }
@@ -314,7 +314,7 @@ pub(in crate::worker) mod tests {
         );
     }
 
-    /// R4.5: working-tree answers are never kept. Caught by: keeping one, which would draw
+    /// Working-tree answers are never kept. Caught by: keeping one, which would draw
     /// the file as it was when first asked.
     #[test]
     fn a_working_tree_answer_is_never_kept() {
@@ -332,7 +332,7 @@ pub(in crate::worker) mod tests {
     }
 
     /// Caught by: an unbounded cache, which holds every diff ever viewed for the life of
-    /// the window; and (T9) a budget that refuses an answer exactly at it, or keeps one a
+    /// the window; and a budget that refuses an answer exactly at it, or keeps one a
     /// byte past it.
     #[test]
     fn what_is_kept_is_bounded_by_count_and_by_size() {
@@ -416,7 +416,7 @@ pub(in crate::worker) mod tests {
         );
     }
 
-    /// R5: the budget counts what an answer holds besides its lines — its changed ranges
+    /// The budget counts what an answer holds besides its lines — its changed ranges
     /// and its overlay's. Caught by: counting the lines alone, under which a file of many
     /// small changes and long highlights is kept at a fraction of its size.
     #[test]

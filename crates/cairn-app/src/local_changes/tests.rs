@@ -1,10 +1,9 @@
-//! Local Changes in the window, headless (refs-and-status R9, criterion C9): pressed in the
-//! sidebar, the view draws Unstaged above Staged with their badges and the count beside the
-//! entry; the first path is chosen and its diff asked through the working-tree query, and drawn
-//! for that query alone; a conflicted path draws its notice and asks nothing; a path in both
-//! lists draws each list's diff; a refresh that takes the chosen path away draws no diff under
-//! no row; the filter is asked of a worker. Updates are applied through `session::apply`, as
-//! the worker's stream applies them.
+//! Local Changes in the window, headless: pressed in the sidebar, the view draws Unstaged above
+//! Staged with their badges and the count beside the entry; the first path is chosen and its
+//! diff asked through the working-tree query, and drawn for that query alone; a conflicted path
+//! draws its notice and asks nothing; a path in both lists draws each list's diff; a refresh
+//! that takes the chosen path away draws no diff under no row; the filter is asked of a worker.
+//! Updates are applied through `session::apply`, as the worker's stream applies them.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -327,11 +326,11 @@ fn every_kind() -> Vec<StatusEntry> {
     ]
 }
 
-/// C9, R9.2, R9.3: the count beside Local Changes is the distinct paths status lists; pressed,
-/// the view draws both lists; the first path — Unstaged's first row — is chosen and its diff
-/// asked through the working-tree query as its list says, and its answer drawn; an answer for
-/// any other path or side is not. Caught by: no path chosen as the view opens, a query asked
-/// as the wrong side, or an answer drawn that the query chosen does not name.
+/// The count beside Local Changes is the distinct paths status lists; pressed, the view draws
+/// both lists; the first path — Unstaged's first row — is chosen and its diff asked through the
+/// working-tree query as its list says, and its answer drawn; an answer for any other path or
+/// side is not. Caught by: no path chosen as the view opens, a query asked as the wrong side,
+/// or an answer drawn that the query chosen does not name.
 #[test]
 fn local_changes_draws_its_lists_and_the_first_paths_diff_from_the_working_tree_query() {
     let (mut test, view, submitted) = launch();
@@ -401,8 +400,8 @@ fn local_changes_draws_its_lists_and_the_first_paths_diff_from_the_working_tree_
     );
 }
 
-/// R9.4: a conflicted path draws its notice in place of a diff and asks nothing. Caught by: a
-/// query asked for a conflict, or a reading notice left up for good.
+/// A conflicted path draws its notice in place of a diff and asks nothing. Caught by: a query
+/// asked for a conflict, or a reading notice left up for good.
 #[test]
 fn a_conflicted_path_draws_its_notice_and_asks_nothing() {
     let (mut test, view, submitted) = launch();
@@ -422,10 +421,9 @@ fn a_conflicted_path_draws_its_notice_and_asks_nothing() {
     );
 }
 
-/// The QA brief: a path both staged and unstaged shows, chosen in each list, that list's diff;
-/// an answer for the list chosen before, arriving late, is not drawn. Caught by: the two rows
-/// asking one query, or answers compared by path (the unstaged diff drawn under the staged
-/// row).
+/// A path both staged and unstaged shows, chosen in each list, that list's diff; an answer for
+/// the list chosen before, arriving late, is not drawn. Caught by: the two rows asking one
+/// query, or answers compared by path (the unstaged diff drawn under the staged row).
 #[test]
 fn a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross() {
     let (mut test, view, submitted) = launch();
@@ -463,11 +461,11 @@ fn a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross() {
     assert!(paragraphs(&test).iter().any(|t| t.contains("STAGED LINE")));
 }
 
-/// The QA brief, C25: a refresh whose status no longer lists the primary draws no diff under no
-/// row — the row that took its place is selected and its diff asked — and a late answer for the
-/// path gone is not drawn; a refresh that still lists it asks it again, its diff drawn
-/// meanwhile. Caught by: the gone path's diff left drawn, its late answer kept, or the list's
-/// first row chosen in its place.
+/// A refresh whose status no longer lists the primary draws no diff under no row — the row that
+/// took its place is selected and its diff asked — and a late answer for the path gone is not
+/// drawn; a refresh that still lists it asks it again, its diff drawn meanwhile. Caught by: the
+/// gone path's diff left drawn, its late answer kept, or the list's first row chosen in its
+/// place.
 #[test]
 fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
     let (mut test, view, submitted) = launch();
@@ -524,12 +522,12 @@ fn a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row() {
     );
 }
 
-/// C25, R8.3 ("never from a render effect"): a status that takes the primary away moves the
-/// selection and asks the new primary's diff inside `session::apply` itself — the request is
-/// there before the window renders again, and with no render at all — as an outside commit
-/// does in Fork (observed `lc5`: f5 committed in a terminal, f6 selected). Caught by: the
-/// selection followed by an effect that runs only once the view renders (the request missing
-/// until a frame), or the list's first row chosen.
+/// Never from a render effect: a status that takes the primary away moves the selection and
+/// asks the new primary's diff inside `session::apply` itself — the request is there before the
+/// window renders again, and with no render at all — as an outside commit does in Fork (f5
+/// committed in a terminal, f6 selected). Caught by: the selection followed by an effect that
+/// runs only once the view renders (the request missing until a frame), or the list's first row
+/// chosen.
 #[test]
 fn a_refresh_moves_the_selection_and_asks_its_diff_without_a_render() {
     let (mut test, view, submitted) = launch();
@@ -583,7 +581,7 @@ fn a_refresh_moves_the_selection_and_asks_its_diff_without_a_render() {
     assert_eq!(selected.as_deref(), Some("f6.rs"));
 }
 
-/// R9's filter: typing asks a worker with the window's own lists, shared; until the answer the
+/// The filter: typing asks a worker with the window's own lists, shared; until the answer the
 /// lists say they are filtering; the answer draws the rows it names and no others. Caught by:
 /// filtering on the UI thread (rows dropped before an answer), or copied lists.
 #[test]
@@ -642,11 +640,10 @@ fn typing_in_the_filter_asks_a_worker_and_the_lists_draw_its_answer() {
     );
 }
 
-/// The user's decision (2026-10-07): under Local Changes' filter, "Showing N of M files" counts
-/// distinct paths, as the sidebar's "Local Changes (N)" does — a path with a staged and an
-/// unstaged change, in both lists, is one file — through the real filter pass a worker runs and
-/// the window keeping its answer. Caught by: counting rows ("Showing 2 of 6 files"), or
-/// counting paths on one side only.
+/// Under Local Changes' filter, "Showing N of M files" counts distinct paths, as the sidebar's
+/// "Local Changes (N)" does — a path with a staged and an unstaged change, in both lists, is
+/// one file — through the real filter pass a worker runs and the window keeping its answer.
+/// Caught by: counting rows ("Showing 2 of 6 files"), or counting paths on one side only.
 #[test]
 fn the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once() {
     let (mut test, view, submitted) = launch();
@@ -726,9 +723,9 @@ fn many_changes(path: &str, lines: u32, context: Context) -> Box<ShownDiff> {
     shown
 }
 
-/// R6.2 in Local Changes: next and previous change move its diff — its own scroll, not the
-/// Changes tab's — heard from inside the view, as the detail pane hears them. Caught by: a
-/// chord unheard with the detail pane gone, or one that moves the Changes tab's diff.
+/// In Local Changes, next and previous change move its diff — its own scroll, not the Changes
+/// tab's — heard from inside the view, as the detail pane hears them. Caught by: a chord
+/// unheard with the detail pane gone, or one that moves the Changes tab's diff.
 #[test]
 fn next_change_moves_local_changes_own_diff() {
     use cairn_ui::accelerators::Action;
@@ -768,9 +765,9 @@ fn next_change_moves_local_changes_own_diff() {
     );
 }
 
-/// The handed-over `RefreshState::failure(Refreshed::Status)`: a status that could not be read
-/// is said — in place of the lists before any was read, over the lists kept after. Caught by:
-/// a failure said nowhere ("Reading…" for good), or the lists kept thrown away.
+/// `RefreshState::failure(Refreshed::Status)`: a status that could not be read is said — in
+/// place of the lists before any was read, over the lists kept after. Caught by: a failure said
+/// nowhere ("Reading…" for good), or the lists kept thrown away.
 #[test]
 fn a_status_that_could_not_be_read_is_said() {
     use crate::local_changes::pane::status_failure;
@@ -815,12 +812,11 @@ fn highlighted_rows(test: &TestingRunner) -> usize {
     .len()
 }
 
-/// C25, L3 (superseding phase 09 QA's RR-note, the Changes tab's rule): a filter that hides
-/// the primary prunes the selection to the rows it shows — the row shown in its place selected,
-/// highlighted and its diff asked, the hidden path's diff no longer drawn — so nothing hidden
-/// is acted on; a refresh with the filter on keeps the shown path and asks it again. Caught by:
-/// a hidden path kept selected and drawn, or a refresh that moves the selection off a path
-/// still shown.
+/// Unlike the Changes tab, a filter that hides the primary prunes the selection to the rows it
+/// shows — the row shown in its place selected, highlighted and its diff asked, the hidden
+/// path's diff no longer drawn — so nothing hidden is acted on; a refresh with the filter on
+/// keeps the shown path and asks it again. Caught by: a hidden path kept selected and drawn, or
+/// a refresh that moves the selection off a path still shown.
 #[test]
 fn a_filter_hiding_the_primary_selects_the_row_shown_in_its_place() {
     let (mut test, view, submitted) = launch();

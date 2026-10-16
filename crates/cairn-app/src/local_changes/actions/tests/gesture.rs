@@ -1,13 +1,13 @@
-//! The diff's staging gesture in the window, headless (staging-and-commit R9, criterion C19's
-//! window half): a hovered chunk's Stage, Unstage and Discard Changes… ask the local lane for
-//! exactly its lines of the diff drawn; a drag-selection narrows them and the chords to its
-//! lines, and with none the chords act on the whole file; a discard of lines confirms the
-//! engine's consequence and asks the lines' discard with its token; every line of a new file is
-//! discarded as the file; the mode row stages the mode alone; nothing acts while a dialog is
-//! open; with several paths selected the diff is the primary's alone, staged whole by ⌘S or
-//! Ctrl+S from the diff and not by Return (C25's diff half); and a line selection is kept across
-//! a refresh that re-reads the same text and let go of, said once, when the text differs (C26).
-//! Updates are applied through `session::apply`, as the worker's stream applies them.
+//! The diff's staging gesture in the window, headless: a hovered chunk's Stage, Unstage and
+//! Discard Changes… ask the local lane for exactly its lines of the diff drawn; a
+//! drag-selection narrows them and the chords to its lines, and with none the chords act on the
+//! whole file; a discard of lines confirms the engine's consequence and asks the lines' discard
+//! with its token; every line of a new file is discarded as the file; the mode row stages the
+//! mode alone; nothing acts while a dialog is open; with several paths selected the diff is the
+//! primary's alone, staged whole by ⌘S or Ctrl+S from the diff and not by Return; and a line
+//! selection is kept across a refresh that re-reads the same text and let go of, said once,
+//! when the text differs. Updates are applied through `session::apply`, as the worker's stream
+//! applies them.
 
 use cairn_model::{
     ChangeStatus, ChangedFile, ChangedRange, Consequence, Context, DiffContent, DiffLine,
@@ -231,10 +231,10 @@ fn lines_asked(submitted: &Submitted) -> Vec<LinesAsked> {
         .collect()
 }
 
-/// R9.1, C19: hovering the first chunk of the unstaged diff floats Stage and Discard
-/// Changes…, and Stage asks the local lane to stage exactly that chunk's lines of the diff
-/// drawn; over the staged diff the one action, Unstage, asks to unstage its chunk. Caught by: a
-/// chunk staged whole-file, the wrong diff handed to the lane, or a discard offered staged.
+/// Hovering the first chunk of the unstaged diff floats Stage and Discard Changes…, and Stage
+/// asks the local lane to stage exactly that chunk's lines of the diff drawn; over the staged
+/// diff the one action, Unstage, asks to unstage its chunk. Caught by: a chunk staged
+/// whole-file, the wrong diff handed to the lane, or a discard offered staged.
 #[test]
 fn a_hovered_chunk_stages_and_unstages_exactly_its_lines() {
     let (mut test, view, submitted) = opened();
@@ -281,9 +281,9 @@ fn a_hovered_chunk_stages_and_unstages_exactly_its_lines() {
     );
 }
 
-/// R9.2: a drag across lines narrows the stage chord to them, and with nothing selected the
-/// chord stages the whole file — hovering is not selecting (Fork, Tracker #103). Caught by: the
-/// chord ignoring the selection, or a hover read as one.
+/// A drag across lines narrows the stage chord to them, and with nothing selected the chord
+/// stages the whole file — hovering is not selecting, as in Fork. Caught by: the chord ignoring
+/// the selection, or a hover read as one.
 #[test]
 fn the_chords_act_on_the_selection_and_on_the_whole_file_without_one() {
     let (mut test, view, submitted) = opened();
@@ -347,12 +347,12 @@ fn lines_loss() -> Consequence {
     }
 }
 
-/// R9.1, R8.4: a chunk's Discard Changes… asks the engine what discarding its lines would lose
-/// — of exactly the diff drawn — and its answer opens the confirmation, whose button asks the
-/// lines' discard with its token; every line of a new file instead asks what discarding the
-/// file would lose, as the files' route does, since that discard deletes it. Caught by: a
-/// discard without the engine's consequence or the dialog, a new file's lines discarded by
-/// patch, or the dialog's token spent on the files' verb.
+/// A chunk's Discard Changes… asks the engine what discarding its lines would lose — of exactly
+/// the diff drawn — and its answer opens the confirmation, whose button asks the lines' discard
+/// with its token; every line of a new file instead asks what discarding the file would lose,
+/// as the files' route does, since that discard deletes it. Caught by: a discard without the
+/// engine's consequence or the dialog, a new file's lines discarded by patch, or the dialog's
+/// token spent on the files' verb.
 #[test]
 fn a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file() {
     let (mut test, view, submitted) = opened();
@@ -446,9 +446,9 @@ fn a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file() 
     );
 }
 
-/// R9.4: a mode change is a row of its own whose action stages the mode alone — selected
-/// through `Selection::select_mode`, no line with it. Caught by: a mode staged with the lines,
-/// or no row for it.
+/// A mode change is a row of its own whose action stages the mode alone — selected through
+/// `Selection::select_mode`, no line with it. Caught by: a mode staged with the lines, or no
+/// row for it.
 #[test]
 fn the_mode_row_stages_the_mode_alone() {
     let (mut test, view, submitted) = opened();
@@ -481,8 +481,8 @@ fn the_mode_row_stages_the_mode_alone() {
     );
 }
 
-/// Phase 06's QA item 4, for the gesture: while a confirmation is open, the chord heard on the
-/// diff stages nothing, selection or not. Caught by: a gesture or chord acting behind a dialog.
+/// While a confirmation is open, the chord heard on the diff stages nothing, selection or not.
+/// Caught by: a gesture or chord acting behind a dialog.
 #[test]
 fn nothing_acts_on_lines_while_a_confirmation_is_open() {
     let (mut test, view, submitted) = opened();
@@ -546,11 +546,11 @@ fn let_go(test: &mut TestingRunner, view: View) {
     settle(test);
 }
 
-/// Phase 02's QA item 8, the lines half: where `status.renames` lists a staged rename's source
-/// as a row of its own — `old.rs`, staged as deleted — whose staged diff git pairs into the
-/// rename, the gesture over that row's diff unstages its lines at the path the rename has now,
-/// `new.rs`: the diff drawn is the one handed to the lane, whose patch names the new path.
-/// Caught by: lines unstaged at the source's path, which the index no longer holds.
+/// Where `status.renames` lists a staged rename's source as a row of its own — `old.rs`, staged
+/// as deleted — whose staged diff git pairs into the rename, the gesture over that row's diff
+/// unstages its lines at the path the rename has now, `new.rs`: the diff drawn is the one
+/// handed to the lane, whose patch names the new path. Caught by: lines unstaged at the
+/// source's path, which the index no longer holds.
 #[test]
 fn a_renames_source_row_unstages_its_lines_at_the_new_path() {
     let (mut test, view, submitted) = launch();
@@ -592,10 +592,9 @@ fn any_lines_asked(submitted: &Submitted) -> bool {
             .any(|request| matches!(request, Request::DiscardLinesConsequence { .. }))
 }
 
-/// Phase 08 QA item 1, R9.6: an act made over one text — the floating action built before the
-/// diff was read again — is refused once a diff of other text is drawn, so its lines never
-/// reach the lane against the new diff. Caught by: an act that trusts the content it was drawn
-/// over.
+/// An act made over one text — the floating action built before the diff was read again — is
+/// refused once a diff of other text is drawn, so its lines never reach the lane against the
+/// new diff. Caught by: an act that trusts the content it was drawn over.
 #[test]
 fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
     let (mut test, view, submitted) = opened();
@@ -640,10 +639,10 @@ fn an_act_made_under_an_answer_no_longer_drawn_asks_nothing() {
     assert!(!any_lines_asked(&submitted), "{:?}", submitted.borrow());
 }
 
-/// Phase 08 QA item 11: part of a new file's lines is not the file — a drag over two of its
-/// forty lines asks what discarding those lines would lose, never the file's deletion — and,
-/// lines a drag selected, never as a chunk (phase 15: the prompt names lines). Caught by: a new
-/// file's every discard routed to the files' route, or a line selection worded as a chunk.
+/// Part of a new file's lines is not the file — a drag over two of its forty lines asks what
+/// discarding those lines would lose, never the file's deletion — and, lines a drag selected,
+/// never as a chunk (the prompt names lines). Caught by: a new file's every discard routed to
+/// the files' route, or a line selection worded as a chunk.
 #[test]
 fn part_of_a_new_files_lines_is_discarded_as_lines() {
     let (mut test, view, submitted) = opened();
@@ -710,14 +709,13 @@ fn paragraphs(test: &TestingRunner) -> Vec<String> {
     })
 }
 
-/// C25's diff half (R8.1 as amended, R7.3 as amended; observed `lc2`-`lc4`): c.rs pressed, then
-/// a.rs added with the extending press — the diff is c.rs's, the file clicked first, under its
-/// own bar, and nothing is asked for a.rs or for both, nor counted; from the diff, with no lines
-/// selected, Return does nothing and Ctrl+S (⌘S) stages the whole selection, the paths in the
-/// lists' order; the selection then moves to b.rs, the row in the first acted row's place, and
-/// its diff is asked. Caught by: the path last toggled shown, a count or a second file drawn, a
-/// bare Return heard on the diff, the chord taking the primary alone, or the selection left on
-/// paths the action took.
+/// As in Fork, c.rs pressed, then a.rs added with the extending press — the diff is c.rs's, the
+/// file clicked first, under its own bar, and nothing is asked for a.rs or for both, nor
+/// counted; from the diff, with no lines selected, Return does nothing and Ctrl+S (⌘S) stages
+/// the whole selection, the paths in the lists' order; the selection then moves to b.rs, the
+/// row in the first acted row's place, and its diff is asked. Caught by: the path last toggled
+/// shown, a count or a second file drawn, a bare Return heard on the diff, the chord taking the
+/// primary alone, or the selection left on paths the action took.
 #[test]
 fn several_paths_selected_show_the_primarys_diff_and_its_chord_stages_them_all() {
     let (mut test, view, submitted) = launch();
@@ -832,14 +830,14 @@ fn select_line_4(test: &mut TestingRunner, nudge: f64) {
     settle(test);
 }
 
-/// C26 through the window (R9.6, L4; the QA brief): a line selection over a.rs, then a refresh
-/// — the status read again, which reads the primary again, its old diff drawn meanwhile — whose
-/// re-read is the same text in every byte keeps the selection, its tint and its action, and an
-/// act then stages exactly the lines selected; the same once more with a re-read that differs
-/// lets the selection go, says "The file changed — line selection cleared." once in the bar,
-/// and the next key takes the words away, nothing acted on. Caught by: a selection dropped by
-/// every refresh (Fork's behaviour, the kept deviation), one kept over other text, the notice
-/// never said, or said for good.
+/// Through the window: a line selection over a.rs, then a refresh — the status read again,
+/// which reads the primary again, its old diff drawn meanwhile — whose re-read is the same text
+/// in every byte keeps the selection, its tint and its action, and an act then stages exactly
+/// the lines selected; the same once more with a re-read that differs lets the selection go,
+/// says "The file changed — line selection cleared." once in the bar, and the next key takes
+/// the words away, nothing acted on. Caught by: a selection dropped by every refresh (Fork's
+/// behaviour, from which this deviates), one kept over other text, the notice never said, or
+/// said for good.
 #[test]
 fn a_line_selection_is_kept_across_a_refresh_of_the_same_text_and_cleared_once_otherwise() {
     let (mut test, view, submitted) = opened();
@@ -969,14 +967,13 @@ fn read_again_after_a_status(seen: &[Update]) -> bool {
         })
 }
 
-/// C26 through a real refresh (merge bar, phase 21, item 12): the window over a real worker,
-/// a.rs staged as forty lines and two of them edited in the working tree. A line selected in
-/// its unstaged diff is kept across a `Request::Refresh` whose status and re-read diff are the
-/// same text — the answer keyed by the diff thread itself — and, once a.rs is edited again and
-/// refreshed, let go of, "The file changed — line selection cleared." said exactly once.
-/// Caught by: a working-tree answer keyed to its query rather than its text, end to end
-/// through the real diff lane (the selection then outlives the edit, or is dropped by every
-/// refresh).
+/// Through a real refresh: the window over a real worker, a.rs staged as forty lines and two of
+/// them edited in the working tree. A line selected in its unstaged diff is kept across a
+/// `Request::Refresh` whose status and re-read diff are the same text — the answer keyed by the
+/// diff thread itself — and, once a.rs is edited again and refreshed, let go of, "The file
+/// changed — line selection cleared." said exactly once. Caught by: a working-tree answer keyed
+/// to its query rather than its text, end to end through the real diff lane (the selection then
+/// outlives the edit, or is dropped by every refresh).
 #[test]
 fn a_line_selection_survives_a_real_refresh_of_the_same_text_and_clears_once_otherwise() {
     let repository = crate::worker::StagedFile::new("cairn-c26-window", "a.rs", &{

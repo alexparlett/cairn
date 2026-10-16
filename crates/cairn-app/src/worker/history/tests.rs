@@ -1,5 +1,4 @@
-//! Finding a row by paging the held walk, and the sidebar's rows, through the real boundary
-//! (refs-and-status R8.3, R8.5, R8.6, criterion C8).
+//! Finding a row by paging the held walk, and the sidebar's rows, through the real boundary.
 //!
 //! A find is history-lane work: it pages the walk a scroll pages, every page answered as a
 //! scroll's is, and stops at the page that holds its row or at the walk's end. What it
@@ -55,7 +54,7 @@ fn holds(update: &Update, target: Oid) -> bool {
     matches!(update, Update::Rows { rows, .. } if rows.ids().any(|id| id == target))
 }
 
-/// R8.5, R8.6: a row past the loaded pages is found by paging the walk forward until a page
+/// A row past the loaded pages is found by paging the walk forward until a page
 /// holds it, every page answered as a scroll's, and no further — the next page asked starts
 /// with the row after the found page's last. The find is asked straight after a reopen, so it
 /// also supersedes an open that never started, whose walk it must page from the start.
@@ -96,7 +95,7 @@ fn a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further() {
     );
 }
 
-/// R8.5: a find asked while another runs supersedes it, and the pages the first had laid out
+/// A find asked while another runs supersedes it, and the pages the first had laid out
 /// still arrive, so the history has no hole; the second stops at its own row. Caught by:
 /// pages answered under the query's number (the first find's pages dropped, the history
 /// missing rows), or the second find never asked.
@@ -130,7 +129,7 @@ fn a_second_find_supersedes_the_first_and_no_page_is_lost() {
     );
 }
 
-/// R8.5: a stop — what a scroll or a row chosen asks during a find — supersedes the find and
+/// A stop — what a scroll or a row chosen asks during a find — supersedes the find and
 /// leaves the walk where it stood, so the scroll's page is the walk's next rows. Caught by: a
 /// find that runs on to the walk's end after its stop (the scroll's page empty, every row
 /// kept), or a stop that drops the walk.
@@ -161,7 +160,7 @@ fn a_stopped_find_leaves_the_walk_for_the_next_page() {
     );
 }
 
-/// R8.5: the pages a find laid out before it was superseded arrive all the same, read after
+/// The pages a find laid out before it was superseded arrive all the same, read after
 /// the supersession: a page is the walk's, answered under the walk's number, not the query's,
 /// so a press or a scroll never leaves a hole where the find's last pages were. The find is
 /// let run on (a row no page holds) while nothing is read, then stopped, then read. Caught by:
@@ -201,7 +200,7 @@ fn the_pages_a_find_laid_out_before_it_was_stopped_still_arrive() {
     }
 }
 
-/// R8.5: a stop alone — what a scroll or a row chosen asks, with nothing asked after it —
+/// A stop alone — what a scroll or a row chosen asks, with nothing asked after it —
 /// ends the find: once an operation queued behind the stop on the same thread is answered,
 /// no page of the find arrives, and the next page asked continues the walk where the find
 /// left it. Over a line of commits written for it, one row a find page, so a find left
@@ -266,7 +265,7 @@ fn a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood() {
     );
 }
 
-/// R8.5: a find whose row no page holds — a stash whose base no ref reaches, a ref moved since
+/// A find whose row no page holds — a stash whose base no ref reaches, a ref moved since
 /// the walk began — pages to the walk's end, and the last page says the walk is complete: what
 /// the window reads as the row not being in the graph. Caught by: a find that stops short of
 /// the end, or an end the window cannot tell.
@@ -312,7 +311,7 @@ fn sorted(mut snapshot: RefsSnapshot) -> RefsSnapshot {
     snapshot
 }
 
-/// Phase 06 QA's TC3, R8.3: the sidebar's rows are answered on the repository thread through
+/// The sidebar's rows are answered on the repository thread through
 /// the real boundary — with the snapshot they index — and of two asked in a row only the
 /// second is drawn, though the first was answered before the second was asked. Caught by:
 /// rows answered under no number (the first, superseded, drawn too), or answered for another
@@ -365,7 +364,7 @@ fn the_sidebars_rows_are_answered_on_a_worker_and_a_newer_ask_supersedes_the_old
     }
 }
 
-/// Phase 06 QA's TC3, R8.3: an ask superseded while its rows are laid out stops part way,
+/// An ask superseded while its rows are laid out stops part way,
 /// within a few thousand refs, and sends nothing. Driven on the lane's own function with the
 /// outbox read raw — beneath the epoch filter, which would hide a superseded answer either
 /// way — over a snapshot large enough that laying it out takes far longer than the moment
@@ -492,7 +491,7 @@ fn find_through_the_boundary(
     }
 }
 
-/// Phase 08's measurement (R8.6, C15, C16, the QA brief): a find of a commit deep in a named
+/// Measures a find of a commit deep in a named
 /// repository through the real boundary — the repository thread paging the held walk, every
 /// page appended to one history as the window appends it — timed (median of seven after a
 /// warm-up) and its retained memory read; then a find stopped halfway, as a scroll stops
@@ -588,7 +587,8 @@ fn measures_a_find_through_the_boundary() {
         scans[0].as_secs_f64() * 1e3,
         scans[6].as_secs_f64() * 1e3,
     );
-    // C16's 64 MiB, or a lower `CAIRN_C16_MIB`: the override can only tighten the bar.
+    // A ceiling of 64 MiB retained, or a lower `CAIRN_C16_MIB`: the override can only
+    // tighten it.
     let ceiling = std::env::var("CAIRN_C16_MIB")
         .ok()
         .map_or(64.0, |mib| {

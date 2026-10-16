@@ -1,6 +1,5 @@
-//! The local writes as the window keeps them (staging-and-commit R4): each asked, queued
-//! until it starts, running until it ends, and how the last one ended; and whether the window is
-//! waiting on one to close (R4.9).
+//! The local writes as the window keeps them: each asked, queued until it starts, running
+//! until it ends, and how the last one ended; and whether the window is waiting on one to close.
 //!
 //! On the UI thread, so nothing here waits: a write is asked by a submit and its news arrives
 //! as updates (`session::apply`).
@@ -14,11 +13,11 @@ use crate::worker::{LocalWrite, OperationId, Request, ResultLines};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asked {
     pub id: OperationId,
-    /// Its one name (`LocalWrite::name`, R14.2, rule 5), in Fork's imperative form: the status
-    /// box, a wait ("Waiting for Commit 1 file…"), the closing line, the "Couldn't <name>" dialog and
-    /// the activity popover all say this.
+    /// Its one name (`LocalWrite::name`), in Fork's imperative form: the status box, a wait
+    /// ("Waiting for Commit 1 file…"), the closing line, the "Couldn't <name>" dialog and the
+    /// activity popover all say this.
     pub name: String,
-    /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
+    /// Whether it can be cancelled while it runs: a commit or an amend.
     pub cancellable: bool,
     /// The prompt a destructive write's confirmation recorded, copied as it was asked
     /// (`LocalWrite::prompt`): what the activity popover quotes once the write ran.
@@ -47,11 +46,10 @@ impl Asked {
 /// The local writes of this session, as the window draws them.
 #[derive(Debug, Default)]
 pub struct LocalWrites {
-    /// Asked and not started, in the order asked: what the status box counts as waiting (R4.2,
-    /// R14.1).
+    /// Asked and not started, in the order asked: what the status box counts as waiting.
     queued: VecDeque<Asked>,
     /// The write running, and when the window heard it start: the status box shows it once it
-    /// has run 250 ms (F1).
+    /// has run 250 ms.
     running: Option<(Asked, Instant)>,
     /// The window asked to close while a write ran: it says which it is waiting for.
     closing: bool,
@@ -96,8 +94,7 @@ impl LocalWrites {
         self.closing = true;
     }
 
-    /// The write running, if any: the commit box draws its commit running, and cancels only it
-    /// (R4.3, R10.4).
+    /// The write running, if any: the commit box draws its commit running, and cancels only it.
     pub fn running(&self) -> Option<&Asked> {
         self.running.as_ref().map(|(asked, _)| asked)
     }
@@ -111,7 +108,7 @@ impl LocalWrites {
         self.running.is_some()
     }
 
-    /// Whether a write runs or waits to: the leftover lock's banner waits on both (F6).
+    /// Whether a write runs or waits to: the leftover lock's banner waits on both.
     pub fn is_busy(&self) -> bool {
         self.running.is_some() || !self.queued.is_empty()
     }
@@ -127,10 +124,10 @@ impl LocalWrites {
     }
 }
 
-/// What the window says while it waits on a local write to close (staging-and-commit R4.9, R14.2):
-/// "Closing after Commit 1 file finishes. Close again to quit now." — the write by its one name, and
-/// what a second close past the window's patience does: closes the window with the write still
-/// running, unwatched (the user's decision 12). `None` when it is not closing, or no write runs.
+/// What the window says while it waits on a local write to close: "Closing after Commit 1 file
+/// finishes. Close again to quit now." — the write by its one name, and what a second close past
+/// the window's patience does: closes the window with the write still running, unwatched. `None`
+/// when it is not closing, or no write runs.
 pub fn closing_line(writes: &LocalWrites) -> Option<String> {
     writes.closing_on().map(|asked| {
         format!(
@@ -161,7 +158,7 @@ mod tests {
         }
     }
 
-    /// R4.2: writes asked are kept queued in the order asked until each starts, one runs at
+    /// Writes asked are kept queued in the order asked until each starts, one runs at
     /// a time, each by its one name, and an ending takes it off. Caught by: a write that leaves
     /// the queue out of order, stays queued once running, or a name other than the write's.
     #[test]
@@ -208,7 +205,7 @@ mod tests {
         );
     }
 
-    /// R4.9: the window says which write it waits on only once it has asked to close, and
+    /// The window says which write it waits on only once it has asked to close, and
     /// only while one runs.
     #[test]
     fn a_close_names_the_write_it_waits_on() {
@@ -234,9 +231,9 @@ mod tests {
         );
     }
 
-    /// C11 with the redesign's words (R4.9, R14.2): the closing line names the write by its one
-    /// name, only once the window has asked to close and only while it runs. Caught by: the old
-    /// phrase ("Finishing commit…"), or a line while nothing is waited on.
+    /// The closing line names the write by its one name, only once the window has asked to
+    /// close and only while it runs. Caught by: a generic phrase ("Finishing commit…"), or a
+    /// line while nothing is waited on.
     #[test]
     fn the_closing_line_names_the_write_by_its_one_name() {
         use crate::worker::{LocalWrite, OperationId};

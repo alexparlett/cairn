@@ -1,14 +1,14 @@
-//! The diff of Local Changes' primary (refs-and-status R9.3, R9.4; staging-and-commit R8.1),
-//! kept apart from the commit's file so going back to All Commits finds the commit's as it was —
-//! but in the diff selection, since the three share the file-diff lane: whichever asks takes
-//! it (`DiffState::take_lane`), and the others are asked again when their view is shown.
+//! The diff of Local Changes' primary, kept apart from the commit's file so going back to All
+//! Commits finds the commit's as it was — but in the diff selection, since the three share the
+//! file-diff lane: whichever asks takes it (`DiffState::take_lane`), and the others are asked
+//! again when their view is shown.
 //!
-//! **Derived, never chosen on its own** (rule 8): which path this is, and in which list, is the
+//! **Derived, never chosen on its own**: which path this is, and in which list, is the
 //! selection's primary (`LocalChangesState::selection`), and [`WorkingChoice`] is only the key of
 //! what was asked for it — written by `diff::actions::show_primary` alone, as the selection or
 //! the lists move. A path is asked as its list says: its staged diff from Staged, its unstaged
 //! or untracked diff from Unstaged. A conflicted path asks nothing — its notice stands in place
-//! of a diff (R9.4). An answer is kept only when it names exactly the query the path is asked
+//! of a diff. An answer is kept only when it names exactly the query the path is asked
 //! as now: its path, its side and its options, so a path in both lists can never draw the
 //! other list's diff, and a primary before a refresh can never draw under the primary after it.
 //!
@@ -17,7 +17,7 @@
 //! gone, the selection has moved to another path by its rule, so no diff is drawn under no row.
 //! What a line selection over it belongs to is the content of the diff drawn
 //! ([`ShownDiff::content`], keyed on the diff thread), never a count of answers: a re-read whose
-//! text is the same keeps the selection, and one whose text differs leaves it nothing (R9.6).
+//! text is the same keeps the selection, and one whose text differs leaves it nothing.
 
 use cairn_model::{ChangeList, RepoPath, ShownDiff};
 
@@ -60,7 +60,7 @@ impl Working {
 /// What a path chosen in Local Changes is asked as, for the view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkingShown<'a> {
-    /// A conflicted path: its notice, and no diff (R9.4).
+    /// A conflicted path: its notice, and no diff.
     Conflicted,
     Waiting,
     Failed(&'a str),
@@ -270,7 +270,7 @@ impl DiffState {
         (asked, freed)
     }
 
-    /// Load Diff for the path chosen (R6.8): asked again past R2.6's limits. Nothing when no
+    /// Load Diff for the path chosen: asked again past the diff limits. Nothing when no
     /// path is chosen or it was loaded already.
     pub fn load_working_anyway(&mut self) -> Vec<Request> {
         let Some(working) = &self.working else {
@@ -359,7 +359,7 @@ mod tests {
             .sum()
     }
 
-    /// The QA brief: a path both staged and unstaged is chosen in each list as its own query,
+    /// A path both staged and unstaged is chosen in each list as its own query,
     /// so an answer for one list's side is never kept for the other — whichever arrives late.
     /// Caught by: answers compared by path alone (the staged diff drawn under the Unstaged
     /// row), or a late answer for the side chosen before kept.
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(state.working_shown(), None);
     }
 
-    /// R9.4: a conflicted path asks nothing and draws its notice; and it gives up the lane, so
+    /// A conflicted path asks nothing and draws its notice; and it gives up the lane, so
     /// nothing of its is asked again. Caught by: a query asked for a conflict, or a conflict
     /// drawn as reading for good.
     #[test]
@@ -526,7 +526,7 @@ mod tests {
         }
     }
 
-    /// H1, phase 17's QA item 2: only the lane's holder lets go of it. The commit's file in
+    /// Only the lane's holder lets go of it. The commit's file in
     /// flight keeps the lane when Local Changes' path is let go of — the lists emptied — or
     /// chosen as a conflict, which asks nothing; and the path in flight keeps it when the
     /// commit's file's options move while the Commit tab is shown. Caught by: a let-go that

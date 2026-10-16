@@ -1,19 +1,17 @@
-//! The commit box as the window keeps it (staging-and-commit R10): the draft and whether the
-//! person has touched it, Amend and the draft it set aside, what the worker read for the box,
-//! the commit asked and its output, and the Git Error dialog a failure opens — with, for a
-//! confirmed amend git refused before amending, the token it handed back for the skip. On the
-//! UI thread, so nothing here waits; what is read arrives as updates (`commit_box::pane`'s
-//! `*_arrived`).
+//! The commit box as the window keeps it: the draft and whether the person has touched it, Amend
+//! and the draft it set aside, what the worker read for the box, the commit asked and its output,
+//! and the Git Error dialog a failure opens — with, for a confirmed amend git refused before
+//! amending, the token it handed back for the skip. On the UI thread, so nothing here waits; what
+//! is read arrives as updates (`commit_box::pane`'s `*_arrived`).
 //!
-//! **The draft is the window's** (R10.7): the subject and the description are two `State`s the
-//! fields are bound to, kept by `LocalChangesView` for the window's life — through a refresh,
-//! Local Changes hidden and shown, a failed hook and Amend's toggling. **One rule fills it**
-//! (C7, Fork's developer's rule, Tracker #61): a fill — `HEAD`'s message as Amend is ticked, a
-//! merge's, cherry-pick's or revert's cleaned message — goes only into an empty draft the person
-//! has not touched, and any edit, clearing included, makes it theirs ([`CommitBox::touch`]).
-//! Ticking Amend sets the draft aside, its touched bit with it; unticking puts it back exactly.
-//! A commit that is made clears the draft it took, untouched again, and an amend unticks
-//! itself; one that fails keeps it.
+//! **The draft is the window's**: the subject and the description are two `State`s the fields are
+//! bound to, kept by `LocalChangesView` for the window's life — through a refresh, Local Changes
+//! hidden and shown, a failed hook and Amend's toggling. **One rule fills it**, as Fork's does: a
+//! fill — `HEAD`'s message as Amend is ticked, a merge's, cherry-pick's or revert's cleaned message
+//! — goes only into an empty draft the person has not touched, and any edit, clearing included,
+//! makes it theirs ([`CommitBox::touch`]). Ticking Amend sets the draft aside, its touched bit with
+//! it; unticking puts it back exactly. A commit that is made clears the draft it took, untouched
+//! again, and an amend unticks itself; one that fails keeps it.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -27,7 +25,7 @@ use crate::worker::{CommitReads, OperationId};
 
 /// The window's handles on the box: the draft, bound to its fields, the rest of its state, and
 /// its commit's output as it streams — a state of its own, read only as the Git Error dialog is
-/// opened (`peek`), so a streamed line draws nothing again (phase 20's QA item 4): the window's
+/// opened (`peek`), so a streamed line draws nothing again: the window's
 /// root reads `state` for the dialog.
 #[derive(Clone, Copy, PartialEq)]
 pub struct CommitBoxView {
@@ -60,7 +58,7 @@ impl CommitBoxView {
     }
 }
 
-/// The box's commit's output as it streams (R10.5): its spoken lines, the latest kept in the one
+/// The box's commit's output as it streams: its spoken lines, the latest kept in the one
 /// bounded tail, for the Git Error dialog its failure opens.
 #[derive(Debug, Default)]
 pub struct StreamedOutput {
@@ -95,13 +93,13 @@ impl StreamedOutput {
 pub struct AskedCommit {
     pub id: OperationId,
     pub amend: bool,
-    /// The message it was asked with: what the skip commits again (R10.5), what the dialog's
+    /// The message it was asked with: what the skip commits again, what the dialog's
     /// confirmed amend runs with, and what a commit made clears from the draft — only that.
     pub message: String,
     pub skip_hooks: bool,
 }
 
-/// The Git Error dialog a failed commit or amend opens (R10.5).
+/// The Git Error dialog a failed commit or amend opens.
 #[derive(Debug)]
 pub struct GitError {
     pub serial: u64,
@@ -110,18 +108,18 @@ pub struct GitError {
     /// git's output, a hook's among it, ANSI sequences stripped.
     pub lines: Rc<Vec<String>>,
     /// Whether the skip is offered: on every failed commit or amend whose hooks were not skipped
-    /// already (C4 — Cairn keeps no hook model, so a failure no hook caused fails the same way
+    /// already (Cairn keeps no hook model, so a failure no hook caused fails the same way
     /// again, harmlessly).
     pub skip: bool,
     /// The commit that failed, for the skip to ask again.
     pub failed: AskedCommit,
-    /// The dialog's sentence: Fork's, or that git made the commit and then failed (R14.3).
+    /// The dialog's sentence: Fork's, or that git made the commit and then failed.
     pub sentence: String,
-    /// git could not create `index.lock`: `Remove index.lock…` beside Close (R12.4).
+    /// git could not create `index.lock`: `Remove index.lock…` beside Close.
     pub index_lock: bool,
-    /// A confirmed amend's token git's failure handed back unspent (R1.1's option (a), the
-    /// user's answer of 2026-10-10): kept until the skip spends it or Close lets it go, so the
-    /// skip amends without asking again. `None` for every other failure.
+    /// A confirmed amend's token git's failure handed back unspent: kept until the skip spends it
+    /// or Close lets it go, so the skip amends without asking again. `None` for every other
+    /// failure.
     unspent: Option<Confirmed>,
 }
 
@@ -143,12 +141,12 @@ struct Kept {
 #[derive(Debug, Default)]
 pub struct CommitBox {
     amend: bool,
-    /// The draft set aside as Amend was ticked, put back exactly as it is unticked (R10.3).
+    /// The draft set aside as Amend was ticked, put back exactly as it is unticked.
     kept: Option<Kept>,
     /// The person has edited the draft — typed, cleared, recalled a message — so no fill goes
-    /// into it (C7).
+    /// into it.
     touched: bool,
-    /// The recent message the subject holds, by its place in the list (R10.2).
+    /// The recent message the subject holds, by its place in the list.
     recalled: Option<usize>,
     reads: Option<CommitReads>,
     /// The recent messages, shared with the box that draws them.
@@ -159,7 +157,7 @@ pub struct CommitBox {
     started: Option<Instant>,
     error: Option<GitError>,
     /// An amend at the press that must be confirmed: its consequence and the amend pressed, until
-    /// the box opens the confirmation dialog on it (R10.6).
+    /// the box opens the confirmation dialog on it.
     confirming: Option<(Consequence, AskedCommit)>,
     /// The serial the next dialog takes.
     serial: u64,
@@ -214,7 +212,7 @@ impl CommitBox {
         self.recalled = None;
     }
 
-    /// Whether a fill may go into the draft: it is empty and the person has not touched it (C7).
+    /// Whether a fill may go into the draft: it is empty and the person has not touched it.
     fn fillable(&self, draft_empty: bool) -> bool {
         draft_empty && !self.touched
     }
@@ -246,14 +244,14 @@ impl CommitBox {
     }
 
     /// `HEAD`'s message, read for amend's lists while Amend is ticked: to fill the draft with when
-    /// it is empty and untouched (R10.3, C7).
+    /// it is empty and untouched.
     pub fn amend_message_arrived(&self, message: String, draft_empty: bool) -> Option<String> {
         (self.amend && self.fillable(draft_empty)).then_some(message)
     }
 
     /// What the box reads has arrived: kept, and — with a merge, a single cherry-pick or a
     /// single revert in progress and the draft empty and untouched — the message git prepared
-    /// for it, cleaned as git's editor cleans it, to fill it with (R10.8, R6.10, C7).
+    /// for it, cleaned as git's editor cleans it, to fill it with.
     pub fn reads_arrived(&mut self, reads: CommitReads, draft_empty: bool) -> Option<String> {
         self.recent = Rc::new(reads.recent.clone().unwrap_or_default());
         let fill = match reads.operation {
@@ -269,7 +267,7 @@ impl CommitBox {
         fill
     }
 
-    /// The recent message `at` is recalled into the subject (R10.2); `None` past the list. The
+    /// The recent message `at` is recalled into the subject; `None` past the list. The
     /// person chose it: the draft is theirs.
     pub fn recall(&mut self, at: usize) -> Option<String> {
         let message = self.recent.get(at)?.clone();
@@ -291,7 +289,7 @@ impl CommitBox {
         self.error = None;
     }
 
-    /// Cancel was pressed for the commit running: "Cancelling…" until git is reaped (R10.4).
+    /// Cancel was pressed for the commit running: "Cancelling…" until git is reaped.
     pub fn cancel_asked(&mut self) {
         if self.asked.is_some() {
             self.cancelling = true;
@@ -315,7 +313,7 @@ impl CommitBox {
     }
 
     /// A commit made: Amend unticks itself, the draft set aside let go of — it was committed or
-    /// left for this one — and the recall forgotten (R10.3). `taken`: the draft is the one it
+    /// left for this one — and the recall forgotten. `taken`: the draft is the one it
     /// committed, cleared, and untouched again.
     pub fn made(&mut self, taken: bool) {
         self.amend = false;
@@ -327,9 +325,9 @@ impl CommitBox {
     }
 
     /// A commit or amend failed with git's own failure: the Git Error dialog opens over its
-    /// output — what streamed (`streamed`), or else what the engine kept of it — the skip offered on every
-    /// failure whose hooks were not already skipped (R10.5 as amended, C4), with the token a
-    /// confirmed amend's failure handed back, which only the skip spends.
+    /// output — what streamed (`streamed`), or else what the engine kept of it — the skip
+    /// offered on every failure whose hooks were not already skipped, with the token a confirmed
+    /// amend's failure handed back, which only the skip spends.
     pub fn failed(
         &mut self,
         failed: AskedCommit,
@@ -356,7 +354,7 @@ impl CommitBox {
     }
 
     /// An amend at the press ended asking to be confirmed: the dialog is to open on `consequence`,
-    /// asking `asked`'s message again under its token (R10.6). The draft is untouched.
+    /// asking `asked`'s message again under its token. The draft is untouched.
     pub fn needs_confirming(&mut self, consequence: Consequence, asked: AskedCommit) {
         self.confirming = Some((consequence, asked));
     }
@@ -378,7 +376,7 @@ impl CommitBox {
     }
 }
 
-/// A message split as the box draws it (R10.2, R10.3, R10.8): the subject is its first line;
+/// A message split as the box draws it: the subject is its first line;
 /// the description the rest, after the one blank line that separates them — so that
 /// [`compose_message`] gives the text back as written.
 pub fn split_message(message: &str) -> (String, String) {
@@ -393,7 +391,7 @@ pub fn split_message(message: &str) -> (String, String) {
 
 /// The message a commit is asked with: the subject, then — when there is one — a blank line
 /// and the description, as typed. git's own cleanup (`commit.cleanup`, `-F`'s default) is
-/// git's to apply (R6.1).
+/// git's to apply.
 pub fn compose_message(subject: &str, description: &str) -> String {
     if description.is_empty() {
         subject.to_owned()
@@ -432,7 +430,7 @@ mod tests {
         assert_eq!(compose_message("Only a subject", ""), "Only a subject");
     }
 
-    /// R10.5's bound: the output kept is the latest lines of the one bounded tail, however many
+    /// The output kept is the latest lines of the one bounded tail, however many
     /// a hook writes. Caught by: an unbounded buffer, or the newest lines dropped rather than
     /// the oldest.
     #[test]
@@ -474,9 +472,9 @@ mod tests {
         );
     }
 
-    /// R10.3, C7 and the QA brief's first case: a draft typed, Amend ticked and unticked comes
-    /// back exactly with its touched bit; `HEAD`'s message fills only an empty, untouched draft,
-    /// and a fill the person cleared stays cleared. Caught by: a typed draft filled, a cleared
+    /// A draft typed, Amend ticked and unticked comes back exactly with its touched bit;
+    /// `HEAD`'s message fills only an empty, untouched draft, and a fill the person cleared
+    /// stays cleared. Caught by: a typed draft filled, a cleared
     /// fill filled again, or the touched bit lost across Amend.
     #[test]
     fn amend_sets_the_draft_aside_and_fills_only_an_empty_untouched_one() {
@@ -518,11 +516,11 @@ mod tests {
         assert_eq!(state.amend_message_arrived("HEAD's".to_owned(), true), None);
     }
 
-    /// R10.8 and C7: a merge fills an empty, untouched draft with the message git prepared,
-    /// cleaned (R6.10), and never a draft the person touched — a fill they cleared stays cleared
-    /// — nor while amending; a single cherry-pick fills the same way, and a rebase never; a
-    /// commit made of the draft makes it untouched again. Caught by: a draft overwritten on every
-    /// refresh, a cleared fill filled again, or a refusing operation's message filled.
+    /// A merge fills an empty, untouched draft with the message git prepared, cleaned, and never a
+    /// draft the person touched — a fill they cleared stays cleared — nor while amending; a single
+    /// cherry-pick fills the same way, and a rebase never; a commit made of the draft makes it
+    /// untouched again. Caught by: a draft overwritten on every refresh, a cleared fill filled
+    /// again, or a refusing operation's message filled.
     #[test]
     fn a_merge_fills_an_empty_untouched_draft() {
         let reads = |operation| CommitReads {
@@ -571,7 +569,7 @@ mod tests {
         );
     }
 
-    /// R10.5 as C4 amended it: the skip is offered on every failed commit — no hook model —
+    /// The skip is offered on every failed commit — no hook model —
     /// and never for one whose hooks were already skipped; the dialog shows what streamed, or
     /// else the engine's kept output, ANSI stripped. Caught by: a skip withheld for want of a
     /// hook Cairn found, or offered again after the skip (an endless `--no-verify` loop).

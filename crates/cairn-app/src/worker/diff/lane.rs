@@ -1,6 +1,5 @@
 //! The diff thread, `cairn-diff`: the changes and file-diff lanes of one repository,
-//! commits, comparisons and the working tree alike (PRD R4.2, R4.3, R4.5; packet decision
-//! L8).
+//! commits, comparisons and the working tree alike.
 //!
 //! It takes its own thread-local repository handle, and keeps the [`DiffSession`] — gix's
 //! blob resource cache, reused across commits — and [`Answers`], the commit and comparison
@@ -353,10 +352,10 @@ impl<'a> Served<'a, '_> {
                 .change_set(*of, &mut kept.answers)
                 .map(|changes| Some(Update::Changes { of: *of, changes })),
             // Prepared for the views here, on this thread, never on the UI thread: both rows'
-            // indexes and a pass over the drawn bytes, 39 ms for a 64 MiB file (phase 06 QA) —
-            // and, for a working-tree answer alone, keyed with the question it answers, a second
-            // pass over its bytes, so a line selection over it belongs to this text alone
-            // (staging-and-commit R9.6). A committed file draws no gesture, so it is not keyed.
+            // indexes and a pass over the drawn bytes, 39 ms measured for a 64 MiB file — and,
+            // for a working-tree answer alone, keyed with the question it answers, a second pass
+            // over its bytes, so a line selection over it belongs to this text alone. A
+            // committed file draws no gesture, so it is not keyed.
             DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| {
                 Some(Update::FileDiff {
                     query: asked.clone(),
@@ -440,15 +439,16 @@ impl<'a> Served<'a, '_> {
         }
     }
 
-    /// Files opened in place (R5.3), answered a page at a time as each is read: first the
-    /// files opened by name — those read past the limits apart, since a page is read at one
-    /// set of options — then, when Expand All is on its way, the rest of the change set from
-    /// where it stands, passing over the files already open (`kept_open`, kept as they are
-    /// drawn), until its line budget ([`EXPAND_ALL_LINES`]) is spent or every file is open. Each page is read with the engine's per-page bound and sent as soon as it is
-    /// prepared, so the memory held is a page's, and a file's failure is that file's outcome.
-    /// The epoch is checked between files and polled while each read runs, so a newer request
-    /// in the lane — another expansion, a file diff, a changes query — ends this one at the
-    /// next file or kills its read. Nothing is kept: a page is read once and handed over.
+    /// Files opened in place, answered a page at a time as each is read: first the files
+    /// opened by name — those read past the limits apart, since a page is read at one set of
+    /// options — then, when Expand All is on its way, the rest of the change set from where it
+    /// stands, passing over the files already open (`kept_open`, kept as they are drawn),
+    /// until its line budget ([`EXPAND_ALL_LINES`]) is spent or every file is open. Each page
+    /// is read with the engine's per-page bound and sent as soon as it is prepared, so the
+    /// memory held is a page's, and a file's failure is that file's outcome. The epoch is
+    /// checked between files and polled while each read runs, so a newer request in the lane —
+    /// another expansion, a file diff, a changes query — ends this one at the next file or
+    /// kills its read. Nothing is kept: a page is read once and handed over.
     fn expand(&mut self, asked: &ExpandQuery, kept: &mut Kept<'a>) -> Result<(), Error> {
         let changes = asked.changes.as_ref();
         let request = request(asked.of);
@@ -462,7 +462,7 @@ impl<'a> Served<'a, '_> {
         };
         let all_from = asked.all.map(|all| all.next.min(changes.files.len()));
         // What Expand All offers: every file from where it stands but the ones already open,
-        // which are kept as they are drawn (the user's decision, 2026-10-04).
+        // which are kept as they are drawn.
         let all_offered: Vec<usize> = all_from.map_or_else(Vec::new, |from| {
             (from..changes.files.len())
                 .filter(|index| asked.kept_open.binary_search(index).is_err())
@@ -632,7 +632,7 @@ fn which(side: WorkingSide) -> WorkingTreeDiff {
     }
 }
 
-/// R2.6's ceilings are fixed; the rest is the view's.
+/// The diff limits are the engine's defaults; the rest is the view's.
 fn content_options(options: &DiffOptions) -> ContentOptions {
     ContentOptions {
         context: options.context,
@@ -685,7 +685,7 @@ mod tests {
         }
     }
 
-    /// R4.3: of what has queued, the newest per lane is served, the file diff first, and a
+    /// Of what has queued, the newest per lane is served, the file diff first, and a
     /// request superseded while it waited is never served. Caught by: serving in arrival
     /// order (a click-through queues every file), the changes query first, or a superseded
     /// request served anyway.
@@ -738,7 +738,7 @@ mod tests {
         assert!(!Waiting::default().gather(&queue));
     }
 
-    /// The design input on stale reads: a disagreement is asked again — three times in
+    /// On a stale read, a disagreement is asked again — three times in
     /// all, so a file saved once mid-read settles on the third — and then shown; never once
     /// the query is superseded. Caught by: no retry (`READ_ATTEMPTS` of one, under which a
     /// file saved mid-read shows an error), an unbounded one (a filter whose output varies
@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(asked.get(), 1, "a superseded query was asked again");
     }
 
-    /// T3, as the stamp design pins it: what each tier's move lets go. A moved global
+    /// What each tier's move lets go, as the stamp design pins it. A moved global
     /// attribute file drops the session and every answer and keeps the handle; a moved
     /// configuration drops them and asks for the handle to be opened again; a stat-only
     /// rewrite of the index — what `git update-index --refresh` does — drops nothing.
@@ -889,7 +889,7 @@ mod tests {
         );
     }
 
-    /// R7.2: two commits are asked tip against tip with the window's base as git's old side,
+    /// Two commits are asked tip against tip with the window's base as git's old side,
     /// so `git diff <base> <tip>` is what answers (pinned against git by
     /// `a_comparison_of_two_commits_reads_as_git_diff_of_the_pair_both_ways`). Caught by: the
     /// pair handed to the engine the other way round.
@@ -906,7 +906,7 @@ mod tests {
             request(Comparison::Commit(oid(3))),
             ChangesRequest::commit(oid(3))
         );
-        // R6.2: a stash is asked as `git stash show` lists it, never as a commit.
+        // A stash is asked as `git stash show` lists it, never as a commit.
         assert_eq!(
             request(Comparison::Stash(oid(4))),
             ChangesRequest::stash(oid(4))

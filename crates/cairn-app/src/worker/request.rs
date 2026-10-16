@@ -2,7 +2,7 @@
 //!
 //! A query is numbered in its lane ([`QueryLane`]) and every diff answer names what it
 //! answers — the commit or the pair, the file, the options — so the window keeps an answer
-//! only for the selection it names (PRD R4.4).
+//! only for the selection it names.
 
 use std::sync::Arc;
 
@@ -17,27 +17,27 @@ use super::askpass::PromptId;
 use super::epoch::QueryLane;
 use super::local::lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 
-/// What a changes query compares (R2.1).
+/// What a changes query compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Comparison {
     /// One commit against its first parent (the empty tree for a root commit).
     Commit(Oid),
-    /// Two commits, tip against tip, `old` the base (R7.2).
+    /// Two commits, tip against tip, `old` the base.
     Between { old: Oid, new: Oid },
-    /// A stash commit, as `git stash show` lists it (refs-and-status R6.2): against the
+    /// A stash commit, as `git stash show` lists it: against the
     /// commit it was made on, with its untracked files where the user's
     /// `stash.showIncludeUntracked` says so.
     Stash(Oid),
 }
 
-/// Which of a path's working-tree diffs (R3.1): what a path chosen in Local Changes is asked
-/// as, by the list it was chosen in (refs-and-status R9.3).
+/// Which of a path's working-tree diffs: what a path chosen in Local Changes is asked as, by
+/// the list it was chosen in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkingSide {
     /// `HEAD` against the index: `git diff --cached`.
     Staged,
     /// `HEAD`'s parent against the index, `git diff --cached HEAD^`: a file of amend's staged
-    /// list, chosen in the Staged list while Amend is ticked (staging-and-commit R10.3).
+    /// list, chosen in the Staged list while Amend is ticked.
     Amending,
     /// The index against the working tree: `git diff`.
     Unstaged,
@@ -46,15 +46,15 @@ pub enum WorkingSide {
 }
 
 /// What a view asks of one file's diff — every option an answer depends on that the view
-/// chooses. R2.6's ceilings are not among them: they are fixed.
+/// chooses. The diff limits (`DiffLimits`) are not among them: they are fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct DiffOptions {
     /// The context the view groups hunks at, which git is asked at (so a change of context
     /// is a new query: git's function context is the text its hunks at that context carry).
     pub context: Context,
-    /// Compute the whitespace-ignoring ranges (R2.8).
+    /// Compute the whitespace-ignoring ranges.
     pub ignore_whitespace: bool,
-    /// Read a file past R2.6's byte ceiling anyway, up to its load-anyway ceiling.
+    /// Read a file past the diff's byte ceiling anyway, up to its load-anyway ceiling.
     pub load_anyway: bool,
 }
 
@@ -88,7 +88,7 @@ pub enum DiffQuery {
     Expand(ExpandQuery),
 }
 
-/// Files of a change set to open in place in the Commit tab (PRD R5.3): the ones opened one at
+/// Files of a change set to open in place in the Commit tab: the ones opened one at
 /// a time, by name, and — when Expand All is on its way — the rest of the change set from the
 /// file it reached, under its line budget. Read on the diff thread a page at a time, each page
 /// answered as it is read ([`Update::Expanded`]).
@@ -106,13 +106,12 @@ pub struct ExpandQuery {
     /// Expand All, taken up where it stands; `None` when it is not on its way.
     pub all: Option<AllFrom>,
     /// The files already open, in index order, which Expand All passes over: kept as they are
-    /// drawn, never read again (the user's decision, 2026-10-04). A file named in `files` is
-    /// among them, read once, by name.
+    /// drawn, never read again. A file named in `files` is among them, read once, by name.
     pub kept_open: Vec<usize>,
 }
 
 /// One file opened in place, by its index in the change set, and whether it is read past
-/// R2.6's limits (its Load Diff pressed).
+/// the diff limits (its Load Diff pressed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenedFile {
     pub index: usize,
@@ -168,10 +167,10 @@ impl DiffQuery {
 }
 
 /// Answers the window has let go of, handed to a worker thread to be freed there rather than
-/// on the UI thread: dropping a change set of 55,184 files took 1.2-2.0 ms (release build,
-/// measured 2026-10-03, R2) — more than a frame can spare, for nothing the window draws. So
-/// are the history a reopen replaces (#52, refs-and-status R11.3) and a refresh's superseded
-/// or replaced answers: a refs snapshot, ahead/behind, a status.
+/// on the UI thread: dropping a change set of 55,184 files takes 1.2-2.0 ms (release build)
+/// — more than a frame can spare, for nothing the window draws. So are the history a reopen
+/// replaces (#52) and a refresh's superseded or replaced answers: a refs snapshot,
+/// ahead/behind, a status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Retired(Box<RetiredAnswers>);
 
@@ -321,25 +320,23 @@ impl Retired {
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(Clone))]
 pub enum Request {
-    /// Starts a walk from every ref (refs-and-status R4.1), abandoning any walk already open:
-    /// from the refs snapshot the last refresh read on the history thread, or — when none has
-    /// been read, or the walk from it fails because one of its commits has gone since — from
-    /// one read now, which is answered as [`Update::Refs`] in the history lane before the
-    /// first page. Numbered in the walk lane too: every page of the walk it opens is answered
-    /// under that number, so the pages of the walk it replaces are never drawn. With `lost`,
-    /// Show Lost Commits: the walk starts from every reflog entry of `HEAD` and each local
-    /// branch too, and draws the commits no ref reaches as lost (staging-and-commit R11.1,
-    /// R11.4).
+    /// Starts a walk from every ref, abandoning any walk already open: from the refs snapshot
+    /// the last refresh read on the history thread, or — when none has been read, or the walk
+    /// from it fails because one of its commits has gone since — from one read now, which is
+    /// answered as [`Update::Refs`] in the history lane before the first page. Numbered in the
+    /// walk lane too: every page of the walk it opens is answered under that number, so the
+    /// pages of the walk it replaces are never drawn. With `lost`, Show Lost Commits: the walk
+    /// starts from every reflog entry of `HEAD` and each local branch too, and draws the
+    /// commits no ref reaches as lost.
     OpenHistory { rows: usize, lost: bool },
     /// The next `rows` rows; falls back to the cold cursor when no walk is open.
     MoreHistory { rows: usize },
-    /// Finds the row of `target` — a commit's, or a stash's by its stash commit — by paging
-    /// the walk open forward `rows` at a time until a page holds it or the walk ends
-    /// (refs-and-status R8.5): every page answered as [`Update::Rows`], as a scroll's are, so
-    /// the window keeps what scrolling there would and no more (R8.6). History-lane work: the
-    /// next press, scroll or stop supersedes it, and it supersedes the page or find in
-    /// flight. On the repository thread a page at a time, so a filter or a refresh asked
-    /// meanwhile is served between its pages.
+    /// Finds the row of `target` — a commit's, or a stash's by its stash commit — by paging the
+    /// walk open forward `rows` at a time until a page holds it or the walk ends — every page
+    /// answered as [`Update::Rows`], as a scroll's are, so the window keeps what scrolling
+    /// there would and no more. History-lane work: the next press, scroll or stop supersedes
+    /// it, and it supersedes the page or find in flight. On the repository thread a page at a
+    /// time, so a filter or a refresh asked meanwhile is served between its pages.
     FindRow { target: Oid, rows: usize },
     /// Supersedes the find in flight and asks nothing: what a scroll of the list, a row
     /// chosen in it or a find answered by a page already loaded asks of the history lane.
@@ -350,13 +347,13 @@ pub enum Request {
     /// One file's diff, answered by [`Update::FileDiff`]. Supersedes the file diff in
     /// flight, and nothing else.
     FileDiff(FileQuery),
-    /// Files of a change set opened in place (R5.3): those opened by name, and Expand All's
+    /// Files of a change set opened in place: those opened by name, and Expand All's
     /// from where it stands, answered a page at a time by [`Update::Expanded`] — in the
     /// file-diff lane, so a file diff, a changes query or a newer expansion asked after it
     /// ends it between files or kills its read. One that names nothing to read asks nothing:
     /// what it is for is to supersede the one in flight (Collapse All).
     Expand(ExpandQuery),
-    /// Which of `files`' files hold `text` in a path (the Changes tab's filter, R5.4),
+    /// Which of `files`' files hold `text` in a path (the Changes tab's filter),
     /// answered by [`Update::FilteredFiles`]: a pass over every path, so run on a worker and
     /// never on the UI thread. Numbered in the file-filter lane, so the next keystroke
     /// supersedes it and nothing else does; `files` is the window's own change set, shared.
@@ -368,15 +365,14 @@ pub enum Request {
     /// The configured remotes, answered by [`Update::Remotes`].
     ListRemotes,
     /// The context the user's `git diff` shows — `diff.context` — answered by
-    /// [`Update::ConfiguredContext`]: where the diff views' context starts (phase 06), and
-    /// answered again whenever the diff thread opens its handle afresh because the
-    /// configuration moved, so an edit reaches a session that has not moved its context.
+    /// [`Update::ConfiguredContext`]: where the diff views' context starts, and answered again
+    /// whenever the diff thread opens its handle afresh because the configuration moved, so an
+    /// edit reaches a session that has not moved its context.
     ConfiguredContext,
-    /// Reads the refs, ahead/behind and the working tree's status again (refs-and-status
-    /// R10): on focus gained, after an operation, and on the Refresh action. Three reads. The
-    /// refs and ahead/behind are numbered in lanes of their own, superseding the refresh
-    /// before them lane by lane and nothing else — no page, no diff, no filter. Status is
-    /// not superseded (R10.3 as amended, the user's decision of 2026-10-07): a refresh
+    /// Reads the refs, ahead/behind and the working tree's status again: on focus gained,
+    /// after an operation, and on the Refresh action. Three reads. The refs and ahead/behind
+    /// are numbered in lanes of their own, superseding the refresh before them lane by lane
+    /// and nothing else — no page, no diff, no filter. Status is not superseded: a refresh
     /// leaves a running `git status` to finish, and every refresh asked while it runs is
     /// one follow-up status after it; only a close ends it. The refs are read on the
     /// history thread and answered by [`Update::Refs`], saying whether the history must be
@@ -385,25 +381,24 @@ pub enum Request {
     /// queues behind a slow one. A failure is [`Update::RefreshFailed`].
     Refresh,
     /// Reads the working tree's status again, and nothing else: what a write to the index or
-    /// the working tree leaves stale (staging-and-commit R4.5). On the refresh thread, as a
-    /// refresh's status is, never superseding one that runs; answered by [`Update::Status`].
+    /// the working tree leaves stale. On the refresh thread, as a refresh's status is, never
+    /// superseding one that runs; answered by [`Update::Status`].
     RefreshStatus,
-    /// The sidebar's rows for `refs` (R8.1-R8.3): its sections, the refs and stashes whose
-    /// names hold `text`, in folders, as far as `disclosure` opens them
-    /// (`RefsSnapshot::sidebar_rows`), answered by [`Update::FilteredRefs`]. A pass over
-    /// every ref, run on the repository thread, numbered in the ref-filter lane so the next
-    /// keystroke, folder opened or snapshot superseded it and nothing else does; `refs` is
-    /// the window's own snapshot, shared.
+    /// The sidebar's rows for `refs`: its sections, the refs and stashes whose names hold
+    /// `text`, in folders, as far as `disclosure` opens them (`RefsSnapshot::sidebar_rows`),
+    /// answered by [`Update::FilteredRefs`]. A pass over every ref, run on the repository
+    /// thread, numbered in the ref-filter lane so the next keystroke, folder opened or snapshot
+    /// superseded it and nothing else does; `refs` is the window's own snapshot, shared.
     FilterRefs {
         refs: Arc<RefsSnapshot>,
         text: String,
         disclosure: Arc<Disclosure>,
     },
-    /// Which rows of Local Changes' two lists hold `text` in a path (refs-and-status R9; the
-    /// Changes tab's filter's rule), answered by [`Update::FilteredLocalChanges`]: a pass over
-    /// every path the status listed, run on the repository thread, numbered in the
-    /// local-changes-filter lane so the next keystroke, or a status arriving, supersedes it and
-    /// nothing else does; `changes` is the window's own, shared.
+    /// Which rows of Local Changes' two lists hold `text` in a path (the Changes tab's filter's
+    /// rule), answered by [`Update::FilteredLocalChanges`]: a pass over every path the status
+    /// listed, run on the repository thread, numbered in the local-changes-filter lane so the
+    /// next keystroke, or a status arriving, supersedes it and nothing else does; `changes` is
+    /// the window's own, shared.
     FilterLocalChanges {
         changes: Arc<LocalChanges>,
         text: String,
@@ -414,18 +409,18 @@ pub enum Request {
     Fetch { remote: String },
     /// Kills the fetch in flight, if any.
     CancelFetch,
-    /// Runs `write` on the local write lane (staging-and-commit R4): straight to its thread,
-    /// queued behind the write running, in the order asked, answered by
-    /// [`Update::WriteStarted`] and [`Update::WriteEnded`] under `id`, which the window
-    /// chose ([`OperationId::next`]) so it can draw the write queued from the moment it asks.
+    /// Runs `write` on the local write lane: straight to its thread, queued behind the write
+    /// running, in the order asked, answered by [`Update::WriteStarted`] and
+    /// [`Update::WriteEnded`] under `id`, which the window chose ([`OperationId::next`]) so it
+    /// can draw the write queued from the moment it asks.
     Write { id: OperationId, write: LocalWrite },
     /// What discarding `paths` — rows of Local Changes' Unstaged list — would lose, computed on
     /// the local lane in the order asked, after every write asked before it, and answered by
     /// [`Update::DiscardConsequence`] under `asked`: the `Consequence` the confirmation draws,
     /// or why no discard is offered (a nested repository, a submodule, a conflict, …), before
-    /// any dialog (staging-and-commit R8.4). A read: it writes nothing, and the window may ask
-    /// again. Numbered in the discard-count lane, so a newer ask ends it — between paths, or
-    /// its `git` read's process — and so does a close; a count ended so answers nothing.
+    /// any dialog. A read: it writes nothing, and the window may ask again. Numbered in the
+    /// discard-count lane, so a newer ask ends it — between paths, or its `git` read's process
+    /// — and so does a close; a count ended so answers nothing.
     DiscardConsequence {
         asked: OperationId,
         paths: Vec<RepoPath>,
@@ -433,9 +428,9 @@ pub enum Request {
     /// What discarding `selection` of `diff` — a path's unstaged or untracked diff as Local
     /// Changes drew it — would lose (`ops::discard_lines_consequence`), computed on the local
     /// lane in the order asked and answered by [`Update::DiscardConsequence`] under `asked`, as
-    /// a discard of files is: the diff's staging gesture's discard (staging-and-commit R9.1,
-    /// R9.2). Numbered in the discard-count lane with it; one superseded before it runs answers
-    /// nothing. The diff is the answer drawn, shared, never copied.
+    /// a discard of files is: the diff's staging gesture's discard. Numbered in the
+    /// discard-count lane with it; one superseded before it runs answers nothing. The diff is
+    /// the answer drawn, shared, never copied.
     DiscardLinesConsequence {
         asked: OperationId,
         diff: Arc<FileDiff>,
@@ -446,45 +441,45 @@ pub enum Request {
     /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
     /// when it is no longer shown, so a count nobody will confirm stops holding the local lane.
     StopCounting,
-    /// What the commit box reads beside a commit (staging-and-commit R6.6, R6.7, R6.9, R10):
-    /// the operation in progress, the hooks git would run and the recent messages, read on the
-    /// local lane after the writes asked before it — so a commit's own message is among them
-    /// once it has ended — and answered by [`Update::CommitReads`]. Numbered in the commit-box
-    /// lane: the next ask supersedes it, and an answer superseded is never drawn.
+    /// What the commit box reads beside a commit: the operation in progress, the hooks git
+    /// would run and the recent messages, read on the local lane after the writes asked before
+    /// it — so a commit's own message is among them once it has ended — and answered by
+    /// [`Update::CommitReads`]. Numbered in the commit-box lane: the next ask supersedes it,
+    /// and an answer superseded is never drawn.
     CommitReads,
     /// Amend's staged list against `HEAD`'s parent laid out with `status`'s unstaged one
-    /// (`LocalChanges::amending`), and `HEAD`'s message, read on the local lane after the writes
-    /// asked before it while Amend is ticked (R6.3, R10.3), answered by [`Update::Amending`]:
-    /// the overlay the lists draw over `status`. What an amend costs is never read here — it is
-    /// read at the press, in the job that runs it (rule 3 of the redesign). Numbered in the
-    /// amending lane, so the next status asking again ends the read before — its `git` read.
-    /// `status` is the window's own, shared.
+    /// (`LocalChanges::amending`), and `HEAD`'s message, read on the local lane after the
+    /// writes asked before it while Amend is ticked, answered by [`Update::Amending`]: the
+    /// overlay the lists draw over `status`. What an amend costs is never read here — it is
+    /// read at the press, in the job that runs it. Numbered in the amending lane, so the next
+    /// status asking again ends the read before — its `git` read. `status` is the window's own,
+    /// shared.
     Amending { status: Arc<LocalChanges> },
     /// Ends amend's read in flight or queued, and asks nothing: Amend unticked, so a commit
     /// pressed next never waits on the serial lane behind an answer that is thrown away.
     StopAmending,
     /// Whether `name`, typed in Create Branch, can be a new branch's: git's `check-ref-format
-    /// --branch`, then the ref looked up (staging-and-commit R11.3), read on the local lane and
-    /// answered by [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's
-    /// ask supersedes it, its `git` read ended.
+    /// --branch`, then the ref looked up, read on the local lane and answered by
+    /// [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's ask
+    /// supersedes it, its `git` read ended.
     CheckBranchName { name: String },
     /// What Create Branch's Discard of the branch `name` at `at` would be confirmed as
     /// (`ops::checkout_discarding_consequence`: the branch, the commit and `HEAD`, or the
     /// refusal of an operation in progress), read on the local lane after the writes asked
     /// before it — asked as Discard is chosen and as the name changes while it is — and
-    /// answered by [`Update::CheckoutConsequence`] under `asked` (R11.3, the user's decisions
-    /// of 2026-10-10). Numbered in the checkout-count lane: a newer ask supersedes it.
+    /// answered by [`Update::CheckoutConsequence`] under `asked`. Numbered in the
+    /// checkout-count lane: a newer ask supersedes it.
     CheckoutConsequence {
         asked: OperationId,
         name: String,
         at: Oid,
     },
     /// What removing the stale `index.lock` would destroy, asked as `Remove index.lock…` is
-    /// pressed (`ops::remove_lock_consequence`; the user's decision H of 2026-10-09: the offer and
-    /// its age are read at the press, never once as a write ends), on the local lane after the
-    /// writes asked before it, and answered by [`Update::LockConsequence`] under `asked`.
+    /// pressed (`ops::remove_lock_consequence`: the offer and its age are read at the press,
+    /// never once as a write ends), on the local lane after the writes asked before it, and
+    /// answered by [`Update::LockConsequence`] under `asked`.
     LockConsequence { asked: OperationId },
-    /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
+    /// Cancels the write `id` names, if it is a commit and running; nothing otherwise.
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     CancelWrite { id: OperationId },
     /// Every `git` invocation this repository has run that is over, oldest
@@ -493,8 +488,7 @@ pub enum Request {
         not(test),
         expect(
             dead_code,
-            reason = "no view asks for the log in this packet (PRD R8.3); the worker answers it, \
-                      and its tests ask"
+            reason = "no view asks for the log yet; the worker answers it, and its tests ask"
         )
     )]
     CommandLog,
@@ -525,7 +519,7 @@ impl Request {
             Self::Changes { .. } => &[QueryLane::Changes],
             Self::FileDiff(_) | Self::Expand(_) => &[QueryLane::FileDiff],
             Self::FilterFiles { .. } => &[QueryLane::FileFilter],
-            // Not the status lane: a refresh never supersedes a status (R10.3 as amended).
+            // Not the status lane: a refresh never supersedes a status.
             Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
             Self::FilterRefs { .. } => &[QueryLane::RefFilter],
             Self::FilterLocalChanges { .. } => &[QueryLane::LocalChangesFilter],
@@ -543,7 +537,7 @@ impl Request {
             | Self::Write { .. }
             | Self::CancelWrite { .. }
             | Self::LockConsequence { .. }
-            // Status is numbered in its lane, which nothing moves (R10.3 as amended).
+            // Status is numbered in its lane, which nothing moves.
             | Self::RefreshStatus
             | Self::CommandLog
             | Self::Retire(_)
@@ -563,8 +557,8 @@ pub enum Refreshed {
 /// Why Create Branch's Discard cannot be confirmed now, as the local lane answers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutRefused {
-    /// git is in the middle of an operation the forced checkout would abandon without a word
-    /// (the user's decision of 2026-10-10): refused before git runs, worded by the dialog.
+    /// git is in the middle of an operation the forced checkout would abandon without a word:
+    /// refused before git runs, worded by the dialog.
     InProgress(OperationInProgress),
     /// The engine could not read what the consequence holds (the commit, `HEAD`): its words.
     Failed(String),
@@ -597,24 +591,24 @@ pub enum Update {
     /// git is running; a `CancelFetch` from here on has something to kill.
     FetchStarted { remote: String },
     /// The fetch in flight wrote: the redraws of git's own progress meter wait in the network
-    /// lane's tap — whole lines, scrubbed by the engine as it split them (R4.10, R12.2) — for
-    /// the window to drain as it applies this, one wake for whatever waits (`output_tap`).
+    /// lane's tap — whole lines, scrubbed by the engine as it split them — for the window to
+    /// drain as it applies this, one wake for whatever waits (`output_tap`).
     FetchProgress { tap: super::OutputTap },
     /// The fetch ended. Whether it moved a ref is the refresh's to find out, which the
     /// window asks for on every ending, since a fetch that failed or was killed may have
-    /// moved some refs before it stopped (refs-and-status R10.1).
+    /// moved some refs before it stopped.
     FetchFinished { remote: String },
-    /// The fetch was cancelled: nothing is opened for it (staging-and-commit R14.5).
+    /// The fetch was cancelled: nothing is opened for it.
     FetchCancelled { remote: String },
-    /// The fetch failed: the Git Error dialog's command, output and sentence (R14.3).
+    /// The fetch failed: the Git Error dialog's command, output and sentence.
     FetchFailed {
         remote: String,
         failure: super::local::lane::Failure,
     },
     /// A fetch of `remote` was not started because one is already in flight;
     /// `reason` says which, as display text. Nothing else about the fetch in
-    /// flight changes. The window draws nothing for it: Fetch is greyed while a fetch runs
-    /// (staging-and-commit F9), so only a second press racing the first's start reaches it.
+    /// flight changes. The window draws nothing for it: Fetch is greyed while a fetch runs, so
+    /// only a second press racing the first's start reaches it.
     FetchRefused { remote: String, reason: String },
     /// git or ssh is asking, through the helper: `text` is the prompt as
     /// given, `id` is what the answer must name, and `asking` is the operation
@@ -627,9 +621,9 @@ pub enum Update {
         text: String,
         asking: Option<String>,
     },
-    /// The refs as they stand, read on the history thread (refs-and-status R1, R11.2): by a
-    /// refresh, in the refs lane, with `reopen` saying whether what the history draws differs
-    /// from the snapshot its walk began from (R10.4) — so the window reopens it, and leaves
+    /// The refs as they stand, read on the history thread: by a refresh, in the refs lane,
+    /// with `reopen` saying whether what the history draws differs from the snapshot its walk
+    /// began from — so the window reopens it, and leaves
     /// it alone otherwise; or by an open that read its own, in the history lane, with
     /// `reopen` false, since the walk being opened is from this snapshot.
     Refs {
@@ -637,10 +631,10 @@ pub enum Update {
         reopen: bool,
     },
     /// Each local branch's distance from its upstream, for the snapshot the same refresh
-    /// read, in that snapshot's order (R2).
+    /// read, in that snapshot's order.
     AheadBehind { counts: Vec<(RefName, AheadBehind)> },
-    /// The working tree's status as `git status` lists it (R3), laid out on the refresh
-    /// thread as Local Changes' two lists (R9.1), so the window only keeps it.
+    /// The working tree's status as `git status` lists it, laid out on the refresh thread as
+    /// Local Changes' two lists, so the window only keeps it.
     Status { changes: Arc<LocalChanges> },
     /// One of a refresh's reads failed: `message` is display text. The answer kept before
     /// stays as it was.
@@ -659,32 +653,31 @@ pub enum Update {
         text: String,
         rows: MatchedRows,
     },
-    /// A local write has started (staging-and-commit R4.2): the writes asked before it have
-    /// ended, and it is no longer queued.
+    /// A local write has started: the writes asked before it have ended, and it is no longer
+    /// queued.
     WriteStarted { id: OperationId },
     /// A running commit or amend's `git` — or a hook it runs — wrote: its lines, stdout's and
-    /// stderr's alike as they arrived (staging-and-commit R6.5), wait in the local lane's tap —
-    /// whole lines, scrubbed by the engine as it split them (R4.10, R12.2) — for the window to
-    /// drain as it applies this, one wake for whatever waits (`output_tap`). What the Git Error
-    /// dialog and the activity popover draw.
+    /// stderr's alike as they arrived, wait in the local lane's tap — whole lines, scrubbed by
+    /// the engine as it split them — for the window to drain as it applies this, one wake for
+    /// whatever waits (`output_tap`). What the Git Error dialog and the activity popover draw.
     WriteOutput {
         id: OperationId,
         tap: super::OutputTap,
     },
-    /// A local write has ended, how, and what the window reads again after it (R4.5): what
-    /// its `Invalidated` names — everything, for a commit, whatever its ending, so a refresh
-    /// kept back while it ran (R4.6) is never lost.
+    /// A local write has ended, how, and what the window reads again after it: what its
+    /// `Invalidated` names — everything, for a commit, whatever its ending, so a refresh kept
+    /// back while it ran is never lost.
     WriteEnded {
         id: OperationId,
         ending: WriteEnding,
         read_again: ReadAgain,
         /// A confirmed amend's token git's failure handed back unspent, for the Git Error
-        /// dialog's skip (R1.1, R10.5); none for every other ending.
+        /// dialog's skip; none for every other ending.
         unspent: super::Unspent,
     },
-    /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
-    /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
-    /// their arguments and output scrubbed of a URL's userinfo by the engine (R12.2).
+    /// What an operation ran, sent just before its ending: the command log's records of every
+    /// `git` it ran itself — never another lane's run meanwhile — their arguments and output
+    /// scrubbed of a URL's userinfo by the engine.
     OperationRan {
         by: RanBy,
         commands: Vec<CommandRecord>,
@@ -725,20 +718,19 @@ pub enum Update {
         read: Box<AmendRead>,
     },
     /// When `<gitdir>/index.lock` was last changed, if it is there — read by a `stat` on the
-    /// refresh thread on every refresh (staging-and-commit R12.4, F6): the leftover lock's
-    /// state, whose banner the window draws while it is old enough and no git of Cairn's runs.
+    /// refresh thread on every refresh: the leftover lock's state, whose banner the window
+    /// draws while it is old enough and no git of Cairn's runs.
     IndexLock {
         changed: Option<std::time::SystemTime>,
     },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog { records: Vec<CommandRecord> },
-    /// What `of` changed (R2.1, R2.2): its files, the commit's details when one commit was
+    /// What `of` changed: its files, the commit's details when one commit was
     /// named, and how the rename search went.
     Changes { of: Comparison, changes: ChangeSet },
     /// One file's diff as `query` asked for it, prepared for the views on the worker that
-    /// answered it (both rows' indexes, the widest line; phase 07) so the window only keeps
-    /// it; `None` where the working tree's `git diff` of the path prints nothing (a clean
-    /// path).
+    /// answered it (both rows' indexes, the widest line) so the window only keeps it; `None`
+    /// where the working tree's `git diff` of the path prints nothing (a clean path).
     FileDiff {
         query: FileQuery,
         /// Boxed: a prepared diff is far larger than any other update.
@@ -778,7 +770,8 @@ impl Update {
     /// a status. `None` for everything else — a page of rows, a filter's indices, a failure, or
     /// a superseded consequence or commit-box read (a discard's bounded by the selection's
     /// paths) — which is small or bounded by what was asked, or (a fetch's and a prompt's
-    /// news) carries no epoch and is never superseded. No arm defaults, so a new update does not compile until it is placed.
+    /// news) carries no epoch and is never superseded. No arm defaults, so a new update does
+    /// not compile until it is placed.
     pub(super) fn into_retired(self) -> Option<Retired> {
         match self {
             Self::Changes { changes, .. } => Retired::of(Some(Arc::new(changes)), Vec::new()),
@@ -836,27 +829,27 @@ pub enum RanBy {
     Fetch,
 }
 
-/// What the commit box reads beside a commit (staging-and-commit R6.7, R6.9, R6.10): each
-/// read's answer, or why it failed as display text — one failing alone.
+/// What the commit box reads beside a commit: each read's answer, or why it failed as display
+/// text — one failing alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitReads {
     /// What git is in the middle of: a merge, a single cherry-pick or a single revert fills an
     /// empty draft and is concluded by the commit; a rebase, `git am` or a sequence disables
-    /// the box (R10.8).
+    /// the box.
     pub operation: Option<OperationInProgress>,
     /// The message git prepared for the commit that concludes the operation — `MERGE_MSG`,
-    /// cleaned as git's editor cleans it (R6.10) — read only while one a commit concludes is in
+    /// cleaned as git's editor cleans it — read only while one a commit concludes is in
     /// progress; `None` otherwise, or where git prepared none.
     pub message: Result<Option<String>, String>,
-    /// The latest messages on the current branch, newest first (R10.2).
+    /// The latest messages on the current branch, newest first.
     pub recent: Result<Vec<String>, String>,
 }
 
-/// Amend's staged list, read for the status it was asked with (R6.3, R10.3): each part, or why
-/// it failed as display text. What the amend costs is not among it: that is read at the press.
+/// Amend's staged list, read for the status it was asked with: each part, or why it failed as
+/// display text. What the amend costs is not among it: that is read at the press.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmendRead {
-    /// `HEAD`'s message, which ticking Amend fills an empty, untouched draft with (C7).
+    /// `HEAD`'s message, which ticking Amend fills an empty, untouched draft with.
     pub message: Result<String, String>,
     /// The lists while amending: Unstaged as the status lists it, Staged as amend's staged
     /// list against `HEAD`'s parent (`LocalChanges::amending`) — or why amend's staged list
@@ -993,7 +986,7 @@ mod tests {
             [QueryLane::History, QueryLane::Walk]
         );
         // A refresh is numbered in the refs and ahead/behind lanes and nothing else: no page,
-        // no diff, no filter is superseded by one, and no status (R10.3 as amended).
+        // no diff, no filter is superseded by one, and no status.
         assert_eq!(
             Request::Refresh.lanes(),
             [QueryLane::Refs, QueryLane::AheadBehind]

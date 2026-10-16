@@ -1,11 +1,10 @@
-//! Local Changes acting on files, in the window, headless (staging-and-commit R8; criteria C18,
-//! C8's view half and C24's conflicted rows): each of Fork's routes asks the local lane to
-//! stage or unstage exactly the paths selected, the selection then moves to the nearest path
-//! left; a discard asks the engine what it would lose and opens the confirmation with it, its
-//! token asking the discard; no route discards a staged change, a submodule or a conflict, and
-//! the view says why; nothing acts while a dialog is open; and what each write does is drawn
-//! where it was asked. Updates are applied through `session::apply`, as the worker's stream
-//! applies them, and requests read back from the window's submit.
+//! Local Changes acting on files, in the window, headless: each of Fork's routes asks the local
+//! lane to stage or unstage exactly the paths selected, the selection then moves to the nearest
+//! path left; a discard asks the engine what it would lose and opens the confirmation with it,
+//! its token asking the discard; no route discards a staged change, a submodule or a conflict,
+//! and the view says why; nothing acts while a dialog is open; and what each write does is
+//! drawn where it was asked. Updates are applied through `session::apply`, as the worker's
+//! stream applies them, and requests read back from the window's submit.
 
 use std::rc::Rc;
 
@@ -274,12 +273,11 @@ fn choose_rows(test: &mut TestingRunner, view: View, rows: &[&str]) {
     let_go(test, view);
 }
 
-/// C18, R8.1-R8.3: a selection of three made by the extending press is staged by the stage
-/// chord on the focused list, as one write naming exactly those paths, and the selection then
-/// moves to the path that takes the first one's place, its diff asked; a range made by the
-/// range press is staged by Unstaged's Stage button. Caught by: the chord acting on the path
-/// chosen alone, a path the selection does not hold staged, or the selection left on paths
-/// that are leaving.
+/// A selection of three made by the extending press is staged by the stage chord on the focused
+/// list, as one write naming exactly those paths, and the selection then moves to the path that
+/// takes the first one's place, its diff asked; a range made by the range press is staged by
+/// Unstaged's Stage button. Caught by: the chord acting on the path chosen alone, a path the
+/// selection does not hold staged, or the selection left on paths that are leaving.
 #[test]
 fn the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on() {
     let (mut test, view, submitted) = opened(several());
@@ -315,10 +313,10 @@ fn the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on() {
     );
 }
 
-/// C18, R8.2: a selection dragged from Unstaged and dropped on Staged is staged whole; the
-/// menu's Stage stages the selection its row is in; a double press stages its row. Caught by:
-/// a drop that stages the row it began on alone, a menu acting on the row pressed rather than
-/// the selection it is in, or a double press staging nothing.
+/// A selection dragged from Unstaged and dropped on Staged is staged whole; the menu's Stage
+/// stages the selection its row is in; a double press stages its row. Caught by: a drop that
+/// stages the row it began on alone, a menu acting on the row pressed rather than the selection
+/// it is in, or a double press staging nothing.
 #[test]
 fn a_drag_the_menu_and_a_double_press_stage_what_is_selected() {
     let (mut test, view, submitted) = opened(several());
@@ -349,11 +347,11 @@ fn a_drag_the_menu_and_a_double_press_stage_what_is_selected() {
     assert_eq!(writes(&submitted)[2..], [write("stage", &["c.rs"])]);
 }
 
-/// C18, R3.4, R8.2: a staged selection unstages as `git reset` takes it — a rename's source
-/// beside it, so the rename moves out whole — by the chord; Unstage All by the menu takes the
-/// whole list, gathered on the local lane from the lists drawn; and the chevron's Stage All the
-/// whole of Unstaged. Caught by: a rename unstaged without its source, or an All that names the
-/// rows drawn on the UI thread.
+/// A staged selection unstages as `git reset` takes it — a rename's source beside it, so the
+/// rename moves out whole — by the chord; Unstage All by the menu takes the whole list,
+/// gathered on the local lane from the lists drawn; and the chevron's Stage All the whole of
+/// Unstaged. Caught by: a rename unstaged without its source, or an All that names the rows
+/// drawn on the UI thread.
 #[test]
 fn a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list() {
     let (mut test, view, submitted) = opened(several());
@@ -409,14 +407,13 @@ fn mixed_loss() -> Consequence {
     }
 }
 
-/// C17, C18, R7.4, R8.4, R1.2 and the redesign's rule 3: the discard chord on a selection opens
-/// the confirmation at once — "Counting…", its button greyed and reading the title, nothing
-/// pressable but Cancel — and asks the engine what it would lose; the answer for that ask makes
-/// the same dialog the confirmation drawn from it, and confirming asks the discard with the
-/// token built from exactly that consequence, the selection moving on. An answer for an earlier
-/// ask is dropped. Caught by: a dialog only once the engine answered, a greyed button that
-/// confirms, a discard asked without the dialog, a stale answer confirmed, or a token naming
-/// other words.
+/// The discard chord on a selection opens the confirmation at once — "Counting…", its button
+/// greyed and reading the title, nothing pressable but Cancel — and asks the engine what it
+/// would lose; the answer for that ask makes the same dialog the confirmation drawn from it,
+/// and confirming asks the discard with the token built from exactly that consequence, the
+/// selection moving on. An answer for an earlier ask is dropped. Caught by: a dialog only once
+/// the engine answered, a greyed button that confirms, a discard asked without the dialog, a
+/// stale answer confirmed, or a token naming other words.
 #[test]
 fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
     let (mut test, view, submitted) = opened(several());
@@ -500,12 +497,12 @@ fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
     assert_eq!(selected(view), ["b.rs"]);
 }
 
-/// The user's decisions of 2026-10-10 on phase 15's Q2 (rule 4): the engine refusing while it
-/// counts makes the open dialog the refusal — "Couldn't Discard Changes", the engine's sentence
-/// and "Nothing was changed.", Close alone — and nothing is said under the lists; and Cancel
-/// while counting lets the dialog go and ends the count (`Request::StopCounting`), its answer
-/// arriving later dropped. Caught by: the refusal said under the lists, a confirm button left on
-/// a refusal, a count left holding the local lane, or a late answer reopening a dialog.
+/// The engine refusing while it counts makes the open dialog the refusal — "Couldn't Discard
+/// Changes", the engine's sentence and "Nothing was changed.", Close alone — and nothing is
+/// said under the lists; and Cancel while counting lets the dialog go and ends the count
+/// (`Request::StopCounting`), its answer arriving later dropped. Caught by: the refusal said
+/// under the lists, a confirm button left on a refusal, a count left holding the local lane, or
+/// a late answer reopening a dialog.
 #[test]
 fn a_refusal_while_counting_is_said_in_the_dialog_and_cancel_ends_the_count() {
     let (mut test, view, submitted) = opened(several());
@@ -601,15 +598,14 @@ fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
     ]
 }
 
-/// C8 (views), C24, R3.6, R8.4, R8.7, R8.8 and the redesign's D1 and rule 4: no route discards
-/// a staged change, a submodule or a conflicted path — over a selection with nothing that can be
-/// discarded the chord asks nothing and says nothing, as Fork's does (no line under the lists);
-/// a selection mixing them with a path that can be discarded asks for that path alone, and its
-/// confirmation says in one line what is left — a nested repository among them, which is never
-/// touched (the user's decision of 2026-10-10 on phase 15's Q6); and a conflicted row stages
-/// whole, by `git add`. Caught by: a discard's consequence asked for any of them, a mixed
-/// selection refused whole or discarding a submodule, a conflict or a nested repository, a line
-/// drawn under the lists for the chord, or a conflict that cannot be staged.
+/// No route discards a staged change, a submodule or a conflicted path — over a selection with
+/// nothing that can be discarded the chord asks nothing and says nothing, as Fork's does (no
+/// line under the lists); a selection mixing them with a path that can be discarded asks for
+/// that path alone, and its confirmation says in one line what is left — a nested repository
+/// among them, which is never touched; and a conflicted row stages whole, by `git add`. Caught
+/// by: a discard's consequence asked for any of them, a mixed selection refused whole or
+/// discarding a submodule, a conflict or a nested repository, a line drawn under the lists for
+/// the chord, or a conflict that cannot be staged.
 #[test]
 fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why() {
     let (mut test, view, submitted) = opened(with_a_submodule_and_a_conflict());
@@ -695,13 +691,12 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
     assert_eq!(writes(&submitted), [write("stage", &["clash.rs"])]);
 }
 
-/// Phase 06's QA item 4, R7.4, and phase 07's QA item 6: with a confirmation open, Enter,
-/// Backspace and Delete pressed in Local Changes stage and discard nothing — the dialog holds
-/// the keys — and every gesture a list or the diff still reports behind the modal (a press, a
-/// double press, a drop, a chord's action, the diff's chord) is acted on not at all, though the
-/// view is handed the window's own submitter. Caught by: the lists' chords heard behind the
-/// modal, or the view's dialog check gone (`dialog_open`), which asks a stage, a discard's count
-/// and Stage All here.
+/// With a confirmation open, Enter, Backspace and Delete pressed in Local Changes stage and
+/// discard nothing — the dialog holds the keys — and every gesture a list or the diff still
+/// reports behind the modal (a press, a double press, a drop, a chord's action, the diff's
+/// chord) is acted on not at all, though the view is handed the window's own submitter. Caught
+/// by: the lists' chords heard behind the modal, or the view's dialog check gone
+/// (`dialog_open`), which asks a stage, a discard's count and Stage All here.
 #[test]
 fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
     let (mut test, view, submitted) = opened(several());
@@ -757,9 +752,8 @@ fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
     );
 }
 
-/// Phase 06's QA item 21: Backspace and Delete typed into the filter field while Local Changes
-/// is shown edit the filter and discard nothing. Caught by: a bare key the field let bubble to
-/// the list's chords.
+/// Backspace and Delete typed into the filter field while Local Changes is shown edit the
+/// filter and discard nothing. Caught by: a bare key the field let bubble to the list's chords.
 #[test]
 fn backspace_in_the_filter_edits_the_filter_and_discards_nothing() {
     let (mut test, view, submitted) = opened(several());
@@ -781,10 +775,10 @@ fn backspace_in_the_filter_edits_the_filter_and_discards_nothing() {
     assert_eq!(writes(&submitted), []);
 }
 
-/// Phase 06's QA item 5: a credential prompt that arrives while a confirmation is open is drawn
-/// and can be answered — the confirmation set aside, kept unanswered — and the confirmation is
-/// drawn again once the prompt is gone. Caught by: a prompt behind the modal no key can reach,
-/// or a confirmation lost to the prompt.
+/// A credential prompt that arrives while a confirmation is open is drawn and can be answered —
+/// the confirmation set aside, kept unanswered — and the confirmation is drawn again once the
+/// prompt is gone. Caught by: a prompt behind the modal no key can reach, or a confirmation
+/// lost to the prompt.
 #[test]
 fn a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered() {
     let (mut test, view, _) = opened(several());
@@ -823,10 +817,10 @@ fn a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered() {
     );
 }
 
-/// C18, R8.5, L6: Local Changes' diff is always the exact one — asked with whitespace never
-/// ignored though the shared setting ignores it, its bar's toggle disabled — and the setting is
-/// left as it was. Caught by: the working-tree query asked at the shared setting, or a toggle
-/// that changes it from here.
+/// Local Changes' diff is always the exact one — asked with whitespace never ignored though the
+/// shared setting ignores it, its bar's toggle disabled — and the setting is left as it was.
+/// Caught by: the working-tree query asked at the shared setting, or a toggle that changes it
+/// from here.
 #[test]
 fn local_changes_diff_is_always_exact_and_leaves_the_setting_alone() {
     let (mut test, view, submitted) = launch();
@@ -858,11 +852,10 @@ fn local_changes_diff_is_always_exact_and_leaves_the_setting_alone() {
     assert_eq!(asked(&submitted).len(), 1, "a disabled toggle asked again");
 }
 
-/// C28 (R14.3, R14.5, R14.6; R8.6 superseded): nothing is drawn under the lists for a write —
-/// queued or running, it is the status box's — a stale patch's ending opens "Couldn't <name>"
-/// naming its path once, with "Nothing was changed." once and no Error Details, and a write
-/// done says nothing at all. Caught by: a line under the lists, a stale ending drawn as
-/// nothing, or the tail said twice.
+/// Nothing is drawn under the lists for a write — queued or running, it is the status box's — a
+/// stale patch's ending opens "Couldn't <name>" naming its path once, with "Nothing was
+/// changed." once and no Error Details, and a write done says nothing at all. Caught by: a line
+/// under the lists, a stale ending drawn as nothing, or the tail said twice.
 #[test]
 fn a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog() {
     let (mut test, view, submitted) = opened(several());
@@ -962,10 +955,10 @@ fn a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog() {
     );
 }
 
-/// Phase 03's QA item 4, decided here: the engine counts any path absent from the index as
-/// untracked, so the window must ask only for paths `git status` listed — a selection naming a
-/// path a refresh took away (or never listed) asks for the paths the lists drawn still list,
-/// and nothing when none is. Caught by: a selection's paths handed to the engine unchecked.
+/// The engine counts any path absent from the index as untracked, so the window must ask only
+/// for paths `git status` listed — a selection naming a path a refresh took away (or never
+/// listed) asks for the paths the lists drawn still list, and nothing when none is. Caught by:
+/// a selection's paths handed to the engine unchecked.
 #[test]
 fn a_discard_names_only_paths_the_lists_drawn_still_list() {
     let (mut test, view, submitted) = opened(several());
@@ -995,12 +988,12 @@ fn a_discard_names_only_paths_the_lists_drawn_still_list() {
     );
 }
 
-/// R8.1, C25, observed `lc2`: the extending press toggles a path in without moving the primary
-/// — the diff stays on the file clicked first — and out; the primary toggled out moves to the
-/// nearest path still selected and its diff is asked, so the diff never shows a path the
-/// selection left; the last path toggled out leaves nothing selected and no diff. Caught by:
-/// the path toggled in made primary (the diff jumping to it), a toggle that only adds, or a
-/// diff left on a path toggled out.
+/// As in Fork, the extending press toggles a path in without moving the primary — the diff
+/// stays on the file clicked first — and out; the primary toggled out moves to the nearest path
+/// still selected and its diff is asked, so the diff never shows a path the selection left; the
+/// last path toggled out leaves nothing selected and no diff. Caught by: the path toggled in
+/// made primary (the diff jumping to it), a toggle that only adds, or a diff left on a path
+/// toggled out.
 #[test]
 fn the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first() {
     let (mut test, view, _) = opened(several());
@@ -1029,10 +1022,10 @@ fn the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first() {
     assert_eq!(chosen(view), None, "a diff left for a path toggled out");
 }
 
-/// C24, R8.7, L25: a conflicted row stages whole — `git add`, which marks it resolved — by
-/// every route the person has: its double press, a drag into Staged, Unstaged's Stage button
-/// and its menu's Stage, as by the chord. Caught by: a route that leaves a conflicted row out,
-/// or takes it by another verb.
+/// A conflicted row stages whole — `git add`, which marks it resolved — by every route the
+/// person has: its double press, a drag into Staged, Unstaged's Stage button and its menu's
+/// Stage, as by the chord. Caught by: a route that leaves a conflicted row out, or takes it by
+/// another verb.
 #[test]
 fn a_conflicted_row_stages_whole_by_every_route() {
     let (mut test, _, submitted) = opened(with_a_submodule_and_a_conflict());
@@ -1059,10 +1052,10 @@ fn a_conflicted_row_stages_whole_by_every_route() {
     assert_eq!(consequences_asked(&submitted), []);
 }
 
-/// C18, R8.2: a staged selection unstages by every route but the double press (which takes its
-/// row): dragged from Staged and dropped on Unstaged, Staged's Unstage button, and the menu's
-/// Unstage — each one write naming exactly the selection. Caught by: a route that unstages the
-/// row it began on alone, or stages instead.
+/// A staged selection unstages by every route but the double press (which takes its row):
+/// dragged from Staged and dropped on Unstaged, Staged's Unstage button, and the menu's Unstage
+/// — each one write naming exactly the selection. Caught by: a route that unstages the row it
+/// began on alone, or stages instead.
 #[test]
 fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
     let (mut test, view, submitted) = opened(several());
@@ -1078,7 +1071,7 @@ fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
     settle(&mut test);
     // The headless runner's presses come with no time between them: a press on s.rs straight
     // after the drop's release would be read as the second of a double press, which stages its
-    // row (C18's double-press route). A press on another row first keeps the routes apart.
+    // row (the double-press route). A press on another row first keeps the routes apart.
     press_row(&mut test, "b.rs", 0);
     choose_rows(&mut test, view, &["s.rs", "u.rs"]);
     click(&mut test, cairn_ui::UNSTAGE_CAPTION);
@@ -1098,9 +1091,9 @@ fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
     assert_eq!(writes(&submitted)[3..], [write("unstage", &["s.rs"])]);
 }
 
-/// Phase 07's QA item 1: Local Changes let go of while a discard's loss is being counted ends
-/// the count — `Request::StopCounting`, so the local lane is not held for a confirmation nobody
-/// will see — and forgets it. Caught by: a count left running once the view is gone.
+/// Local Changes let go of while a discard's loss is being counted ends the count —
+/// `Request::StopCounting`, so the local lane is not held for a confirmation nobody will see —
+/// and forgets it. Caught by: a count left running once the view is gone.
 #[test]
 fn leaving_local_changes_ends_a_discards_count() {
     let (mut test, view, submitted) = opened(several());
@@ -1166,13 +1159,13 @@ fn filterable() -> Vec<StatusEntry> {
     ]
 }
 
-/// Rule 8, C18, the QA brief ("no route acts on anything but the selection"): the Staged
-/// list's Unstage is greyed while the selection is Unstaged's, so it unstages nothing; a drag
-/// begun on a row the selection does not hold carries that row alone — the selection made of it
-/// as it drops, as a native list's drag does — and the selection then moves on by the rule;
-/// with Stage All's heading key held both headings act on their whole list, whatever is
-/// selected. Caught by: a greyed button that still acts, a drag that stages the selection it
-/// did not begin in, or a held heading acting on the selection.
+/// No route acts on anything but the selection: the Staged list's Unstage is greyed while the
+/// selection is Unstaged's, so it unstages nothing; a drag begun on a row the selection does
+/// not hold carries that row alone — the selection made of it as it drops, as a native list's
+/// drag does — and the selection then moves on by the rule; with Stage All's heading key held
+/// both headings act on their whole list, whatever is selected. Caught by: a greyed button that
+/// still acts, a drag that stages the selection it did not begin in, or a held heading acting
+/// on the selection.
 #[test]
 fn every_route_takes_the_selection_and_nothing_the_person_did_not_select() {
     let (mut test, view, submitted) = opened(several());
@@ -1212,12 +1205,11 @@ fn every_route_takes_the_selection_and_nothing_the_person_did_not_select() {
     );
 }
 
-/// L3, the QA brief ("no file is ever acted on that the filter hides"): while a filter's first
-/// rows are on their way the lists show nothing and the selection is left as it was — so the
-/// stage and discard chords heard on the diff then take nothing: no write, no consequence, no
-/// dialog — every route takes only the selected paths the lists SHOW. Caught by: an action that
-/// takes the selection's listed paths without asking whether the filter shows them (phase 16's
-/// QA #1).
+/// No file is ever acted on that the filter hides: while a filter's first rows are on their way
+/// the lists show nothing and the selection is left as it was — so the stage and discard chords
+/// heard on the diff then take nothing: no write, no consequence, no dialog — every route takes
+/// only the selected paths the lists SHOW. Caught by: an action that takes the selection's
+/// listed paths without asking whether the filter shows them.
 #[test]
 fn nothing_is_acted_on_while_the_filters_rows_are_on_their_way() {
     let (mut test, view, submitted) = opened(several());
@@ -1248,11 +1240,11 @@ fn nothing_is_acted_on_while_the_filters_rows_are_on_their_way() {
     assert!(view.confirming.peek().is_none(), "a dialog opened");
 }
 
-/// Phase 07's QA item 7, R8.3: the selection moves to the row that takes the FIRST acted row's
-/// place — c.rs staged out of a, b, c, d leaves d.rs selected, not the list's first row — and,
-/// through a filter, by the rows the filter shows: cx.rs staged out of cx, dx, ex leaves dx.rs.
-/// Caught by: the nearest measured from the top of the list, or from the row's place in the
-/// whole list rather than the rows shown.
+/// The selection moves to the row that takes the FIRST acted row's place — c.rs staged out of
+/// a, b, c, d leaves d.rs selected, not the list's first row — and, through a filter, by the
+/// rows the filter shows: cx.rs staged out of cx, dx, ex leaves dx.rs. Caught by: the nearest
+/// measured from the top of the list, or from the row's place in the whole list rather than the
+/// rows shown.
 #[test]
 fn the_selection_moves_to_the_row_that_takes_the_acted_rows_place() {
     let (mut test, view, submitted) = opened(several());
@@ -1270,10 +1262,9 @@ fn the_selection_moves_to_the_row_that_takes_the_acted_rows_place() {
     assert_eq!(selected(view), ["dx.rs"]);
 }
 
-/// The user's decision (2026-10-09, phase 07's QA item 11): with a filter on, Stage All and
-/// Unstage All take the rows the filter shows and no other — a hidden row, a hidden conflicted
-/// row among them, stays as it is — and with none on, every row. Caught by: an All that takes
-/// the rows the filter hides.
+/// With a filter on, Stage All and Unstage All take the rows the filter shows and no other — a
+/// hidden row, a hidden conflicted row among them, stays as it is — and with none on, every
+/// row. Caught by: an All that takes the rows the filter hides.
 #[test]
 fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
     let (mut test, view, submitted) = opened(filterable());
@@ -1292,12 +1283,12 @@ fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
     );
 }
 
-/// Phase 07's QA item 5: a refresh that takes the selected paths away moves the selection with
-/// the path chosen — so when one of them is listed again it is not selected unseen, and the
-/// stage chord stages only what is drawn selected; and a ⌘- or Ctrl-press that toggles the last
-/// path out leaves nothing selected — the diff saying "No file selected" — so the stage chord
-/// stages nothing. Caught by: a selection that keeps paths a refresh took away, or an emptied
-/// selection that falls back to the path toggled out.
+/// A refresh that takes the selected paths away moves the selection with the path chosen — so
+/// when one of them is listed again it is not selected unseen, and the stage chord stages only
+/// what is drawn selected; and a ⌘- or Ctrl-press that toggles the last path out leaves nothing
+/// selected — the diff saying "No file selected" — so the stage chord stages nothing. Caught
+/// by: a selection that keeps paths a refresh took away, or an emptied selection that falls
+/// back to the path toggled out.
 #[test]
 fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
     let (mut test, view, submitted) = opened(several());
@@ -1330,7 +1321,7 @@ fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
     press_row(&mut test, "d.rs", 0);
     let_go(&mut test, view);
     assert_eq!(selected(view), Vec::<String>::new());
-    // R8.1: with nothing selected the diff says so, in Fork's words.
+    // With nothing selected the diff says so, in Fork's words.
     assert!(
         crate::local_changes::tests::labels(&test)
             .iter()

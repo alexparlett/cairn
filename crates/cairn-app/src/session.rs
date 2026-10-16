@@ -27,7 +27,7 @@ pub struct Worker<'a> {
 /// refuses its prompt, which releases the helper of a git that is gone; a
 /// fetch's ending asks for a refresh, which reopens the history if the fetch
 /// moved what it draws, and a write's asks for what the write says to read
-/// again (staging-and-commit R4.5). A prompt arriving while neither a fetch
+/// again. A prompt arriving while neither a fetch
 /// nor a write is in flight — a helper orphaned by a killed git — is refused
 /// rather than shown, since the dialog could not say what asked. A refresh's
 /// refs that differ from those the history was walked from reopen it, keeping
@@ -59,7 +59,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 (history.len(), held)
             };
             progress.write().appended(widest, complete, loaded, held);
-            // A find in the sidebar looks through the rows that arrived (R8.5).
+            // A find in the sidebar looks through the rows that arrived.
             crate::history::ref_find::pages_arrived(view, Some(worker.submit));
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
@@ -68,17 +68,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
-        // The leftover lock's stat, from every refresh (R12.4, F6).
+        // The leftover lock's stat, from every refresh.
         Update::IndexLock { changed } => {
             let mut lock = view.lock;
             lock.write().stated(changed);
         }
-        // What removing the stale lock would cost, read at the press (the user's decision H).
+        // What removing the stale lock would cost, read at the press.
         Update::LockConsequence { asked, outcome } => {
             crate::operations::leftover_lock::answered(view, asked, outcome);
         }
-        // What a discard would lose, for the confirmation Local Changes opened at the press
-        // (R7.4, R8.4): kept only for the discard asked last and only while that confirmation is
+        // What a discard would lose, for the confirmation Local Changes opened at the press:
+        // kept only for the discard asked last and only while that confirmation is
         // still open and counting — one let go of drops it.
         Update::CommitReads(reads) => crate::commit_box::pane::reads_arrived(*reads, view),
         Update::BranchName { name, outcome } => {
@@ -116,7 +116,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 fetch.write().progressed(line.to_owned());
             }
         }
-        // What an operation ran, for the activity popover (R12.1).
+        // What an operation ran, for the activity popover.
         Update::OperationRan { by, commands } => {
             let key = match by {
                 crate::worker::RanBy::Write(id) => {
@@ -139,7 +139,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Finished { remote });
             refresh_after_an_operation(worker);
         }
-        // A cancel opens nothing (R14.5).
+        // A cancel opens nothing.
         Update::FetchCancelled { remote } => {
             activity.log.write().fetch_ended(
                 &remote,
@@ -153,7 +153,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Cancelled { remote });
             refresh_after_an_operation(worker);
         }
-        // git's failure opens its Git Error, as every operation the person started does (R14.3).
+        // git's failure opens its Git Error, as every operation the person started does.
         Update::FetchFailed { remote, failure } => {
             activity.log.write().fetch_ended(
                 &remote,
@@ -179,8 +179,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
             crate::commit_box::pane::write_started(id, view);
         }
-        // The commit box's commit's output, kept for the Git Error dialog (R10.5), and every
-        // write's for the activity popover (R10.4, R12.1).
+        // The commit box's commit's output, kept for the Git Error dialog, and every
+        // write's for the activity popover.
         // Drained once from the local lane's tap, whatever waits (`output_tap`).
         Update::WriteOutput { id, tap } => {
             let drained = tap.drain();
@@ -207,8 +207,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let the_boxs =
                 crate::commit_box::pane::write_ended(id, &ending, &mut unspent, view, asking);
             crate::operations::create_branch::write_ended(view, id, &ending, asking);
-            // A write that never started is named as it was asked (the user's decision N), and
-            // a destructive one quotes the prompt it was asked with however it ended (R12.1).
+            // A write that never started is named as it was asked, and a destructive one quotes
+            // the prompt it was asked with however it ended.
             let asked = {
                 let writes = writes.peek();
                 writes
@@ -217,7 +217,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                     .find(|asked| asked.id == id)
                     .cloned()
             };
-            // Every ending to its one home (R14): the commit box's Git Error is its own; any
+            // Every ending to its one home: the commit box's Git Error is its own; any
             // other failure or refusal waits its turn in the endings' dialog, by the write's one
             // name; a success or a cancel opens nothing.
             if !the_boxs {
@@ -237,8 +237,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
             }
-            // What the write left stale and no more (R4.5): a read begun before it ended is
-            // dropped by the worker (R4.4), so this is the one that shows it.
+            // What the write left stale and no more: a read begun before it ended is dropped
+            // by the worker, so this is the one that shows it.
             if !worker.closing {
                 (worker.submit)(match read_again {
                     ReadAgain::Everything => Request::Refresh,
@@ -246,10 +246,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 });
             }
         }
-        // Kept for the views that draw it (phases 07-08); the snapshot it replaces is freed
+        // Kept for the views that draw it; the snapshot it replaces is freed
         // on a worker. A history the refs no longer draw is reopened.
         Update::Refs { snapshot, reopen } => {
-            // The sidebar's rows are asked for the snapshot that arrived (R8).
+            // The sidebar's rows are asked for the snapshot that arrived.
             let mut sidebar = view.sidebar.state;
             let asked = sidebar.write().refs_arrived(&snapshot);
             if !worker.closing {
@@ -258,7 +258,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = refreshed.write().refs_arrived(snapshot);
             retire(replaced, worker);
             // What the commit box reads is asked again: a merge begun, a hook added, a commit
-            // made (R10).
+            // made.
             if !worker.closing {
                 crate::commit_box::pane::refs_arrived(view, worker.submit);
             }
@@ -273,11 +273,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             retire(replaced, worker);
         }
         // Kept for the title bar and the sidebar's count; laid out for Local Changes' lists,
-        // drawn at once or once a filter's rows are here (R9). What either lets go of is freed
+        // drawn at once or once a filter's rows are here. What either lets go of is freed
         // on a worker.
         Update::Status { changes } => {
             // Every status lands in the lists' state; while Amend is ticked it asks amend's lists
-            // over it, its overlay (R10.3, review M3).
+            // over it, its overlay.
             let mut local = view.local.state;
             let asked = local.write().status_arrived(Arc::clone(&changes));
             let replaced = refreshed.write().status_arrived(changes);
@@ -287,7 +287,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 }
             }
             retire(replaced, worker);
-            // The selection moved by the rule as the lists were drawn (R8.3, L5): its primary's
+            // The selection moved by the rule as the lists were drawn: its primary's
             // diff asked here, as the status arrives, never by a render effect.
             if !worker.closing {
                 crate::diff::actions::show_primary(view, Some(worker.submit), false);
@@ -303,7 +303,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             for request in requests {
                 (worker.submit)(request);
             }
-            // The filter pruned the selection to the rows it shows (L3): the primary's diff.
+            // The filter pruned the selection to the rows it shows: the primary's diff.
             if !worker.closing {
                 crate::diff::actions::show_primary(view, Some(worker.submit), false);
             }
@@ -322,12 +322,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = sidebar.write().rows_arrived(refs, rows);
             retire(replaced, worker);
         }
-        // Never drawn: Fetch is greyed while a fetch runs (F9), so only a second press racing
+        // Never drawn: Fetch is greyed while a fetch runs, so only a second press racing
         // the first's start reaches the lane's refusal, and the fetch in flight says the rest.
         Update::FetchRefused { .. } => {}
-        // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
+        // Answered for whoever asks; no view draws the log.
         Update::CommandLog { .. } => {}
-        // A fetch's, or a local write's — a hook, a signing key, an LFS filter (R5.1).
+        // A fetch's, or a local write's — a hook, a signing key, an LFS filter.
         Update::Prompt { id, text, asking } => {
             if fetch.peek().is_in_flight() || writes.peek().is_running() {
                 prompt.set(Some(PromptView { id, text, asking }));
@@ -335,7 +335,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 (worker.refuse)(id);
             }
         }
-        // Each kept only for the selection it names (PRD R4.4); checked before the write,
+        // Each kept only for the selection it names; checked before the write,
         // so an answer for another selection does not even wake what draws the diff. One not
         // kept is handed to a worker to free (`retire`), as a superseded one is.
         Update::Changes { of, changes } => {
@@ -417,7 +417,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
     }
 }
 
-/// The primary's diff was drawn again (R9.6, L4, C26): a finished line selection made over
+/// The primary's diff was drawn again: a finished line selection made over
 /// the text drawn `before` is kept while the text drawn `after` is the same — its content equal,
 /// so it names the same lines — and is let go of when it differs, the diff's bar saying so once
 /// (`cairn_ui::SELECTION_CLEARED`) until the next key or press. A selection over no text drawn
@@ -440,8 +440,8 @@ fn retire(retired: Option<Retired>, worker: &Worker<'_>) {
     }
 }
 
-/// An operation finished (a fetch, today): the refs, ahead/behind and status are read again
-/// (R10.1), and the refresh decides whether the history is reopened — unless the window is
+/// An operation finished (a fetch, today): the refs, ahead/behind and status are read again,
+/// and the refresh decides whether the history is reopened — unless the window is
 /// closing, when the worker that would answer has stopped.
 fn refresh_after_an_operation(worker: &Worker<'_>) {
     if !worker.closing {
@@ -449,12 +449,12 @@ fn refresh_after_an_operation(worker: &Worker<'_>) {
     }
 }
 
-/// The refs no longer draw the history on screen (R10.4): it is reopened from them. The rows
-/// it held are handed to a worker to free rather than freed here (#52, R11.3), the new
+/// The refs draw another history than the one on screen: it is reopened from them. The rows
+/// it held are handed to a worker to free rather than freed here (#52), the new
 /// history is sized for as many authors as the old named so its first pages do not rehash
 /// their way back up, and the selection is left as it is — it is drawn again when its row
-/// arrives (R10.5). With `lost`, the walk is Show Lost Commits' (staging-and-commit R11.4): a
-/// reopen like any other, off the UI thread.
+/// arrives. With `lost`, the walk is Show Lost Commits': a reopen like any other, off the UI
+/// thread.
 pub fn reopen_history(
     mut rows: State<cairn_model::History>,
     mut progress: State<Progress>,
@@ -468,7 +468,7 @@ pub fn reopen_history(
     };
     progress.set(Progress::opening());
     // The new history asked first, so its first page is not queued behind the free of the
-    // old one on the repository thread (phase 06 QA, RR4).
+    // old one on the repository thread.
     submit(Request::OpenHistory {
         rows: PAGE_ROWS,
         lost,
@@ -616,7 +616,7 @@ mod tests {
         });
     }
 
-    /// C8, R4.4, through the real boundary: an answer naming another selection is never
+    /// Through the real boundary: an answer naming another selection is never
     /// drawn, even when its epoch is still current — the selection was cleared without
     /// asking anything new, so the change set arrives through the worker under a current
     /// epoch and only the window's own check can refuse it. The negative follows: asked
@@ -661,9 +661,9 @@ mod tests {
         drop(handle);
     }
 
-    /// T5, the other three diff arms: a file's diff, Expand All's batch and a failure are
+    /// The other three diff arms: a file's diff, Expand All's batch and a failure are
     /// each refused with nothing selected and kept once their selection is made. Synthetic
-    /// answers, since what is decided here is the window's own check. Caught by: an arm
+    /// answers, since what this test decides is the window's own check. Caught by: an arm
     /// that stores whatever arrives (selecting what it names first), or one that drops
     /// even its own selection's answer.
     #[test]
@@ -788,7 +788,7 @@ mod tests {
         );
     }
 
-    /// R1 (phase 07 QA): an answer the window will not keep is freed on a worker, never on
+    /// An answer the window will not keep is freed on a worker, never on
     /// the UI thread — a file's prepared diff is up to 64 MiB in both layouts, a change set
     /// 55,184 files. One the epoch filter caught arrives as `Update::Superseded` and is
     /// handed straight back; one naming another selection is handed back from its own arm.
@@ -956,14 +956,12 @@ mod tests {
         }
     }
 
-    /// R10.1 and R10.4, the fetch's half: every ending — finished, cancelled, failed, since
-    /// one that failed or was killed may have moved refs before it stopped — asks for a
-    /// refresh and does nothing else; whether the history is reopened is the refresh's to
-    /// decide. The fetch's own tip comparison is gone: no ending carries whether a ref moved
-    /// (the field is gone from the type), clears a row or asks for the history. Caught by:
-    /// the old `reload_if` left running beside the refresh (a second reopen, rows cleared on
-    /// the UI thread), or an ending that does not refresh (a fetch that moved refs leaves the
-    /// graph stale).
+    /// The fetch's half: every ending — finished, cancelled, failed, since one that failed or
+    /// was killed may have moved refs before it stopped — asks for a refresh and does nothing
+    /// else; whether the history is reopened is the refresh's to decide. No ending carries
+    /// whether a ref moved, clears a row or asks for the history. Caught by: a reload of the
+    /// fetch's own beside the refresh (a second reopen, rows cleared on the UI thread), or an
+    /// ending that does not refresh (a fetch that moved refs leaves the graph stale).
     #[test]
     fn every_fetch_ending_asks_for_a_refresh_and_touches_no_row() {
         for ending in fetch_endings() {
@@ -984,7 +982,7 @@ mod tests {
         }
     }
 
-    /// R14.3, R14.5: a fetch cancelled opens nothing, and one git failed opens its Git Error,
+    /// A fetch cancelled opens nothing, and one git failed opens its Git Error,
     /// named for the fetch, with its command. Caught by: a cancel drawn, or a fetch's failure
     /// said anywhere but its dialog.
     #[test]
@@ -1074,7 +1072,7 @@ mod tests {
         ]
     }
 
-    /// Staging-and-commit R4.5: a write's ending asks for what it says to read again and no
+    /// A write's ending asks for what it says to read again and no
     /// more — status alone after a stage, everything after a commit (or a refresh it kept
     /// back) — once, and nothing while the window closes. Caught by: a full refresh after
     /// every write (the refs and the history read again for a stage), none at all (the
@@ -1104,7 +1102,7 @@ mod tests {
         }
     }
 
-    /// R5.1: a prompt is shown while a local write runs, as during a fetch, and the write's
+    /// A prompt is shown while a local write runs, as during a fetch, and the write's
     /// ending takes it down — unless a fetch is in flight, whose prompt it may be; a fetch's
     /// ending leaves one up while a write runs, for the same reason. Caught by: a prompt
     /// refused during a write (a hook or a signing key can never ask), or one ending taking
@@ -1151,7 +1149,7 @@ mod tests {
         }
     }
 
-    /// R12.4: the leftover lock's stat is kept for its banner, and a refused fetch — which the
+    /// The leftover lock's stat is kept for its banner, and a refused fetch — which the
     /// greyed Fetch never asks — changes nothing. Caught by: the stat dropped between the worker
     /// and the banner, or a refusal ending the fetch in flight.
     #[test]
@@ -1218,9 +1216,9 @@ mod tests {
         assert_eq!(view.remotes.read().len(), 1);
     }
 
-    /// Phase 06: the user's `diff.context` is where the session's context starts; a file
-    /// already shown at git's default — in the Changes tab — is asked again at it; once the user has moved the
-    /// context, a later reading of the configuration does not move it back. Caught by: a
+    /// The user's `diff.context` is where the session's context starts; a file already shown
+    /// at git's default — in the Changes tab — is asked again at it; once the user has moved
+    /// the context, a later reading of the configuration does not move it back. Caught by: a
     /// context fixed at three, or one the configuration overrides after the user chose.
     #[test]
     fn the_configured_context_is_where_the_session_starts_until_the_user_moves_it() {
@@ -1245,8 +1243,8 @@ mod tests {
             },
             options: crate::diff::actions::options(cairn_ui::DiffSettings::default()),
         };
-        // Shown in the Changes tab, whose file a setting asks again at once (phase 08: the
-        // Commit tab's files opened in place share the lane, and the hidden one waits).
+        // Shown in the Changes tab, whose file a setting asks again at once (the Commit tab's
+        // files opened in place share the lane, and the hidden one waits).
         test.run_in(|| view.detail_tab.set(cairn_ui::DetailTab::Changes));
         test.run_in(|| view.diff.write().select_file(query.clone()));
 
@@ -1288,7 +1286,7 @@ mod tests {
         assert_eq!(asked.submitted.borrow().len(), 1);
     }
 
-    /// Phase 06 QA (T7), through the real boundary: `diff.context` and
+    /// Through the real boundary: `diff.context` and
     /// `diff.interHunkContext` edited mid-session reach the next answer — the context
     /// adopted while the user has not moved it, the grouping always — and once the user has
     /// moved the context, a `diff.context` edit is read and sent but not adopted, while the
@@ -1421,7 +1419,7 @@ mod tests {
         })
     }
 
-    /// R10.4, R10.5, R11.3 and #52, the window's half: refs that draw another history reopen
+    /// The window's half of #52: refs that draw another history reopen
     /// it — the old rows handed to a worker to free as one `Request::Retire`, never freed on
     /// the UI thread, the new history sized for the authors the old one named, the history
     /// asked for again, and the selection left as it was; refs that draw the same history
@@ -1445,7 +1443,7 @@ mod tests {
             },
         );
         let submitted: Vec<Request> = asked.submitted.borrow_mut().drain(..).collect();
-        // The sidebar's rows asked for the snapshot first (refs-and-status R8), then the reopen.
+        // The sidebar's rows asked for the snapshot first, then the reopen.
         match submitted.as_slice() {
             [
                 Request::FilterRefs { .. },
@@ -1516,7 +1514,7 @@ mod tests {
         );
     }
 
-    /// R11.3: each refresh answer the window replaces — ahead/behind, a status — is handed
+    /// Each refresh answer the window replaces — ahead/behind, a status — is handed
     /// to a worker to free; a failed read is said beside the answer kept, which stays; a
     /// failure to read the refs before any were read is the history's failure too, since it
     /// has nothing to walk from. Caught by: a replaced answer dropped in place, a failure
@@ -1610,14 +1608,14 @@ mod tests {
         assert_eq!(kept.failure(Refreshed::AheadBehind), None);
     }
 
-    /// C10 through the real boundary, counting reopens: the window's first refresh opens the
+    /// Through the real boundary, counting reopens: the window's first refresh opens the
     /// history; a refresh that finds nothing changed asks for nothing; a stash pushed — the
     /// stash list alone changed — reopens it, and so does a checkout that moves no ref
     /// (`HEAD` onto `other`, on `HEAD`'s commit) and a branch moved; nothing changed again
     /// reopens nothing. Each reopen is counted as the window asks for it, from what the
     /// worker answered. Caught by: a comparison that leaves out the stash list or `HEAD`'s
     /// state (a step that should reopen does not), one that reopens on anything (a step that
-    /// should not, does), or the old fetch comparison standing in for the refresh.
+    /// should not, does), or a fetch's own tip comparison standing in for the refresh.
     #[test]
     fn a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else() {
         use crate::worker::{Refreshable, next_update};

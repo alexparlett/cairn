@@ -62,7 +62,7 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
 /// always be closed. The one close that may honestly take longer is one that
-/// waits on a local write — a commit in its hooks (staging-and-commit R4.9) —
+/// waits on a local write — a commit in its hooks —
 /// which the window says it is finishing; a second request past this closes
 /// the window then too, leaving the write to finish or not, and a lock it
 /// strands is named the next time the repository opens.
@@ -90,7 +90,7 @@ pub fn open(
     let (diff_jobs, diff_incoming) = channel::<DiffJob>();
     // Likewise the refresh thread's: a status is asked of it directly.
     let (refresh_jobs, refresh_incoming) = channel::<RefreshJob>();
-    // And the local lane's: a write is sent to it directly (staging-and-commit R4.1).
+    // And the local lane's: a write is sent to it directly.
     let (local_jobs, local_incoming) = channel::<LocalJob>();
     let lane = LaneState::default();
     let (outgoing, inbox) = channel::<Envelope>();
@@ -317,7 +317,7 @@ struct Threads {
     /// The local lane's queue, to stop it with as the repository closes.
     local: Option<Sender<LocalJob>>,
     /// The local lane, waited for as the repository closes: the write it runs is never ended
-    /// by a close (staging-and-commit R4.9).
+    /// by a close.
     local_thread: Option<JoinHandle<()>>,
     lane: LaneState,
     acceptor: Option<AcceptorStop>,
@@ -507,7 +507,7 @@ impl Threads {
 
     /// Forwards an operation to its lane. A second copy of one already
     /// running or waiting there is refused, with the reason sent to the
-    /// window, never dropped in silence (PRD R7.2).
+    /// window, never dropped in silence.
     fn perform(&self, operation: Operation, outbox: &Outbox) {
         match operation.lane() {
             Lane::Network => {
@@ -537,13 +537,13 @@ impl Threads {
 }
 
 impl Drop for Threads {
-    /// Closes the repository (PRD R6.3): the diff thread is told to stop and
+    /// Closes the repository: the diff thread is told to stop and
     /// the network lane's queue is closed; the fetch in flight, if any, is
     /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the
     /// local lane is waited for next and a fetch must not run on for as long
     /// as a commit's hooks do; then the local lane is marked closing and
     /// joined, so the write it is running finishes and is never ended by a
-    /// close (staging-and-commit R4.9); then every `git` still running in the
+    /// close; then every `git` still running in the
     /// repository — a fetch mid-spawn, one dropped to a reaper, a read — is
     /// ended the way a cancel ends it, and this waits up to `CLOSE_BOUND` for
     /// their reaps, here on the repository thread. One that enters the
@@ -566,7 +566,7 @@ impl Drop for Threads {
         // close as soon as it is asked, whatever write is still running.
         self.control.cancel();
         // The local lane starts nothing more, and the write it is running — a commit in its
-        // hooks, say — is waited for, never ended (staging-and-commit R4.9): the window says
+        // hooks, say — is waited for, never ended: the window says
         // which, and a second close after its patience closes it anyway. Waited for here, on
         // the repository thread; the acceptor still answers a prompt the write is waiting on.
         self.lane.close();
@@ -618,11 +618,11 @@ impl RepositoryHandle {
     /// it starts is the repository thread's. A refresh is numbered in its two lanes and
     /// sent to two threads — its refs to the repository thread, its status to
     /// the refresh thread under the status lane's number, which no refresh moves
-    /// (a running status is never superseded, R10.3 as amended) — and returns its
+    /// (a running status is never superseded) — and returns its
     /// refs' epoch.
     pub fn submit(&self, request: Request) -> Option<Epoch> {
         // Kept back while a commit runs, and so numbered nowhere: the commit's ending says to
-        // read everything again (staging-and-commit R4.6).
+        // read everything again.
         if matches!(request, Request::Refresh | Request::RefreshStatus) && self.lane.defer_refresh()
         {
             return None;
@@ -746,7 +746,7 @@ impl RepositoryHandle {
                 if matches!(job, RepositoryJob::Close) {
                     self.epochs.stop();
                     // No write asked from now on is started, whatever the repository thread
-                    // is still busy with (R4.9): one bounded lock.
+                    // is still busy with: one bounded lock.
                     self.lane.close();
                 }
                 let _ = self.jobs.send((epoch, job));
@@ -1011,7 +1011,7 @@ fn serve(
         outbox,
     };
 
-    // A find in progress (R8.5): one page of it is walked whenever no other job is waiting, so
+    // A find in progress: one page of it is walked whenever no other job is waiting, so
     // a filter, a refresh or a free asked meanwhile is served between its pages, and the
     // next page or find — whose number supersedes it — ends it.
     let mut finding: Option<(Epoch, Finding)> = None;
@@ -1063,7 +1063,7 @@ fn serve(
                 // numbered: `submit` numbers what is in a lane.)
                 _ => {}
             },
-            // Kept back while a commit runs: its ending reads everything again (R4.6).
+            // Kept back while a commit runs: its ending reads everything again.
             RepositoryJob::Refs { .. } if threads.lane.defer_refresh() => {}
             RepositoryJob::Refs { ahead_behind } => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
@@ -1114,7 +1114,7 @@ fn serve(
     }
 }
 
-/// The sidebar's rows for `refs` (R8.1-R8.3), answered while `epoch` is current: one
+/// The sidebar's rows for `refs`, answered while `epoch` is current: one
 /// superseded before it started, or by the next ask while it runs, stops within a few
 /// thousand refs and sends nothing. The snapshot is the window's own, shared, and handed back
 /// with the rows so the window keeps them together.
@@ -1134,7 +1134,7 @@ pub(super) fn sidebar_rows(
     }
 }
 
-/// Which of `files`' files hold `text` (the Changes tab's filter, R5.4), answered while
+/// Which of `files`' files hold `text` (the Changes tab's filter), answered while
 /// `epoch` is current: one superseded before it started, or by a keystroke while it runs,
 /// stops at the next few thousand files and sends nothing. The change set is the window's
 /// own, shared; if the window let go of it meanwhile, it is freed here, off the UI thread.
@@ -1161,7 +1161,7 @@ fn filter_files(
     }
 }
 
-/// Which rows of Local Changes' two lists hold `text` (refs-and-status R9), answered while
+/// Which rows of Local Changes' two lists hold `text`, answered while
 /// `epoch` is current: one superseded before it started, or by a keystroke or a newer status
 /// while it runs, stops within a few thousand paths and sends nothing. The lists are the
 /// window's own, shared, and handed back with the rows so the window keeps the rows only for
@@ -1223,7 +1223,7 @@ mod tests {
         }
     }
 
-    /// QC1, R7.1: the title bar names the repository's own folder whatever path it was opened
+    /// The title bar names the repository's own folder whatever path it was opened
     /// at — its working tree, `<it>/.`, `<it>/sub/..`, a subdirectory, its `.git` — as Fork
     /// names a repository by its folder. Caught by: naming the path as given (`.`, `..`,
     /// `sub`, `.git`), unresolved.
@@ -1506,11 +1506,10 @@ mod tests {
         );
     }
 
-    /// Phase 05's hand-off: a repository with no ref and an unborn `HEAD` has a snapshot
-    /// that seeds nothing, and its walk answers the empty, complete page the window draws as
-    /// an empty history — what `from_head`'s unborn arm answered before the window walked
-    /// from every ref. Caught by: an empty seed set failing the open, or a page that says
-    /// more is coming.
+    /// A repository with no ref and an unborn `HEAD` has a snapshot that seeds nothing, and
+    /// its walk answers the empty, complete page the window draws as an empty history — what
+    /// `from_head`'s unborn arm answers. Caught by: an empty seed set failing the open, or a
+    /// page that says more is coming.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
@@ -1822,7 +1821,7 @@ mod tests {
         }
     }
 
-    /// C8, "a superseded answer is never drawn", per lane: an answer that finished after
+    /// "A superseded answer is never drawn", per lane: an answer that finished after
     /// its query was superseded is dropped on arrival — a file diff's by a newer file diff
     /// or by a changes query — while an answer in a lane nothing superseded arrives, though
     /// other lanes moved on after it. Posted by hand under real epochs, so the answer has
@@ -1873,7 +1872,7 @@ mod tests {
         );
     }
 
-    /// R1 (phase 07 QA): a superseded answer that holds something large — a file's
+    /// A superseded answer that holds something large — a file's
     /// prepared diff, a change set, Expand All's batch — is not dropped here, on the task
     /// the UI thread drives, but handed back as `Update::Superseded` for the window to send
     /// to a worker to free; one holding nothing worth a worker is still dropped, and the
@@ -1985,7 +1984,7 @@ mod tests {
         }
     }
 
-    /// R11.3: a refresh's superseded answers — a refs snapshot, ahead/behind, a status — come
+    /// A refresh's superseded answers — a refs snapshot, ahead/behind, a status — come
     /// back to be freed on a worker, never dropped on the task the UI thread drives; the
     /// current refresh's arrive as they are. Posted by hand under real epochs. Caught by:
     /// `Update::into_retired` dropping any of the three.
@@ -2306,11 +2305,11 @@ mod tests {
     }
 
     /// Issue #21, the mechanism: on the worker's early exits (`git` missing, no repository)
-    /// two outboxes were dropped as closure captures AFTER the `WorkerExit` had signalled,
-    /// so a task parked between the two never woke. The outbox itself must wake on drop,
-    /// with no `WorkerExit` around it. Single-threaded on purpose: the task is parked
-    /// (one poll, `Pending`) BEFORE the drop, so the old code fails on the wake count
-    /// every time rather than only when the scheduler let the driver park first.
+    /// two outboxes are dropped as closure captures AFTER the `WorkerExit` has signalled,
+    /// so a task parked between the two would never wake. The outbox itself must wake on
+    /// drop, with no `WorkerExit` around it. Single-threaded on purpose: the task is parked
+    /// (one poll, `Pending`) BEFORE the drop, so an outbox that does not wake fails on the
+    /// wake count every time rather than only when the scheduler let the driver park first.
     #[test]
     fn an_outbox_dropped_anywhere_ends_the_stream() {
         struct Woke(std::sync::atomic::AtomicUsize);
@@ -2359,7 +2358,7 @@ mod tests {
         assert_eq!(asked(), vec![Request::Close], "the close was not queued");
     }
 
-    /// Phase 18's QA item 4: unticking Amend ends amend's read in flight or queued
+    /// Unticking Amend ends amend's read in flight or queued
     /// (`Request::StopAmending`, numbering the amending lane and sending nothing), so a commit
     /// pressed straight after never waits behind an answer that would be thrown away; nothing
     /// else is superseded by it, and a write asked supersedes no read. Caught by: an untick that
@@ -2396,7 +2395,7 @@ mod tests {
         );
     }
 
-    /// Staging-and-commit R4.9: a close marks the local lane closing as it is submitted, so a
+    /// A close marks the local lane closing as it is submitted, so a
     /// write asked after it is never started — even while the repository thread, which marks
     /// it again as it closes, is still busy with what was queued before. Caught by: marking
     /// the lane only in `Threads::drop`, which leaves an idle lane to start a write asked

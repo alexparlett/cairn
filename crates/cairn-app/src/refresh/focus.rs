@@ -1,6 +1,6 @@
 //! What a refresh is asked by, besides the Refresh action (`shortcuts`) and a finished
-//! operation (`session`): the window gaining focus (refs-and-status R10.1), as Fork refreshes
-//! on its window's activation. Nothing watches the file system (R10.2).
+//! operation (`session`): the window gaining focus, as Fork refreshes on its
+//! window's activation. Nothing watches the file system.
 //!
 //! On the UI thread, so it only submits: the reads are the worker's, and a refresh asked
 //! while one is in flight supersedes it lane by lane, so focus flapping never stacks them.

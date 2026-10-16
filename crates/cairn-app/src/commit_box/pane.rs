@@ -1,26 +1,25 @@
-//! The commit box under Local Changes' diff, and what its presses do (staging-and-commit R10):
-//! `cairn_ui::CommitBox` drawn from `commit_box::state`, each press asking the local lane — a
-//! commit, an amend at the press, an amend under the dialog's confirmation, a cancel of the commit
-//! running — and each update the worker sends for the box applied here (`session::apply` hands
-//! them on).
+//! The commit box under Local Changes' diff, and what its presses do: `cairn_ui::CommitBox` drawn
+//! from `commit_box::state`, each press asking the local lane — a commit, an amend at the press, an
+//! amend under the dialog's confirmation, a cancel of the commit running — and each update the
+//! worker sends for the box applied here (`session::apply` hands them on).
 //!
 //! **What is asked, and where.** As the box is shown, and as each refresh's refs arrive while it
 //! is, the box's reads are asked (`Request::CommitReads`: the operation in progress, the message
 //! git prepared for the commit that concludes it, cleaned, and the recent messages), on the
 //! local lane after the writes asked before them. While Amend is ticked, Local Changes' lists ask
 //! amend's staged list over each status (`LocalChangesState`'s overlay, `Request::Amending`),
-//! which brings `HEAD`'s message with it; what an amend costs is never read before the press
-//! (rule 3 of the redesign, C14). Nothing here waits: each is a submit.
+//! which brings `HEAD`'s message with it; what an amend costs is never read before the press.
+//! Nothing here waits: each is a submit.
 //!
-//! **One button, one press** (R10.6, C1, C6): `Commit N Files`, or "Amend Last Commit" while
-//! Amend is ticked; the commit chord does exactly what the button does. Amend asks
-//! `LocalWrite::AmendAtPress`, whose job reads the cost and runs an amend git logs and no remote
-//! has at once, with no token; any other ends `WriteEnding::NeedsConfirming`, and the
-//! confirmation dialog, "Amend Commit", opens on it — its Cancel returning to the box unchanged,
-//! its Amend asking `LocalWrite::Amend` with the token the dialog built, the one confirmation
-//! surface for it. A failed commit or amend opens the Git Error dialog, whose skip asks the same
-//! message again with `--no-verify`, once: a confirmed amend's with the token its failure handed
-//! back (`GitError::take_unspent`, R1.1's option (a)), so nothing asks twice.
+//! **One button, one press**: `Commit N Files`, or "Amend Last Commit" while Amend is ticked; the
+//! commit chord does exactly what the button does. Amend asks `LocalWrite::AmendAtPress`, whose job
+//! reads the cost and runs an amend git logs and no remote has at once, with no token; any other
+//! ends `WriteEnding::NeedsConfirming`, and the confirmation dialog, "Amend Commit", opens on it —
+//! its Cancel returning to the box unchanged, its Amend asking `LocalWrite::Amend` with the token
+//! the dialog built, the one confirmation surface for it. A failed commit or amend opens the Git
+//! Error dialog, whose skip asks the same message again with `--no-verify`, once: a confirmed
+//! amend's with the token its failure handed back (`GitError::take_unspent`), so nothing asks
+//! twice.
 
 use std::rc::Rc;
 
@@ -59,11 +58,10 @@ impl PartialEq for CommitBoxPane {
     }
 }
 
-/// What a commit asked is doing, drawn in the button's place (R10.4, C5): queued behind a write
-/// ahead of it — the one running, or one asked before it — in the one form every queued write
-/// uses; running; or cancelled until git is reaped. Asked with no write ahead and not yet
-/// started (the lane busy with a read), it is drawn by its verb alone, no Cancel offered until
-/// git runs (phase 18's QA item 6).
+/// What a commit asked is doing, drawn in the button's place: queued behind a write ahead of it —
+/// the one running, or one asked before it — in the one form every queued write uses; running; or
+/// cancelled until git is reaped. Asked with no write ahead and not yet started (the lane busy with
+/// a read), it is drawn by its verb alone, no Cancel offered until git runs.
 fn busy_of(asked: &AskedCommit, state: &crate::commit_box::state::CommitBox, view: View) -> Busy {
     if state.is_cancelling() {
         return Busy::Cancelling;
@@ -120,17 +118,16 @@ impl Component for CommitBoxPane {
         let born = head.is_some_and(|head| !matches!(head, HeadState::Unborn(_)));
         let detached = head.is_some_and(|head| matches!(head, HeadState::Detached(_)));
         let amend_enabled = born && operation.is_none();
-        // One line at most (R10.8, rule 6): the operation in progress; or, while Amend is ticked
-        // and its staged list could not be read, that the lists show the status's own (R10.3);
-        // or an unborn branch, where Amend is greyed; or a detached `HEAD`.
+        // One line at most: the operation in progress; or, while Amend is ticked and its staged
+        // list could not be read, that the lists show the status's own; or an unborn branch, where
+        // Amend is greyed; or a detached `HEAD`.
         let line = match (operation, local.amend_unread()) {
-            // The detached line wins: it says what the press will do (the coordinator's ruling
-            // under rule 4, phase 18's QA item 8).
+            // The detached line wins: it says what the press will do.
             (None, Some(why)) if state.is_amending() && !detached => Some(format!(
                 "Amend's staged list couldn't be read, so the lists show what is staged against \
                  HEAD: {why}"
             )),
-            // Amend greyed on an unborn branch, its reason beside it (rule 4).
+            // Amend greyed on an unborn branch, its reason beside it.
             (None, _) if head.is_some() && !born => Some(cairn_ui::UNBORN_LINE.to_owned()),
             (operation, _) => cairn_ui::operation_line(operation.as_ref(), detached),
         };
@@ -184,8 +181,8 @@ fn submit_all(requests: Vec<Request>, submit: Option<&dyn Fn(Request)>) {
     }
 }
 
-/// Amend ticked or unticked (R10.3): the draft set aside or put back exactly, and amend's lists
-/// asked over the newest status, or the status's own drawn again.
+/// Amend ticked or unticked: the draft set aside or put back exactly, and amend's lists asked over
+/// the newest status, or the status's own drawn again.
 pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
     let commit = view.local.commit;
     let mut state = commit.state;
@@ -215,9 +212,9 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
     crate::diff::actions::show_primary(view, submit, false);
 }
 
-/// The button, or the commit chord heard in a field (R10.1, R10.6, R7.3): commits what is
-/// staged, or — Amend ticked — asks the amend at the press, whose job reads what it costs and
-/// runs it, or ends asking for the dialog.
+/// The button, or the commit chord heard in a field: commits what is staged, or — Amend ticked —
+/// asks the amend at the press, whose job reads what it costs and runs it, or ends asking for the
+/// dialog.
 pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let commit = view.local.commit;
     let amending = {
@@ -274,14 +271,13 @@ fn ask(
 }
 
 /// The confirmation dialog over the window for an amend at the press that must be confirmed — a
-/// remote has `HEAD`, or git keeps no reflog (R10.6, C1) — opened as the box renders, which holds
-/// the submitter its answer needs: titled "Amend Commit", in the consequence's fixed sentences;
-/// its Amend asks the amend of the pressed message under the token it built, its Cancel leaves
-/// the box as it was.
+/// remote has `HEAD`, or git keeps no reflog — opened as the box renders, which holds the submitter
+/// its answer needs: titled "Amend Commit", in the consequence's fixed sentences; its Amend asks
+/// the amend of the pressed message under the token it built, its Cancel leaves the box as it was.
 fn use_amend_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     use_side_effect(move || {
         // Read so the effect runs again once a confirmation already open is answered: one open
-        // is never replaced, its acknowledgement then another prompt's (phase 18's QA item 1).
+        // is never replaced, its acknowledgement then another prompt's.
         let open = view.confirming.read().is_some();
         if open || !view.local.commit.state.read().is_confirming() {
             return;
@@ -316,8 +312,7 @@ fn use_amend_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     });
 }
 
-/// Cancel (R10.4, R4.3): the running commit, never one still queued; "Cancelling…" until git is
-/// reaped.
+/// Cancel: the running commit, never one still queued; "Cancelling…" until git is reaped.
 pub fn cancel(view: View, submit: Option<&dyn Fn(Request)>) {
     let asked = view.local.commit.state.peek().asked().map(|asked| asked.id);
     let running = view.writes.peek().running().map(|running| running.id);
@@ -328,7 +323,7 @@ pub fn cancel(view: View, submit: Option<&dyn Fn(Request)>) {
     }
 }
 
-/// The recent message `at`, from the menu, fills both fields (R10.2).
+/// The recent message `at`, from the menu, fills both fields.
 pub fn recall(at: usize, view: View) {
     let commit = view.local.commit;
     let mut state = commit.state;
@@ -338,9 +333,9 @@ pub fn recall(at: usize, view: View) {
     }
 }
 
-/// A bare ↑ or ↓ in the subject (R10.2): taken only while the subject is empty or holds the
-/// message last recalled — ↑ to the next older, ↓ to the next newer, and ↓ from the newest back
-/// to an empty draft. Anything else is the editor's.
+/// A bare ↑ or ↓ in the subject: taken only while the subject is empty or holds the message last
+/// recalled — ↑ to the next older, ↓ to the next newer, and ↓ from the newest back to an empty
+/// draft. Anything else is the editor's.
 pub fn recall_step(step: RecallStep, view: View) -> bool {
     let commit = view.local.commit;
     let (recalled, len, holds_recalled) = {
@@ -389,9 +384,9 @@ fn draft_empty(view: View) -> bool {
     commit.subject.peek().is_empty() && commit.description.peek().is_empty()
 }
 
-/// What the box reads has arrived (R10.2, R10.8): kept, and the message git prepared, cleaned,
-/// filling an empty, untouched draft while a merge, a single cherry-pick or a single revert is
-/// in progress (C7).
+/// What the box reads has arrived: kept, and the message git prepared, cleaned, filling an
+/// empty, untouched draft while a merge, a single cherry-pick or a single revert is in
+/// progress.
 pub fn reads_arrived(reads: CommitReads, view: View) {
     let empty = draft_empty(view);
     let mut state = view.local.commit.state;
@@ -401,9 +396,9 @@ pub fn reads_arrived(reads: CommitReads, view: View) {
     }
 }
 
-/// Amend's lists arrived for `status` (R10.3): drawn by Local Changes' lists while Amend is
+/// Amend's lists arrived for `status`: drawn by Local Changes' lists while Amend is
 /// ticked — or the status's own, where amend's staged list could not be read — and `HEAD`'s
-/// message filling an empty, untouched draft (C7); handed to a worker to free otherwise.
+/// message filling an empty, untouched draft; handed to a worker to free otherwise.
 pub fn amend_arrived(
     status: std::sync::Arc<cairn_model::LocalChanges>,
     read: AmendRead,
@@ -452,10 +447,9 @@ pub fn write_output(id: OperationId, lines: &ScrubbedLines, view: View) {
 }
 
 /// A write ended: when it is this box's commit — made, the draft it took cleared and Amend
-/// unticked (R10.3); failed by git, the Git Error dialog opened (R10.5), with the token a
-/// confirmed amend's failure handed back; an amend at the press that must be confirmed, the
-/// dialog opened on its consequence (R10.6); anything else, the draft kept (R10.7) — a cancel
-/// opens nothing (rule 4).
+/// unticked; failed by git, the Git Error dialog opened, with the token a confirmed amend's
+/// failure handed back; an amend at the press that must be confirmed, the dialog opened on
+/// its consequence; anything else, the draft kept — a cancel opens nothing.
 pub fn write_ended(
     id: OperationId,
     ending: &WriteEnding,
@@ -488,7 +482,7 @@ pub fn write_ended(
             }
             false
         }
-        // git's failure: the box's own Git Error, whose skip runs this commit again (R10.5).
+        // git's failure: the box's own Git Error, whose skip runs this commit again.
         WriteEnding::Failed(failure) if failure.command.is_some() => {
             let mut output = view.local.commit.output;
             let streamed = output.write().take();
@@ -502,7 +496,7 @@ pub fn write_ended(
             true
         }
         // A refusal, a stale amend, a failure beneath git: "Couldn't <name>", the window's
-        // endings' (R14.3); a cancel nothing (R14.5).
+        // endings'; a cancel nothing.
         WriteEnding::Failed(_)
         | WriteEnding::Stale { .. }
         | WriteEnding::Refused { .. }
@@ -512,7 +506,7 @@ pub fn write_ended(
     }
 }
 
-/// The Git Error dialog, while one is open (R10.5): its skip asks the failed commit or amend
+/// The Git Error dialog, while one is open: its skip asks the failed commit or amend
 /// again with its hooks skipped; Close lets it go, and with it any token it kept.
 pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
     let (serial, command, lines, skip, sentence, index_lock) = {
@@ -546,7 +540,7 @@ pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Elem
     Some(dialog.into())
 }
 
-/// The Git Error dialog's skip (R10.5, C4): the same message asked again with `--no-verify` for
+/// The Git Error dialog's skip: the same message asked again with `--no-verify` for
 /// that one commit or amend — a confirmed amend's under the token its failure handed back,
 /// asking nothing again; an amend at the press's at the press again, which reads its cost anew.
 pub fn skip_hooks(view: View, submit: Option<Rc<dyn Fn(Request)>>) {

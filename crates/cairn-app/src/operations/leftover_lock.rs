@@ -1,6 +1,6 @@
-//! The leftover lock as the window keeps it (staging-and-commit R12.4, F5, F6, decision G): a
-//! state of the repository, decided by whether `<gitdir>/index.lock` exists now — the refresh
-//! thread's `stat` on every refresh (`Update::IndexLock`) — never by an operation's entry.
+//! The leftover lock as the window keeps it: a state of the repository, decided by whether
+//! `<gitdir>/index.lock` exists now — the refresh thread's `stat` on every refresh
+//! (`Update::IndexLock`) — never by an operation's entry.
 //!
 //! The banner under the title bar shows while the file is there, no `git` of Cairn's runs or
 //! waits in the repository (a write running or queued, a fetch in flight), and the file is older
@@ -8,9 +8,9 @@
 //! the file gone, whoever removed it. Its `Remove index.lock…`, and the same button in a write's
 //! Git Error where git could not create the lock, ask what the removal would cost, read at the
 //! press on the local lane (`Request::LockConsequence`); the answer opens the one confirmation,
-//! "Remove Stale Lock" over decision G's prompt, whose token asks `LocalWrite::RemoveLock`; a
+//! "Remove Stale Lock" over its prompt, whose token asks `LocalWrite::RemoveLock`; a
 //! refusal at the press opens "Couldn't Remove index.lock". After the removal the window
-//! refreshes, as every write's ending does, and never runs the failed write again (Fork, `lk3`).
+//! refreshes, as every write's ending does, and never runs the failed write again, as Fork does.
 
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -23,8 +23,7 @@ use crate::operations::confirming::Confirming;
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request};
 
-/// What a confirmation of `Remove index.lock…` is titled: decision G's, in Title Case (the user's
-/// answers of 2026-10-10, 4).
+/// What a confirmation of `Remove index.lock…` is titled, in Title Case.
 pub const REMOVE_LOCK_TITLE: &str = "Remove Stale Lock";
 /// The removal's one name, as its "Couldn't" dialog says it.
 pub const REMOVE_LOCK_NAME: &str = "Remove index.lock";
@@ -76,7 +75,7 @@ impl LeftoverLock {
 }
 
 /// `Remove index.lock…` pressed — on the banner, or in a write's Git Error: what the removal
-/// would cost is asked of the local lane, read at the press (the user's decision H).
+/// would cost is asked of the local lane, read at the press.
 pub fn ask(view: View, submit: Option<&dyn Fn(Request)>) {
     let Some(submit) = submit else {
         return;
@@ -138,7 +137,7 @@ pub fn use_lock_confirmation(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     });
 }
 
-/// The banner, while the lock is there and no git of Cairn's runs or waits (F6); its age is the
+/// The banner, while the lock is there and no git of Cairn's runs or waits; its age is the
 /// banner's own to decide.
 pub fn banner(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
     let changed = view.lock.read().changed()?;

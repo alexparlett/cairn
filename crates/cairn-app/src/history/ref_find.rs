@@ -1,12 +1,12 @@
-//! Pressing a ref or a stash in the sidebar (refs-and-status R8.5, R8.6): its row is selected
-//! and scrolled into view; one not loaded yet is found by paging the held walk forward — a
-//! history-lane query, `Request::FindRow` — every page appended as a scroll's is, so the window
-//! keeps what scrolling there would and no more. While it looks the sidebar says "Finding
-//! <ref>…". The next press, a scroll of the list or a row chosen in it supersedes the find
-//! (`Request::StopFinding`); a reopen of the history asks it again of the new walk.
+//! Pressing a ref or a stash in the sidebar: its row is selected and scrolled into view; one not
+//! loaded yet is found by paging the held walk forward — a history-lane query, `Request::FindRow` —
+//! every page appended as a scroll's is, so the window keeps what scrolling there would and no
+//! more. While it looks the sidebar says "Finding <ref>…". The next press, a scroll of the list or
+//! a row chosen in it supersedes the find (`Request::StopFinding`); a reopen of the history asks it
+//! again of the new walk.
 //!
 //! A ref that names no commit (a tag on a tree) is not in the walk, and says so at once. A row
-//! the walk ends without — a stash whose base no ref reaches (R4.2), or a ref moved since the
+//! the walk ends without — a stash whose base no ref reaches, or a ref moved since the
 //! walk began — says it is not in the graph; a stash's changes are shown all the same, with no
 //! row selected.
 //!
@@ -136,12 +136,11 @@ pub fn press(row: SidebarRow, view: View, submit: Option<&dyn Fn(Request)>) {
     find(target, name, stash, false, view, submit, was_finding);
 }
 
-/// A commit's row found in the history and selected, as a press of a ref finds its row: the
-/// main region switched to All Commits, the row brought into view when loaded, or found by
-/// paging the walk forward ("Finding <name>…"). The activity popover's way back from an amend
-/// (staging-and-commit R12.1) finds the replaced commit so, in Show Lost Commits. A commit no
-/// ref labels is looked for among every loaded row's id first — once per press, as a parent
-/// link's is (`selection::loaded_row`).
+/// A commit's row found in the history and selected, as a press of a ref finds its row: the main
+/// region switched to All Commits, the row brought into view when loaded, or found by paging the
+/// walk forward ("Finding <name>…"). The activity popover's way back from an amend finds the
+/// replaced commit so, in Show Lost Commits. A commit no ref labels is looked for among every
+/// loaded row's id first — once per press, as a parent link's is (`selection::loaded_row`).
 pub fn find_commit(target: Oid, name: String, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut main = view.sidebar.main;
     main.set(MainView::AllCommits);

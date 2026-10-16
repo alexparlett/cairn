@@ -82,14 +82,14 @@ pub(super) struct Backend {
     /// `Err` names why no prompt can be answered in this session — the helper
     /// is not built beside the executable, or there is no runtime directory
     /// to put a socket in. Fetching still works where a credential helper or
-    /// agent answers (L7); a prompt fails closed, and the failure says this.
+    /// agent answers; a prompt fails closed, and the failure says this.
     pub(super) prompting: Result<(), String>,
 }
 
 impl Backend {
     /// Opens this repository's channel and points `git` — found once, as the
-    /// application started — at it. A missing or too-old `git` was refused
-    /// before this (`super::Discovery`); everything about prompting degrades
+    /// application started — at it. A missing or too-old `git` is refused
+    /// before this, by `super::Discovery`; everything about prompting degrades
     /// to a named reason instead.
     pub(super) fn open(startup: &Startup, git: &GitBinary) -> Self {
         let channel = match (startup.parent)("XDG_RUNTIME_DIR") {

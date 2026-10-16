@@ -35,12 +35,12 @@ use worker::Request;
 const PAGE_ROWS: usize = 64;
 
 /// IBM Plex Mono Regular, from IBM's release `@ibm/plex-mono@2.5.0`, under the SIL Open Font
-/// Licence 1.1 beside it in `assets/fonts/` (L16): the diff's typeface, embedded so the
+/// Licence 1.1 beside it in `assets/fonts/`: the diff's typeface, embedded so the
 /// application draws the same text wherever it runs.
 const DIFF_FONT: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf");
 
 fn main() {
-    // Found once, as the application starts, on a thread of its own (PRD R6.1).
+    // Found once, as the application starts, on a thread of its own.
     let git = worker::Discovery::start();
     let closing = Closing::default();
     let window = WindowConfig::new({
@@ -48,7 +48,7 @@ fn main() {
         move || app(git.clone(), closing.clone())
     })
     .with_title("Cairn")
-    // Closing the window closes its repository first (PRD R6.3): see `closing`.
+    // Closing the window closes its repository first: see `closing`.
     .with_on_close(move |_, _| closing.requested());
     launch(
         LaunchConfig::new()
@@ -72,7 +72,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
     let history_cursor = use_state(|| 0usize);
-    // Session state: the tab and the pane's shape outlive every selection (R5.2).
+    // Session state: the tab and the pane's shape outlive every selection.
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
     let pane_height = use_state(|| window::PANE_HEIGHT);
@@ -86,23 +86,23 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // The second commit of a comparison, and the keys a press on a row is resolved against.
     let pair = use_state(|| None);
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
-    // What the last refresh answered (R10).
+    // What the last refresh answered.
     let refreshed = use_state(refresh::state::RefreshState::default);
     // What the title bar calls the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
-    // The sidebar's state, for the session (refs-and-status R8).
+    // The sidebar's state, for the session.
     let sidebar = sidebar::state::SidebarView::used();
-    // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
+    // Local Changes' lists, filter and diff, for the session.
     let local = local_changes::state::LocalChangesView::used();
-    // The local writes, for the session (staging-and-commit R4).
+    // The local writes, for the session.
     let writes = use_state(operations::local_writes::LocalWrites::default);
-    // A destructive operation's confirmation, while one is open (staging-and-commit R7.4).
+    // A destructive operation's confirmation, while one is open.
     let confirming = use_state(|| None::<operations::confirming::Confirming>);
-    // Show Lost Commits, off as the window opens (staging-and-commit R11).
+    // Show Lost Commits, off as the window opens.
     let show_lost = use_state(|| false);
-    // Create Branch, for the session (staging-and-commit R11.3).
+    // Create Branch, for the session.
     let branch = operations::create_branch::CreateBranchView::used();
-    // The activity popover's operations, for the session (staging-and-commit R12).
+    // The activity popover's operations, for the session.
     let activity = operations::activity::ActivityView::used();
     let view = View {
         rows,
@@ -150,7 +150,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         move || match worker::open(&path, &git) {
             Ok((handle, mut updates, reply)) => {
                 closing.opened(handle.clone());
-                // The first close asked while a write runs waits for it, and says which (R4.9).
+                // The first close asked while a write runs waits for it, and says which.
                 closing.when_requested(move || {
                     let mut told = writes;
                     told.write().closing();
@@ -160,7 +160,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
                 handle.submit(Request::ConfiguredContext);
                 // The refs, ahead/behind and status, read for the first time: the refs'
                 // answer has no walk to compare with, so it asks for the history, which
-                // then walks from them (R10, R11.2).
+                // then walks from them.
                 handle.submit(Request::Refresh);
                 let submitting = handle.clone();
                 // Weak: the task must not keep the answering end alive past the window,

@@ -1,10 +1,9 @@
 //! A running operation's output on its way to the window: one shared bounded tail the lane
-//! fills and the window drains on a wake, the latest kept (staging-and-commit phase 20;
-//! `review-code-app-ui.md` H3 (c), phase 12's QA #15 and #16).
+//! fills and the window drains on a wake, the latest kept.
 //!
 //! A hook can write far faster than the window applies what it is sent, and the outbox is
 //! unbounded. So a lane never sends lines: it puts each read's lines — whole, scrubbed by the
-//! engine's runner as it split them (R4.10, R12.2) — into its tap, a [`crate::operations::output_tail`]
+//! engine's runner as it split them — into its tap, a [`crate::operations::output_tail`]
 //! bounded by the one pair of bounds, and wakes the window with one update only when no wake is
 //! already on its way. The window drains everything waiting when it applies the wake. However
 //! far behind the window falls, at most one wake per tap waits in the outbox and the tap holds
@@ -157,7 +156,7 @@ mod tests {
             drained.iter().next_back().map(ScrubbedLines::text),
             Some(wide(39).as_str())
         );
-        // Exactly as many reads as fit, the oldest of them first (phase 20's QA item 6).
+        // Exactly as many reads as fit, the oldest of them first.
         let fit = OUTPUT_BYTES / wide(0).len();
         assert_eq!(drained.iter().count(), fit);
         assert_eq!(

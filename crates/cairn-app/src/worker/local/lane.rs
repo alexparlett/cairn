@@ -1,13 +1,12 @@
 //! The local write lane, `cairn-local`: the thread where every write to the index, the
 //! working tree and a local ref runs — staging, unstaging, discarding, commit and amend —
-//! one at a time, in the order asked (staging-and-commit R4,
-//! `docs/design/concurrency.md`, "Operations").
+//! one at a time, in the order asked (`docs/design/concurrency.md`, "Operations").
 //!
 //! A write reaches this thread straight from `RepositoryHandle::submit`, never through the
-//! repository thread, where it would wait behind a deep find (R4.1). It is queued behind the
-//! write running, never refused for being second (R4.2), and carries an [`OperationId`] the
+//! repository thread, where it would wait behind a deep find. It is queued behind the
+//! write running, never refused for being second, and carries an [`OperationId`] the
 //! window chose as it asked, so the window draws it queued, then running, then ended, and a
-//! cancel names it (R4.3): only a commit or an amend is cancellable, and only while it runs,
+//! cancel names it: only a commit or an amend is cancellable, and only while it runs,
 //! so a cancel that arrives late never reaches the write queued behind the one it named. A
 //! cancel that comes while an amend's checks still read stops it before git starts; once git
 //! runs, the commit's [`ops::CommitCancel`] is installed under the write's id, and a cancel
@@ -17,32 +16,32 @@
 //! What the lane shares with the other threads is [`LaneState`], one mutex held for an
 //! assignment and a send:
 //!
-//! - **The write clock** (R4.4). It ticks as a write starts and as it ends, so it is odd while
+//! - **The write clock**. It ticks as a write starts and as it ends, so it is odd while
 //!   one runs. A status is read only while it is even, and is sent only if it has not ticked
 //!   since the read began — checked and sent under the lock the lane ticks and announces
 //!   under, so a status the window draws was read entirely between two writes, and arrives
 //!   before the next write's start. One that began before a write ended is dropped, never
 //!   drawn: the window reads status again after every write's ending, which shows it.
-//! - **Quiet while a commit runs** (R4.6). A refresh asked of the handle, or reaching the
+//! - **Quiet while a commit runs**. A refresh asked of the handle, or reaching the
 //!   repository or refresh thread, while a commit runs starts nothing, and is dropped: a
 //!   commit's ending always says to read everything again — whatever it did, since a hook may
 //!   have moved anything — so nothing a refresh would have shown is lost.
 //! - **The running write**, its id and its cancel.
 //!
-//! Every write carries an askpass token of its own (R5.1, L11), issued under the name the
+//! Every write carries an askpass token of its own, issued under the name the
 //! window gives the write ("Commit"): a hook, a signing program or an LFS filter it runs may
 //! ask, and the window shows the prompt titled by that name while the write runs. A commit's
-//! output — its hooks' lines — reaches the window as it arrives (`Update::WriteOutput`, R6.5).
+//! output — its hooks' lines — reaches the window as it arrives (`Update::WriteOutput`).
 //!
-//! Closing the window during a write waits for it (R4.9): the repository thread, closing,
+//! Closing the window during a write waits for it: the repository thread, closing,
 //! marks the lane closing, which runs nothing more it is sent, and waits for the write
 //! running to end before it ends what else `git` runs. The window says which write it is
 //! waiting for, and a second close after `CLOSE_PATIENCE` closes it anyway; a lock the write
-//! leaves then is found by the leftover lock's `stat` as the repository next opens (R12.4).
+//! leaves then is found by the leftover lock's `stat` as the repository next opens.
 //!
 //! A write git refused because it could not create `<gitdir>/index.lock` — the lock there when
 //! the attempt began, and the same file still there after — is run again about a second later,
-//! at most [`LOCK_RETRIES`] times, before its ending goes out (F5): while that file stood no git
+//! at most [`LOCK_RETRIES`] times, before its ending goes out: while that file stood no git
 //! could change the index, so the attempt wrote nothing and running it again cannot write
 //! twice. The wait is a sleep on this thread, in slices that end it for a close.
 
@@ -136,9 +135,8 @@ pub enum LocalWrite {
         to: UnstageTarget,
     },
     /// Every path of `changes`' Unstaged list — or, with a filter on, of the rows it shows,
-    /// `shown` (the user's decision, 2026-10-09) — whole, into the index: Stage All (R8.2). The
-    /// paths are gathered here, on the lane, never on the UI thread — a status can list tens
-    /// of thousands.
+    /// `shown` — whole, into the index: Stage All. The paths are gathered here, on the lane,
+    /// never on the UI thread — a status can list tens of thousands.
     StageAll {
         changes: Arc<LocalChanges>,
         shown: Option<Vec<u32>>,
@@ -154,37 +152,37 @@ pub enum LocalWrite {
     DiscardLines(Confirmed),
     /// The files the confirmation names, discarded, untracked ones deleted.
     DiscardFiles(Confirmed),
-    /// What is staged, committed with `message` (R6.1); `skip_hooks` only from the hook
-    /// failure's skip (R10.5). `files` is how many files were staged when it was asked — the
+    /// What is staged, committed with `message`; `skip_hooks` only from the hook
+    /// failure's skip. `files` is how many files were staged when it was asked — the
     /// count its name says, as Fork's "Commit 2 files" does — and nothing else reads it.
     Commit {
         message: String,
         skip_hooks: bool,
         files: usize,
     },
-    /// `HEAD` amended with `message` and what is staged (R6.2), under the confirmation of the
+    /// `HEAD` amended with `message` and what is staged, under the confirmation of the
     /// `Consequence` the dialog drew.
     Amend {
         confirmed: Confirmed,
         message: String,
         skip_hooks: bool,
     },
-    /// Amend pressed (R6.4, rules 2 and 3 of the redesign): what it costs read in this job, and
+    /// Amend pressed: what it costs read in this job, and
     /// the amend run at once, taking no token, where git logs it and no remote has `HEAD`
     /// (`ops::amend_unconfirmed`); otherwise nothing runs and the ending answers the
     /// `Consequence` for the dialog ([`WriteEnding::NeedsConfirming`]), whose token then asks
     /// [`LocalWrite::Amend`].
     AmendAtPress { message: String, skip_hooks: bool },
-    /// The branch `name` put on `at`: Create Branch, unticked (staging-and-commit R11.3).
+    /// The branch `name` put on `at`: Create Branch, unticked.
     CreateBranch { name: String, at: Oid },
     /// The branch `name` put on `at` and checked out, the working tree's changes carried over
     /// or git refusing: Create Branch's "Don't change".
     CreateBranchAndCheckout { name: String, at: Oid },
     /// The branch and the commit the confirmation names, checked out with every change it
-    /// names discarded: Create Branch's "Discard" (the user's decision 3, 2026-10-09).
+    /// names discarded: Create Branch's "Discard".
     CreateBranchDiscarding(Confirmed),
-    /// The stale `<gitdir>/index.lock` the confirmation names, removed: `Remove index.lock…`
-    /// (staging-and-commit R12.4), the one mutation not made by git.
+    /// The stale `<gitdir>/index.lock` the confirmation names, removed: `Remove index.lock…`,
+    /// the one mutation not made by git.
     RemoveLock(Confirmed),
 }
 
@@ -199,7 +197,7 @@ impl Clone for LocalWrite {
     }
 }
 
-/// What the window reads again once a write has ended (R4.5): what its `Invalidated` names
+/// What the window reads again once a write has ended: what its `Invalidated` names
 /// and no more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadAgain {
@@ -243,7 +241,7 @@ impl LocalWrite {
     }
 
     /// What it can leave stale, read again however it ends — a failed or cancelled write may
-    /// have done part of its work (R4.7). Its `Performed` says the same of one that ran.
+    /// have done part of its work. Its `Performed` says the same of one that ran.
     fn read_again(&self) -> ReadAgain {
         match self {
             Self::StageLines { .. }
@@ -266,11 +264,10 @@ impl LocalWrite {
         }
     }
 
-    /// Its one name (R14.2, rule 5), as Fork's Activity Manager names the operation, observed
-    /// first-hand (`fork-activity-result-lines-2026-10-11.md`): "Stage 1 File", "Unstage 2
+    /// Its one name, as Fork's Activity Manager names the operation: "Stage 1 File", "Unstage 2
     /// Files" (title case), "Commit 2 files" (lower case, the count committed), "Discard
     /// Changes" (no count), "Amend", "Create branch 'topic'" — and, where Fork draws no row,
-    /// "Stage lines of a.rs" and "Remove index.lock" (R12.1's deviation). A destructive
+    /// "Stage lines of a.rs" and "Remove index.lock". A destructive
     /// write's is its confirmation's (`Consequence::name`). The only wording of the write: the
     /// status box, a wait ("Waiting for Commit 1 file…"), the closing line, the "Couldn't
     /// <name>" dialog, the askpass prompt's title and the activity popover all say this.
@@ -328,14 +325,14 @@ impl LocalWrite {
         }
     }
 
-    /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
+    /// Whether it can be cancelled while it runs: a commit or an amend.
     pub fn is_cancellable(&self) -> bool {
         self.is_commit()
     }
 
     /// The prompt a destructive write's confirmation recorded — what the user accepted — copied
     /// as the write is asked, before the verb spends the token, so the activity popover quotes
-    /// it however the write ends (R12.1): `None` for a write that asks no confirmation.
+    /// it however the write ends: `None` for a write that asks no confirmation.
     /// Create Branch's Discard quotes none: its prompt is never drawn, its dialog's press the
     /// confirmation, and its entry says what happened instead ([`Self::happened`]).
     pub fn prompt(&self) -> Option<String> {
@@ -359,7 +356,7 @@ impl LocalWrite {
     }
 
     /// What it did once it succeeded, for the one destructive write whose prompt is not quoted
-    /// — Create Branch's Discard — rendered from its consequence (R12.1); `None` for every other.
+    /// — Create Branch's Discard — rendered from its consequence; `None` for every other.
     pub fn happened(&self) -> Option<String> {
         match self {
             Self::CreateBranchDiscarding(confirmed) => confirmed.consequence().happened(),
@@ -380,13 +377,12 @@ impl LocalWrite {
         }
     }
 
-    /// Fork's result line under its row in the activity popover (R12.1, C29), for each way it
-    /// can end, as Fork's Activity Manager says it (observed first-hand, 2026-10-11,
-    /// `docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`): the verb's
-    /// past participle where Fork's says one — "staged", "unstaged", "discarded" (files and,
-    /// Cairn's own row, lines) — none for a commit, an amend, a branch created without checkout
-    /// or a lock removed, and git's own "Switched to branch 'topic'" for a branch checked out;
-    /// "<verb> failed" on every failure, as Fork's "stage failed"; "cancelled" on a cancel.
+    /// Fork's result line under its row in the activity popover, for each way it can end, as
+    /// Fork's Activity Manager says it: the verb's past participle where Fork's says one —
+    /// "staged", "unstaged", "discarded" (files and, Cairn's own row, lines) — none for a
+    /// commit, an amend, a branch created without checkout or a lock removed, and git's own
+    /// "Switched to branch 'topic'" for a branch checked out; "<verb> failed" on every failure,
+    /// as Fork's "stage failed"; "cancelled" on a cancel.
     pub fn result_lines(&self) -> ResultLines {
         let lines = |succeeded: Option<String>, verb: &str| ResultLines {
             succeeded,
@@ -420,7 +416,7 @@ impl LocalWrite {
     }
 
     /// A copy of a write that carries no confirmation, to run again after git refused it for the
-    /// lock (F5); `None` for a destructive write, whose token is spent once — a confirmed amend
+    /// lock; `None` for a destructive write, whose token is spent once — a confirmed amend
     /// runs again only with the token its failure handed back.
     fn token_free_copy(&self) -> Option<Self> {
         Some(match self {
@@ -614,8 +610,8 @@ impl LocalWrite {
     }
 }
 
-/// Fork's result line under an operation's row in the activity popover (R12.1, C29), for each
-/// way it can end: `None` where there is none to say.
+/// Fork's result line under an operation's row in the activity popover, for each way it can
+/// end: `None` where there is none to say.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResultLines {
     pub succeeded: Option<String>,
@@ -629,8 +625,8 @@ pub struct ResultLines {
 enum Ran {
     Performed(Performed),
     /// An amend made: the commit it replaced, as the run answered it — the way back the activity
-    /// popover offers (R12.1) — and, for one run at the press, what it turned out to cost, read
-    /// once git was reaped (R1.5, C35).
+    /// popover offers — and, for one run at the press, what it turned out to cost, read once
+    /// git was reaped.
     Amended {
         performed: Performed,
         replaced: Option<Oid>,
@@ -689,7 +685,7 @@ impl Watch<'_> {
         commit(CommitWatch {
             cancel: &before,
             // A read after git is reaped is ended by the close alone, never by the write's
-            // Cancel (C35, phase 18's QA item 2).
+            // Cancel.
             closing: &closing,
             running: &mut running,
             output: &mut output,
@@ -709,18 +705,18 @@ impl cairn_git::Cancel for BeforeRunning<'_> {
     }
 }
 
-/// How a write ended, as the window keeps it (R14): what it did, or why it did nothing — each a
+/// How a write ended, as the window keeps it: what it did, or why it did nothing — each a
 /// short sentence for people (`said`), worded on the lane from the engine's typed error
 /// (`ending_words`), apart from the command git ran, its output and the lock paths. The window
 /// gives each its one home: nothing for a success or a cancel, Fork's Git Error for git's
-/// failure, "Couldn't <name>" for the rest (R14.3, R14.5).
+/// failure, "Couldn't <name>" for the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteEnding {
     /// It ran: what it did, the prompt it confirmed when it was destructive, and the lock
     /// files before and after it.
     Done(Done),
     /// Nothing was written, because what it was built from moved first — a patch the writes
-    /// ahead of it made stale, or a file edited since its discard was confirmed (R3.7, R1.4):
+    /// ahead of it made stale, or a file edited since its discard was confirmed:
     /// `path` is what moved, as the engine names it, and `said` the sentence naming it.
     Stale { path: String, said: String },
     /// Nothing was written: refused before git ran (nothing selected, a conflicted path, a
@@ -728,14 +724,14 @@ pub enum WriteEnding {
     Refused { said: String },
     /// It failed — git, with its command and output, or something beneath it.
     Failed(Failure),
-    /// Cancelled by the user (R4.7, rule 5 of the redesign): a commit or an amend git had not
-    /// made — `HEAD` read after its `git` was reaped, or the cancel heard before git ran. One
-    /// git had made ended [`WriteEnding::Done`]. With the lock files left, and whether its git
-    /// had started — `false` for a cancel heard before git ran, which ran nothing (phase 20's QA
-    /// item 8: the activity entry then quotes no prompt).
+    /// Cancelled by the user: a commit or an amend git had not made — `HEAD` read after its
+    /// `git` was reaped, or the cancel heard before git ran. One git had made ended
+    /// [`WriteEnding::Done`]. With the lock files left, and whether its git had started —
+    /// `false` for a cancel heard before git ran, which ran nothing, so the activity entry
+    /// quotes no prompt.
     Cancelled { locks: Vec<PathBuf>, ran: bool },
     /// Nothing ran: an amend at the press that must be confirmed — a remote has `HEAD`, or git
-    /// keeps no reflog (R6.4) — its `Consequence` answered for the confirmation dialog.
+    /// keeps no reflog — its `Consequence` answered for the confirmation dialog.
     NeedsConfirming { consequence: Consequence },
     /// A discard of files that did not take every file: what it did, the prompt it confirmed,
     /// the paths still as they were confirmed, the sentence saying so, and git's failure when
@@ -750,7 +746,7 @@ pub enum WriteEnding {
     NotRun { said: String },
 }
 
-/// A write, or a fetch, that failed (R14.3): git's failure — its command and output for the Git
+/// A write, or a fetch, that failed: git's failure — its command and output for the Git
 /// Error dialog's Error Details — or one beneath git, which has neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
@@ -760,12 +756,12 @@ pub struct Failure {
     /// What ran (`git commit -q -F -`), when it was git that failed.
     pub command: Option<String>,
     /// git's words as the engine kept them — its runner's whole lines, scrubbed as they were
-    /// split, stdout's and stderr's in the order they arrived (R4.10); empty otherwise.
+    /// split, stdout's and stderr's in the order they arrived; empty otherwise.
     pub output: ScrubbedLines,
     /// The lock files present once it had failed.
     pub locks: Vec<PathBuf>,
-    /// git could not create `<gitdir>/index.lock` (F5): its Git Error offers `Remove
-    /// index.lock…` beside Close (R12.4, observed `lk2`).
+    /// git could not create `<gitdir>/index.lock`: its Git Error offers `Remove
+    /// index.lock…` beside Close.
     pub index_lock: bool,
 }
 
@@ -837,17 +833,17 @@ fn failed_on_lock(error: &Error, lock: &Path) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Done {
     pub description: String,
-    /// The prompt the user accepted, for a destructive write (R1.6).
+    /// The prompt the user accepted, for a destructive write.
     pub acknowledged: Option<String>,
     pub locks_before: Vec<PathBuf>,
     pub locks_after: Vec<PathBuf>,
     /// The commit an amend replaced, as its run answered it: the way back into Show Lost
-    /// Commits the activity popover offers (R12.1). `None` for every other write.
+    /// Commits the activity popover offers. `None` for every other write.
     pub replaced: Option<Oid>,
-    /// What an amend run at the press turned out to cost, read again once git was reaped
-    /// (R1.5, C35): where it would now need confirming — a remote came to have the replaced
-    /// commit, or git logged no move away from it — the activity entry says so (phase 20).
-    /// `None` for every other write, and where that read failed.
+    /// What an amend run at the press turned out to cost, read again once git was reaped:
+    /// where it would now need confirming — a remote came to have the replaced commit, or git
+    /// logged no move away from it — the activity entry says so. `None` for every other write,
+    /// and where that read failed.
     pub cost_after: Option<Box<Consequence>>,
 }
 
@@ -865,8 +861,8 @@ impl Done {
 }
 
 /// A confirmed amend's token handed back unspent — git failed and `HEAD` is still the commit
-/// confirmed (`Error::AmendNotMade`, R1.1's option (a) as (a′)) — carried on the write's ending to
-/// the window's Git Error state, whose skip spends it without asking again (R10.5). Every other
+/// confirmed (`Error::AmendNotMade`) — carried on the write's ending to the window's Git Error
+/// state, whose skip spends it without asking again. Every other
 /// ending carries none. A clone carries none either, so one token is never two: the update is
 /// moved to the window, never copied on the way.
 pub struct Unspent {
@@ -958,9 +954,8 @@ impl WriteEnding {
                     Unspent::none(),
                 );
             }
-            // A confirmed amend git refused before amending hands its token back (R1.1's option
-            // (a)): carried to the window's Git Error state for its skip, the ending git's
-            // failure's.
+            // A confirmed amend git refused before amending hands its token back, for the
+            // window's Git Error state to spend on its skip; the ending is git's failure's.
             Err(Error::AmendNotMade { failure, unspent }) => {
                 let (ending, invalidated, _) = Self::of(Err(*failure), prompting, lock);
                 return (
@@ -985,7 +980,7 @@ impl WriteEnding {
                 path: "HEAD".to_owned(),
                 said: said(),
             },
-            // Create Branch's Discard re-checks `HEAD`, the commit and the name (R1.4).
+            // Create Branch's Discard re-checks `HEAD`, the commit and the name.
             Error::CheckoutChangedSinceConfirmed { what } => Self::Stale {
                 path: what.to_string(),
                 said: said(),
@@ -1032,7 +1027,7 @@ impl WriteEnding {
                 );
             }
             // git's failure, one beneath git, a commit made and then failed, one whose `HEAD`
-            // something else moved, Cairn losing hold of git (R4.7): each a failure, worded.
+            // something else moved, Cairn losing hold of git: each a failure, worded.
             _ => Self::Failed(Failure::of(&error, prompting, lock)),
         };
         (ending, None, Unspent::none())
@@ -1049,7 +1044,7 @@ pub(crate) enum LocalJob {
     },
     /// What discarding `paths` would lose, computed for the window's confirmation
     /// (`ops::discard_files_consequence`), in the lane's order: after every write asked before
-    /// it, so it counts what they left (staging-and-commit R8.4).
+    /// it, so it counts what they left.
     Consequence {
         asked: OperationId,
         paths: Vec<RepoPath>,
@@ -1067,17 +1062,17 @@ pub(crate) enum LocalJob {
         chunk: bool,
         cancel: Superseded,
     },
-    /// What the commit box reads (staging-and-commit R10), in the lane's order, answered under
-    /// its number in the commit-box lane; one superseded before it is answered is not sent.
+    /// What the commit box reads, in the lane's order, answered under its number in the
+    /// commit-box lane; one superseded before it is answered is not sent.
     CommitReads { epoch: Epoch, cancel: Superseded },
-    /// Amend's lists over `status` and `HEAD`'s message, in the lane's order (R6.3, R10.3); a
+    /// Amend's lists over `status` and `HEAD`'s message, in the lane's order; a
     /// newer ask ends its `git` read.
     Amending {
         status: Arc<LocalChanges>,
         epoch: Epoch,
         cancel: Superseded,
     },
-    /// Whether `name` can be a new branch's (R11.3), in the lane's order, answered under its
+    /// Whether `name` can be a new branch's, in the lane's order, answered under its
     /// number in the branch-name lane; one superseded is not sent.
     BranchName {
         name: String,
@@ -1147,7 +1142,7 @@ impl LaneState {
     }
 
     /// Runs `send` — the answer of a read that began at `stamp` — only if no write has
-    /// started or ended since; `false` when it was dropped instead (R4.4). Under the lane's
+    /// started or ended since; `false` when it was dropped instead. Under the lane's
     /// lock, so the answer is sent before the next write's start.
     pub(crate) fn if_unchanged(&self, stamp: u64, send: impl FnOnce()) -> bool {
         let lane = self.lock();
@@ -1159,7 +1154,7 @@ impl LaneState {
         unchanged
     }
 
-    /// `true` when a commit is running, so a refresh is kept back (R4.6): dropped, since the
+    /// `true` when a commit is running, so a refresh is kept back: dropped, since the
     /// commit's ending reads everything again whatever it did.
     pub(crate) fn defer_refresh(&self) -> bool {
         self.lock()
@@ -1169,7 +1164,7 @@ impl LaneState {
     }
 
     /// Cancels the write `id` names, if it is a commit and running; anything else — a write
-    /// that is not a commit, one queued, one that has ended — is left alone (R4.3). Called on
+    /// that is not a commit, one queued, one that has ended — is left alone. Called on
     /// the UI thread; the cancel it calls under the lock never waits (module docs).
     pub(crate) fn cancel(&self, id: OperationId) {
         let mut lane = self.lock();
@@ -1178,8 +1173,8 @@ impl LaneState {
             && running.commit
         {
             // Kept whichever way it lands: a kill installed for an attempt already reaped ends
-            // nothing, and the lock retry's next attempt must still see it (phase 19's QA item
-            // 3). `install` fires a kept cancel; the reads after a reap poll the close alone.
+            // nothing, and the lock retry's next attempt must still see it. `install` fires a
+            // kept cancel; the reads after a reap poll the close alone.
             running.cancelled = true;
             if let Some(cancel) = &running.cancel {
                 cancel();
@@ -1232,12 +1227,12 @@ impl LaneState {
         announce();
     }
 
-    /// Waits `after` before `id` runs again for the lock (F5) — a sleep on this, the lane's own
+    /// Waits `after` before `id` runs again for the lock — a sleep on this, the lane's own
     /// thread, in `slice`s — and lets go of the cancel its last attempt installed, so a cancel
     /// that comes now is kept for the next attempt's checks; `true` at once when a cancel is kept,
     /// so that attempt's checks end it as cancelled rather than the wait ending it as the lock's
-    /// refusal (phase 19's QA item 4); `false`, at once, once the repository is closing, when the
-    /// write is not run again.
+    /// refusal; `false`, at once, once the repository is closing, when the write is not run
+    /// again.
     fn wait_to_retry(&self, id: OperationId, after: Duration, slice: Duration) -> bool {
         if let Some(running) = self
             .lock()
@@ -1305,8 +1300,8 @@ pub(crate) struct Local<'a> {
 }
 
 /// The local lane's loop: until it is told to stop or every handle is gone. A lock a write
-/// left when a close gave up on it (R4.9) is found by the leftover lock's `stat` on the next
-/// open's refresh (R12.4), not here.
+/// left when a close gave up on it is found by the leftover lock's `stat` on the next open's
+/// refresh, not here.
 pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     let repo = shared.to_worker();
     while let Ok(job) = serving.jobs.recv() {
@@ -1401,7 +1396,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     .send(Some(epoch), Update::BranchName { name, outcome });
             }
             LocalJob::LockConsequence { asked } => {
-                // Read now, at the press (the user's decision H): its age is current, and a git
+                // Read now, at the press: its age is current, and a git
                 // of Cairn's running is said rather than the offer lost.
                 let outcome = ops::remove_lock_consequence(&repo)
                     .map_err(|error| crate::worker::ending_words::sentence(&error));
@@ -1424,7 +1419,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     Err(Error::CheckoutRefused {
                         why: cairn_git::CheckoutRefusal::InProgress(operation),
                     }) => Err(CheckoutRefused::InProgress(operation)),
-                    // One sentence, worded as every ending is (phase 14's QA item 16d).
+                    // One sentence, worded as every ending is.
                     Err(error) => Err(CheckoutRefused::Failed(
                         crate::worker::ending_words::sentence(&error),
                     )),
@@ -1456,7 +1451,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     }
 }
 
-/// What the commit box reads (R6.7, R6.9, R6.10): each read's answer or its failure, or `None`
+/// What the commit box reads: each read's answer or its failure, or `None`
 /// once `reading` is cancelled — nobody waits on it. The message git prepared is read, and
 /// cleaned through git, only while an operation a commit concludes is in progress.
 fn commit_reads(git: &GitBinary, repo: &Repository, reading: &Counting<'_>) -> Option<CommitReads> {
@@ -1481,9 +1476,9 @@ fn commit_reads(git: &GitBinary, repo: &Repository, reading: &Counting<'_>) -> O
     })
 }
 
-/// Amend's lists over `status` and `HEAD`'s message (R6.3, R10.3), each part or its failure;
+/// Amend's lists over `status` and `HEAD`'s message, each part or its failure;
 /// `None` once `reading` is cancelled. What an amend costs is not read here: it is read at the
-/// press, in the job that runs it (`ops::amend_unconfirmed`, rule 3 of the redesign).
+/// press, in the job that runs it (`ops::amend_unconfirmed`).
 fn amend_read(
     git: &GitBinary,
     repo: &Repository,
@@ -1516,9 +1511,9 @@ fn amend_read(
     (!reading.is_cancelled()).then_some(AmendRead { message, lists })
 }
 
-/// What the window reads again after a write (R4.5): what its `Invalidated` names when it ran,
+/// What the window reads again after a write: what its `Invalidated` names when it ran,
 /// what it could have changed otherwise — and everything after a commit, whatever its ending,
-/// which covers a refresh kept back while it ran (R4.6).
+/// which covers a refresh kept back while it ran.
 fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> ReadAgain {
     if commit {
         ReadAgain::Everything
@@ -1528,9 +1523,8 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
 }
 
 /// Why counting what a discard would lose refused, in one sentence for the "Couldn't Discard
-/// Changes" dialog, which adds "Nothing was changed." itself (R14.2; the user's decision of
-/// 2026-10-10 on phase 15's Q2): worded as every ending is (`ending_words`), its path escaped —
-/// a file that moved while it was read says so.
+/// Changes" dialog, which adds "Nothing was changed." itself: worded as every ending is
+/// (`ending_words`), its path escaped — a file that moved while it was read says so.
 pub(crate) fn refused_while_counting(error: &Error) -> String {
     match error {
         Error::ChangedSinceRead { path } => {
@@ -1544,7 +1538,7 @@ pub(crate) fn refused_while_counting(error: &Error) -> String {
 }
 
 /// The command log's records of what this thread ran in `repo` since `mark` — each argument
-/// and its output scrubbed of a URL's userinfo by the engine as it was recorded (R12.2, R4.10).
+/// and its output scrubbed of a URL's userinfo by the engine as it was recorded.
 pub(crate) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<CommandRecord> {
     repo.commands_since(mark)
 }
@@ -1568,15 +1562,15 @@ fn no_token(why: &impl std::fmt::Display) -> String {
 }
 
 /// How many times a write git refused for the lock is run again before its ending goes out
-/// (F5: "once or twice", as Fork retries, Tracker #1303).
+/// ("once or twice", as Fork retries).
 pub(crate) const LOCK_RETRIES: usize = 2;
-/// How long the lane waits before running it again: about a second (F5).
+/// How long the lane waits before running it again: about a second.
 pub(crate) const LOCK_RETRY_AFTER: Duration = Duration::from_secs(1);
 /// The slices the wait is slept in, so a close ends it within one.
 const LOCK_RETRY_SLICE: Duration = Duration::from_millis(50);
 
 /// Runs one write: announced, given its own askpass token, run again while git refuses it for a
-/// lock that stood from before the attempt began (F5, module docs), ended with what it did.
+/// lock that stood from before the attempt began (module docs), ended with what it did.
 fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_>) {
     let commit = write.is_commit();
     let asked = write.read_again();
@@ -1587,10 +1581,10 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
         serving.outbox.send(None, Update::WriteStarted { id })
     });
     // One token for the whole write, every attempt of it, retired before its ending goes out,
-    // so no helper of a git that is gone is accepted afterwards (L11).
-    // Named by the write's one name, so a prompt it raises is titled by it (R5.1, R14.2).
-    // A token that could not be had is said in the ending, as a channel never opened is
-    // (phase 04's QA item 11): a write that then fails for want of a prompt says why.
+    // so no helper of a git that is gone is accepted afterwards.
+    // Named by the write's one name, so a prompt it raises is titled by it.
+    // A token that could not be had is said in the ending, as a channel never opened is: a
+    // write that then fails for want of a prompt says why.
     let (authorised, prompting) = token_and_prompting(
         serving
             .channel
@@ -1619,8 +1613,8 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
             &watch,
         );
         // Run again only what git refused before writing: the lock stood from before this
-        // attempt began and is the same file now — its time, size, device and inode — so no git could have changed the index
-        // meanwhile (the phase's stopping rule).
+        // attempt began and is the same file now — its time, size, device and inode — so no
+        // git could have changed the index meanwhile.
         let refused_for_the_lock = match &outcome {
             Err(error) => failed_on_lock(error, &lock),
             Ok(_) => false,
@@ -1677,12 +1671,11 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
 mod tests {
     use super::*;
 
-    /// The user's decision of 2026-10-10 on phase 15's Q2: a refusal while counting is one
-    /// sentence for "Couldn't Discard Changes", which adds "Nothing was changed." itself — a file
-    /// that moved while it was read named so, a path left as written (never capitalised), the
-    /// engine's own words with their "; nothing was written" tail left off, each ending with one
-    /// full stop. Caught by: the tail kept (said twice with the dialog's), a path capitalised, or
-    /// a sentence without its stop.
+    /// A refusal while counting is one sentence for "Couldn't Discard Changes", which adds
+    /// "Nothing was changed." itself — a file that moved while it was read named so, a path left
+    /// as written (never capitalised), the engine's own words with their "; nothing was written"
+    /// tail left off, each ending with one full stop. Caught by: the tail kept (said twice with
+    /// the dialog's), a path capitalised, or a sentence without its stop.
     #[test]
     fn a_refusal_while_counting_is_one_sentence() {
         assert_eq!(
@@ -1716,12 +1709,12 @@ mod tests {
         assert!(!other.contains("nothing was"), "{other}");
     }
 
-    /// Phase 04's QA item 11: a write whose askpass token could not be made says why in its
-    /// ending, as one under a channel never opened does. Caught by: the failure dropped with
-    /// `.ok()`, the write failing with no word of the token.
+    /// A write whose askpass token could not be made says why in its ending, as one under a
+    /// channel never opened does. Caught by: the failure dropped with `.ok()`, the write
+    /// failing with no word of the token.
     #[test]
     fn a_token_that_could_not_be_made_is_said_in_the_ending() {
-        // Phase 11's QA (TC9): the choice `run` makes, its failing arm.
+        // The choice `run` makes, its failing arm.
         let (operation, prompting) =
             token_and_prompting::<(), _>(Some(Err("could not generate an askpass token")), &Ok(()));
         assert!(operation.is_none());
@@ -1744,13 +1737,11 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA (Fork-settled), and Fork's rows as observed first-hand on 2026-10-11
-    /// (`fork-activity-result-lines-2026-10-11.md`; merge bar, phase 21, item 15): each write is
-    /// named in the activity popover as Fork's Activity Manager names it — "Stage 1 File" and
-    /// "Unstage 2 Files" in title case, "Commit 1 file" and "Commit 2 files" in lower case with
-    /// the count committed, "Discard Changes" with none, "Create branch 'develop'" — a
-    /// destructive one by its confirmation. Caught by: the progress phrase ("staging 1 file")
-    /// drawn as an operation's name, or a spelling Fork's rows do not use.
+    /// Each write is named in the activity popover as Fork's Activity Manager names it — "Stage
+    /// 1 File" and "Unstage 2 Files" in title case, "Commit 1 file" and "Commit 2 files" in
+    /// lower case with the count committed, "Discard Changes" with none, "Create branch
+    /// 'develop'" — a destructive one by its confirmation. Caught by: the progress phrase
+    /// ("staging 1 file") drawn as an operation's name, or a spelling Fork's rows do not use.
     #[test]
     fn each_write_is_named_in_forks_imperative_form() {
         use cairn_model::Consequence;
@@ -1817,12 +1808,11 @@ mod tests {
         );
     }
 
-    /// Fork's result lines, observed first-hand on 2026-10-11
-    /// (`fork-activity-result-lines-2026-10-11.md`): "staged", "unstaged", "discarded"; none for
-    /// a commit, an amend, a branch created without checkout and a lock removed; git's "Switched
-    /// to branch 'topic'" for a branch checked out, with Discard or without; "<verb> failed" on
-    /// every failure and "cancelled" on every cancel. Caught by: a line Fork does not draw, a
-    /// line missing, or Fork's "Switched to branch'topic'" typo copied.
+    /// Fork's result lines: "staged", "unstaged", "discarded"; none for a commit, an amend, a
+    /// branch created without checkout and a lock removed; git's "Switched to branch 'topic'"
+    /// for a branch checked out, with Discard or without; "<verb> failed" on every failure and
+    /// "cancelled" on every cancel. Caught by: a line Fork does not draw, a line missing, or
+    /// Fork's "Switched to branch'topic'" typo copied.
     #[test]
     fn each_write_carries_forks_result_lines() {
         use cairn_model::Consequence;
@@ -1921,7 +1911,7 @@ mod tests {
         }
     }
 
-    /// F5 and R12.4: a write is refused "for the lock" — retried, and its Git Error offering the
+    /// A write is refused "for the lock" — retried, and its Git Error offering the
     /// lock's removal — only where git failed with `<gitdir>/index.lock` among the locks present
     /// and its words name it: not for another lock present, not for a failure that does not name
     /// it, and through a confirmed amend's hand-back. Caught by: an offer or a retry made on the
@@ -1955,7 +1945,7 @@ mod tests {
         assert_eq!(failure.said, crate::worker::GIT_FAILED);
     }
 
-    /// R12.2 and R4.10 at the lane: a failure's output is the engine's scrubbed lines, handed on
+    /// At the lane, a failure's output is the engine's scrubbed lines, handed on
     /// as they are, and its message is the engine's text of the error — no token in either,
     /// whatever part quoted one — with why no prompt could be answered after it. Caught by: the
     /// lane formatting an error's text itself, or a failure's output rebuilt from text.
@@ -2007,7 +1997,7 @@ mod tests {
         );
     }
 
-    /// The user's decision (2026-10-09): Stage All and Unstage All take the rows a filter shows
+    /// Stage All and Unstage All take the rows a filter shows
     /// — a hidden row, a conflicted one among them, left as it is — and every row with none
     /// on; a rename's source comes with its row. Caught by: the lane gathering every row
     /// whatever the filter showed.
@@ -2067,7 +2057,7 @@ mod tests {
         lane
     }
 
-    /// R4.3: a cancel ends the commit it names while it runs — at once once git is, or as git
+    /// A cancel ends the commit it names while it runs — at once once git is, or as git
     /// starts when it came first — and nothing else: not a write that is not a commit, not a
     /// commit with another id. Caught by: a cancel matched on anything but the id, or one
     /// lost when it beats the install.
@@ -2121,7 +2111,7 @@ mod tests {
         );
     }
 
-    /// R4.4: a read stamped while no write runs is sent only if no write started or ended
+    /// A read stamped while no write runs is sent only if no write started or ended
     /// before it was answered; none is stamped while one runs. Caught by: a clock that does
     /// not tick at both ends, or a check made outside the lock it ticks under.
     #[test]
@@ -2154,7 +2144,7 @@ mod tests {
         assert!(sent, "a read begun after the write was dropped");
     }
 
-    /// Phase 19's QA item 3: a Cancel that lands after an attempt's git was reaped — its kill
+    /// A Cancel that lands after an attempt's git was reaped — its kill
     /// still installed — and before the lock retry lets that kill go is kept for the retried
     /// attempt's checks, which end it as cancelled. Caught by: a cancel spent on a dead kill,
     /// so the retried commit runs.
@@ -2168,7 +2158,7 @@ mod tests {
         assert!(lane.cancel_kept(id), "the cancel was lost to the retry");
     }
 
-    /// Phase 19's QA item 4: a Cancel during the retry's wait ends the wait within about one
+    /// A Cancel during the retry's wait ends the wait within about one
     /// slice, answering "run it" so the next attempt's checks end it as cancelled rather than as
     /// the lock's refusal. Caught by: a wait that sleeps its whole second regardless.
     #[test]
@@ -2185,7 +2175,7 @@ mod tests {
         );
     }
 
-    /// R4.6: a refresh is kept back while a commit runs, and only then. Caught by: deferring
+    /// A refresh is kept back while a commit runs, and only then. Caught by: deferring
     /// behind a stage (a refresh lost while staging), or a deferral that outlives the commit.
     #[test]
     fn a_refresh_is_kept_back_only_while_a_commit_runs() {
@@ -2204,7 +2194,7 @@ mod tests {
         );
     }
 
-    /// R4.6 and phase 04's QA item 7: a refresh kept back is dropped, not remembered, so a
+    /// A refresh kept back is dropped, not remembered, so a
     /// commit's ending must read everything again whatever it did — done, refused, failed,
     /// cancelled — and a stage's only what it names. Caught by: a commit that ran reading only
     /// what its `Invalidated` names (a hook may have moved more), or one that failed reading
@@ -2232,7 +2222,7 @@ mod tests {
         assert_eq!(after(false, ReadAgain::Status, None), ReadAgain::Status);
     }
 
-    /// R4.3: a cancel that comes before a commit's `git` runs is what its checks poll, and only
+    /// A cancel that comes before a commit's `git` runs is what its checks poll, and only
     /// for the commit it names. Caught by: a cancel kept for another id, or one lost before
     /// git starts.
     #[test]
@@ -2250,7 +2240,7 @@ mod tests {
         assert!(!lane.cancel_kept(stage), "a stage was cancelled");
     }
 
-    /// R4.5, R4.7: a write that ran reads again what its `Invalidated` names; one that failed
+    /// A write that ran reads again what its `Invalidated` names; one that failed
     /// or was cancelled reads what it could have changed; a stale patch is dropped naming its
     /// path; a cancel — git ended, or heard before it ran — is a cancel, with its locks, never
     /// "may have taken effect"; a write whose git Cairn lost hold of is a failure that says the

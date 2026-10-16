@@ -1,8 +1,7 @@
-//! The one bounded tail of git's output (staging-and-commit phase 20; `review-code-app-ui.md`
-//! H3 (b)): the latest [`OUTPUT_LINES`] lines and [`OUTPUT_BYTES`] bytes of what an operation
-//! wrote, its oldest whole items let go of first. One type, one pair of bounds, for every holder
-//! of a running operation's output — what the local and network lanes hold for the window
-//! (`worker::OutputTap`), the commit box's output for its Git Error dialog
+//! The one bounded tail of git's output: the latest [`OUTPUT_LINES`] lines and [`OUTPUT_BYTES`]
+//! bytes of what an operation wrote, its oldest whole items let go of first. One type, one pair of
+//! bounds, for every holder of a running operation's output — what the local and network lanes hold
+//! for the window (`worker::OutputTap`), the commit box's output for its Git Error dialog
 //! (`crate::commit_box::state`), and each activity entry's lines (`crate::operations::activity`).
 //!
 //! It keeps its items in an `Arc`, so a holder hands a snapshot out by a reference count
@@ -174,7 +173,7 @@ mod tests {
         }
         assert!(wide.bytes() <= OUTPUT_BYTES, "{}", wide.bytes());
         assert_eq!(wide.iter().next_back(), Some(&line(6)));
-        // Exactly as many as fit, the oldest of them first (phase 20's QA item 6).
+        // Exactly as many as fit, the oldest of them first.
         let fit = OUTPUT_BYTES / line(0).len();
         assert_eq!(wide.iter().count(), fit);
         assert_eq!(wide.iter().next(), Some(&line(7 - fit)));

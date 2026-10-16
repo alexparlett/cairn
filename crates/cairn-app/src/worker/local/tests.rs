@@ -1,14 +1,13 @@
-//! The local write lane through the real boundary (staging-and-commit C10, C11, C12): writes
-//! in order and each with its own ending, a status read across a write never drawn, a commit
-//! that keeps refreshes back and a stage queued behind it, a cancel that reaches only the
-//! commit it names, a close that waits on a commit and ends nothing, the lock files named as
-//! a repository opens and by the write they fail, and a prompt a write's child raises answered
-//! through the window, titled by its own operation.
+//! The local write lane through the real boundary: writes in order and each with its own ending, a
+//! status read across a write never drawn, a commit that keeps refreshes back and a stage queued
+//! behind it, a cancel that reaches only the commit it names, a close that waits on a commit and
+//! ends nothing, the lock files named as a repository opens and by the write they fail, and a
+//! prompt a write's child raises answered through the window, titled by its own operation.
 //!
-//! Every commit here is a real `git commit`, held in its `pre-commit` hook for as long as a
-//! test says ([`held_hook`]) — the slow hook the commit-dependent halves of C10-C12 name.
-//! Nothing waits a fixed time to see that nothing happened: a test waits on the answer to a
-//! later request instead ([`after_the_repository_thread`]), or on what a held process wrote.
+//! Every commit here is a real `git commit`, held in its `pre-commit` hook for as long as a test
+//! says ([`held_hook`]) — the slow hook a test of a running commit needs. Nothing waits a fixed
+//! time to see that nothing happened: a test waits on the answer to a later request instead
+//! ([`after_the_repository_thread`]), or on what a held process wrote.
 //!
 //! No `Command` here — the guards scan this crate's tests — so fixtures are built with
 //! `std::fs`, every write goes through the lane, and a stub `git` is a `/bin/sh` script.
@@ -228,10 +227,10 @@ fn real_open(
     }
 }
 
-/// An unborn repository whose `path` git has staged as `text` — through the local lane, as a
-/// stage asked of the window is — for the window's tests through a real refresh, which may not
-/// wait themselves (C26's window test; merge bar, phase 21, item 12). Its working tree is the
-/// test's to write, so the path's unstaged diff is whatever the test makes it.
+/// An unborn repository whose `path` git has staged as `text` — through the local lane, as a stage
+/// asked of the window is — for the window's tests through a real refresh, which may not wait
+/// themselves. Its working tree is the test's to write, so the path's unstaged diff is whatever the
+/// test makes it.
 pub(crate) struct StagedFile {
     fixture: UnbornRepository,
     home: Home,
@@ -471,15 +470,14 @@ fn staged_and_untracked(status: &WorkingTreeStatus) -> (Vec<String>, Vec<String>
     (staged, untracked)
 }
 
-/// C10 and the QA brief: five stages asked while the first is still held in its `git add` —
-/// every one asked before it has finished — all run, one at a time, in the order asked, each
-/// with its own ending;
-/// the stale one (a second stage of lines built from the same diff as the first, which the
-/// first made stale) is dropped naming its path and the ones behind it still run; each says to
-/// read status again, and status alone; and the status read after them lists what they did.
-/// Caught by: asking that waits for a write, writes refused or run beside each other for being
-/// second, an ending under the wrong id, a stale patch that stalls the lane or is applied, or a
-/// stage that reads more than status again.
+/// Five stages asked while the first is still held in its `git add` — every one asked before it has
+/// finished — all run, one at a time, in the order asked, each with its own ending; the stale one
+/// (a second stage of lines built from the same diff as the first, which the first made stale) is
+/// dropped naming its path and the ones behind it still run; each says to read status again, and
+/// status alone; and the status read after them lists what they did. Caught by: asking that waits
+/// for a write, writes refused or run beside each other for being second, an ending under the wrong
+/// id, a stale patch that stalls the lane or is applied, or a stage that reads more than status
+/// again.
 #[test]
 fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
     let fixture = with_files("cairn-lane-in-order", &["a", "b", "c", "d"]);
@@ -570,11 +568,11 @@ fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
     drop(handle);
 }
 
-/// C10 and the QA brief: a status that begins before a write and ends after it is never
-/// drawn — the status reads the repository, is held while a stage runs and ends, and answers
-/// what it read once released — and the status read after the write is the one drawn, listing
-/// what it did. Deterministic: each status is released by the test. Caught by: a status sent
-/// whatever writes ran while it was read (the pre-write lists are drawn after the write).
+/// A status that begins before a write and ends after it is never drawn — the status reads the
+/// repository, is held while a stage runs and ends, and answers what it read once released — and
+/// the status read after the write is the one drawn, listing what it did. Deterministic: each
+/// status is released by the test. Caught by: a status sent whatever writes ran while it was read
+/// (the pre-write lists are drawn after the write).
 #[test]
 fn a_status_begun_before_a_write_ended_is_never_drawn() {
     let fixture = with_files("cairn-lane-stale-status", &["a"]);
@@ -637,13 +635,12 @@ fn staged(handle: &RepositoryHandle, updates: &mut Updates, paths: &[&str]) {
     );
 }
 
-/// C10 and the QA brief against a real `git commit` held in its `pre-commit` hook: while it
-/// runs no refresh of Cairn's own starts — three asked of the handle start no status and
-/// answer nothing, by the time the repository thread has answered a request asked after them
-/// — and a stage asked meanwhile waits for it; its ending says to read everything again, and
-/// once the window asks, one refresh is answered, after the stage behind it. Caught by: a
-/// refresh read during a commit, a stage run beside it, or a commit's ending that reads less
-/// than everything.
+/// Against a real `git commit` held in its `pre-commit` hook: while it runs no refresh of Cairn's
+/// own starts — three asked of the handle start no status and answer nothing, by the time the
+/// repository thread has answered a request asked after them — and a stage asked meanwhile waits
+/// for it; its ending says to read everything again, and once the window asks, one refresh is
+/// answered, after the stage behind it. Caught by: a refresh read during a commit, a stage run
+/// beside it, or a commit's ending that reads less than everything.
 #[test]
 fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
     let fixture = to_commit("cairn-lane-quiet-commit", &["a", "b"]);
@@ -715,15 +712,14 @@ fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
     drop(handle);
 }
 
-/// R4.6 on the threads' side, against a real commit: a refresh asked BEFORE the commit, whose
-/// reads are still queued on the refresh thread — its status held, its ahead/behind waiting
-/// behind it — when the commit starts, draws nothing while the commit runs: the status,
-/// released, was read across a write and is dropped, and the ahead/behind is kept back as it
-/// is taken up. The commit is held until the status's process has ended and the repository
-/// thread has answered a later request, so the refresh thread takes the ahead/behind up while
-/// it runs. Once the commit has ended and the window asks, one refresh is answered. Caught by:
-/// the refresh thread counting ahead/behind while a commit runs (only the handle's gate kept
-/// back).
+/// On the threads' side, against a real commit: a refresh asked BEFORE the commit, whose reads are
+/// still queued on the refresh thread — its status held, its ahead/behind waiting behind it — when
+/// the commit starts, draws nothing while the commit runs: the status, released, was read across a
+/// write and is dropped, and the ahead/behind is kept back as it is taken up. The commit is held
+/// until the status's process has ended and the repository thread has answered a later request, so
+/// the refresh thread takes the ahead/behind up while it runs. Once the commit has ended and the
+/// window asks, one refresh is answered. Caught by: the refresh thread counting ahead/behind while
+/// a commit runs (only the handle's gate kept back).
 #[test]
 fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
     let fixture = to_commit("cairn-lane-refresh-before-commit", &["a"]);
@@ -804,12 +800,11 @@ fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
     drop(handle);
 }
 
-/// C10, R4.3, R4.7 and the QA brief, against real commits held in their hooks: a cancel names
-/// its write and reaches only that one — a cancel for a commit still queued does nothing, the
-/// running commit's ends it as cancelled (its hook killed, nothing committed, `HEAD` read after
-/// the reap), and that same cancel sent again once the next commit runs leaves the next one
-/// to finish and commit what is staged. Caught by: a cancel that reaches whatever runs (#47's
-/// shape), or one kept for a write it was not for.
+/// Against real commits held in their hooks: a cancel names its write and reaches only that one — a
+/// cancel for a commit still queued does nothing, the running commit's ends it as cancelled (its
+/// hook killed, nothing committed, `HEAD` read after the reap), and that same cancel sent again
+/// once the next commit runs leaves the next one to finish and commit what is staged. Caught by: a
+/// cancel that reaches whatever runs (#47's shape), or one kept for a write it was not for.
 #[test]
 fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     let fixture = to_commit("cairn-lane-cancel-by-id", &["a"]);
@@ -847,11 +842,11 @@ fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     drop(handle);
 }
 
-/// R4.9 beside a fetch: a close asked while a fetch and a real commit both run ends the fetch
-/// at once, as it ends every read and network operation, and waits on the commit alone — the
-/// fetch's ending arrives while the commit is still held in its hook. Caught by: a close that
-/// ends the fetch only once the local lane has been waited for, which leaves a fetch reaching
-/// the network for as long as a commit's hooks run.
+/// Beside a fetch: a close asked while a fetch and a real commit both run ends the fetch at once,
+/// as it ends every read and network operation, and waits on the commit alone — the fetch's ending
+/// arrives while the commit is still held in its hook. Caught by: a close that ends the fetch only
+/// once the local lane has been waited for, which leaves a fetch reaching the network for as long
+/// as a commit's hooks run.
 #[test]
 fn a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit() {
     let fixture = to_commit("cairn-lane-close-fetch", &["a"]);
@@ -896,12 +891,11 @@ fn a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit() {
     );
 }
 
-/// C11 and R4.9, against a real commit held in its hook: a close asked while it runs waits for
-/// it — the stream stays open and the commit's `git` and its hook alive, past `CLOSE_BOUND`,
-/// when a close that ended what runs would have given up on it — and ends nothing; once it
-/// finishes, its ending arrives, a write queued behind it is not run, and the stream ends.
-/// Caught by: a close that ends the commit's `git` (the registry's close-everything), or one
-/// that runs the queued write.
+/// Against a real commit held in its hook: a close asked while it runs waits for it — the stream
+/// stays open and the commit's `git` and its hook alive, past `CLOSE_BOUND`, when a close that
+/// ended what runs would have given up on it — and ends nothing; once it finishes, its ending
+/// arrives, a write queued behind it is not run, and the stream ends. Caught by: a close that ends
+/// the commit's `git` (the registry's close-everything), or one that runs the queued write.
 #[test]
 fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
     let fixture = to_commit("cairn-lane-close-waits", &["a", "b"]);
@@ -957,12 +951,11 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
     );
 }
 
-/// R6.1 and R10.5 through the lane (phase 05's QA item 8): a commit whose `pre-commit` hook
-/// fails ends `Failed` with the hook's words and commits nothing; asked again with
-/// `skip_hooks`, it commits past the hook; and the next commit, hooks on, runs the hook again
-/// and fails on it, leaving the branch where the skip put it. Caught by: the skip dropped, or
-/// passed when not asked for, between the window's write and the engine's `Hooks`, or kept
-/// for the commits after the one it was asked for.
+/// Through the lane: a commit whose `pre-commit` hook fails ends `Failed` with the hook's words and
+/// commits nothing; asked again with `skip_hooks`, it commits past the hook; and the next commit,
+/// hooks on, runs the hook again and fails on it, leaving the branch where the skip put it. Caught
+/// by: the skip dropped, or passed when not asked for, between the window's write and the engine's
+/// `Hooks`, or kept for the commits after the one it was asked for.
 #[test]
 fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again() {
     let fixture = to_commit("cairn-lane-hook-skip", &["a"]);
@@ -989,7 +982,7 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
             ReadAgain::Everything,
         ) => {
             assert_eq!(message, crate::worker::GIT_FAILED);
-            // The Git Error dialog's command and git's own words (R10.5).
+            // The Git Error dialog's command and git's own words.
             assert_eq!(command.as_deref(), Some("git commit -q -F -"));
             assert!(output.contains("lint failed"), "{output}");
         }
@@ -1031,13 +1024,12 @@ fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_a
     drop(handle);
 }
 
-/// C11, C30 and R4.9, R12.4, F5: a lock left in the git directory — by a write a close gave up
-/// on, say — is found by the stat every refresh makes, the open's first; a write git refuses for
-/// it is run again about a second later, twice, before it ends failed with the lock's removal
-/// offered; what that would cost is read at the press, and confirmed, the lane removes exactly
-/// that file; the next stat finds it gone, and the write then runs. Caught by: an open that does
-/// not stat, a write reported at its first refusal, a retry past two, or the removal of another
-/// file.
+/// A lock left in the git directory — by a write a close gave up on, say — is found by the stat
+/// every refresh makes, the open's first; a write git refuses for it is run again about a second
+/// later, twice, before it ends failed with the lock's removal offered; what that would cost is
+/// read at the press, and confirmed, the lane removes exactly that file; the next stat finds it
+/// gone, and the write then runs. Caught by: an open that does not stat, a write reported at its
+/// first refusal, a retry past two, or the removal of another file.
 #[test]
 fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation() {
     let fixture = with_files("cairn-lane-lock-left", &["a"]);
@@ -1074,8 +1066,8 @@ fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation(
         }
         other => panic!("a stage over index.lock ended {other:?}"),
     }
-    // R12.1: what the write ran — its own `git add`, once and then twice again, and nothing the
-    // refresh ran meanwhile.
+    // What the write ran — its own `git add`, once and then twice again, and nothing the refresh
+    // ran meanwhile.
     let commands = seen
         .iter()
         .find_map(|update| match update {
@@ -1122,9 +1114,9 @@ fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation(
     let read = collect_until(&mut updates, |update| {
         matches!(update, Update::Status { .. })
     });
-    // C30, never a retry (merge bar, phase 21, item 13): the removal is followed by a refresh,
-    // never by the refused write run again — no write starts but the removal itself, and the
-    // stage the lock refused has not happened: `a` is still listed unstaged, never staged.
+    // Never a retry: the removal is followed by a refresh, never by the refused write run again —
+    // no write starts but the removal itself, and the stage the lock refused has not happened: `a`
+    // is still listed unstaged, never staged.
     let started: Vec<OperationId> = seen
         .iter()
         .chain(&refreshed)
@@ -1159,12 +1151,11 @@ fn a_lock_left_behind_is_stated_retried_on_and_removed_through_its_confirmation(
     drop(handle);
 }
 
-/// The stopping rule's negative arms (phase 19's QA items 1 and 2): a write git refused for the
-/// lock is run again only where the same lock stood from before the attempt until after it.
-/// (a) A lock made during the attempt — none before — and (b) a lock swapped during it for
-/// another file of the same time but another size each end the write failed after ONE `git`,
-/// since another git may have written the index between. Caught by: the condition dropped, or a
-/// lock told the same by its time alone.
+/// The retry's negative arms: a write git refused for the lock is run again only where the same
+/// lock stood from before the attempt until after it. (a) A lock made during the attempt — none
+/// before — and (b) a lock swapped during it for another file of the same time but another size
+/// each end the write failed after ONE `git`, since another git may have written the index between.
+/// Caught by: the condition dropped, or a lock told the same by its time alone.
 #[test]
 fn a_lock_made_or_swapped_during_the_attempt_is_never_run_through_again() {
     for swapped in [false, true] {
@@ -1208,10 +1199,9 @@ fn a_lock_made_or_swapped_during_the_attempt_is_never_run_through_again() {
     }
 }
 
-/// F5 and the phase's stopping rule: a write git refused for a lock another program held, and let
-/// go of within the second, runs again and writes once — its first attempt wrote nothing, since
-/// the lock stood throughout it. Caught by: a write reported failed though the lock went, or
-/// one run past its success.
+/// A write git refused for a lock another program held, and let go of within the second, runs again
+/// and writes once — its first attempt wrote nothing, since the lock stood throughout it. Caught
+/// by: a write reported failed though the lock went, or one run past its success.
 #[test]
 fn a_write_refused_for_a_lock_let_go_of_runs_again_and_writes_once() {
     let fixture = with_files("cairn-lane-lock-retried", &["a"]);
@@ -1292,11 +1282,10 @@ fn asks(directory: &str) -> String {
     )
 }
 
-/// C12 and R5.1: a local write whose child asks for a secret — a real `git add` whose
-/// `post-index-change` hook asks through the helper, as a signing program does — raises the
-/// prompt in the window while it runs, and the answer reaches the child. Caught by: a local
-/// write run without an askpass token (the helper refuses it), or a prompt that never leaves
-/// the worker.
+/// A local write whose child asks for a secret — a real `git add` whose `post-index-change` hook
+/// asks through the helper, as a signing program does — raises the prompt in the window while it
+/// runs, and the answer reaches the child. Caught by: a local write run without an askpass token
+/// (the helper refuses it), or a prompt that never leaves the worker.
 #[test]
 fn a_prompt_a_stages_hook_raises_is_shown_and_answered() {
     let fixture = with_files("cairn-lane-hook-asks", &["a"]);
@@ -1363,12 +1352,11 @@ fn signing_program(directory: &Path) -> PathBuf {
     program
 }
 
-/// C12's commit half and phase 04's QA item 13, against a real signed `git commit` (git
-/// 2.34's `gpg.format=ssh`): the signing program it runs asks for the key's passphrase
-/// through the helper while a fetch is also in flight, the prompt reaches the window titled by
-/// the commit — not the fetch — and the answer reaches the program, whose signature is the
-/// commit's. Caught by: a commit run without an askpass token (the helper refuses it), a
-/// prompt titled by whatever else is in flight, or an answer that never arrives.
+/// Against a real signed `git commit` (git 2.34's `gpg.format=ssh`): the signing program it runs
+/// asks for the key's passphrase through the helper while a fetch is also in flight, the prompt
+/// reaches the window titled by the commit — not the fetch — and the answer reaches the program,
+/// whose signature is the commit's. Caught by: a commit run without an askpass token (the helper
+/// refuses it), a prompt titled by whatever else is in flight, or an answer that never arrives.
 #[test]
 fn a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs() {
     let fixture = to_commit("cairn-lane-commit-asks", &["a"]);
@@ -1417,10 +1405,10 @@ fn a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs() {
     drop(handle);
 }
 
-/// R6.2, R1.6 and phase 04's QA item 7, through the lane: an amend held in its hook keeps a
-/// refresh back like a commit, runs under the confirmation of the `Consequence` the engine
-/// computed, and ends quoting the prompt it confirmed and reading everything again. Caught
-/// by: an amend run as a plain commit, its prompt lost, or a refresh read while it ran.
+/// Through the lane: an amend held in its hook keeps a refresh back like a commit, runs under the
+/// confirmation of the `Consequence` the engine computed, and ends quoting the prompt it confirmed
+/// and reading everything again. Caught by: an amend run as a plain commit, its prompt lost, or a
+/// refresh read while it ran.
 #[test]
 fn an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back() {
     let fixture = to_commit("cairn-lane-amend", &["a", "b"]);
@@ -1480,12 +1468,11 @@ fn reading_git() -> GitBinary {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// C14's worker half and the QA brief (R6.4, rules 2 and 3 of the redesign): Amend pressed is one
-/// job on the lane that reads what the amend costs and, in the same job, runs it — git logs it
-/// and no remote has `HEAD`: amended, with no token and no prompt — or ends without running git,
-/// answering the `Consequence` for the dialog — a remote-tracking ref holds `HEAD`: nothing
-/// amended — and the dialog's token then runs it. Caught by: a recoverable amend sent to the
-/// dialog, a published one run unconfirmed, or the answer carrying another `HEAD`.
+/// Amend pressed is one job on the lane that reads what the amend costs and, in the same job, runs
+/// it — git logs it and no remote has `HEAD`: amended, with no token and no prompt — or ends
+/// without running git, answering the `Consequence` for the dialog — a remote-tracking ref holds
+/// `HEAD`: nothing amended — and the dialog's token then runs it. Caught by: a recoverable amend
+/// sent to the dialog, a published one run unconfirmed, or the answer carrying another `HEAD`.
 #[test]
 fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog() {
     let fixture = to_commit("cairn-lane-amend-press", &["a", "b", "c"]);
@@ -1506,8 +1493,8 @@ fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog()
     match ending_of(&seen, recoverable) {
         (WriteEnding::Done(done), ReadAgain::Everything) => {
             assert_eq!(done.acknowledged, None, "a prompt recorded with none shown");
-            // Phase 18, step 6: the way back is the commit the run answered it replaced; and
-            // C35, read again once git was reaped, it still asks nothing.
+            // The way back is the commit the run answered it replaced; and, read again once git was
+            // reaped, it still asks nothing.
             assert_eq!(done.replaced, Some(committed));
             assert!(
                 done.cost_after
@@ -1570,11 +1557,10 @@ fn amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog()
     drop(handle);
 }
 
-/// R1.1's option (a), the user's answer of 2026-10-10, through the lane: a confirmed amend a
-/// `pre-commit` hook fails, `HEAD` unmoved, ends git's failure and carries its token back unspent
-/// on the ending, for the window's Git Error state; the skip run with that token amends, and its
-/// ending carries none. Caught by: the token dropped by the lane (the skip asking again), or
-/// handed back on an ending that spent it.
+/// Through the lane: a confirmed amend a `pre-commit` hook fails, `HEAD` unmoved, ends git's
+/// failure and carries its token back unspent on the ending, for the window's Git Error state; the
+/// skip run with that token amends, and its ending carries none. Caught by: the token dropped by
+/// the lane (the skip asking again), or handed back on an ending that spent it.
 #[test]
 fn a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -1668,9 +1654,9 @@ fn a_confirmed_amend_a_hook_fails_carries_its_token_back_for_the_skip() {
     drop(handle);
 }
 
-/// R1, R4.1: each destructive write runs through the lane with the confirmation the user gave
-/// it — a discard of lines, then a discard of files — and its ending quotes the prompt they
-/// accepted. Caught by: a lane that drops a confirmation or does not spend it.
+/// Each destructive write runs through the lane with the confirmation the user gave it — a discard
+/// of lines, then a discard of files — and its ending quotes the prompt they accepted. Caught by: a
+/// lane that drops a confirmation or does not spend it.
 #[test]
 fn confirmed_discards_run_through_the_lane_and_quote_their_prompts() {
     let fixture = with_files("cairn-lane-discard", &["a", "b"]);
@@ -1740,12 +1726,12 @@ fn consequence_of(seen: &[Update], asked: OperationId) -> Result<cairn_model::Co
         .unwrap_or_else(|| panic!("no consequence for {asked:?}: {seen:?}"))
 }
 
-/// R8.4 and phase 04's carry: what a discard would lose is counted on the local lane in the
-/// order asked — after a stage asked before it, held in its `git add` meanwhile — so it counts
-/// what that stage left: the path staged whole has no unstaged change, and the count refuses —
-/// the refusal the dialog, opened counting at the press, then shows as "Couldn't Discard
-/// Changes". Caught by: the consequence computed on another thread, or ahead
-/// of the write asked before it (it would count the file as untracked and offer to delete it).
+/// What a discard would lose is counted on the local lane in the order asked — after a stage asked
+/// before it, held in its `git add` meanwhile — so it counts what that stage left: the path staged
+/// whole has no unstaged change, and the count refuses — the refusal the dialog, opened counting at
+/// the press, then shows as "Couldn't Discard Changes". Caught by: the consequence computed on
+/// another thread, or ahead of the write asked before it (it would count the file as untracked and
+/// offer to delete it).
 #[test]
 fn a_discards_consequence_is_counted_after_the_writes_asked_before_it() {
     let fixture = with_files("cairn-lane-consequence-order", &["a", "b"]);
@@ -1787,11 +1773,10 @@ fn a_discards_consequence_is_counted_after_the_writes_asked_before_it() {
     drop(handle);
 }
 
-/// The QA brief, R8.4, R1.2: a selection mixing a modified file and an untracked one — what the
-/// window asks — is counted by the lane, and the discard confirmed from exactly that count
-/// restores the one and deletes the other, its ending quoting the prompt the dialog drew.
-/// Caught by: a count that is not what the discard then does, or a discard that takes a file
-/// the prompt did not name.
+/// A selection mixing a modified file and an untracked one — what the window asks — is counted by
+/// the lane, and the discard confirmed from exactly that count restores the one and deletes the
+/// other, its ending quoting the prompt the dialog drew. Caught by: a count that is not what the
+/// discard then does, or a discard that takes a file the prompt did not name.
 #[test]
 fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
     let fixture = to_commit("cairn-lane-mixed-discard", &["kept", "modified"]);
@@ -1857,12 +1842,11 @@ fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
     drop(handle);
 }
 
-/// Phase 07's QA item 1: a count of what a discard would lose holds the local lane while its
-/// `git diff-files` reads run, so it is numbered in a lane of its own — a newer ask ends it,
-/// its held read's process ended with it, and answers nothing, the newer one answered; a
-/// `StopCounting` ends one with nothing after it; and the writes behind each still run. Caught
-/// by: a count that runs to its end whatever was asked after it (it held the lane and the close
-/// for as long as the selection was wide).
+/// A count of what a discard would lose holds the local lane while its `git diff-files` reads run,
+/// so it is numbered in a lane of its own — a newer ask ends it, its held read's process ended with
+/// it, and answers nothing, the newer one answered; a `StopCounting` ends one with nothing after
+/// it; and the writes behind each still run. Caught by: a count that runs to its end whatever was
+/// asked after it (it held the lane and the close for as long as the selection was wide).
 #[test]
 fn a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read() {
     let fixture = to_commit("cairn-lane-count-cancelled", &["kept", "modified"]);
@@ -1944,13 +1928,12 @@ fn status_now(handle: &RepositoryHandle, updates: &mut Updates) -> Arc<cairn_mod
     }
 }
 
-/// Staging-and-commit R6.7, R6.3 and R10 through the real boundary: the commit box's reads
-/// answer no operation, no message prepared, and the branch's messages newest first, the last
-/// commit's among them; and amend's read answers `HEAD`'s message and amend's lists over the
-/// status asked with: the file `HEAD` added and the one staged since in Staged, the first
-/// commit's file in neither — and, C14 and rule 3, reads nothing of what the amend costs: no
-/// `git config` read of `core.logAllRefUpdates` runs for it. Caught by: a read run on the UI
-/// thread's terms (an answer missing), lists against `HEAD`, or the cost read on a status.
+/// Through the real boundary: the commit box's reads answer no operation, no message prepared, and
+/// the branch's messages newest first, the last commit's among them; and amend's read answers
+/// `HEAD`'s message and amend's lists over the status asked with: the file `HEAD` added and the one
+/// staged since in Staged, the first commit's file in neither — and reads nothing of what the amend
+/// costs: no `git config` read of `core.logAllRefUpdates` runs for it. Caught by: a read run on the
+/// UI thread's terms (an answer missing), lists against `HEAD`, or the cost read on a status.
 #[test]
 fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
     let fixture = to_commit("cairn-lane-box-reads", &["a", "b", "c"]);
@@ -2025,11 +2008,10 @@ fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
     drop(handle);
 }
 
-/// Phase 08's QA item 7, end to end: a chunk drawn at a context of ten lines — two edits
-/// thirteen lines apart, which three lines of context keep apart — staged through the lane is
-/// exactly that chunk, as `git diff --cached` reads it back: both edits staged, nothing else.
-/// Caught by: a patch emitted at another context than the one drawn, which would stage one
-/// edit or misplace the other.
+/// End to end: a chunk drawn at a context of ten lines — two edits thirteen lines apart, which
+/// three lines of context keep apart — staged through the lane is exactly that chunk, as
+/// `git diff --cached` reads it back: both edits staged, nothing else. Caught by: a patch emitted
+/// at another context than the one drawn, which would stage one edit or misplace the other.
 #[test]
 fn a_chunk_drawn_at_context_ten_stages_exactly_as_drawn() {
     use crate::worker::request::{DiffOptions, FileQuery, FileTarget, WorkingSide};
@@ -2133,11 +2115,11 @@ fn head_commit(repository: &Path) -> cairn_model::Oid {
     }
 }
 
-/// staging-and-commit R11.3 through the lane: `Create Branch Here…` runs as a local write,
-/// in order, its ending saying to read everything again — the refs moved, and the history
-/// with them — and a name git refuses ends failed with git's command and its reason, nothing
-/// written. Caught by: a branch write that reads only the status after it (the history keeps
-/// drawing the commit as lost), or a refusal that loses git's words.
+/// Through the lane: `Create Branch Here…` runs as a local write, in order, its ending saying to
+/// read everything again — the refs moved, and the history with them — and a name git refuses ends
+/// failed with git's command and its reason, nothing written. Caught by: a branch write that reads
+/// only the status after it (the history keeps drawing the commit as lost), or a refusal that loses
+/// git's words.
 #[test]
 fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason() {
     let fixture = to_commit("cairn-lane-branch", &["a"]);
@@ -2201,11 +2183,11 @@ fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits
     }
 }
 
-/// Create Branch's reads through the lane (staging-and-commit R11.3): a name is answered for
-/// the text asked — taken, free, or refused in git's words — and what Discard would be
-/// confirmed as is answered under the id asked with the engine's `Consequence`, or, during a
-/// merge, the operation it would abandon. Caught by: an answer under another name or id, a
-/// query routed where no `git` runs it, or the refusal lost in words.
+/// Create Branch's reads through the lane: a name is answered for the text asked — taken, free, or
+/// refused in git's words — and what Discard would be confirmed as is answered under the id asked
+/// with the engine's `Consequence`, or, during a merge, the operation it would abandon. Caught by:
+/// an answer under another name or id, a query routed where no `git` runs it, or the refusal lost
+/// in words.
 #[test]
 fn create_branchs_reads_are_answered_on_the_lane() {
     let fixture = to_commit("cairn-lane-branch-reads", &["a"]);
@@ -2294,9 +2276,9 @@ fn create_branchs_reads_are_answered_on_the_lane() {
     }
 }
 
-/// Phase 10's QA, item 13: a name's check superseded before its turn on the lane runs no `git`
-/// — only the newest of two asked behind a held write starts `check-ref-format`, and only its
-/// answer arrives. Caught by: a check that polls its cancel only once `git` is running.
+/// A name's check superseded before its turn on the lane runs no `git` — only the newest of two
+/// asked behind a held write starts `check-ref-format`, and only its answer arrives. Caught by: a
+/// check that polls its cancel only once `git` is running.
 #[test]
 fn a_name_check_superseded_before_its_turn_runs_no_git() {
     let fixture = with_files("cairn-lane-name-checks", &["a"]);
@@ -2339,11 +2321,11 @@ fn a_name_check_superseded_before_its_turn_runs_no_git() {
     assert_eq!(pids(&stub, "checks").len(), 1, "a superseded check ran git");
 }
 
-/// Phase 20's QA item 2: each write's output waits in a tap of its own. Two writes whose hooks
-/// print run back to back while the window has not applied the first one's wake; the window
-/// then drains each wake in turn, giving what it drains to the write the wake names — and the
-/// first write's lines hold none of the second's. Caught by: one tap for the lane, whose pending
-/// wake swallows the next write's lines under the first write's id.
+/// Each write's output waits in a tap of its own. Two writes whose hooks print run back to back
+/// while the window has not applied the first one's wake; the window then drains each wake in turn,
+/// giving what it drains to the write the wake names — and the first write's lines hold none of the
+/// second's. Caught by: one tap for the lane, whose pending wake swallows the next write's lines
+/// under the first write's id.
 #[test]
 fn a_writes_output_never_lands_under_the_write_before_it() {
     let fixture = to_commit("cairn-lane-tap-per-write", &["a"]);

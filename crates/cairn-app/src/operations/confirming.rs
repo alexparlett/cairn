@@ -1,10 +1,9 @@
-//! A confirmation the window shows, and what it does with the token (staging-and-commit
-//! R7.4).
+//! A confirmation the window shows, and what it does with the token.
 //!
 //! The view that asks for a destructive operation hands the window the `Consequence` the
 //! engine computed — or, for a discard, opens the confirmation at the press, counting, and
-//! hands it the `Consequence` or the engine's refusal when it arrives (the redesign's rule 3)
-//! — and what to do with the `Confirmed` built from it: ask the write that spends it. The
+//! hands it the `Consequence` or the engine's refusal when it arrives — and what to do with
+//! the `Confirmed` built from it: ask the write that spends it. The
 //! window draws `cairn_ui::ConfirmDialog` over everything else while one is kept, makes its own
 //! chords inert (`shortcuts::act`), and lets go of it on either answer. It keeps the
 //! consequence, never a token: the token exists only from the press that builds it to the
@@ -27,8 +26,8 @@ pub struct Confirming {
     serial: u64,
     title: Rc<str>,
     answer: DialogAnswer,
-    /// The one line under the prompt saying what the selection held that this leaves as it is
-    /// (the redesign's D1), when it held any.
+    /// The one line under the prompt saying what the selection held that this leaves as it is,
+    /// when it held any.
     left: Option<Rc<str>>,
     then: Rc<dyn Fn(Confirmed)>,
     /// What letting go of it unanswered does besides closing it: a count still running ended.
@@ -46,8 +45,8 @@ impl Confirming {
         Self::answering(title, DialogAnswer::Ready(Rc::new(consequence)), then)
     }
 
-    /// Opened at the press, before the engine has counted what it would destroy (R7.4, rule
-    /// 3): "Counting…", its button greyed, until [`Self::arrived`] or [`Self::refused`].
+    /// Opened at the press, before the engine has counted what it would destroy:
+    /// "Counting…", its button greyed, until [`Self::arrived`] or [`Self::refused`].
     pub fn counting(title: impl Into<String>, then: impl Fn(Confirmed) + 'static) -> Self {
         Self::answering(title, DialogAnswer::Counting, then)
     }
@@ -86,7 +85,7 @@ impl Confirming {
     }
 
     /// The engine refused while counting, in one sentence: the same dialog, now "Couldn't
-    /// <title>" (rule 4).
+    /// <title>".
     pub fn refused(&mut self, why: String) {
         self.answer = DialogAnswer::Refused(Rc::from(why));
     }

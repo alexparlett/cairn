@@ -1,4 +1,4 @@
-//! The detail pane under the history (PRD R5): the pane and its Changes tab, the Changes
+//! The detail pane under the history: the pane and its Changes tab, the Changes
 //! tab's filter, and the selected row found for the Commit tab's REFS row.
 
 pub(crate) mod changes_tab;

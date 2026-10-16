@@ -1,4 +1,4 @@
-//! The sidebar as the window draws it (refs-and-status R8): `cairn_ui::Sidebar` over the rows
+//! The sidebar as the window draws it: `cairn_ui::Sidebar` over the rows
 //! the window keeps (`sidebar::state`), each branch's counts from the last refresh, the count
 //! of paths the last status listed, and what a press is doing. A component of its own, so a
 //! keystroke in its filter or an answer for it redraws the sidebar and not the window.
@@ -33,7 +33,7 @@ impl PartialEq for SidebarPane {
     }
 }
 
-/// The count beside Local Changes: the distinct paths the last status listed (R9.2) — a path
+/// The count beside Local Changes: the distinct paths the last status listed — a path
 /// in both lists once; none before a status was read, or where there is no working tree to
 /// list.
 pub fn local_changes_count(changes: Option<&LocalChanges>) -> Option<usize> {
@@ -90,7 +90,7 @@ mod tests {
 
     use super::*;
 
-    /// R9.2: the count is of distinct paths — a staged deletion and an untracked file of the same
+    /// The count is of distinct paths — a staged deletion and an untracked file of the same
     /// name, which git lists apart, once — and nothing where git gave no list. Caught by: the
     /// entries counted, or a count shown for an unreadable index.
     #[test]

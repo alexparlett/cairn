@@ -1,43 +1,42 @@
-//! Local Changes, read only (refs-and-status R9): in the main region in place of the history
-//! when Local Changes is pressed in the sidebar — the filter and the two lists on the left,
-//! Unstaged above Staged, and the selection's primary's diff on the right under the diff view's bar, as
-//! Fork lays the view out (`fork-refs-and-status-ui.md` section 6). A component of its own,
-//! mounted only while it is shown, so the work it watches for — a filter's text, a path to
-//! choose, a diff to ask again — is done only for a view someone is looking at.
+//! Local Changes: in the main region in place of the history when Local Changes is pressed in
+//! the sidebar — the filter and the two lists on the left, Unstaged above Staged, and the
+//! selection's primary's diff on the right under the diff view's bar, as Fork lays the view
+//! out. A component of its own, mounted only while it is shown, so the work it watches for — a
+//! filter's text, a path to choose, a diff to ask again — is done only for a view someone is
+//! looking at.
 //!
 //! **What it asks, and where that runs.** Typing in the filter asks a worker which rows match
 //! (`Request::FilterLocalChanges`). The diff shown is the selection's primary's
 //! (`diff::actions::show_primary`), asked through the working-tree query in the file-diff lane —
-//! its staged diff from Staged, its unstaged or untracked diff from Unstaged (R9.3) —
-//! superseding the last; a conflicted path asks nothing and draws its notice (R9.4). With
-//! nothing selected, the first path the lists show is, as the view opens (R9.3). Where the
-//! selection goes when other lists are drawn or the filter's rows change is one pure rule
-//! (`next_selection`), run as the status and the filter's answers arrive (`session::apply`),
-//! never by this view: a path still listed and shown stays, its diff asked again and drawn until
-//! the new one comes; one gone, or hidden by the filter (L3), gives its place to the row that
-//! took it — so no diff is drawn for a path the lists do not show.
+//! its staged diff from Staged, its unstaged or untracked diff from Unstaged — superseding the
+//! last; a conflicted path asks nothing and draws its notice. With nothing selected, the first
+//! path the lists show is, as the view opens. Where the selection goes when other lists are
+//! drawn or the filter's rows change is one pure rule (`next_selection`), run as the status and
+//! the filter's answers arrive (`session::apply`), never by this view: a path still listed and
+//! shown stays, its diff asked again and drawn until the new one comes; one gone, or hidden by
+//! the filter, gives its place to the row that took it — so no diff is drawn for a path the
+//! lists do not show.
 //!
 //! **What it draws.** The lists only for the status they are laid out over; the diff only for
 //! the answer naming the primary, its side and the settings now — always the exact diff,
-//! ignore whitespace drawn off and disabled whatever the shared setting says
-//! (staging-and-commit R8.5) — and, under the lists, what the writes asked from here are doing
-//! (R8.6).
+//! ignore whitespace drawn off and disabled whatever the shared setting says — and nothing
+//! under the lists: a write's progress is the status box's, its ending its dialog's.
 //!
-//! **What it does** (staging-and-commit R8, R9): the lists' selection, Fork's routes to stage
-//! and unstage, and the discard through its confirmation are `local_changes::actions`'; this
-//! view hands them what the lists and the diff report, and opens the confirmation once the
-//! engine has said what the discard would lose. The diff draws the staging gesture
+//! **What it does**: the lists' selection, Fork's routes to stage and unstage, and the discard
+//! through its confirmation are `local_changes::actions`'; this view hands them what the lists
+//! and the diff report, and opens the confirmation once the engine has said what the discard
+//! would lose. The diff draws the staging gesture
 //! (`cairn_ui::Gesture`): a hovered chunk's actions, a drag-selection's, and the mode change's
 //! own row; it hears the stage and discard chords (`Scope::LocalChanges` — ⌘S or Ctrl+S, never
 //! a bare Return, which the lists alone hear) and acts on the lines a drag selected, or with
 //! none on the selection, whole.
 //!
-//! **One file** (R8.1 as amended 2026-10-10, L1; Fork, observed `lc2`): with several paths
-//! selected the diff is still the primary's alone — the file clicked first — with everything one
-//! file's diff has, and its bar the primary's own, counting nothing: the lists' highlighted rows
-//! show the selection. With nothing selected it says "No file selected". A refresh that re-reads
-//! the primary keeps a finished line selection while the text is the same, and when it is not
-//! lets it go, the bar saying so until the next key or press (R9.6, `session::apply`).
+//! **One file**, as in Fork: with several paths selected the diff is still the primary's alone
+//! — the file clicked first — with everything one file's diff has, and its bar the primary's
+//! own, counting nothing: the lists' highlighted rows show the selection. With nothing selected
+//! it says "No file selected". A refresh that re-reads the primary keeps a finished line
+//! selection while the text is the same, and when it is not lets it go, the bar saying so until
+//! the next key or press (`session::apply`).
 
 use std::rc::Rc;
 
@@ -63,13 +62,13 @@ use crate::{diff, shortcuts};
 
 /// Said in place of the lists before the first status is read.
 pub const READING_STATUS: &str = "Reading the working tree's status…";
-/// Said in place of the diff while nothing is selected (R8.1).
+/// Said in place of the diff while nothing is selected.
 pub const NO_FILE_SELECTED: &str = "No file selected";
 /// Said beside the lists when status lists nothing.
 pub const NO_LOCAL_CHANGES: &str = "No local changes.";
 /// Said in place of the lists for a bare repository.
 pub const NO_WORKING_TREE: &str = "This repository has no working tree.";
-/// Said in place of the lists when the git in use cannot read a sparse index (R3.7).
+/// Said in place of the lists when the git in use cannot read a sparse index.
 pub const SPARSE_INDEX: &str =
     "The index is a sparse index, which the git in use cannot read (git 2.32 and later can).";
 /// Said while the primary's diff is on its way.
@@ -134,7 +133,7 @@ impl Component for LocalChangesPane {
             // Cleared, every row is drawn at once: the primary's diff, if the lists moved.
             diff::actions::show_primary(view, filtering.as_deref(), false);
         });
-        // As the view is shown: the first path selected when none is (R9.3), and the
+        // As the view is shown: the first path selected when none is, and the
         // primary's diff asked if the lists moved while the view was hidden. Peeked only, so
         // it runs once; where the selection goes after that is `session::apply`'s, as the
         // status and the filter's rows arrive.
@@ -147,7 +146,7 @@ impl Component for LocalChangesPane {
             diff::actions::show_primary(view, showing.as_deref(), false);
         });
         // A discard's count nobody will now confirm stops holding the local lane as the view
-        // goes (phase 07's QA item 1): the view moved on, so the count is let go of and ended.
+        // goes: the view moved on, so the count is let go of and ended.
         let stopping = self.submit.clone();
         use_drop(move || {
             let mut acting = view.local.acting;
@@ -223,7 +222,7 @@ impl Component for LocalChangesPane {
         .on_intent(move |intent: ListIntent| {
             actions::intent(intent, view, intending.clone());
         });
-        // Nothing is drawn under the lists (R14.6): a write's progress is the status box's, its
+        // Nothing is drawn under the lists: a write's progress is the status box's, its
         // ending its dialog's.
         let list = rect().expanded().child(list);
 
@@ -243,7 +242,7 @@ impl Component for LocalChangesPane {
                 }
             })
             // "The file changed — line selection cleared." goes at the next key or press,
-            // wherever it lands (R9.6).
+            // wherever it lands.
             .on_global_key_down(move |_: Event<KeyboardEventData>| quieten(view))
             .on_global_pointer_down(move |_: Event<PointerEventData>| quieten(view))
             .maybe_child(failure.map(banner))
@@ -274,8 +273,7 @@ impl Component for LocalChangesPane {
                                 ResizablePanel::new(PanelSize::percent(100. - list_share))
                                     .min_pixels(DIFF_MIN_PIXELS)
                                     .child(
-                                        // The commit box under the diff (staging-and-commit
-                                        // R10.1).
+                                        // The commit box under the diff.
                                         rect()
                                             .expanded()
                                             .content(Content::Flex)
@@ -342,7 +340,7 @@ fn header_file(shown: Option<&ShownDiff>, path: &cairn_model::RepoPath) -> Chang
 }
 
 /// The diff side: the primary's bar and its diff, or its notice — the primary's alone however
-/// many paths are selected, its bar counting nothing (R8.1, the user's answer of 2026-10-10).
+/// many paths are selected, its bar counting nothing.
 fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> Element {
     let state = view.diff.read();
     let (Some(choice), Some(shown)) = (state.working_choice(), state.working_shown()) else {
@@ -359,7 +357,7 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
     let drawn = state.shown_working();
     let acting = submit.clone();
     let hearing = submit.clone();
-    // The exact diff, always (R8.5): what is staged from here is what is drawn.
+    // The exact diff, always: what is staged from here is what is drawn.
     let said = view
         .local
         .lines
@@ -388,7 +386,7 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
         .expanded()
         .content(Content::Flex)
         // The stage and discard chords heard on the diff act on the lines a drag selected, or
-        // with none on the file it shows (R7.3, R9.2).
+        // with none on the file it shows.
         .on_key_down(move |e: Event<KeyboardEventData>| {
             if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
                 e.stop_propagation();
@@ -405,7 +403,7 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
         .into()
 }
 
-/// Which of the gesture's sides a path selected in `list` is drawn under (R9.1).
+/// Which of the gesture's sides a path selected in `list` is drawn under.
 fn gesture_side(list: ChangeList) -> GestureSide {
     match list {
         ChangeList::Unstaged => GestureSide::Unstaged,
@@ -420,10 +418,9 @@ fn gesture_acts(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> EventHandler
     })
 }
 
-/// The primary's diff: its rows under the staging gesture (R9), or the notice that stands
-/// in their place (R6.8) — no gesture over a notice, so a conflicted path (R8.7), a submodule
-/// (R8.8) and every state that is not text draw none — with the mode change's row over either
-/// when the file's mode changed (R9.4).
+/// The primary's diff: its rows under the staging gesture, or the notice that stands in their
+/// place — no gesture over a notice, so a conflicted path, a submodule and every state that is
+/// not text draw none — with the mode change's row over either when the file's mode changed.
 fn diff_body(
     shown: &ShownDiff,
     list: ChangeList,

@@ -1,12 +1,12 @@
-//! What the last refresh answered, as the window keeps it (refs-and-status R10): the refs
-//! snapshot, each branch's ahead/behind and the working tree's status, each kept until the
-//! next answer replaces it, and each read's failure beside it. The history's chips and the
-//! title bar read the refs, the title bar the current branch's counts and whether status
-//! listed a change; the sidebar and Local Changes read the rest, from phases 08-09.
+//! What the last refresh answered, as the window keeps it: the refs snapshot, each branch's
+//! ahead/behind and the working tree's status, each kept until the next answer replaces it,
+//! and each read's failure beside it. The history's chips and the title bar read the refs,
+//! the title bar the current branch's counts and whether status listed a change; the sidebar
+//! and Local Changes read the rest.
 //!
 //! An answer replaced is handed back, never dropped here: the window sends it to a worker to
 //! free (`Request::Retire`), since a snapshot of tens of thousands of refs, or a status of
-//! tens of thousands of paths, is too much to free on the UI thread (R11.3).
+//! tens of thousands of paths, is too much to free on the UI thread.
 
 use std::sync::Arc;
 

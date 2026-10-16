@@ -25,11 +25,11 @@ pub enum FetchStatus {
     Finished {
         remote: String,
     },
-    /// Cancelled: nothing is said of it (staging-and-commit R14.5).
+    /// Cancelled: nothing is said of it.
     Cancelled {
         remote: String,
     },
-    /// Failed: its Git Error dialog is the window's endings' (R14.3).
+    /// Failed: its Git Error dialog is the window's endings'.
     Failed {
         remote: String,
     },

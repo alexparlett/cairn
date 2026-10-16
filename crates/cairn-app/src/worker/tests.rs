@@ -1,9 +1,8 @@
 //! The worker's half of the process manager, through the real boundary with
 //! a stub `git` on a `PATH` the test controls: `git` found once per
-//! application (G16), a second fetch refused with a reason (G15), the command
-//! log answered as values (G17's worker half), and closing a repository
-//! ending and reaping every `git` in it, its grandchildren included, with
-//! nothing left behind (G14).
+//! application, a second fetch refused with a reason, the command log
+//! answered as values, and closing a repository ending and reaping every
+//! `git` in it, its grandchildren included, with nothing left behind.
 //!
 //! No `Command` here — the guards scan this crate's tests — so the stub is a
 //! `/bin/sh` script written with `std::fs`, and what is left running is read
@@ -249,7 +248,7 @@ fn next(updates: &mut Updates) -> Option<Update> {
     next_by(updates, Instant::now() + WAIT, &[])
 }
 
-/// PRD G16: `git` is found once per application, not once per repository
+/// `git` is found once per application, not once per repository
 /// opened. Three repositories opened, each through to its first page, on the
 /// one discovery started as the application starts; then, as the negative,
 /// two opened with a discovery each, which must probe twice — so the count is
@@ -302,9 +301,9 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     );
 }
 
-/// PRD G16's other half: a `git` refused at discovery is refused once, and
-/// every repository that asks is told so in the same words, naming the
-/// version found and the version Cairn needs. Caught by: a discovery that
+/// A `git` refused at discovery is refused once, and every repository that
+/// asks is told so in the same words, naming the version found and the
+/// version Cairn needs. Caught by: a discovery that
 /// keeps only a found `git` and probes again after a refusal (the count
 /// moves), or a refusal reworded per repository.
 #[test]
@@ -338,7 +337,7 @@ fn a_git_refused_at_discovery_is_refused_to_every_repository_that_asks() {
     );
 }
 
-/// PRD G15, the worker's half: a second fetch while one runs is refused with a
+/// The worker's half: a second fetch while one runs is refused with a
 /// reason naming the fetch in flight — never dropped in silence — and the fetch
 /// in flight goes on. Caught by: `perform` returning without a word when `arm`
 /// refuses, or forwarding the second fetch anyway.
@@ -396,10 +395,10 @@ fn a_second_fetch_while_one_runs_is_refused_with_a_reason() {
     until_the_stream_ends(&mut updates, CLOSE_BOUND);
 }
 
-/// PRD G17, the worker's half: the command log is answered through the
-/// boundary as `cairn-model` values, and a fetch's entry is in it once, with
-/// what it was given and how it ended, after the refspec check's reads. The probe ran in no repository, so it
-/// is not. Caught by: the request going unanswered, or answered from anywhere
+/// The worker's half: the command log is answered through the boundary as
+/// `cairn-model` values, and a fetch's entry is in it once, with what it was
+/// given and how it ended, after the refspec check's reads. The probe ran in
+/// no repository, so it is not. Caught by: the request going unanswered, or answered from anywhere
 /// but the repository's log.
 #[test]
 fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
@@ -472,10 +471,10 @@ fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
     until_the_stream_ends(&mut updates, CLOSE_BOUND);
 }
 
-/// Phase 11's QA (TC10): a fetch whose git writes a remote URL with a token — whole, split over
-/// two writes, and in the failure it ends with — sends the window no update that carries the
-/// token: not its progress, not what it ran, not its failure (R4.10: the engine scrubs each
-/// line as its runner splits it). Caught by: a scrub left out, or one after the split.
+/// A fetch whose git writes a remote URL with a token — whole, split over two writes, and in
+/// the failure it ends with — sends the window no update that carries the token: not its
+/// progress, not what it ran, not its failure (the engine scrubs each line as its runner
+/// splits it). Caught by: a scrub left out, or one after the split.
 #[test]
 fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
     let stub = StubGit::new(
@@ -546,7 +545,7 @@ fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
     until_the_stream_ends(&mut updates, CLOSE_BOUND);
 }
 
-/// R12.4, F5: a fetch git refused offers the lock's removal in its Git Error only where git
+/// A fetch git refused offers the lock's removal in its Git Error only where git
 /// could not create `index.lock` — a fetch takes no index lock, so a stale one there is never
 /// offered from it; the leftover lock's banner is the repository's. Caught by: the offer made on
 /// the lock's presence alone.
@@ -578,7 +577,7 @@ fn a_failed_fetch_offers_no_removal_for_a_lock_it_did_not_fail_on() {
     }
 }
 
-/// PRD G14: closing a repository with a fetch in flight ends and reaps its
+/// Closing a repository with a fetch in flight ends and reaps its
 /// whole group — the leader and a grandchild holding its pipes — within
 /// `CLOSE_BOUND`, and the update stream ends with nothing left running and the
 /// askpass socket gone. Caught by: a close that does not end the registry's
@@ -653,7 +652,7 @@ fn closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound() {
     let _ = (leader, grandchild);
 }
 
-/// PRD R6.3 and the QA brief: a fetch forwarded to the network lane and
+/// A fetch forwarded to the network lane and
 /// closed at once — mid-spawn or just running when the close lands, whichever
 /// this run catches — is still ended as a cancel, never missed for not yet
 /// being in the registry when the close looked. The command log is asked for

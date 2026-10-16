@@ -1,13 +1,13 @@
-//! Where an operation's ending goes (staging-and-commit R14, rule 4): one home for each kind.
+//! Where an operation's ending goes: one home for each kind.
 //!
-//! - A success says nothing: the refresh is the message (R14.5).
-//! - A cancel opens nothing (R14.5).
+//! - A success says nothing: the refresh is the message.
+//! - A cancel opens nothing.
 //! - A git failure opens Fork's Git Error dialog — its title and sentence, `Error Details:`, the
-//!   command and git's output — for every operation the person started, a fetch among them
-//!   (R14.3); one git refused for the lock carries `Remove index.lock…` beside Close (R12.4).
+//!   command and git's output — for every operation the person started, a fetch among them;
+//!   one git refused for the lock carries `Remove index.lock…` beside Close.
 //! - A refusal found while it ran — a stale patch, a file changed since it was confirmed, `HEAD`
 //!   moved before an amend, closing — opens the same dialog titled "Couldn't <name>", its one
-//!   sentence and "Nothing was changed." once, and no Error Details (F2); a failure beneath git
+//!   sentence and "Nothing was changed." once, and no Error Details; a failure beneath git
 //!   says its sentence there too, without the tail, since it may have done part of its work.
 //! - A discard that left files as they were says so in one sentence there, the files behind
 //!   Show files, each path as `cairn_model::shown_path` spells it.
@@ -103,7 +103,7 @@ pub fn couldnt(name: &str, sentence: String) -> Shown {
     }
 }
 
-/// A refusal found while `name` ran: its sentence and, once, "Nothing was changed." (R14.2).
+/// A refusal found while `name` ran: its sentence, then "Nothing was changed." once.
 pub fn refused(name: &str, said: &str) -> Shown {
     couldnt(name, format!("{said} {NOTHING_CHANGED}"))
 }
@@ -199,7 +199,7 @@ mod tests {
         }
     }
 
-    /// C28, every ending of a write to exactly one home: a success and a cancel nothing, git's
+    /// Every ending of a write to exactly one home: a success and a cancel nothing, git's
     /// failure Fork's Git Error with its command and output (and the lock's removal where git
     /// could not create it), a refusal "Couldn't <name>" with its sentence and "Nothing was
     /// changed." once, a failure beneath git its sentence alone, and a partly done discard its

@@ -1,4 +1,4 @@
-//! The routing table: which thread serves each request (PRD R4.2, packet decision L8).
+//! The routing table: which thread serves each request.
 //!
 //! | Lane or request | Thread |
 //! | --- | --- |
@@ -9,12 +9,12 @@
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | file filter (`FilterFiles`) | `cairn-repository`, whose pages are bounded, so a keystroke never waits behind a diff |
-//! | refs (`Refresh`'s first read) | `cairn-repository`, which reopens the walk from them (refs-and-status R11.2) |
+//! | refs (`Refresh`'s first read) | `cairn-repository`, which reopens the walk from them |
 //! | ahead/behind and status (`Refresh`'s other two) | `cairn-refresh`, so neither a page nor a diff queues behind a slow status or a long divergence; ahead/behind is forwarded there by the repository thread once the refs it counts are read |
 //! | ref filter (`FilterRefs`) | `cairn-repository`, as the file filter |
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
-//! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
+//! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find |
 //! | discard count (`DiscardConsequence`, `DiscardLinesConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
 //! | commit box (`CommitReads`) and amend's staged list (`Amending`, `StopAmending`) | `cairn-local`, in the lane's order, so what the box reads is read after the writes asked before it — a commit's message among the recent ones once it has ended, amend's staged list against the `HEAD` the writes left; `StopAmending` only numbers the lane |
 //! | `LockConsequence` | `cairn-local`, in the lane's order, so the lock is read after the writes asked before it |
@@ -486,10 +486,10 @@ mod tests {
         ]
     }
 
-    /// PRD R4.2 and refs-and-status R11.2: every query is served on the thread its lane is
-    /// routed to, and the lanes are routed as decided — the history and the refs on the
-    /// thread that owns the walk, the changes and file-diff lanes on the diff thread, status
-    /// and ahead/behind on the refresh thread. Caught by: a diff routed to the repository
+    /// Every query is served on the thread its lane is routed to, and the lanes are routed as
+    /// [`thread_of`] states — the history and the refs on the thread that owns the walk, the
+    /// changes and file-diff lanes on the diff thread, status and ahead/behind on the refresh
+    /// thread. Caught by: a diff routed to the repository
     /// thread (it queues behind a page), a status routed to the repository or diff thread (a
     /// page or a diff queues behind it), the table changed without the routing, or the
     /// routing without the table.
@@ -506,11 +506,11 @@ mod tests {
         assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::DiscardCount), Thread::Local);
-        // Staging-and-commit R10: what the commit box reads and what an amend would replace
+        // What the commit box reads and what an amend would replace
         // are read on the local lane, after the writes asked before them.
         assert_eq!(thread_of(QueryLane::CommitBox), Thread::Local);
         assert_eq!(thread_of(QueryLane::Amending), Thread::Local);
-        // Staging-and-commit R4.1: a write goes straight to the local lane, never through the
+        // A write goes straight to the local lane, never through the
         // repository thread, where it would wait behind a page or a find; a status asked alone
         // goes where a refresh's does; a write's cancel queues nowhere.
         let write = Request::Write {
@@ -548,7 +548,7 @@ mod tests {
             match lanes.first() {
                 Some(_) => {}
                 // The configured context: the diff thread's, since its handle is the one the
-                // configuration's freshness opens again (phase 06 QA, T7).
+                // configuration's freshness opens again.
                 None if request == Request::ConfiguredContext => {
                     assert_eq!(routed.thread(), Some(Thread::Diff));
                 }

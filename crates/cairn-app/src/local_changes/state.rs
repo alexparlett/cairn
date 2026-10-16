@@ -1,6 +1,6 @@
-//! Local Changes' lists as the window keeps them (refs-and-status R9): the status they are laid
-//! out over, the rows the view's filter leaves of each, and the session's handles for the view —
-//! its filter's text, its list's width, its diff's scroll and the change last moved to.
+//! Local Changes' lists as the window keeps them: the status they are laid out over, the rows
+//! the view's filter leaves of each, and the session's handles for the view — its filter's
+//! text, its list's width, its diff's scroll and the change last moved to.
 //!
 //! **Which lists are drawn.** A status arrives laid out already (`cairn_model::LocalChanges`,
 //! built on the refresh thread). With no filter it is drawn at once. With one, its rows are
@@ -14,20 +14,20 @@
 //! lists drawn are numbered ([`LocalChangesState::serial`]), so the primary's diff is asked again
 //! whenever they are replaced (`diff::actions::show_primary`).
 //!
-//! **Amend is an overlay over the status** (staging-and-commit R10.3, `review-code-app-ui.md`
-//! M3): every status lands here. While Amend is ticked, the lists drawn are amend's laid out
-//! over the newest status — Staged as amend's staged list against `HEAD`'s parent — read for it
-//! on the local lane (`Request::Amending`, which reads that list and `HEAD`'s message, never
-//! what the amend costs); until they arrive, the lists drawn before stay drawn, so the selection
-//! never moves through the status's own Staged list on the way. Where amend's staged list cannot
-//! be read, the status's own lists are drawn and the box says so.
+//! **Amend is an overlay over the status**: every status lands here. While Amend is ticked, the
+//! lists drawn are amend's laid out over the newest status — Staged as amend's staged list
+//! against `HEAD`'s parent — read for it on the local lane (`Request::Amending`, which reads
+//! that list and `HEAD`'s message, never what the amend costs); until they arrive, the lists
+//! drawn before stay drawn, so the selection never moves through the status's own Staged list
+//! on the way. Where amend's staged list cannot be read, the status's own lists are drawn and
+//! the box says so.
 //!
-//! **The selection is the state's, and the state's alone** (staging-and-commit R8.1, rule 8):
-//! one [`LocalSelection`], or none, moved by the one rule of `next_selection` whenever other
-//! lists are drawn or the filter's rows change — as the status and the filter's answers arrive,
-//! in `session::apply` — and after an action, with the paths it took leaving
-//! ([`LocalChangesState::acted`]). While the filter's first rows are on their way it is left as
-//! it was; nothing is acted on meanwhile, since an action takes only the rows shown.
+//! **The selection is the state's, and the state's alone**: one [`LocalSelection`], or none,
+//! moved by the one rule of `next_selection` whenever other lists are drawn or the filter's
+//! rows change — as the status and the filter's answers arrive, in `session::apply` — and after
+//! an action, with the paths it took leaving ([`LocalChangesState::acted`]). While the filter's
+//! first rows are on their way it is left as it was; nothing is acted on meanwhile, since an
+//! action takes only the rows shown.
 
 use std::sync::{Arc, LazyLock};
 
@@ -49,19 +49,19 @@ pub struct LocalChangesView {
     pub filter_text: State<String>,
     pub list_width: State<f32>,
     /// Unstaged's share of the two lists' height, as the splitter between them was last
-    /// dragged: the session's, never kept beyond it (the user's decision, 2026-10-07).
+    /// dragged: the session's, never kept beyond it.
     pub lists_split: State<f32>,
     /// The diff's scroll: the view's own, so the Changes tab's is where it was when it is
     /// shown again.
     pub scroll: ScrollController,
     /// The change previous or next change last moved to in the view's diff.
     pub cursor: State<Option<ChangeCursor>>,
-    /// What the view's actions are waiting on and what it says of them (R8.4, R8.6).
+    /// What the view's actions are waiting on and what it says of them.
     pub acting: State<crate::local_changes::actions::Acting>,
-    /// A drag across the diff's lines, and the lines it selected (staging-and-commit R9.2):
+    /// A drag across the diff's lines, and the lines it selected:
     /// written by the diff view, read by the chords heard on the diff.
     pub lines: State<cairn_ui::LineDrag>,
-    /// The commit box under the diff: the draft, kept for the window's life (R10.7), and the
+    /// The commit box under the diff: the draft, kept for the window's life, and the
     /// rest of its state.
     pub commit: crate::commit_box::state::CommitBoxView,
 }
@@ -129,7 +129,7 @@ pub struct LocalChangesState {
     answered: String,
     /// Moves each time other lists are drawn.
     serial: u64,
-    /// What is selected in the lists drawn (R8.1): `None` only when nothing is.
+    /// What is selected in the lists drawn: `None` only when nothing is.
     selection: Option<LocalSelection>,
     /// While Amend is ticked: amend's overlay (module docs).
     amend: Option<AmendOverlay>,
@@ -203,7 +203,7 @@ impl LocalChangesState {
         self.drawn.as_ref().map(Drawn::rows)
     }
 
-    /// An action took `leaving` out of the selection's list (R8.3, L5): the selection moved by
+    /// An action took `leaving` out of the selection's list: the selection moved by
     /// the rule at once, over the lists drawn — the next file's diff asked before the status
     /// that shows the write arrives, whose turn of the rule then changes nothing.
     pub fn acted(&mut self, leaving: &Leaving) {
@@ -214,7 +214,7 @@ impl LocalChangesState {
         }
     }
 
-    /// The first row shown, selected when nothing is (R9.3: as the view opens).
+    /// The first row shown, selected when nothing is, as the view opens.
     pub fn select_first_if_none(&mut self) {
         if self.selection.is_some() {
             return;
@@ -394,7 +394,7 @@ impl LocalChangesState {
     }
 
     /// Why amend's staged list could not be read, while Amend is ticked and the status's own
-    /// lists are drawn in its place (R10.3: a partial clone's missing blob).
+    /// lists are drawn in its place, as for a partial clone's missing blob.
     pub fn amend_unread(&self) -> Option<&str> {
         self.amend.as_ref()?.unread.as_deref()
     }
@@ -629,9 +629,9 @@ mod tests {
         assert_eq!(shown_paths(&state), None);
     }
 
-    /// Phase 16's QA #4: a status that keeps every selected path leaves the selection as it was
-    /// — the same value, not a copy — while one that takes a path away moves it. Caught by: a
-    /// refresh that clones and rewrites the selection whatever it keeps.
+    /// A status that keeps every selected path leaves the selection as it was — the same value,
+    /// not a copy — while one that takes a path away moves it. Caught by: a refresh that clones
+    /// and rewrites the selection whatever it keeps.
     #[test]
     fn a_status_that_keeps_the_selection_leaves_it_uncopied() {
         let mut state = LocalChangesState::default();
@@ -680,11 +680,11 @@ mod tests {
         assert!(state.is_settled());
     }
 
-    /// Phase 18's QA items 4 and 5: unticking Amend ends amend's read in flight
-    /// (`Request::StopAmending`), and draws the newest status even when amend's lists never
-    /// arrived — a status parked while Amend was ticked is drawn, not left behind the pre-tick
-    /// lists, and the parked hold is let go of on a worker. Caught by: the read left running on
-    /// the serial lane, or the newer status undrawn until the next refresh.
+    /// Unticking Amend ends amend's read in flight (`Request::StopAmending`), and draws the
+    /// newest status even when amend's lists never arrived — a status parked while Amend was
+    /// ticked is drawn, not left behind the pre-tick lists, and the parked hold is let go of on
+    /// a worker. Caught by: the read left running on the serial lane, or the newer status
+    /// undrawn until the next refresh.
     #[test]
     fn unticking_amend_ends_its_read_and_draws_the_newest_status() {
         let mut state = LocalChangesState::default();

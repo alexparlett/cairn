@@ -1,7 +1,6 @@
-//! What the diff view's controls do to the view state (PRD R6.1-R6.3, R6.7, R6.8, R8):
-//! choosing a file, the diff views' settings, Load Diff, and previous and next
-//! change. On the UI thread; asking is a [`Request`] handed to the caller's submit, never a
-//! wait.
+//! What the diff view's controls do to the view state: choosing a file, the diff views'
+//! settings, Load Diff, and previous and next change. On the UI thread; asking is a
+//! [`Request`] handed to the caller's submit, never a wait.
 //!
 //! A setting is part of what a file's diff is asked with — the context git is asked at, and
 //! whether the whitespace-ignoring ranges are read — so a change of setting asks again,
@@ -27,7 +26,7 @@ pub fn options(settings: DiffSettings) -> DiffOptions {
 
 /// What a file opened in place in the Commit tab is asked with: the shared context and
 /// whitespace, never the entire file, which is the Changes tab's and Local Changes' and never a
-/// file opened in place (the user's decision, 2026-10-04).
+/// file opened in place.
 pub fn in_place_options(settings: DiffSettings) -> DiffOptions {
     DiffOptions {
         context: settings.line_context(),
@@ -99,9 +98,9 @@ pub fn choose_file(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     submit_all(requests, submit);
 }
 
-/// Load Diff (R6.8): the file shown asked again past R2.6's ceilings, up to the load-anyway
+/// Load Diff: the file shown asked again past the diff limits, up to the load-anyway
 /// ceiling, keeping where the view is. Its rows are then drawn with each line past the
-/// long-line limit cut (R6.9). Nothing when no file is shown or it was loaded already.
+/// long-line limit cut. Nothing when no file is shown or it was loaded already.
 pub fn load_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
     let View { mut diff, .. } = view;
     let Some(mut query) = diff.peek().file().map(|(query, _)| query.clone()) else {
@@ -115,7 +114,7 @@ pub fn load_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
     submit_all(requests, submit);
 }
 
-/// Side-by-side or unified (R6.1): the same answer drawn another way, so nothing is asked
+/// Side-by-side or unified: the same answer drawn another way, so nothing is asked
 /// again; the change last moved to is let go, in either view, since its rows are another
 /// view's.
 pub fn toggle_side_by_side(view: View) {
@@ -136,8 +135,8 @@ fn local_changes_shown(view: View) -> bool {
 }
 
 /// What a path of Local Changes is asked with: the Changes tab's options, but always the exact
-/// diff — whitespace never ignored, whatever the shared setting says (staging-and-commit R8.5,
-/// L6), since what is staged from the view is what it draws.
+/// diff — whitespace never ignored, whatever the shared setting says, since what is staged
+/// from the view is what it draws.
 pub fn working_options(settings: DiffSettings) -> DiffOptions {
     DiffOptions {
         ignore_whitespace: false,
@@ -145,10 +144,10 @@ pub fn working_options(settings: DiffSettings) -> DiffOptions {
     }
 }
 
-/// What a path of Local Changes is asked as (R9.3): its staged diff from Staged, its unstaged
+/// What a path of Local Changes is asked as: its staged diff from Staged, its unstaged
 /// or — for a path git does not track — untracked diff from Unstaged, at the view's options
-/// ([`working_options`]); `None` for a conflicted path, which has a notice in place of a diff
-/// (R9.4).
+/// ([`working_options`]); `None` for a conflicted path, which has a notice in place of a
+/// diff.
 pub fn working_query(
     list: ChangeList,
     change: &LocalChange<'_>,
@@ -159,7 +158,7 @@ pub fn working_query(
         (PathState::Conflicted, _, _) => return None,
         (PathState::Untracked, _, _) => WorkingSide::Untracked,
         (PathState::Tracked, ChangeList::Staged, StagedAgainst::Head) => WorkingSide::Staged,
-        // A file of amend's staged list: against `HEAD`'s parent (staging-and-commit R10.3).
+        // A file of amend's staged list: against `HEAD`'s parent.
         (PathState::Tracked, ChangeList::Staged, StagedAgainst::HeadParent(_)) => {
             WorkingSide::Amending
         }
@@ -176,7 +175,7 @@ pub fn working_query(
 
 /// Local Changes' diff starts at its top, with no change moved to and no lines selected: a
 /// selection over another file's text, or the same at other options, is let go of silently —
-/// only a re-read of the same question says it cleared one (R9.6, `session::apply`).
+/// only a re-read of the same question says it cleared one (`session::apply`).
 fn reset_local_view(view: View) {
     let mut scroll = view.local.scroll;
     let mut cursor = view.local.cursor;
@@ -194,7 +193,7 @@ fn let_go_of_lines(view: View) {
     }
 }
 
-/// The diff of the selection's primary in Local Changes, asked (R8.1, R9.3; rule 8): the
+/// The diff of the selection's primary in Local Changes, asked: the
 /// path the diff shows is derived from the primary and the lists drawn, never chosen on its
 /// own. Asked through the working-tree query as its list says, at once while Local Changes is
 /// shown — as the view is shown otherwise, so a refresh in All Commits never takes the
@@ -264,7 +263,7 @@ pub fn show_primary(view: View, submit: Option<&dyn Fn(Request)>, retry: bool) {
     submit_all(requests, submit);
 }
 
-/// Load Diff for the primary's diff in Local Changes (R6.8), keeping where its view is.
+/// Load Diff for the primary's diff in Local Changes, keeping where its view is.
 pub fn load_working_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
     let mut diff = view.diff;
     let requests = diff.write().load_working_anyway();
@@ -311,8 +310,8 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
     submit_all(requests, submit);
 }
 
-/// A file pressed in the Commit tab opens its diff in place under its row, or closes it
-/// (R5.3, Fork's Finding 4), at the session's settings but never the entire file.
+/// A file pressed in the Commit tab opens its diff in place under its row, or closes it, as
+/// Fork's Commit tab does — at the session's settings but never the entire file.
 pub fn toggle_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut diff,
@@ -341,7 +340,7 @@ pub fn expand_all(all: bool, view: View, submit: Option<&dyn Fn(Request)>) {
     submit_all(requests, submit);
 }
 
-/// Load Diff under a file opened in place (R6.8).
+/// Load Diff under a file opened in place.
 pub fn load_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     let View { mut diff, .. } = view;
     let requests = diff.write().load_in_place(index);
@@ -370,7 +369,7 @@ pub fn configured(context: Context, view: View, submit: &dyn Fn(Request)) {
     change_settings(view, Some(submit), |settings| settings.configured(context));
 }
 
-/// Previous or next change (R6.2): one change from where the view is, or from the change
+/// Previous or next change: one change from where the view is, or from the change
 /// last moved to while the view has not moved since; nothing when no diff is drawn — the
 /// Changes tab hidden, the pane collapsed — or there is no change that way. With Local Changes
 /// shown, in its diff.

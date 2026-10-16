@@ -526,10 +526,10 @@ fn generated(what: &str) -> String {
     )
 }
 
-/// PRD R4: a fetch runs off the UI thread through the boundary, reports its
-/// progress, and the refresh the window asks after it (refs-and-status R10.1)
-/// finds the new refs and says to reopen the history, which then walks from them —
-/// the cache contract's first real test: the gix handle the worker holds
+/// A fetch runs off the UI thread through the boundary, reports its
+/// progress, and the refresh the window asks after it finds the new refs and
+/// says to reopen the history, which then walks from them — a test of the
+/// cache contract: the gix handle the worker holds
 /// serves the new refs and commits after a `git` subprocess wrote them. A
 /// refresh after that, with nothing moved, says to leave the history alone.
 #[test]
@@ -563,7 +563,7 @@ fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_n
     // As the window opens: a refresh, whose refs have no walk to compare with.
     handle.submit(Request::Refresh);
     // The whole refresh — its ahead/behind and status come from another thread — so none
-    // of it arrives among the fetch's updates below (phase 06 QA, TC1).
+    // of it arrives among the fetch's updates below.
     let first = crate::worker::refresh::tests::one_refresh(&mut updates);
     assert_eq!(
         first.refs,
@@ -641,7 +641,7 @@ fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_n
     drop(handle);
 }
 
-/// PRD B3 through the boundary: git asks, the prompt reaches the window as a
+/// Through the boundary: git asks, the prompt reaches the window as a
 /// value, the answer goes back as a `Secret`, and what git then sends the
 /// remote carries it. The remote never accepts, so the fetch ends failed and
 /// the failure carries no secret.
@@ -719,7 +719,7 @@ fn a_prompt_reaches_the_window_as_a_value_and_its_answer_reaches_git() {
     drop(handle);
 }
 
-/// PRD B5 through the boundary: the window declines; the fetch fails once,
+/// Through the boundary: the window declines; the fetch fails once,
 /// nothing asks again, and the worker goes on serving.
 #[test]
 fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
@@ -780,10 +780,10 @@ fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
     drop(handle);
 }
 
-/// PRD R4.3: cancelling kills git while it waits on the prompt; the outcome
-/// says cancelled, the dialog's refusal afterwards is harmless, and the
-/// worker goes on serving. A cancel opens nothing (staging-and-commit R14.5): the
-/// outcome names the remote alone, whatever lock a git left.
+/// Cancelling kills git while it waits on the prompt; the outcome says
+/// cancelled, the dialog's refusal afterwards is harmless, and the worker
+/// goes on serving. A cancel opens nothing: the outcome names the remote
+/// alone, whatever lock a git left.
 #[test]
 fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     let remote = Demanding::new();

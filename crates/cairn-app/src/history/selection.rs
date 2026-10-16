@@ -1,9 +1,9 @@
 //! What the detail pane describes: the row chosen in the history, a parent reached from the
-//! Commit tab, or two commits to compare (R7). On the UI thread; asking is a [`Request`]
-//! handed to the caller's submit, never a wait.
+//! Commit tab, or two commits to compare. On the UI thread; asking is a [`Request`] handed
+//! to the caller's submit, never a wait.
 //!
-//! **Two commits** (R7.1, R7.2; Fork, Finding 7). A row pressed with the table's extending
-//! chord (⌘-click, Ctrl-click) is compared with the row selected: exactly two, never three —
+//! **Two commits**, as Fork compares them. A row pressed with the table's extending chord
+//! (⌘-click, Ctrl-click) is compared with the row selected: exactly two, never three —
 //! a third replaces the second, the row pressed plainly staying — and never half-selected: a
 //! pressed row already in the pair leaves the other one selected alone, and a plain press
 //! returns to one. The comparison is tip against tip, the lower row of the two in the list
@@ -17,11 +17,11 @@ use crate::diff::state::Answer;
 use crate::window::View;
 use crate::worker::{Comparison, Request};
 
-/// What a row's changes are asked against. Named variant by variant: a row of another kind
-/// must say here what it compares, or the window does not compile. A stash's row asks what
-/// `git stash show` lists (refs-and-status R6.2): the stash commit against the commit it was
-/// made on and, where the user's `stash.showIncludeUntracked` says so, the untracked files
-/// it holds; its Commit tab draws the stash commit's details, every parent among them.
+/// What a row's changes are asked against. Named variant by variant: a row of another kind must say
+/// here what it compares, or the window does not compile. A stash's row asks what `git stash show`
+/// lists: the stash commit against the commit it was made on and, where the user's
+/// `stash.showIncludeUntracked` says so, the untracked files it holds; its Commit tab draws the
+/// stash commit's details, every parent among them.
 pub fn comparison_of(id: RowId) -> Comparison {
     match id {
         RowId::Commit(oid) => Comparison::Commit(oid),
@@ -29,7 +29,7 @@ pub fn comparison_of(id: RowId) -> Comparison {
     }
 }
 
-/// Two rows selected to compare (R7): the base — the lower of the two rows, the commit the
+/// Two rows selected to compare: the base — the lower of the two rows, the commit the
 /// diff runs from — and the tip, each as the history drew it, for the header that names them,
 /// and each row's identity, which a stash's row does not share with its commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub struct Pair {
 }
 
 impl Pair {
-    /// What the pair compares: tip against tip, never against a merge base (R7.2).
+    /// What the pair compares: tip against tip, never against a merge base.
     pub fn comparison(&self) -> Comparison {
         Comparison::Between {
             old: self.base.id,
@@ -84,7 +84,7 @@ fn summary_of(row: HistoryRow<'_>) -> CommitSummary {
 /// Selects `id` alone and asks what it changed — through [`crate::diff::state::DiffState`], so
 /// an answer for any other selection is never kept. Choosing what is already chosen asks
 /// nothing new, unless its answer failed, when choosing it again is how to retry. A pair
-/// selected goes: a plain press returns to one (R7.1).
+/// selected goes: a plain press returns to one.
 pub fn choose(id: RowId, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut selected,
@@ -98,7 +98,7 @@ pub fn choose(id: RowId, view: View, submit: Option<&dyn Fn(Request)>) {
     ask(comparison_of(id), view, submit);
 }
 
-/// The row `id`, at `index` in the loaded rows, pressed with the extending chord (R7.1): it
+/// The row `id`, at `index` in the loaded rows, pressed with the extending chord: it
 /// and the row selected become the pair compared, the lower row the base; pressed while it is
 /// one of a pair, the other stays selected alone. With nothing selected it is selected alone.
 pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
@@ -131,7 +131,7 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
                     Some(row) => (summary_of(row), summary_of(pressed)),
                     None => return,
                 };
-                // The lower row in the list is the base (R7.2).
+                // The lower row in the list is the base.
                 Some(if index > anchor_at {
                     Pair {
                         base: pressed_summary,
@@ -161,7 +161,7 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
     ask(of, view, submit);
 }
 
-/// The pair's base and tip swapped (R7.2): the other diff, asked for.
+/// The pair's base and tip swapped: the other diff, asked for.
 pub fn swap(view: View, submit: Option<&dyn Fn(Request)>) {
     let mut pair = view.pair;
     let swapped = pair.peek().clone().map(|held| Pair {

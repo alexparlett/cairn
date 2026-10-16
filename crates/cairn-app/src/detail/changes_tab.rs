@@ -1,6 +1,6 @@
-//! The Changes tab (PRD R5.4, R6.1, R6.8): a one-line summary of the commit, its changed
+//! The Changes tab: a one-line summary of the commit, its changed
 //! files on the left behind a filter, and one file's diff on the right — one file at a time,
-//! as Fork shows it (Findings 5 and 19). A component of its own, mounted only while the tab
+//! as Fork shows it. A component of its own, mounted only while the tab
 //! is shown, so the work it watches for — a filter's text, the first file to choose — is done
 //! only for a tab someone is looking at.
 //!
@@ -9,7 +9,7 @@
 //! over the paths. Choosing a file — pressed, or reached with ↑ or ↓ in the focused list —
 //! asks its diff through the file-diff lane, which supersedes the last file's and kills its
 //! `git` (`diff::actions::choose_file`). With no file chosen, the first file the list shows is
-//! chosen, as Fork selects the first file by default (Finding 5).
+//! chosen, as Fork selects the first file by default.
 //!
 //! **What it draws, and when.** The summary and the list only for the change set of the
 //! selection now; the diff only for the answer naming the file and the settings now — its
@@ -37,10 +37,10 @@ pub const NO_FILE_CHOSEN: &str = "Choose a file to see its diff.";
 pub const READING_DIFF: &str = "Reading the diff…";
 /// Said under the comparison's header while what two commits changed is on its way.
 pub const READING_COMPARISON: &str = "Reading the comparison…";
-/// The file list's share of the pane until its splitter is dragged, in percent (the user's
-/// decision, 2026-10-03: about a third).
+/// The file list's share of the pane until its splitter is dragged, in percent: about a
+/// third.
 pub const LIST_WIDTH: f32 = 35.0;
-/// The least a drag, or a narrowing window, leaves the file list (the user's decision).
+/// The least a drag, or a narrowing window, leaves the file list.
 const LIST_MIN_PIXELS: f32 = 200.0;
 const DIFF_MIN_PIXELS: f32 = 240.0;
 
@@ -104,7 +104,7 @@ impl Component for ChangesTab {
                 submit(request);
             }
         });
-        // With no file chosen, the first the list shows is: Fork's default (Finding 5).
+        // With no file chosen, the first the list shows is: Fork's default.
         let choosing = self.submit.clone();
         use_side_effect(move || {
             let first = {
@@ -125,9 +125,9 @@ impl Component for ChangesTab {
         let Some(of) = selection::selected_comparison(view) else {
             return notice(NOTHING_SELECTED, false);
         };
-        // Over two commits, both named, base then tip, with the swap (R7.3) — drawn the moment
-        // the pair is set, what they changed awaited under it (the user's decision,
-        // 2026-10-04); over one, its one-line summary, once its answer is here.
+        // Over two commits, both named, base then tip, with the swap — drawn the moment the
+        // pair is set, what they changed awaited under it; over one, its one-line summary, once
+        // its answer is here.
         let compared = view.pair.read().clone();
         let swapping = self.submit.clone();
         let comparison: Option<Element> = compared.map(|pair| {
@@ -292,7 +292,7 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
         .into()
 }
 
-/// One file's diff: its rows, or the notice that stands in their place (R6.8).
+/// One file's diff: its rows, or the notice that stands in their place.
 fn diff_body(
     shown: &ShownDiff,
     view: View,

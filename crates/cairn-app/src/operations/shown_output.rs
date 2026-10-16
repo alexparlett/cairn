@@ -1,12 +1,12 @@
-//! git's output as the window draws it (R10.5, staging-and-commit R4.10, R12.2): git's text
-//! reaches the window only as `cairn_model::ScrubbedLines`, which the engine's runner fills as it
-//! splits git's output into whole lines — each stripped of terminal control sequences
-//! (`cairn_model::strip_ansi`) and then scrubbed of a URL's userinfo, before anything keeps or
-//! cuts it: a commit's streamed output, a fetch's progress, a failure's kept output and the
-//! command log's records alike — and an error's text as `cairn_git::Error::shown` renders it in
-//! the worker. So no view, tooltip or dialog can draw a token a remote URL carried, and nothing
-//! here scrubs. The window strips escapes again as it draws, which changes nothing the engine
-//! already stripped and keeps a line drawn plain whoever built it.
+//! git's output as the window draws it: git's text reaches the window only as
+//! `cairn_model::ScrubbedLines`, which the engine's runner fills as it splits git's output into
+//! whole lines — each stripped of terminal control sequences (`cairn_model::strip_ansi`) and then
+//! scrubbed of a URL's userinfo, before anything keeps or cuts it: a commit's streamed output, a
+//! fetch's progress, a failure's kept output and the command log's records alike — and an error's
+//! text as `cairn_git::Error::shown` renders it in the worker. So no view, tooltip or dialog can
+//! draw a token a remote URL carried, and nothing here scrubs. The window strips escapes again as
+//! it draws, which changes nothing the engine already stripped and keeps a line drawn plain whoever
+//! built it.
 
 use cairn_model::{ScrubbedLines, strip_ansi};
 
@@ -44,9 +44,9 @@ mod tests {
         );
     }
 
-    /// The phase 12 QA's first finding, drawn: an escape between a scheme and its `://` hid the
-    /// URL from a scrubber that read the line before stripping it, and the strip here then drew
-    /// the credential whole. Caught by: the engine scrubbing what git wrote before stripping it.
+    /// An escape between a scheme and its `://` must not hide the URL from the scrubber: a scrubber
+    /// that read the line before stripping it would miss it, and the strip here would then draw the
+    /// credential whole. Caught by: the engine scrubbing what git wrote before stripping it.
     #[test]
     fn an_escape_inside_a_url_draws_no_token() {
         for line in ["https\u{7}://u:TOKEN@h/x", "https:\u{1b}[0m//u:TOKEN@h/x"] {

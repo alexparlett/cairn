@@ -1,5 +1,5 @@
 //! View state for diffs: what the window has selected — a commit or a pair, a file, Expand
-//! All — and the answer it keeps for that selection alone (PRD R4.4). On the UI thread, so
+//! All — and the answer it keeps for that selection alone. On the UI thread, so
 //! nothing here waits; asking is the caller's, through the [`Request`] each selection
 //! returns.
 //!
@@ -49,8 +49,8 @@ pub enum AllState {
     Stopped,
 }
 
-/// The files of the selected change set opened in place in the Commit tab (R5.3): what each
-/// draws, the ones read past R2.6's limits, where Expand All stands, and the options every
+/// The files of the selected change set opened in place in the Commit tab: what each
+/// draws, the ones read past the diff limits, where Expand All stands, and the options every
 /// file is asked at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Opening {
@@ -72,7 +72,7 @@ pub enum Asking {
     Working,
 }
 
-/// Who holds the file-diff lane (review-code-app-ui.md H1): the selection whose request is the
+/// Who holds the file-diff lane: the selection whose request is the
 /// lane's now. The diff thread serves one file-diff query at a time, a newer superseding it, so
 /// one holds it at most — `DiffState::lane` is one value, taken by one call
 /// (`DiffState::take_lane`), never a flag per holder that every other holder must reset. A
@@ -106,7 +106,7 @@ fn retire(shown: Vec<ShownDiff>) -> Option<Request> {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffState {
     /// The commit or the pair selected, and what it changed — shared, so the Changes tab's
-    /// filter can read it on a worker (phase 07) without a copy.
+    /// filter can read it on a worker without a copy.
     changes: Option<(Comparison, Answer<Arc<ChangeSet>>)>,
     /// The file selected, and its diff as the view draws it, prepared on the worker that
     /// answered it — `None` inside `Ready` for a clean working-tree path.
@@ -116,16 +116,16 @@ pub struct DiffState {
     /// Whose request is the one in the file-diff lane now; `None` once a changes query
     /// superseded it, or its holder asked for nothing more.
     lane: Option<LaneHolder>,
-    /// The Changes tab's filter over the selected change set's files (phase 07).
+    /// The Changes tab's filter over the selected change set's files.
     filter: FileFilter,
     /// Where the file selected is in the change set, when it was chosen from it: what the
     /// Changes tab's list highlights and moves from, kept rather than searched for.
     file_index: Option<usize>,
-    /// Local Changes' primary and its diff (refs-and-status R9.3, staging-and-commit R8.1).
+    /// Local Changes' primary and its diff.
     working: Option<working::Working>,
 }
 
-/// The file-diff lane (H1): one holder, taken and let go of here alone.
+/// The file-diff lane: one holder, taken and let go of here alone.
 impl DiffState {
     /// `holder`'s request is now the one in the file-diff lane: whoever held it is asked again
     /// when its view is shown.
@@ -154,7 +154,7 @@ impl DiffState {
     ///
     /// Returns what to submit, in order: the query, then — when answers were kept — a
     /// [`Request::Retire`] handing them to a worker, so a large change set is not freed on
-    /// the UI thread (R2: 1.2-2.0 ms for 55,184 files).
+    /// the UI thread (1.2-2.0 ms measured for 55,184 files).
     pub fn select_changes(&mut self, of: Comparison) -> Vec<Request> {
         let changes = self.changes.replace((of, Answer::Waiting));
         let file = self.file.take();
@@ -269,7 +269,7 @@ impl DiffState {
     }
 }
 
-/// The Commit tab's files opened in place (phase 08, R5.3).
+/// The Commit tab's files opened in place.
 impl DiffState {
     /// The opening for the change set selected now, made at `options` if there is none; `None`
     /// while no change set is here to name files of.
@@ -291,8 +291,8 @@ impl DiffState {
         Some(opening)
     }
 
-    /// Opens the change set's file at `index` in place, or closes it when it is open (Fork,
-    /// Finding 4). Returns what to submit: the request for what is unanswered when a file
+    /// Opens the change set's file at `index` in place, or closes it when it is open, as Fork
+    /// does. Returns what to submit: the request for what is unanswered when a file
     /// opened, and a closed file's diff handed to a worker to free.
     pub fn toggle_file(&mut self, index: usize, options: DiffOptions) -> Vec<Request> {
         let Some(opening) = self.opening_now(options) else {
@@ -307,9 +307,9 @@ impl DiffState {
         self.ask_expansion().into_iter().collect()
     }
 
-    /// Expand All (R5.3): every file opened in the change set's order, from the first, until
+    /// Expand All: every file opened in the change set's order, from the first, until
     /// its line budget is spent. Files already open are kept as they are drawn and passed over:
-    /// only the rest are read (the user's decision, 2026-10-04).
+    /// only the rest are read.
     pub fn expand_all(&mut self, options: DiffOptions) -> Vec<Request> {
         let Some(opening) = self.opening_now(options) else {
             return Vec::new();
@@ -348,8 +348,8 @@ impl DiffState {
         requests
     }
 
-    /// Load Diff under the file opened in place at `index` (R6.8): it is read again past
-    /// R2.6's limits, up to the load-anyway ceiling.
+    /// Load Diff under the file opened in place at `index`: it is read again past the diff
+    /// limits, up to the load-anyway ceiling.
     pub fn load_in_place(&mut self, index: usize) -> Vec<Request> {
         let Some(opening) = self.opening.as_mut() else {
             return Vec::new();
@@ -397,7 +397,7 @@ impl DiffState {
             return None;
         }
         // Expand All passes over every file open, whatever it draws: it is kept, never read
-        // again (the user's decision, 2026-10-04).
+        // again.
         let kept_open: Vec<usize> = match all {
             Some(_) => opening.shown.iter().map(|(index, _)| index).collect(),
             None => Vec::new(),
@@ -465,7 +465,7 @@ impl DiffState {
             self.let_go_of_lane(LaneHolder::Expansion);
         }
         // The path chosen in Local Changes is asked at the Changes tab's options but always
-        // exact (staging-and-commit R8.5): its view is one file's diff under the same bar.
+        // exact: its view is one file's diff under the same bar.
         let (working_asked, freed) =
             self.working_settings_changed(working, asking == Asking::Working);
         requests.extend(retire(freed));
@@ -779,7 +779,7 @@ mod tests {
         }
     }
 
-    /// R2: choosing another commit hands the change set kept for the last one — and its file
+    /// Choosing another commit hands the change set kept for the last one — and its file
     /// and Expand All diffs — to a worker after the query, rather than dropping them on the
     /// UI thread; a selection with nothing ready retires nothing. Caught by: assigning the
     /// new selection over the old (which drops it here), or retiring before asking.
@@ -810,7 +810,7 @@ mod tests {
         );
     }
 
-    /// R4.4: an answer naming another commit is never kept — not after the selection moved
+    /// An answer naming another commit is never kept — not after the selection moved
     /// on, and not after it was cleared without asking anything new. Caught by: keeping
     /// whatever arrives (the previous commit's files drawn under the new one).
     #[test]
@@ -839,7 +839,7 @@ mod tests {
         assert_eq!(state.changes(), None);
     }
 
-    /// R4.4 for a file: the answer must name the file, its commit and its options. Caught
+    /// For a file, the answer must name the file, its commit and its options. Caught
     /// by: comparing paths alone (the same path of another commit), or ignoring the options
     /// (an answer at the old context drawn after the context changed).
     #[test]
@@ -950,7 +950,7 @@ mod tests {
         assert_eq!(retired_count(&requests), 1, "{requests:?}");
     }
 
-    /// R5.3, phase 02 QA's R2 at the window: Expand All asks from the first file with nothing
+    /// At the window, Expand All asks from the first file with nothing
     /// spent; each page opens the files it read and moves Expand All on to where it stands; the
     /// page that ends it with the budget spent stops it and says so. Caught by: a page that
     /// replaces the last, progress not kept (a superseded Expand All starting again from the
@@ -985,7 +985,7 @@ mod tests {
         assert!(matches!(expansion.get(3), Some(Opened::Shown(_))));
     }
 
-    /// The user's decision (2026-10-04): Expand All keeps the files already open — answered,
+    /// Expand All keeps the files already open — answered,
     /// failed or still being read — and asks only for the rest; what they draw is not replaced
     /// or freed, and the files Expand All reads open around them. Caught by: the files open
     /// offered to Expand All again (read anew, their diffs replaced and freed), or a page of
@@ -1219,7 +1219,7 @@ mod tests {
         }
     }
 
-    /// The entire file moves the Changes tab's file alone (the user's decision, 2026-10-04):
+    /// The entire file moves the Changes tab's file alone:
     /// the files opened in place keep their options, so nothing of theirs is asked again or
     /// freed, now or when the Commit tab is shown. Caught by: one set of options for both.
     #[test]
@@ -1245,7 +1245,7 @@ mod tests {
         assert_eq!(state.reask_expansion(), None);
     }
 
-    /// Phase 08 QA's U2: an Expand All whose request failed is off — not asked again when the
+    /// An Expand All whose request failed is off — not asked again when the
     /// Commit tab is next shown, and its button Expand All once more. Caught by: the failure
     /// leaving Expand All running, which the tab then asks again, and fails again, for good.
     #[test]
@@ -1259,7 +1259,7 @@ mod tests {
         assert_eq!(state.reask_expansion(), None);
     }
 
-    /// Phase 08 QA's U3, the other direction of
+    /// The other direction of
     /// `a_setting_asks_the_shown_tabs_selection_now_and_the_others_later`: with the Changes tab
     /// shown, a setting asks its file at once and not the files opened in place, which are
     /// asked — whole, at the new options — when the Commit tab is shown. Caught by: the
@@ -1307,7 +1307,7 @@ mod tests {
         );
     }
 
-    /// T4: a failure of the selected file is recorded as that file's answer. Caught by: the
+    /// A failure of the selected file is recorded as that file's answer. Caught by: the
     /// file arm of `failed` writing nothing (the pane waits for good on a failed diff).
     #[test]
     fn a_failed_file_diff_is_recorded_for_the_file() {
@@ -1321,7 +1321,7 @@ mod tests {
         );
     }
 
-    /// R2 for a file: choosing another file — or the same at other options — hands the diff
+    /// For a file, choosing another file — or the same at other options — hands the diff
     /// kept for the last one to a worker after the query, and the answer kept is prepared at
     /// the context it was asked at. Caught by: the replaced diff dropped on the UI thread, or
     /// rows grouped at another context than git was asked at.

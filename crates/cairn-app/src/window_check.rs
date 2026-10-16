@@ -1,8 +1,8 @@
-//! C14's window check, measured (phase 08): the real window — `window::window`, every
-//! component it draws — over the real worker and the real engine, against the repository
-//! the bar names, headless through `freya-testing`, while the heaviest subjects load.
+//! The window check: the real window — `window::window`, every component it draws — over
+//! the real worker and the real engine, against the bench repository (`CAIRN_BENCH_REPO`),
+//! headless through `freya-testing`, while the heaviest subjects load.
 //!
-//! The criterion asks for a look at the window by hand; this is the instrument beside that
+//! A look at the window by hand is still wanted; this is the instrument beside that
 //! look, not a replacement for it. Frames are paced as a 60 Hz display paces them: each
 //! frame waits for whatever the worker sends until the frame is due, applies every update
 //! that arrived (`session::apply`, the function the application's update task calls, timed
@@ -12,11 +12,10 @@
 //! runner can only measure as a raster snapshot encoded to PNG, reported apart as an upper
 //! bound). A frame's time is the two together — every update applied in it and its
 //! `sync_and_update` — since the application applies its updates on the UI thread between
-//! frames (phase 08 QA's R2). Times are wall-clock on the machine it runs on; nothing here
-//! asserts one.
+//! frames. Times are wall-clock on the machine it runs on; nothing here asserts one.
 //!
-//! Run it in a release build, warm, against the repository the bar names (read only), and —
-//! for refs-and-status C12's large status — a scratch clone of it with no alternates, dirtied
+//! Run it in a release build, warm, against the bench repository (read only), and —
+//! for a large working-tree status — a scratch clone of it with no alternates, dirtied
 //! there and never in the bench repository:
 //!
 //! ```text
@@ -27,10 +26,10 @@
 //! ```
 //!
 //! The window opens as the application opens it — the refs, ahead/behind and status read by a
-//! refresh, the history walked from every ref and labelled, the sidebar's rows laid out
-//! (refs-and-status C12) — and, on the scratch clone, Local Changes is shown over its status of
-//! thousands of paths: its lists drawn, the first path's diff asked and drawn, a list scrolled,
-//! a filter typed and a refresh landed.
+//! refresh, the history walked from every ref and labelled, the sidebar's rows laid out —
+//! and, on the scratch clone, Local Changes is shown over its status of thousands of paths:
+//! its lists drawn, the first path's diff asked and drawn, a list scrolled, a filter typed
+//! and a refresh landed.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -438,7 +437,7 @@ fn launch(path: &str) -> Harness {
     test.set_fonts(HashMap::from([(DIFF_FONT_FAMILY, crate::DIFF_FONT)]));
     test.sync_and_update();
     // As the application opens a repository: the refresh's refs open the history from every
-    // ref (refs-and-status C12).
+    // ref.
     handle.submit(Request::ListRemotes);
     handle.submit(Request::ConfiguredContext);
     handle.submit(Request::Refresh);
@@ -452,7 +451,7 @@ fn launch(path: &str) -> Harness {
 
 const PATH: &str = "bench";
 
-/// C14's window check: the window over the bench repository while S1's and M1's change sets
+/// The window's frames over the bench repository, timed while S1's and M1's change sets
 /// load, while Expand All reads them, while F1 loads past the limits, and while each scrolls.
 #[test]
 #[ignore = "needs a large repository named by CAIRN_BENCH_REPO, and a release build"]
@@ -711,7 +710,7 @@ fn window_check() {
     local_changes_check(&path);
 }
 
-/// Whether the window has landed what opening it reads (refs-and-status C12): the refs, a
+/// Whether the window has landed what opening it reads: the refs, a
 /// page of the history walked from them, the sidebar's rows and the working tree's status.
 fn landed(view: View) -> bool {
     let refreshed = view.refreshed.peek();
@@ -746,7 +745,7 @@ fn describe_landed(harness: &Harness) {
     );
 }
 
-/// C12's large status: Local Changes over a scratch clone of the bench repository, dirtied
+/// A large status: Local Changes over a scratch clone of the bench repository, dirtied
 /// there, with thousands of paths — its lists drawn, the first path's diff asked and drawn,
 /// Unstaged scrolled, a filter typed, and a refresh landed while it is shown.
 fn local_changes_check(bench: &str) {
@@ -925,7 +924,7 @@ fn scratch_refusal(bench: &Path, scratch: &Path) -> Option<String> {
     None
 }
 
-/// Phase 09 QA's TC2: the window check's guard refuses every scratch that would read the
+/// The window check's guard refuses every scratch that would read the
 /// bench's git directory — the bench itself, a directory inside it, a linked worktree of it, a
 /// `.git` symbolic link to it, a clone borrowing objects — and accepts a clone of its own.
 /// Built with `std::fs` in the temporary directory; no `git` runs. Caught by: a guard that
@@ -993,16 +992,16 @@ fn the_scratch_guard_refuses_whatever_shares_the_benchs_git_directory() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// R13.1's subject: rust-lang/rust at this commit, which the scratch clone of the writes check
-/// is checked out at.
+/// The writes check's subject: rust-lang/rust at this commit, which its scratch clone is
+/// checked out at.
 const SUBJECT: &str = "c999cef531ea9059e189e82fe0e82c5daf249bc9";
 /// The file a hunk is staged, unstaged and discarded in — the baseline's (`write_baseline`).
 const HUNK_FILE: &str = "library/core/src/option.rs";
 const HUNK_LINE: usize = 1_500;
-/// Runs a verb is timed over, after one to warm (R13.1: the median of seven).
+/// Runs a verb is timed over, after one to warm (the median of seven).
 const RUNS: usize = 7;
 
-/// staging-and-commit C21, measured (R13.1): in the real window over the real worker and
+/// The local writes, measured in the real window over the real worker and
 /// engine, on a plain clone of the bench at `c999cef531e` (`CAIRN_SCRATCH_REPO`, refused when it
 /// shares the bench's git directory, `CAIRN_BENCH_REPO`), warm, the median of seven — stage,
 /// unstage and discard a hunk and commit, each from the press until the refreshed lists are
@@ -1269,7 +1268,7 @@ fn writes_check() {
     // A hook running, every frame timed while it runs and as its ending lands: one that writes
     // a line every 50 ms for two seconds; one that writes 20,000 lines as fast as it can, each
     // flushed; and one that writes five lines of 200 KiB with no newline in them — each with the
-    // activity popover closed, then open on the running commit (phase 11's QA, app item 4).
+    // activity popover closed, then open on the running commit.
     let hook = root.join(".git/hooks/pre-commit");
     let hooks: [(&str, &[u8]); 3] = [
         (
@@ -1392,7 +1391,7 @@ fn writes_check() {
     });
     harness.test.press_key(Key::Named(NamedKey::Escape));
 
-    // A thousand files selected: the primary's diff alone drawn (R8.1 as amended).
+    // A thousand files selected: the primary's diff alone drawn.
     let files: Vec<PathBuf> = {
         let mut found = Vec::new();
         let mut stack = vec![root.join("library")];

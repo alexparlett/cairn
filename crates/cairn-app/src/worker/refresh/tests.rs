@@ -1,4 +1,4 @@
-//! The refresh, through the real boundary (refs-and-status R10, R11, criterion C10): one
+//! The refresh, through the real boundary: one
 //! refresh reads the refs, ahead/behind and status, each answered in its own lane; a refresh
 //! asked again at once supersedes the one before it lane by lane, so only one answer of each
 //! is drawn; a refresh cancels neither a page being walked nor a diff being read; and a slow
@@ -117,7 +117,7 @@ pub(crate) struct Answered {
     pub(crate) refs: Vec<bool>,
     pub(crate) ahead_behind: usize,
     pub(crate) status: usize,
-    /// The leftover lock's stats, one before each status read (R12.4).
+    /// The leftover lock's stats, one before each status read.
     pub(crate) lock_stats: usize,
     /// Every other update seen meanwhile.
     pub(crate) others: Vec<Update>,
@@ -172,7 +172,7 @@ fn arriving_within(updates: &mut Updates, quiet: Duration) -> Answered {
     }
 }
 
-/// R10.1, R11.1: a refresh reads the refs, ahead/behind and the working tree's status, each
+/// A refresh reads the refs, ahead/behind and the working tree's status, each
 /// answered once; the first, with no walk to compare with, says to open the history, and once
 /// the history is open from those refs, a refresh that finds nothing changed says to leave it.
 /// Caught by: a refresh that reads one of the three not at all (no answer arrives), a status
@@ -204,12 +204,12 @@ fn a_refresh_answers_the_refs_ahead_behind_and_status_each_once() {
     drop(handle);
 }
 
-/// The QA brief: focus flapping — two refreshes asked at once, as Alt+Tab twice quickly asks
+/// Focus flapping — two refreshes asked at once, as Alt+Tab twice quickly asks
 /// them — draws one refs answer and one count, the second refresh's; the first's are
 /// superseded in their lanes, cancelled where still running and dropped where finished,
 /// before the window reads them. Deterministic: the second is numbered before any answer can
 /// be read, and an answer is drawn only while its number is current. Status is not
-/// superseded (R10.3 as amended): one status answers both when the second is asked before
+/// superseded: one status answers both when the second is asked before
 /// the first starts, and a status and one follow-up when after — never more
 /// (`a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it` pins which,
 /// with a status that hangs). Caught by: a refresh numbered in fewer than its two lanes (two
@@ -249,7 +249,7 @@ fn a_refresh_asked_twice_at_once_draws_one_answer_of_each() {
     drop(handle);
 }
 
-/// The QA brief: a refresh while a page is loading cancels neither the page nor a diff
+/// A refresh while a page is loading cancels neither the page nor a diff
 /// being read — each answer arrives, whole, beside the refresh's. Deterministic: were a
 /// refresh numbered in the history or the changes lane, the page's or the diff's number
 /// would no longer be current when it arrived, and it would never be drawn. Caught by: a
@@ -307,7 +307,7 @@ const STATUS_HANGS: &str = "  echo $$ >> \"$DIR/started\"\n  n=0\n  \
      while [ ! -e \"$DIR/release\" ] && [ ! -e \"$DIR/release.$$\" ] && [ $n -lt 600 ]; do /bin/sleep 0.05; n=$((n+1)); done\n  \
      exit 0";
 
-/// R11.2 and the QA brief: a slow status — 736 ms on a stat-dirty rust-lang/rust — runs on
+/// A slow status — 736 ms on a stat-dirty rust-lang/rust — runs on
 /// the refresh thread, so neither a page nor a diff asked while it runs waits for it: both
 /// answers arrive while the status is still running, and the status after. Deterministic:
 /// the status cannot finish before the test releases it. Caught by: status served on the
@@ -430,10 +430,9 @@ impl Drop for Release<'_> {
     }
 }
 
-/// R10.3 as amended (the user's decision of 2026-10-07), and phase 06 QA's DO1: refreshes
-/// asked while a `git status` runs do not end it — it runs on, finishes, and its answer is
-/// drawn — and however many there were, exactly one follow-up status runs after it. The
-/// newest refresh's count is drawn before that follow-up finishes — it waits behind the
+/// Refreshes asked while a `git status` runs do not end it — it runs on, finishes, and its
+/// answer is drawn — and however many there were, exactly one follow-up status runs after it.
+/// The newest refresh's count is drawn before that follow-up finishes — it waits behind the
 /// status that was running, not behind the follow-up too — and is the one count drawn.
 /// Deterministic: each status is released by the test, one at a time. Caught by: a refresh
 /// that supersedes the status again (the first `git` is ended and its answer never drawn),
@@ -523,7 +522,7 @@ fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
     drop(handle);
 }
 
-/// R10.3 as amended and phase 06 QA's DO1: a status no refresh ends is still ended by a
+/// A status no refresh ends is still ended by a
 /// close — the window's `Request::Close` while the `git status` hangs, a second refresh
 /// queued behind it, ends the stream within the close's bound, nothing answers a status,
 /// and the status's process group is gone. Caught by: a status read whose cancel no longer
@@ -568,7 +567,7 @@ fn a_close_ends_a_running_status() {
     drop(handle);
 }
 
-/// R9.1, R9.2 and the QA brief, through the real boundary: untracked files under a new
+/// Through the real boundary, untracked files under a new
 /// directory are listed one row per file — the directory never a row of its own — in their
 /// paths' order, laid out on the refresh thread, and counted one each. Caught by: git's
 /// collapsed directory kept (one row, a count of one), or the lists laid out on the window's
@@ -625,10 +624,10 @@ fn untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted() {
     drop(handle);
 }
 
-/// R9's filter, through the real boundary: answered on the repository thread for the window's
-/// own lists, shared, and a newer text superseding the older, whose rows never arrive. Caught
-/// by: lists copied on the way (an answer the window cannot tell is for its lists), or a
-/// filter not numbered in its lane (both answers arrive).
+/// Local Changes' filter, through the real boundary: answered on the repository thread for
+/// the window's own lists, shared, and a newer text superseding the older, whose rows never
+/// arrive. Caught by: lists copied on the way (an answer the window cannot tell is for its
+/// lists), or a filter not numbered in its lane (both answers arrive).
 #[test]
 fn local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists() {
     use std::sync::Arc;
@@ -669,7 +668,7 @@ fn local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists() {
     drop(handle);
 }
 
-/// Phase 09 QA's TC5: Local Changes' filter superseded while its pass runs stops part way and
+/// Local Changes' filter superseded while its pass runs stops part way and
 /// sends nothing. Driven on the lane's own function with the outbox read raw — beneath the
 /// epoch filter, which would hide a superseded answer either way — over a status large enough
 /// that its pass takes far longer than the moment the supersession comes after. Caught by: a

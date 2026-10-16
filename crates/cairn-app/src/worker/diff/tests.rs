@@ -1,7 +1,7 @@
-//! The query lanes, through the real boundary (PRD R4, criterion C8): a scroll does not
-//! cancel a diff and a diff does not cancel a scroll; a changes query supersedes the
-//! file-diff lane; a superseded diff's `git` is killed, not left to run out; an answer
-//! naming another selection is never drawn (`session`'s
+//! The query lanes, through the real boundary: a scroll does not cancel a diff and a diff
+//! does not cancel a scroll; a changes query supersedes the file-diff lane; a superseded
+//! diff's `git` is killed, not left to run out; an answer naming another selection is never
+//! drawn (`session`'s
 //! `an_answer_naming_another_selection_is_never_drawn`, through these helpers, since a
 //! render-side test may name neither the toolkit here nor a wait there); and a fetch still
 //! supersedes nothing.
@@ -144,7 +144,7 @@ pub(crate) fn changes_answer(updates: &mut Updates, of: Comparison) -> Update {
     }
 }
 
-/// C8, the first half: a scroll asked while a changes query is in flight does not cancel
+/// A scroll asked while a changes query is in flight does not cancel
 /// it — the change set still arrives, and so does the page. Mutation that reddens it:
 /// numbering every lane on one counter (`QueryLane::index` answering 0 for every lane), so
 /// the page supersedes the diff and its answer is dropped on arrival.
@@ -175,7 +175,7 @@ fn a_scroll_does_not_cancel_a_diff() {
     drop(handle);
 }
 
-/// C8, the second half: a changes query and a file diff asked while a page is being
+/// A changes query and a file diff asked while a page is being
 /// walked do not cancel it — the page arrives. Mutation that reddens it: one counter for
 /// every lane, under which the diff supersedes the page and the walk is abandoned.
 #[test]
@@ -207,7 +207,7 @@ fn a_diff_does_not_cancel_a_scroll() {
     drop(handle);
 }
 
-/// C8: a changes query supersedes the file diff in flight — its answer is never
+/// A changes query supersedes the file diff in flight — its answer is never
 /// delivered, whether it was cancelled before it started, killed while git read, or
 /// finished and dropped on arrival — and nothing else. The file diff, served before the
 /// changes query on the one diff thread, would arrive first if it survived. Mutation that
@@ -237,7 +237,7 @@ fn a_changes_query_supersedes_the_file_diff_in_flight() {
     drop(handle);
 }
 
-/// C8, the negative of the one above: a file diff does not supersede the changes query in
+/// The negative of the one above: a file diff does not supersede the changes query in
 /// flight, nor one file diff the history — both answers arrive. Mutation that reddens it:
 /// a file diff numbered in the changes lane too.
 #[test]
@@ -268,7 +268,7 @@ fn a_file_diff_does_not_supersede_the_changes_query() {
     drop(handle);
 }
 
-/// C8, a fast click through a file list: each file's diff supersedes the one before, and
+/// A fast click through a file list: each file's diff supersedes the one before, and
 /// only the last is answered. (Whether the ones before are killed rather than run out is
 /// `a_superseded_diff_kills_its_git`; whether one that finished anyway is dropped on
 /// arrival is `pool`'s `an_answer_superseded_in_its_lane_is_dropped_on_arrival`.)
@@ -344,7 +344,7 @@ fn leaders(stub: &StubGit, count: usize) -> Vec<i32> {
     }
 }
 
-/// C8 and the design input on fast clicks: a superseded diff's `git` is KILLED — its whole
+/// On fast clicks, a superseded diff's `git` is KILLED — its whole
 /// process group, the grandchild holding its pipes included — and the command log records
 /// it as cancelled; it is not left to run out with its answer discarded. Mutation that
 /// reddens it: handing the engine a cancel that never fires (`CancelSignal::new()` in
@@ -445,7 +445,7 @@ fn a_superseded_diff_kills_its_git() {
     drop(handle);
 }
 
-/// C8: a fetch still supersedes nothing — a page and a changes query asked before it are
+/// A fetch still supersedes nothing — a page and a changes query asked before it are
 /// both answered. A fixture borrowing this checkout's objects, so the fetch (of a remote
 /// that does not exist, which fails at once and writes nothing) runs in a repository of
 /// the test's own. Mutation that reddens it: an operation numbered in a lane, such as
@@ -651,7 +651,7 @@ fn append(path: &Path, content: &str) {
     write(path, &held);
 }
 
-/// P2 and R4.5 as amended: an unstaged attribute edit reaches an answer already KEPT and
+/// An unstaged attribute edit reaches an answer already KEPT and
 /// one never asked — the working tree's `.gitattributes`, then `info/attributes` — each
 /// binary as the engine answers on a handle of its own, which is `git show`'s answer.
 /// The second identical ask, before either edit, runs no `git`: the answer was kept.
@@ -710,7 +710,7 @@ fn an_unstaged_attribute_edit_reaches_a_kept_answer_and_a_new_one() {
     drop(handle);
 }
 
-/// P1 and R4.5 as amended: a configuration edit reaches the next answer, kept or not —
+/// A configuration edit reaches the next answer, kept or not —
 /// an include target created where none was, an edit to `$GIT_DIR/config` itself, and
 /// `diff.renames` reaching the next change set. Caught by: answering on the handle opened
 /// first (whose configuration gix read once), or stamping only the files gix loaded (the
@@ -778,7 +778,7 @@ fn a_configuration_edit_reaches_the_next_answer() {
     drop(handle);
 }
 
-/// R4.5 as amended: a stat-only refresh of the index — a new file holding the same
+/// A stat-only refresh of the index — a new file holding the same
 /// entries, as `git update-index --refresh` writes it — keeps what is kept, and asking
 /// again runs no `git`. Caught by: keying on the index file's stamp or its checksum,
 /// which every refresh moves.
@@ -819,7 +819,7 @@ fn a_stat_only_index_refresh_keeps_what_is_kept() {
     drop(handle);
 }
 
-/// T7: two identical asks run `git` once each — the change set's listing and the file's
+/// Two identical asks run `git` once each — the change set's listing and the file's
 /// patch read — the second answered from what was kept. Over this checkout, whose files
 /// are long settled. Caught by: either early return taken out, which reads again.
 #[test]
@@ -873,7 +873,7 @@ fn an_identical_ask_is_answered_from_what_is_kept() {
     drop(handle);
 }
 
-/// T2: a read git fails reaches the window as `DiffFailed`, naming the query. A stub `git`
+/// A read git fails reaches the window as `DiffFailed`, naming the query. A stub `git`
 /// whose `diff-tree` exits 128. Caught by: a failure arm that sends nothing (`Err(_) =>
 /// {}`), which leaves the pane waiting for good.
 #[test]
@@ -1004,7 +1004,7 @@ fn commit_read_whole(files: usize) -> (Comparison, ChangeSet) {
     panic!("none of {ids:?} changed {files} files within Expand All's budget");
 }
 
-/// Phase 08, R5.3 through the boundary: Expand All answers every file of a change set that
+/// Through the boundary, Expand All answers every file of a change set that
 /// fits its budget, in the change set's order, page after page, and ends saying every file
 /// is open; a file opened by name is answered on its own, before any Expand All. Caught by: a
 /// lane that drops a page, answers files out of order, never ends, or reads a file named
@@ -1066,7 +1066,7 @@ fn expand_all_answers_every_file_in_order_through_the_boundary() {
     );
 }
 
-/// Q2 through the boundary: Expand All stops at `EXPAND_ALL_LINES` — taken up one line short
+/// Through the boundary, Expand All stops at `EXPAND_ALL_LINES` — taken up one line short
 /// of it, it opens one file and ends with its budget spent, leaving unread the rest of a change
 /// set of several files it would otherwise read whole, so the budget alone stops it; the
 /// progress it reports is where it stopped and what it spent.
@@ -1104,7 +1104,7 @@ fn expand_all_stops_at_its_budget_through_the_boundary() {
     }
 }
 
-/// Phase 08, R4.3 and phase 02 QA's R2: Expand All is in the file-diff lane, so a newer
+/// Expand All is in the file-diff lane, so a newer
 /// request there ends it — its `git` killed while it reads, never left to run out — and
 /// nothing more of it is sent. Over a stub whose `diff-tree -p` hangs with a grandchild.
 /// Caught by: an expansion read on a cancel that never fires (the first `diff-tree` running
@@ -1205,7 +1205,7 @@ fn submodule_changes(files: usize) -> (Comparison, ChangeSet) {
     (Comparison::Commit(id), changes)
 }
 
-/// The user's decision (2026-10-04): Expand All keeps the files already open and reads only
+/// Expand All keeps the files already open and reads only
 /// the rest. Files 1 and 3 open — 3 still awaited, so named — Expand All from the first file
 /// reads 0, 2, 4 and on, never 1, and 3 once, by name; it still ends at the change set's end.
 /// Caught by: the files open offered to Expand All again (each re-read and drawn anew), or a
@@ -1266,7 +1266,7 @@ fn expand_all_passes_over_the_files_already_open() {
     }
 }
 
-/// Phase 08 QA's E5: an Expand All taken up where a superseded one stopped, `next` files in,
+/// An Expand All taken up where a superseded one stopped, `next` files in,
 /// over a change set longer than a page, reads from that file on — each file answered once, in
 /// order, across both pages — and ends saying every file is open, at the change set's end.
 /// Caught by: the place it stands ignored (reading from the first file), the files offered
@@ -1309,7 +1309,7 @@ fn expand_all_taken_up_midway_reads_from_where_it_stood_across_pages() {
     }
 }
 
-/// T8: a working-tree file diff through the boundary answers the working tree as it is:
+/// A working-tree file diff through the boundary answers the working tree as it is:
 /// an untracked file's lines, and nothing for its unstaged side, which git does not list.
 /// Caught by: a working-tree query routed to the commit path, or answered for another
 /// side.
@@ -1363,7 +1363,7 @@ fn answer_content(
     }
 }
 
-/// R9.6, L4 (C26) at the boundary: the diff thread keys a working-tree answer with its
+/// At the boundary, the diff thread keys a working-tree answer with its
 /// question — the same query over the same text twice answers one content, not 0, and the file
 /// rewritten answers another — and keys a committed file's answer not at all (0), the views
 /// that read a content being Local Changes' alone. Caught by: the production answer left
@@ -1410,7 +1410,7 @@ fn a_working_tree_answer_is_keyed_to_its_text_and_a_committed_one_is_not() {
     );
 }
 
-/// R2: a change set handed back to the worker is freed there without an answer, and the
+/// A change set handed back to the worker is freed there without an answer, and the
 /// repository thread goes on serving: the next request asked after it is answered first.
 /// Caught by: a retirement answered with an update, or one that ends the thread.
 #[test]
@@ -1432,7 +1432,7 @@ fn a_retired_change_set_is_freed_on_the_worker_without_an_answer() {
     );
 }
 
-/// Phase 06: the context the views open at is the user's `diff.context`, read on the
+/// The context the views open at is the user's `diff.context`, read on the
 /// repository thread and answered as a value; a value git refuses answers nothing, and the
 /// thread goes on serving. Caught by: a fixed three, or an answer for a refused value.
 #[test]
@@ -1467,7 +1467,7 @@ fn the_configured_context_is_answered_through_the_boundary() {
     drop(handle);
 }
 
-/// Phase 07, R5.4: the Changes tab's filter is answered on a worker, through the real
+/// The Changes tab's filter is answered on a worker, through the real
 /// boundary, with the indices of the files whose path holds the text — in order, a rename by
 /// either name — and a filter superseded by the next keystroke is not answered, while a
 /// filter supersedes no diff. Here a change set of 55,184 files (the largest subject's

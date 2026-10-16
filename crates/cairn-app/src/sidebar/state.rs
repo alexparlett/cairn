@@ -1,6 +1,6 @@
-//! The sidebar as the window keeps it (refs-and-status R8): the rows a worker laid out with the
-//! snapshot they index, what is open, the filter's text they were asked for, and the entry
-//! last pressed with what its press is doing.
+//! The sidebar as the window keeps it: the rows a worker laid out with the snapshot they
+//! index, what is open, the filter's text they were asked for, and the entry last pressed
+//! with what its press is doing.
 //!
 //! The rows are asked again — `Request::FilterRefs`, on the repository thread — whenever what
 //! they are laid out from changes: a snapshot arrives, the filter's text changes, a section or

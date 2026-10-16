@@ -1,7 +1,6 @@
-//! Show Lost Commits as the window keeps it (`docs/prd/staging-and-commit.md` R11): a toggle
-//! of the session, which reopens the history — a reopen like any other, off the UI thread
-//! (R11.4) — walking from every reflog entry of `HEAD` and each local branch too, or no
-//! longer.
+//! Show Lost Commits as the window keeps it: a toggle of the session, which reopens the
+//! history — a reopen like any other, off the UI thread — walking from every reflog entry of
+//! `HEAD` and each local branch too while it is on.
 
 use cairn_ui::accelerators::Action;
 use freya::prelude::*;
@@ -9,7 +8,7 @@ use freya::prelude::*;
 use crate::window::View;
 use crate::worker::Request;
 
-/// What a chord of the history's own scope does (R7.3): Show Lost Commits toggles it.
+/// What a chord of the history's own scope does: Show Lost Commits toggles it.
 pub fn history_action(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     if crate::shortcuts::keys_inert(view) {
         return;

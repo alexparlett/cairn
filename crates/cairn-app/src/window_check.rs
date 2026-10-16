@@ -45,15 +45,16 @@ use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{MouseEventName, PlatformEvent, WheelEventName};
 
-use crate::diff_state::{AllState, Answer, DiffState, answered_expansion};
-use crate::fetch_state::FetchStatus;
-use crate::history_state::Progress;
+use crate::diff::state::{AllState, Answer, DiffState, answered_expansion};
+use crate::history::selection;
+use crate::history::state::Progress;
+use crate::operations::fetch::FetchStatus;
 use crate::window::{PANE_HEIGHT, View, window};
 use crate::worker::{
     Comparison, Discovery, EXPAND_ALL_LINES, RepositoryHandle, Request, Update, Updates, open,
     update_within,
 };
-use crate::{PAGE_ROWS, diff_actions, selection, session};
+use crate::{PAGE_ROWS, diff, session};
 
 const WIDTH: f32 = 1440.;
 const HEIGHT: f32 = 900.;
@@ -418,18 +419,18 @@ fn launch(path: &str) -> Harness {
                 diff_scroll: ScrollController::new(0, 0, Vec::new()),
                 change_cursor: State::create(None),
                 filter_text: State::create(String::new()),
-                changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+                changes_list_width: State::create(crate::detail::changes_tab::LIST_WIDTH),
                 pair: State::create(None),
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
-                refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                refreshed: State::create(crate::refresh::state::RefreshState::default()),
                 repository: State::create(None),
-                sidebar: crate::sidebar_state::SidebarView::created(),
-                local: crate::local_changes_state::LocalChangesView::created(),
-                writes: State::create(crate::local_writes::LocalWrites::default()),
+                sidebar: crate::sidebar::state::SidebarView::created(),
+                local: crate::local_changes::state::LocalChangesView::created(),
+                writes: State::create(crate::operations::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
-                activity: crate::activity::ActivityView::created(),
-                branch: crate::create_branch::CreateBranchView::created(),
+                activity: crate::operations::activity::ActivityView::created(),
+                branch: crate::operations::create_branch::CreateBranchView::created(),
             })
         },
         1.,
@@ -599,7 +600,7 @@ fn window_check() {
         let view = harness.view;
         harness
             .test
-            .run_in(|| diff_actions::expand_all(true, view, Some(&submit)));
+            .run_in(|| diff::actions::expand_all(true, view, Some(&submit)));
         let expanding = harness.pump(
             Stimulus::Scroll {
                 x: pane.0,
@@ -654,7 +655,7 @@ fn window_check() {
         let view = harness.view;
         harness
             .test
-            .run_in(|| diff_actions::expand_all(false, view, Some(&submit)));
+            .run_in(|| diff::actions::expand_all(false, view, Some(&submit)));
     }
 
     // F1: refused on the byte ceiling, then Load Diff.
@@ -669,7 +670,7 @@ fn window_check() {
     let view = harness.view;
     harness
         .test
-        .run_in(|| diff_actions::load_anyway(view, Some(&submit)));
+        .run_in(|| diff::actions::load_anyway(view, Some(&submit)));
     let loading = harness.pump(
         Stimulus::Scroll {
             x: history.0,
@@ -774,18 +775,17 @@ fn local_changes_check(bench: &str) {
     // Local Changes pressed: its lists drawn and the first path's diff asked and drawn.
     let mut main = harness.view.sidebar.main;
     harness.test.run_in(|| main.set(MainView::LocalChanges));
-    let shown = harness.pump(Stimulus::Nothing, 20, |view| {
-        view.local.state.peek().has_lists()
-            && view
-                .diff
-                .peek()
-                .working_shown()
-                .is_some_and(|shown| !matches!(shown, crate::diff_state::WorkingShown::Waiting))
-    });
+    let shown =
+        harness.pump(Stimulus::Nothing, 20, |view| {
+            view.local.state.peek().has_lists()
+                && view.diff.peek().working_shown().is_some_and(|shown| {
+                    !matches!(shown, crate::diff::state::WorkingShown::Waiting)
+                })
+        });
     shown.report("Local Changes shown: both lists drawn, the first path's diff asked and drawn");
     let (unstaged, staged) = harness.test.run_in(|| {
         let state = harness.view.local.state.peek();
-        let lists = crate::local_changes_state::drawn_changes(&state);
+        let lists = crate::local_changes::state::drawn_changes(&state);
         (
             lists.len(cairn_model::ChangeList::Unstaged),
             lists.len(cairn_model::ChangeList::Staged),
@@ -796,7 +796,7 @@ fn local_changes_check(bench: &str) {
         visible_texts(&harness.test, 14)
     );
 
-    let unstaged_list = (f64::from(crate::sidebar_state::SIDEBAR_WIDTH) + 120., 150.);
+    let unstaged_list = (f64::from(crate::sidebar::state::SIDEBAR_WIDTH) + 120., 150.);
     let mut scrolled = 0;
     let scrolling = harness.pump(
         Stimulus::Scroll {
@@ -859,8 +859,10 @@ fn visible_texts(test: &TestingRunner, count: usize) -> Vec<String> {
                     .collect()
             })
         };
-        text.filter(|_| area.min_x() > crate::sidebar_state::SIDEBAR_WIDTH && area.min_y() < HEIGHT)
-            .map(|text| (area.min_y(), area.min_x(), text))
+        text.filter(|_| {
+            area.min_x() > crate::sidebar::state::SIDEBAR_WIDTH && area.min_y() < HEIGHT
+        })
+        .map(|text| (area.min_y(), area.min_x(), text))
     });
     texts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
     texts
@@ -1079,13 +1081,13 @@ fn writes_check() {
     let staged = cairn_model::ChangeList::Staged;
     let rows = move |view: View, list| {
         let state = view.local.state.peek();
-        crate::local_changes_state::drawn_changes(&state).len(list)
+        crate::local_changes::state::drawn_changes(&state).len(list)
     };
     let holds = {
         let path = path.clone();
         move |view: View, list| {
             let state = view.local.state.peek();
-            crate::local_changes_state::drawn_changes(&state)
+            crate::local_changes::state::drawn_changes(&state)
                 .row_of(list, &path)
                 .is_some()
         }
@@ -1104,13 +1106,13 @@ fn writes_check() {
         let view = harness.view;
         harness
             .test
-            .run_in(|| crate::local_changes_actions::choose(list, 0, view, Some(&submit)));
+            .run_in(|| crate::local_changes::actions::choose(list, 0, view, Some(&submit)));
         let _ = harness.pump(Stimulus::Nothing, 2, |view| {
             let diff = view.diff.peek();
             diff.shown_working().is_some()
                 && !matches!(
                     diff.working_shown(),
-                    Some(crate::diff_state::WorkingShown::Waiting) | None
+                    Some(crate::diff::state::WorkingShown::Waiting) | None
                 )
         });
     };
@@ -1133,7 +1135,7 @@ fn writes_check() {
                     shown.content(),
                 )
             };
-            crate::local_changes_actions::on_gesture(
+            crate::local_changes::actions::on_gesture(
                 cairn_ui::GestureAct {
                     verb,
                     selection,
@@ -1141,7 +1143,7 @@ fn writes_check() {
                     chunk: false,
                 },
                 view,
-                Some(&(std::rc::Rc::new(submit) as crate::local_changes_actions::Submit)),
+                Some(&(std::rc::Rc::new(submit) as crate::local_changes::actions::Submit)),
             );
         });
     };
@@ -1241,7 +1243,7 @@ fn writes_check() {
         let pressed = Instant::now();
         harness
             .test
-            .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+            .run_in(|| crate::commit_box::pane::pressed(view, Some(submit)));
         let lead = pressed.elapsed();
         let phase = harness.pump(Stimulus::Nothing, 0, move |view| {
             rows(view, staged) == 0 && rows(view, unstaged) == 0 && !view.writes.peek().is_running()
@@ -1303,7 +1305,7 @@ fn writes_check() {
             let view = harness.view;
             harness
                 .test
-                .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+                .run_in(|| crate::commit_box::pane::pressed(view, Some(submit)));
             if open {
                 // Opened once the commit is running: its entry is the newest, and selected.
                 let _ = harness.pump(Stimulus::Nothing, 0, |view| view.writes.peek().is_running());
@@ -1336,9 +1338,9 @@ fn writes_check() {
         long.extend_from_slice(format!("// line {n} the window check appends\n").as_bytes());
     }
     set_up(&mut harness, &clean_index, &long, unstaged);
-    let diff_x = f64::from(crate::sidebar_state::SIDEBAR_WIDTH)
-        + f64::from(WIDTH - crate::sidebar_state::SIDEBAR_WIDTH)
-            * f64::from(crate::local_changes_state::LIST_WIDTH)
+    let diff_x = f64::from(crate::sidebar::state::SIDEBAR_WIDTH)
+        + f64::from(WIDTH - crate::sidebar::state::SIDEBAR_WIDTH)
+            * f64::from(crate::local_changes::state::LIST_WIDTH)
             / 100.
         + 300.;
     let mut hovered = 0;
@@ -1424,7 +1426,7 @@ fn writes_check() {
     let view = harness.view;
     let selecting = Instant::now();
     harness.test.run_in(|| {
-        crate::local_changes_actions::intent(
+        crate::local_changes::actions::intent(
             cairn_ui::ListIntent::Range(unstaged, last),
             view,
             Some(Rc::new(submit)),
@@ -1457,7 +1459,7 @@ fn writes_check() {
     let toggled = Instant::now();
     harness
         .test
-        .run_in(|| crate::lost_commits::toggle(view, Some(&submit)));
+        .run_in(|| crate::history::lost_commits::toggle(view, Some(&submit)));
     let lead = toggled.elapsed();
     let lost = harness.pump(Stimulus::Nothing, 3, move |view| {
         let rows = view.rows.peek();

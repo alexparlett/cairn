@@ -10,7 +10,7 @@ use cairn_ui::accelerators::Action;
 use cairn_ui::{DetailTab, HeaderAction};
 use freya::prelude::*;
 
-use crate::diff_actions;
+use crate::diff;
 use crate::window::View;
 use crate::worker::Request;
 
@@ -54,19 +54,19 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     match action {
         Action::ShowCommitTab => show(DetailTab::Commit, &mut detail_tab, &mut pane_collapsed),
         Action::ShowChangesTab => show(DetailTab::Changes, &mut detail_tab, &mut pane_collapsed),
-        Action::PreviousChange => diff_actions::step(view, false),
-        Action::NextChange => diff_actions::step(view, true),
-        Action::ToggleIgnoreWhitespace => diff_actions::change_settings(view, submit, |s| {
+        Action::PreviousChange => diff::actions::step(view, false),
+        Action::NextChange => diff::actions::step(view, true),
+        Action::ToggleIgnoreWhitespace => diff::actions::change_settings(view, submit, |s| {
             s.toggle_ignore_whitespace();
             true
         }),
-        Action::MoreLines => diff_actions::change_settings(view, submit, |s| s.more_lines()),
-        Action::FewerLines => diff_actions::change_settings(view, submit, |s| s.fewer_lines()),
-        Action::EntireFile => diff_actions::change_settings(view, submit, |s| {
+        Action::MoreLines => diff::actions::change_settings(view, submit, |s| s.more_lines()),
+        Action::FewerLines => diff::actions::change_settings(view, submit, |s| s.fewer_lines()),
+        Action::EntireFile => diff::actions::change_settings(view, submit, |s| {
             s.toggle_entire_file();
             true
         }),
-        Action::ToggleSideBySide => diff_actions::toggle_side_by_side(view),
+        Action::ToggleSideBySide => diff::actions::toggle_side_by_side(view),
         // A press's chord, never a key's: resolved where the press lands. The range press and
         // Shift+↑/↓ are Local Changes' lists' own, resolved by the list (R7.3).
         Action::ExtendSelection
@@ -81,7 +81,7 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         | Action::Commit
         | Action::ShowLostCommits => {}
         // Fork's New Branch, at `HEAD`, wherever focus is (R11.3).
-        Action::NewBranch => crate::create_branch::open_at_head(view),
+        Action::NewBranch => crate::operations::create_branch::open_at_head(view),
         // Read again on the worker; the window only asks (R10.1).
         Action::Refresh => {
             if let Some(submit) = submit {

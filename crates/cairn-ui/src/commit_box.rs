@@ -5,7 +5,7 @@
 //! the right.
 //!
 //! **What it draws, and what it decides.** It draws what it is handed and reports what is
-//! pressed; the window decides what the press does (`crates/cairn-app/src/commit_box_pane.rs`).
+//! pressed; the window decides what the press does (`crates/cairn-app/src/commit_box/pane.rs`).
 //! The subject and the description are the window's own text (`State<String>`), bound two ways
 //! to the fields, so the draft is the window's for its life (R10.7) — Amend ticked and unticked,
 //! a refresh, a failed hook — and a value the window writes (a recalled message, `HEAD`'s, a

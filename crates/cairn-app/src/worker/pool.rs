@@ -6,18 +6,18 @@
 //!
 //! - `cairn-repository` (this file): takes the `git` the application found as
 //!   it started ([`Discovery`]), opens the repository and its askpass channel,
-//!   serves the history lane and a refresh's refs (`history_lane.rs`), the
+//!   serves the history lane and a refresh's refs (`history/lane.rs`), the
 //!   filters and the command log, forwards each operation to its write lane,
 //!   and on its way out closes the repository — every `git` in it ended and
 //!   reaped, up to `CLOSE_BOUND`, once the write the local lane is running has
 //!   ended — and stops the other five.
-//! - `cairn-diff` (`diff_lane.rs`): the changes and file-diff lanes, so a
+//! - `cairn-diff` (`diff/lane.rs`): the changes and file-diff lanes, so a
 //!   page and a diff never queue behind each other.
-//! - `cairn-refresh` (`refresh_lane.rs`): status and ahead/behind, so neither
+//! - `cairn-refresh` (`refresh/lane.rs`): status and ahead/behind, so neither
 //!   a page nor a diff queues behind a slow status.
-//! - `cairn-network` (`network_lane.rs`): the network lane, where fetch runs,
+//! - `cairn-network` (`network/lane.rs`): the network lane, where fetch runs,
 //!   so it blocks neither the walk nor the window.
-//! - `cairn-local` (`local_lane.rs`): the local write lane, where every write
+//! - `cairn-local` (`local/lane.rs`): the local write lane, where every write
 //!   to the index, the working tree and a local ref runs, one at a time, in the
 //!   order asked; reached directly, so a write never waits behind a page.
 //! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
@@ -40,13 +40,13 @@ use cairn_git::{CLOSE_BOUND, SharedRepository};
 use cairn_model::{Disclosure, RefsSnapshot};
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
-use super::diff_lane::{DiffJob, Serving, serve_diffs};
+use super::diff::lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
-use super::history_lane::{Answering, Finding, HistoryLane};
-use super::local_lane::{LaneState, Local, LocalJob, serve_local_lane};
-use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
-use super::refresh_lane::{RefreshJob, Refreshing, serve_refreshes};
+use super::history::lane::{Answering, Finding, HistoryLane};
+use super::local::lane::{LaneState, Local, LocalJob, serve_local_lane};
+use super::network::lane::{FetchControl, Lane, Operation, serve_network_lane};
+use super::refresh::lane::{RefreshJob, Refreshing, serve_refreshes};
 use super::request::{MOST_LANES, Request, Update};
 use super::routing::{Page, RepositoryJob, Routed, route};
 use super::startup::{Backend, Startup};
@@ -1199,7 +1199,7 @@ mod tests {
 
     use cairn_git::{CancelSignal, HistoryRequest, Repository};
 
-    use crate::worker::fetch_tests::{BorrowedRepository, UnbornRepository, block_on, woken_by};
+    use crate::worker::network::tests::{BorrowedRepository, UnbornRepository, block_on, woken_by};
     use crate::worker::routing::Page;
 
     /// The next update but an open's own refs, which come before its first page.
@@ -1216,7 +1216,7 @@ mod tests {
     fn cairn() -> (RepositoryHandle, Updates) {
         match open_with(env!("CARGO_MANIFEST_DIR"), Startup::of_this_process()) {
             Ok((handle, mut updates, _)) => {
-                crate::worker::fetch_tests::opened_as(&mut updates);
+                crate::worker::network::tests::opened_as(&mut updates);
                 (handle, updates)
             }
             Err(error) => panic!("opening the Cairn checkout: {error}"),
@@ -1246,7 +1246,7 @@ mod tests {
                 Err(error) => panic!("starting the worker: {error}"),
             };
             assert_eq!(
-                crate::worker::fetch_tests::opened_as(&mut updates),
+                crate::worker::network::tests::opened_as(&mut updates),
                 "cairn-named-by-its-folder",
                 "opened at {}",
                 at.display()
@@ -1271,7 +1271,7 @@ mod tests {
                 Err(error) => panic!("starting the worker: {error}"),
             };
             assert_eq!(
-                crate::worker::fetch_tests::opened_as(&mut updates),
+                crate::worker::network::tests::opened_as(&mut updates),
                 folder,
                 "opened at {at}"
             );
@@ -1400,7 +1400,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        crate::worker::fetch_tests::opened_as(&mut updates);
+        crate::worker::network::tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory {
             rows: 8,
             lost: false,
@@ -1484,7 +1484,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        crate::worker::fetch_tests::opened_as(&mut updates);
+        crate::worker::network::tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory {
             rows: 8,
             lost: false,
@@ -1519,7 +1519,7 @@ mod tests {
             Err(error) => panic!("starting the worker: {error}"),
         };
         assert_eq!(
-            crate::worker::fetch_tests::opened_as(&mut updates),
+            crate::worker::network::tests::opened_as(&mut updates),
             "cairn-unborn-head"
         );
         handle.submit(Request::OpenHistory {
@@ -1621,7 +1621,7 @@ mod tests {
                 Ok(opened) => opened,
                 Err(error) => panic!("starting the worker: {error}"),
             };
-        crate::worker::fetch_tests::opened_as(&mut updates);
+        crate::worker::network::tests::opened_as(&mut updates);
 
         handle.submit(Request::OpenHistory {
             rows: 3,
@@ -1687,7 +1687,7 @@ mod tests {
         );
         let (handle, mut updates) = match open_with(line.path(), Startup::of_this_process()) {
             Ok((handle, mut updates, _)) => {
-                crate::worker::fetch_tests::opened_as(&mut updates);
+                crate::worker::network::tests::opened_as(&mut updates);
                 (handle, updates)
             }
             Err(error) => panic!("opening the line: {error}"),

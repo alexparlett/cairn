@@ -1391,7 +1391,7 @@ fn a_discard_that_fails_part_way_says_what_it_did_and_what_is_left() {
 /// the index as untracked, so a path git does not list — an ignored file — is offered and
 /// reaches `git clean -f`, which leaves it and exits 0; the discard does not claim it, and the
 /// outcome names it as kept. The engine trusts its caller here: the window asks only for paths
-/// of rows `git status` listed (phase 07's decision; `local_changes_actions`, pinned by
+/// of rows `git status` listed (phase 07's decision; `local_changes::actions`, pinned by
 /// `a_discard_names_only_paths_the_lists_drawn_still_list` in `cairn-app`).
 #[test]
 fn a_file_git_clean_leaves_is_named_as_kept() {

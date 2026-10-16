@@ -622,7 +622,7 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
 /// Crates that may read `DiffContent` however they like: its owner, and this suite's fixtures.
 const DIFF_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
 
-/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod diff_tests;`): test
+/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod tests;`): test
 /// code that carries no `#[cfg(test)]` marker of its own for [`code_without_test_modules`] to
 /// find. Only a declaration at the top of its file (brace depth 0) names a file beside it —
 /// one inside `mod outer { .. }` names `outer/x.rs`, and one inside a test module is test
@@ -1456,7 +1456,7 @@ const PROCESS_YIELDING_METHODS: &[&str] = &["command"];
 const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "crates/cairn-app/src",
     "status",
-    "history_state::Progress::status, the history view's load state, read by the window and the status \
+    "history::state::Progress::status, the history view's load state, read by the window and the status \
      line. No process can be behind a `.status()` in cairn-app: a Command there is caught by its \
      name and by `.command(..)`, cairn-git's public surface yields none, and a dependency that \
      did would need an allowlist row",
@@ -5963,9 +5963,9 @@ const CONFIRMED_RECORD: (&str, &str, &str) = (
 /// skip spends it or Close lets it go, each in one field alone (`WINDOW_TOKEN_FIELDS`, held by
 /// `the_window_holds_a_token_only_for_the_git_errors_skip`).
 const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
-    ("crates/cairn-app/src/worker/local_lane.rs", "LocalWrite"),
-    ("crates/cairn-app/src/worker/local_lane.rs", "Unspent"),
-    ("crates/cairn-app/src/commit_box_state.rs", "GitError"),
+    ("crates/cairn-app/src/worker/local/lane.rs", "LocalWrite"),
+    ("crates/cairn-app/src/worker/local/lane.rs", "Unspent"),
+    ("crates/cairn-app/src/commit_box/state.rs", "GitError"),
     ("crates/cairn-git/src/error.rs", "Error"),
 ];
 
@@ -5974,12 +5974,12 @@ const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
 /// the Git Error state.
 const WINDOW_TOKEN_FIELDS: &[(&str, &str, &str)] = &[
     (
-        "crates/cairn-app/src/worker/local_lane.rs",
+        "crates/cairn-app/src/worker/local/lane.rs",
         "Unspent",
         "token: Option<Box<Confirmed>>,",
     ),
     (
-        "crates/cairn-app/src/commit_box_state.rs",
+        "crates/cairn-app/src/commit_box/state.rs",
         "GitError",
         "unspent: Option<Confirmed>,",
     ),
@@ -7342,8 +7342,8 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
         );
     }
     // In the application, as in the engine: only the rostered file may hold one.
-    let lane = "crates/cairn-app/src/worker/local_lane.rs";
-    let queued = "crates/cairn-app/src/worker/queued.rs";
+    let lane = "crates/cairn-app/src/worker/local/lane.rs";
+    let queued = "crates/cairn-app/src/worker/local/queued.rs";
     let held = "pub enum LocalWrite {\n    DiscardFiles(Confirmed),\n}";
     let row = [(lane, "LocalWrite")];
     assert_eq!(

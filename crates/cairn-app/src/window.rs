@@ -11,21 +11,23 @@ use cairn_ui::{
 };
 use freya::prelude::*;
 
-use crate::confirming::Confirming;
-use crate::detail_pane::DetailPane;
-use crate::diff_state::DiffState;
-use crate::fetch_state::{FetchStatus, PromptView};
-use crate::history_state::{Progress, Status};
-use crate::local_changes_pane::LocalChangesPane;
-use crate::local_changes_state::LocalChangesView;
-use crate::local_writes::LocalWrites;
+use crate::detail::pane::DetailPane;
+use crate::diff::state::DiffState;
+use crate::history::selection::Pair;
+use crate::history::state::{Progress, Status};
+use crate::history::{selection, status_text};
+use crate::local_changes::pane::LocalChangesPane;
+use crate::local_changes::state::LocalChangesView;
 use crate::modal::Modal;
-use crate::refresh_state::RefreshState;
-use crate::selection::Pair;
-use crate::sidebar_pane::SidebarPane;
-use crate::sidebar_state::{SIDEBAR_MIN_WIDTH, SidebarView};
+use crate::operations::confirming::Confirming;
+use crate::operations::fetch::{FetchStatus, PromptView};
+use crate::operations::local_writes::LocalWrites;
+use crate::refresh::state::RefreshState;
+use crate::sidebar::pane::SidebarPane;
+use crate::sidebar::ref_find;
+use crate::sidebar::state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
-use crate::{PAGE_ROWS, ref_find, selection, shortcuts, status_text};
+use crate::{PAGE_ROWS, shortcuts};
 
 /// The detail pane's height until the splitter is dragged.
 pub const PANE_HEIGHT: f32 = 260.0;
@@ -47,11 +49,11 @@ pub struct View {
     pub prompt: State<Option<PromptView>>,
     pub remotes: State<Vec<RemoteSummary>>,
     /// The endings' Git Error and "Couldn't <name>" dialogs waiting to be read, but the commit
-    /// box's (staging-and-commit R14.3, `crate::ending_dialog`).
-    pub endings: State<crate::ending_dialog::Endings>,
+    /// box's (staging-and-commit R14.3, `crate::operations::ending_dialog`).
+    pub endings: State<crate::operations::ending_dialog::Endings>,
     /// The leftover lock: what the last stat found of `<gitdir>/index.lock`, and its removal
-    /// asked (R12.4, `crate::leftover_lock`).
-    pub lock: State<crate::leftover_lock::LeftoverLock>,
+    /// asked (R12.4, `crate::operations::leftover_lock`).
+    pub lock: State<crate::operations::leftover_lock::LeftoverLock>,
     /// The diff selection and the answers kept for it.
     pub diff: State<DiffState>,
     /// The commit list's scroll, shared so a parent link can bring its row into view.
@@ -102,10 +104,10 @@ pub struct View {
     pub show_lost: State<bool>,
     /// Create Branch: its dialog, its name, its sticky check box and a create's failure
     /// (staging-and-commit R11.3).
-    pub branch: crate::create_branch::CreateBranchView,
+    pub branch: crate::operations::create_branch::CreateBranchView,
     /// The activity popover: the session's operations, and whether it is open
     /// (staging-and-commit R12), in two states.
-    pub activity: crate::activity::ActivityView,
+    pub activity: crate::operations::activity::ActivityView,
 }
 
 impl std::fmt::Debug for View {
@@ -150,9 +152,9 @@ pub fn window(
         }
     });
     // Coming back to the window reads the refs and the working tree again (R10.1).
-    crate::refresh::on_focus_gained(submit.clone());
+    crate::refresh::focus::on_focus_gained(submit.clone());
     // `Remove index.lock…`'s answer, read at its press, opens its confirmation (R12.4).
-    crate::leftover_lock::use_lock_confirmation(view, submit.clone());
+    crate::operations::leftover_lock::use_lock_confirmation(view, submit.clone());
     // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
     // scroll alone, and acting only while a find looks.
     let stopping = submit.clone();
@@ -177,7 +179,7 @@ pub fn window(
             // user's decision B, 2026-10-09).
             let toggling = submit.clone();
             HistoryHeader::new().show_lost_commits(*view.show_lost.read(), move |_: bool| {
-                crate::lost_commits::toggle(view, toggling.as_deref());
+                crate::history::lost_commits::toggle(view, toggling.as_deref());
             })
         })
         .child(match status_text::placeholder(&status, has_rows) {
@@ -195,7 +197,7 @@ pub fn window(
         .expanded()
         .theme_background()
         // Every shortcut resolves through the accelerator table (R8): here the ones heard
-        // wherever focus is; the detail pane hears its own (`detail_pane`).
+        // wherever focus is; the detail pane hears its own (`detail::pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
             let mut held = view.held_keys;
             held.write().heard(&e, true);
@@ -233,7 +235,7 @@ pub fn window(
         ))
         // The two banners (R14.6): the leftover lock, about the repository, and closing, about
         // the window.
-        .maybe_child(crate::leftover_lock::banner(view, unlocking))
+        .maybe_child(crate::operations::leftover_lock::banner(view, unlocking))
         .maybe_child(closing_on.map(banner))
         .child(beside(
             SidebarPane::new(view, submit.clone()).into(),
@@ -256,12 +258,14 @@ pub fn window(
             }
             // A commit's Git Error dialog (R10.5): its skip may open the amend's confirmation in
             // its place.
-            Some(Modal::CommitError) => crate::commit_box_pane::git_error(view, erring),
-            Some(Modal::Ending) => crate::ending_dialog::dialog(view, ending),
-            Some(Modal::CreateBranch) => crate::create_branch::dialog(view, branching),
+            Some(Modal::CommitError) => crate::commit_box::pane::git_error(view, erring),
+            Some(Modal::Ending) => crate::operations::ending_dialog::dialog(view, ending),
+            Some(Modal::CreateBranch) => crate::operations::create_branch::dialog(view, branching),
             // A child of its own, the one reader of the log (phase 20): a streamed line draws
             // it again, never the window.
-            Some(Modal::Popover) => Some(crate::activity::ActivityLayer::new(view, popping).into()),
+            Some(Modal::Popover) => {
+                Some(crate::operations::activity::ActivityLayer::new(view, popping).into())
+            }
             None => None,
         })
         // Every context menu opens here, so none panics for want of a host (R7.5).
@@ -444,10 +448,12 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     })
     // "New Branch…" on a commit row opens Create Branch (R11.3, the user's decision).
     .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
-        crate::create_branch::open(view, at, subject);
+        crate::operations::create_branch::open(view, at, subject);
     })
     // The history's own chord, Show Lost Commits (staging-and-commit R7.3, R11.1).
-    .on_action(move |action| crate::lost_commits::history_action(action, view, acting.as_deref()))
+    .on_action(move |action| {
+        crate::history::lost_commits::history_action(action, view, acting.as_deref())
+    })
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
         if view.sidebar.finding.peek().is_some() {
@@ -664,20 +670,20 @@ pub(crate) mod tests {
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
-    use crate::detail_pane::{NOTHING_SELECTED, READING};
+    use crate::detail::pane::{NOTHING_SELECTED, READING};
     use crate::worker::Comparison;
 
-    use crate::fetch_state::{FetchStatus, PromptView};
+    use crate::operations::fetch::{FetchStatus, PromptView};
 
     use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width, running_text};
 
     use super::*;
-    use crate::history_state;
+    use crate::history::state;
 
     const HEIGHT: f32 = 600.;
     /// Where the main region begins: right of the sidebar at its opening width and the
     /// splitter's handle. The window is as wide again as the main region's 800 px.
-    const LEFT: f32 = crate::sidebar_state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
+    const LEFT: f32 = crate::sidebar::state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
     const LEFT_X: f64 = LEFT as f64;
     const WINDOW_WIDTH: f32 = LEFT + 800.;
     const PATH: &str = "/home/ada/engine";
@@ -818,18 +824,18 @@ pub(crate) mod tests {
             diff_scroll: ScrollController::new(0, 0, Vec::new()),
             change_cursor: State::create(None),
             filter_text: State::create(String::new()),
-            changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+            changes_list_width: State::create(crate::detail::changes_tab::LIST_WIDTH),
             pair: State::create(None),
             held_keys: State::create(HeldKeys::default()),
             refreshed: State::create(RefreshState::default()),
             repository: State::create(Some("engine".to_owned())),
             sidebar: SidebarView::created(),
-            local: crate::local_changes_state::LocalChangesView::created(),
-            writes: State::create(crate::local_writes::LocalWrites::default()),
+            local: crate::local_changes::state::LocalChangesView::created(),
+            writes: State::create(crate::operations::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
-            activity: crate::activity::ActivityView::created(),
-            branch: crate::create_branch::CreateBranchView::created(),
+            activity: crate::operations::activity::ActivityView::created(),
+            branch: crate::operations::create_branch::CreateBranchView::created(),
         }
     }
 
@@ -1362,7 +1368,7 @@ pub(crate) mod tests {
         let page: Vec<TestRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
         let mut progress = Progress::opening();
         progress.received(
-            history_state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
+            state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
             true,
             page.len(),
         );
@@ -2432,13 +2438,13 @@ pub(crate) mod tests {
         let query = last_file_query(&submitted);
         assert_eq!(
             query.options,
-            crate::diff_actions::options(DiffSettings::default())
+            crate::diff::actions::options(DiffSettings::default())
         );
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
             pane(&test)
                 .iter()
-                .any(|t| t == crate::changes_tab::READING_DIFF),
+                .any(|t| t == crate::detail::changes_tab::READING_DIFF),
             "{:?}",
             pane(&test)
         );
@@ -2489,7 +2495,7 @@ pub(crate) mod tests {
             by_all,
             outcome: Ok(Box::new(cairn_model::ShownDiff::new(
                 diff,
-                crate::diff_actions::options(DiffSettings::default()).context,
+                crate::diff::actions::options(DiffSettings::default()).context,
             ))),
         }
     }
@@ -3386,7 +3392,9 @@ pub(crate) mod tests {
         arrives(&mut test, view, 4, Vec::new());
         let shown = pane(&test);
         assert!(
-            shown.iter().any(|t| t == crate::changes_tab::READING_DIFF)
+            shown
+                .iter()
+                .any(|t| t == crate::detail::changes_tab::READING_DIFF)
                 && !shown.iter().any(|t| t == cairn_ui::EXPAND_ALL_CAPTION),
             "the Changes tab chosen before the comparison is not the one drawn: {shown:?}"
         );
@@ -3412,7 +3420,7 @@ pub(crate) mod tests {
             at(cairn_ui::BASE_CAPTION) < at(&base_id)
                 && at(&base_id) < at(cairn_ui::TIP_CAPTION)
                 && at(cairn_ui::TIP_CAPTION) < at(&tip_id)
-                && at(&tip_id) < at(crate::changes_tab::READING_COMPARISON),
+                && at(&tip_id) < at(crate::detail::changes_tab::READING_COMPARISON),
             "the header is not drawn over the comparison being read: {shown:?}"
         );
 
@@ -3484,7 +3492,7 @@ pub(crate) mod tests {
         let pushing = submitted.clone();
         let submit = move |request| pushing.borrow_mut().push(request);
         test.run_in(|| {
-            crate::diff_actions::change_settings(view, Some(&submit), |settings| {
+            crate::diff::actions::change_settings(view, Some(&submit), |settings| {
                 settings.more_lines()
             })
         });
@@ -3952,7 +3960,7 @@ pub(crate) mod tests {
             .filter_map(|request| match request {
                 Request::FilterFiles { text, files, .. } => {
                     let shared = match view.diff.peek().changes() {
-                        Some((_, crate::diff_state::Answer::Ready(kept))) => {
+                        Some((_, crate::diff::state::Answer::Ready(kept))) => {
                             std::sync::Arc::ptr_eq(kept, files)
                         }
                         _ => false,
@@ -3994,7 +4002,7 @@ pub(crate) mod tests {
     /// C10 and the QA brief: a file chosen in the Changes tab's list asks its diff and lets go
     /// of the last one's — the query it replaces is no longer wanted, so its answer, if it
     /// still arrives, is never drawn, and the diff thread's epoch for the lane has moved on
-    /// (`worker::diff_tests`' `a_superseded_diff_kills_its_git` shows that kills its `git`).
+    /// (`worker::diff::tests`' `a_superseded_diff_kills_its_git` shows that kills its `git`).
     /// Caught by: a list that reports nothing, or a choice that leaves the last query wanted.
     #[test]
     fn a_file_chosen_in_the_list_supersedes_the_last_ones_diff() {
@@ -4191,7 +4199,7 @@ pub(crate) mod tests {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
         changes_tab_over(&mut test, view, 3);
         let opened = list_split(&test);
-        let reading = crate::changes_tab::READING_DIFF;
+        let reading = crate::detail::changes_tab::READING_DIFF;
         assert!(
             diff_side_labels(&test).iter().any(|t| t == reading),
             "{:?}",

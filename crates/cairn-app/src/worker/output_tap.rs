@@ -4,12 +4,12 @@
 //!
 //! A hook can write far faster than the window applies what it is sent, and the outbox is
 //! unbounded. So a lane never sends lines: it puts each read's lines — whole, scrubbed by the
-//! engine's runner as it split them (R4.10, R12.2) — into its tap, a [`crate::output_tail`]
+//! engine's runner as it split them (R4.10, R12.2) — into its tap, a [`crate::operations::output_tail`]
 //! bounded by the one pair of bounds, and wakes the window with one update only when no wake is
 //! already on its way. The window drains everything waiting when it applies the wake. However
 //! far behind the window falls, at most one wake per tap waits in the outbox and the tap holds
 //! the latest lines; what was let go of is older than what the window's own tails keep, and the
-//! tap says so ([`crate::output_tail::OutputTail::cut`]). Nothing waits for git's next read: a
+//! tap says so ([`crate::operations::output_tail::OutputTail::cut`]). Nothing waits for git's next read: a
 //! wake is sent with the first lines after each drain.
 //!
 //! Each write the local lane runs has a tap of its own, made as it starts and named by every
@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use cairn_model::ScrubbedLines;
 
-use crate::output_tail::OutputTail;
+use crate::operations::output_tail::OutputTail;
 
 /// What waits for the window, and whether a wake for it is on its way.
 #[derive(Debug, Default)]
@@ -104,7 +104,7 @@ impl std::fmt::Debug for OutputTap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output_tail::{OUTPUT_BYTES, OUTPUT_LINES};
+    use crate::operations::output_tail::{OUTPUT_BYTES, OUTPUT_LINES};
 
     fn read(lines: &[&str]) -> ScrubbedLines {
         ScrubbedLines::scrubbing(&lines.join("\n"))

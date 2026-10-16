@@ -1,0 +1,1343 @@
+//! Local Changes acting on files, in the window, headless (staging-and-commit R8; criteria C18,
+//! C8's view half and C24's conflicted rows): each of Fork's routes asks the local lane to
+//! stage or unstage exactly the paths selected, the selection then moves to the nearest path
+//! left; a discard asks the engine what it would lose and opens the confirmation with it, its
+//! token asking the discard; no route discards a staged change, a submodule or a conflict, and
+//! the view says why; nothing acts while a dialog is open; and what each write does is drawn
+//! where it was asked. Updates are applied through `session::apply`, as the worker's stream
+//! applies them, and requests read back from the window's submit.
+
+use std::rc::Rc;
+
+use cairn_model::{
+    ChangeList, ChangedEntry, Consequence, DiscardedFile, FileLoss, Oid, RepoPath, Similarity,
+    StagedChange, StatusEntry, SubmoduleState, UnstagedChange,
+};
+use cairn_ui::accelerators::{self, Action, Os};
+use cairn_ui::{
+    CANCEL_CAPTION, CLOSE_CAPTION, COUNTING_TEXT, IGNORE_WHITESPACE_LABEL, ListIntent,
+    STAGE_CAPTION, STAGED_CAPTION,
+};
+use freya::prelude::*;
+use freya_testing::TestingRunner;
+use freya_testing::prelude::{MouseEventName, PlatformEvent};
+
+use crate::local_changes::actions::{self, DISCARD_TITLE};
+use crate::local_changes::tests::{
+    Submitted, apply, asked, changed, conflicted, labels, launch, open_local_changes, path_of,
+    press_row, status, untracked,
+};
+use crate::operations::confirming::Confirming;
+use crate::operations::fetch::PromptView;
+use crate::window::View;
+use crate::worker::{
+    Done, LocalWrite, OperationId, PromptId, ReadAgain, Request, UnstageTarget, Update, WriteEnding,
+};
+
+fn settle(test: &mut TestingRunner) {
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+}
+
+/// Unstaged: a.rs, b.rs, c.rs (untracked), d.rs; Staged: new.rs (renamed from old.rs), s.rs,
+/// u.rs.
+fn several() -> Vec<StatusEntry> {
+    vec![
+        changed("a.rs", None, Some(UnstagedChange::Modified)),
+        changed("b.rs", None, Some(UnstagedChange::Modified)),
+        untracked("c.rs"),
+        changed("d.rs", None, Some(UnstagedChange::Deleted)),
+        changed(
+            "new.rs",
+            Some(StagedChange::Renamed {
+                from: RepoPath::from("old.rs"),
+                similarity: Similarity::from_percent(90),
+            }),
+            None,
+        ),
+        changed("s.rs", Some(StagedChange::Modified), None),
+        changed("u.rs", Some(StagedChange::Added), None),
+    ]
+}
+
+fn opened(entries: Vec<StatusEntry>) -> (TestingRunner, View, Submitted) {
+    let (mut test, view, submitted) = launch();
+    apply(&mut test, view, &submitted, status(entries));
+    open_local_changes(&mut test);
+    (test, view, submitted)
+}
+
+/// The writes asked, oldest first, each as its kind and paths.
+fn writes(submitted: &Submitted) -> Vec<(String, Vec<String>)> {
+    let names = |paths: &[RepoPath]| paths.iter().map(|p| p.display().into_owned()).collect();
+    submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::Write { write, .. } => Some(match write {
+                LocalWrite::StageFiles { paths } => ("stage".to_owned(), names(paths)),
+                LocalWrite::UnstageFiles { paths, to } => {
+                    assert_eq!(*to, UnstageTarget::Head);
+                    ("unstage".to_owned(), names(paths))
+                }
+                LocalWrite::StageAll { changes, shown } => (
+                    "stage all".to_owned(),
+                    names(&gathered(changes, ChangeList::Unstaged, shown.as_deref())),
+                ),
+                LocalWrite::UnstageAll { changes, shown, .. } => (
+                    "unstage all".to_owned(),
+                    names(&gathered(changes, ChangeList::Staged, shown.as_deref())),
+                ),
+                LocalWrite::DiscardFiles(confirmed) => {
+                    ("discard".to_owned(), vec![confirmed.prompt().to_owned()])
+                }
+                other => (format!("{other:?}"), Vec::new()),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The paths the local lane gathers for an All, as it gathers them.
+fn gathered(
+    changes: &cairn_model::LocalChanges,
+    list: ChangeList,
+    shown: Option<&[u32]>,
+) -> Vec<RepoPath> {
+    match shown {
+        Some(rows) => changes.whole_file_paths(list, rows.iter().map(|row| *row as usize)),
+        None => changes.whole_file_paths(list, 0..changes.len(list)),
+    }
+}
+
+fn write(kind: &str, paths: &[&str]) -> (String, Vec<String>) {
+    (
+        kind.to_owned(),
+        paths.iter().map(|path| (*path).to_owned()).collect(),
+    )
+}
+
+/// The discards' consequences asked, oldest first: their ids and paths.
+fn consequences_asked(submitted: &Submitted) -> Vec<(OperationId, Vec<String>)> {
+    submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::DiscardConsequence { asked, paths } => Some((
+                *asked,
+                paths.iter().map(|p| p.display().into_owned()).collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Holds `action`'s press as the window hears it, through the table, until `let_go`.
+fn hold(test: &mut TestingRunner, view: View, action: Action) {
+    let Some((key, code, down)) = accelerators::chords(action, Os::current())
+        .iter()
+        .find_map(|chord| chord.press_hold())
+    else {
+        panic!("{action:?} has no press");
+    };
+    let mut held = view.held_keys;
+    test.run_in(|| {
+        held.write()
+            .heard(&KeyboardEventData::new(key, code, down), true)
+    });
+    settle(test);
+}
+
+fn let_go(test: &mut TestingRunner, view: View) {
+    let mut held = view.held_keys;
+    test.run_in(|| held.set(cairn_ui::accelerators::HeldKeys::default()));
+    settle(test);
+}
+
+/// Presses `action`'s first chord where focus is, through the window tests' own helper.
+fn press_chord(test: &mut TestingRunner, action: Action) {
+    crate::window::tests::press_chord(test, action);
+    settle(test);
+}
+
+fn press_key(test: &mut TestingRunner, key: NamedKey) {
+    test.press_key(Key::Named(key));
+    settle(test);
+}
+
+/// Where the label reading `text` in the lists — or a menu over them — is drawn, the `nth` from
+/// the top.
+/// Anywhere right of the sidebar — a dialog's button — when nothing in the lists reads it.
+fn at(test: &TestingRunner, text: &str, nth: usize) -> (f64, f64) {
+    let reading = |within: &dyn Fn(f32) -> bool| -> Vec<(f32, f32)> {
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .filter(|_| within(node.layout().area.min_x()))
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.center().y, area.min_x())
+                })
+        })
+    };
+    let mut found = reading(&crate::local_changes::tests::in_lists);
+    if found.is_empty() {
+        found = reading(&|x| x > crate::sidebar::state::SIDEBAR_WIDTH);
+    }
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (y, x) = *found
+        .get(nth)
+        .unwrap_or_else(|| panic!("no label {nth} reads {text}: {:?}", labels(test)));
+    (f64::from(x) + 4., f64::from(y))
+}
+
+fn click(test: &mut TestingRunner, text: &str) {
+    let at = at(test, text, 0);
+    test.click_cursor(at);
+    settle(test);
+}
+
+/// Clicks the lowest label reading `text`: a dialog's button under its title.
+fn click_last(test: &mut TestingRunner, text: &str) {
+    let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|_| {
+                let area = node.layout().area;
+                (area.center().y, area.min_x())
+            })
+    });
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((y, x)) = found.last().copied() else {
+        panic!("no label reads {text}: {:?}", labels(test));
+    };
+    test.click_cursor((f64::from(x) + 4., f64::from(y)));
+    settle(test);
+}
+
+fn right_click(test: &mut TestingRunner, text: &str) {
+    let at = at(test, text, 0);
+    test.move_cursor(at);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: at.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    settle(test);
+}
+
+/// The path selected now, as the view keeps it.
+fn selected(view: View) -> Vec<String> {
+    view.local
+        .state
+        .peek()
+        .selection()
+        .map_or_else(Vec::new, |selection| {
+            selection
+                .paths()
+                .iter()
+                .map(|path| path.display().into_owned())
+                .collect()
+        })
+}
+
+/// The selection's primary, as the view keeps it.
+fn primary(view: View) -> Option<String> {
+    view.local
+        .state
+        .peek()
+        .selection()
+        .map(|selection| selection.primary().display().into_owned())
+}
+
+fn chosen(view: View) -> Option<String> {
+    view.diff
+        .peek()
+        .working_choice()
+        .map(|choice| choice.path.display().into_owned())
+}
+
+/// Selects `rows` of one list: the first pressed plainly, each other with the extending press.
+fn choose_rows(test: &mut TestingRunner, view: View, rows: &[&str]) {
+    let Some((first, rest)) = rows.split_first() else {
+        return;
+    };
+    press_row(test, first, 0);
+    hold(test, view, Action::ExtendSelection);
+    for row in rest {
+        press_row(test, row, 0);
+    }
+    let_go(test, view);
+}
+
+/// C18, R8.1-R8.3: a selection of three made by the extending press is staged by the stage
+/// chord on the focused list, as one write naming exactly those paths, and the selection then
+/// moves to the path that takes the first one's place, its diff asked; a range made by the
+/// range press is staged by Unstaged's Stage button. Caught by: the chord acting on the path
+/// chosen alone, a path the selection does not hold staged, or the selection left on paths
+/// that are leaving.
+#[test]
+fn the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs", "c.rs"]);
+    assert_eq!(selected(view), ["a.rs", "b.rs", "c.rs"]);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(
+        writes(&submitted),
+        [write("stage", &["a.rs", "b.rs", "c.rs"])]
+    );
+    assert_eq!(selected(view), ["d.rs"], "R8.3: the nearest path left");
+    assert_eq!(chosen(view).as_deref(), Some("d.rs"));
+    assert_eq!(
+        asked(&submitted).last().map(path_of).as_deref(),
+        Some("d.rs"),
+        "the diff of the path moved to was not asked"
+    );
+
+    press_row(&mut test, "b.rs", 0);
+    hold(&mut test, view, Action::SelectRange);
+    press_row(&mut test, "d.rs", 0);
+    let_go(&mut test, view);
+    assert_eq!(selected(view), ["b.rs", "c.rs", "d.rs"]);
+    click(&mut test, STAGE_CAPTION);
+    assert_eq!(
+        writes(&submitted)[1..],
+        [write("stage", &["b.rs", "c.rs", "d.rs"])]
+    );
+    assert_eq!(
+        selected(view),
+        ["a.rs"],
+        "with nothing left below, the nearest path above"
+    );
+}
+
+/// C18, R8.2: a selection dragged from Unstaged and dropped on Staged is staged whole; the
+/// menu's Stage stages the selection its row is in; a double press stages its row. Caught by:
+/// a drop that stages the row it began on alone, a menu acting on the row pressed rather than
+/// the selection it is in, or a double press staging nothing.
+#[test]
+fn a_drag_the_menu_and_a_double_press_stage_what_is_selected() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "c.rs"]);
+    let from = at(&test, "a.rs", 0);
+    let staged = at(&test, STAGED_CAPTION, 0);
+    let into = (staged.0 + 40., staged.1 + 40.);
+    test.press_cursor(from);
+    test.move_cursor((from.0, from.1 + 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    assert_eq!(writes(&submitted), [write("stage", &["a.rs", "c.rs"])]);
+
+    choose_rows(&mut test, view, &["b.rs", "d.rs"]);
+    right_click(&mut test, "d.rs");
+    let stage = at(&test, STAGE_CAPTION, 1);
+    test.click_cursor(stage);
+    settle(&mut test);
+    assert_eq!(writes(&submitted)[1..], [write("stage", &["b.rs", "d.rs"])]);
+
+    let row = at(&test, "c.rs", 0);
+    test.click_cursor(row);
+    test.click_cursor(row);
+    settle(&mut test);
+    assert_eq!(writes(&submitted)[2..], [write("stage", &["c.rs"])]);
+}
+
+/// C18, R3.4, R8.2: a staged selection unstages as `git reset` takes it — a rename's source
+/// beside it, so the rename moves out whole — by the chord; Unstage All by the menu takes the
+/// whole list, gathered on the local lane from the lists drawn; and the chevron's Stage All the
+/// whole of Unstaged. Caught by: a rename unstaged without its source, or an All that names the
+/// rows drawn on the UI thread.
+#[test]
+fn a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "old.rs → new.rs", 0);
+    hold(&mut test, view, Action::ExtendSelection);
+    press_row(&mut test, "u.rs", 0);
+    let_go(&mut test, view);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(
+        writes(&submitted),
+        [write("unstage", &["new.rs", "old.rs", "u.rs"])]
+    );
+    assert_eq!(selected(view), ["s.rs"]);
+
+    right_click(&mut test, "s.rs");
+    click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
+    let (x, y) = at(&test, STAGE_CAPTION, 0);
+    test.click_cursor((x - 20., y));
+    settle(&mut test);
+    assert_eq!(
+        writes(&submitted)[1..],
+        [
+            write("unstage all", &["new.rs", "old.rs", "s.rs", "u.rs"]),
+            write("stage all", &["a.rs", "b.rs", "c.rs", "d.rs"])
+        ]
+    );
+}
+
+/// What a discard of a.rs (3 lines) and c.rs (12 bytes) would lose.
+fn mixed_loss() -> Consequence {
+    let oid = |n: u8| Oid::from_bytes(&[n; 20]).unwrap_or_else(|_| unreachable!());
+    Consequence::DiscardFiles {
+        files: vec![
+            DiscardedFile {
+                path: RepoPath::from("a.rs"),
+                loss: FileLoss::Modified {
+                    index: oid(1),
+                    working_tree: Some(oid(2)),
+                    executable: false,
+                    lines: Some(3),
+                    mode: None,
+                },
+            },
+            DiscardedFile {
+                path: RepoPath::from("c.rs"),
+                loss: FileLoss::Untracked {
+                    working_tree: oid(3),
+                    executable: false,
+                    bytes: 12,
+                },
+            },
+        ],
+    }
+}
+
+/// C17, C18, R7.4, R8.4, R1.2 and the redesign's rule 3: the discard chord on a selection opens
+/// the confirmation at once — "Counting…", its button greyed and reading the title, nothing
+/// pressable but Cancel — and asks the engine what it would lose; the answer for that ask makes
+/// the same dialog the confirmation drawn from it, and confirming asks the discard with the
+/// token built from exactly that consequence, the selection moving on. An answer for an earlier
+/// ask is dropped. Caught by: a dialog only once the engine answered, a greyed button that
+/// confirms, a discard asked without the dialog, a stale answer confirmed, or a token naming
+/// other words.
+#[test]
+fn a_discard_asks_what_it_would_lose_and_confirms_exactly_that() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "c.rs"]);
+    press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let consequences = consequences_asked(&submitted);
+    assert_eq!(consequences.len(), 1);
+    let (asked_id, paths) = consequences[0].clone();
+    assert_eq!(paths, ["a.rs", "c.rs"]);
+    let serial = view.confirming.peek().as_ref().map(Confirming::serial);
+    assert!(
+        view.confirming
+            .peek()
+            .as_ref()
+            .is_some_and(Confirming::is_counting),
+        "no dialog opened at the press"
+    );
+    for drawn in [DISCARD_TITLE, COUNTING_TEXT, CANCEL_CAPTION] {
+        assert!(
+            labels(&test).iter().any(|t| t == drawn),
+            "{drawn}: {:?}",
+            labels(&test)
+        );
+    }
+    // The greyed button, which reads the title, confirms nothing.
+    let greyed: Vec<String> = labels(&test)
+        .into_iter()
+        .filter(|t| t == DISCARD_TITLE)
+        .collect();
+    assert_eq!(greyed.len(), 2, "the title and the greyed button");
+    click_last(&mut test, DISCARD_TITLE);
+    assert!(writes(&submitted).is_empty(), "the greyed button confirmed");
+    // An answer for another ask does not fill it.
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: OperationId::for_tests(9_999),
+            outcome: Ok(mixed_loss()),
+        },
+    );
+    assert!(
+        view.confirming
+            .peek()
+            .as_ref()
+            .is_some_and(Confirming::is_counting),
+        "a stale answer filled the dialog"
+    );
+
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Ok(mixed_loss()),
+        },
+    );
+    settle(&mut test);
+    assert_eq!(
+        view.confirming.peek().as_ref().map(Confirming::serial),
+        serial,
+        "another dialog opened for the answer"
+    );
+    assert_eq!(
+        view.confirming.peek().as_ref().map(Confirming::title),
+        Some(DISCARD_TITLE)
+    );
+    let prompt = mixed_loss().prompt();
+    assert!(labels(&test).contains(&prompt), "{:?}", labels(&test));
+    assert!(!labels(&test).iter().any(|t| t == COUNTING_TEXT));
+    assert!(
+        writes(&submitted).is_empty(),
+        "discarded before the dialog was answered"
+    );
+    click(&mut test, &mixed_loss().action());
+    assert_eq!(writes(&submitted), [write("discard", &[&prompt])]);
+    assert!(view.confirming.peek().is_none());
+    assert_eq!(selected(view), ["b.rs"]);
+}
+
+/// The user's decisions of 2026-10-10 on phase 15's Q2 (rule 4): the engine refusing while it
+/// counts makes the open dialog the refusal — "Couldn't Discard Changes", the engine's sentence
+/// and "Nothing was changed.", Close alone — and nothing is said under the lists; and Cancel
+/// while counting lets the dialog go and ends the count (`Request::StopCounting`), its answer
+/// arriving later dropped. Caught by: the refusal said under the lists, a confirm button left on
+/// a refusal, a count left holding the local lane, or a late answer reopening a dialog.
+#[test]
+fn a_refusal_while_counting_is_said_in_the_dialog_and_cancel_ends_the_count() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs"]);
+    let before = labels(&test);
+    press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let (asked_id, _) = consequences_asked(&submitted)[0].clone();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Err("a.rs changed while it was read.".to_owned()),
+        },
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|t| t == "Couldn't Discard Changes"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|t| t == "a.rs changed while it was read. Nothing was changed."),
+        "{drawn:?}"
+    );
+    assert!(drawn.iter().any(|t| t == CLOSE_CAPTION), "{drawn:?}");
+    assert!(!drawn.iter().any(|t| t == CANCEL_CAPTION), "{drawn:?}");
+    click(&mut test, CLOSE_CAPTION);
+    assert!(view.confirming.peek().is_none());
+    assert_eq!(labels(&test), before, "something was said under the lists");
+    assert!(writes(&submitted).is_empty());
+
+    // Cancel while counting (another row, so the press is not a double press).
+    press_row(&mut test, "b.rs", 0);
+    press_chord(&mut test, Action::Discard);
+    settle(&mut test);
+    let (asked_id, _) = consequences_asked(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("no second ask"));
+    let stops = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .filter(|r| matches!(r, Request::StopCounting))
+            .count()
+    };
+    let stopped_before = stops(&submitted);
+    click(&mut test, CANCEL_CAPTION);
+    assert!(view.confirming.peek().is_none());
+    assert_eq!(
+        stops(&submitted),
+        stopped_before + 1,
+        "the count was not ended"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Ok(mixed_loss()),
+        },
+    );
+    settle(&mut test);
+    assert!(
+        view.confirming.peek().is_none(),
+        "a late answer reopened a dialog"
+    );
+}
+
+/// Unstaged: a.rs, clash.rs (conflicted), sub (a submodule), lib/ (a nested repository);
+/// Staged: s.rs.
+fn with_a_submodule_and_a_conflict() -> Vec<StatusEntry> {
+    vec![
+        changed("a.rs", None, Some(UnstagedChange::Modified)),
+        conflicted("clash.rs"),
+        StatusEntry::Changed(ChangedEntry {
+            path: RepoPath::from("sub"),
+            staged: None,
+            unstaged: Some(UnstagedChange::Modified),
+            submodule: Some(SubmoduleState {
+                new_commits: true,
+                modified_content: true,
+                untracked_content: false,
+            }),
+        }),
+        changed("s.rs", Some(StagedChange::Modified), None),
+        untracked("lib/"),
+    ]
+}
+
+/// C8 (views), C24, R3.6, R8.4, R8.7, R8.8 and the redesign's D1 and rule 4: no route discards
+/// a staged change, a submodule or a conflicted path — over a selection with nothing that can be
+/// discarded the chord asks nothing and says nothing, as Fork's does (no line under the lists);
+/// a selection mixing them with a path that can be discarded asks for that path alone, and its
+/// confirmation says in one line what is left — a nested repository among them, which is never
+/// touched (the user's decision of 2026-10-10 on phase 15's Q6); and a conflicted row stages
+/// whole, by `git add`. Caught by: a discard's consequence asked for any of them, a mixed
+/// selection refused whole or discarding a submodule, a conflict or a nested repository, a line
+/// drawn under the lists for the chord, or a conflict that cannot be staged.
+#[test]
+fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why() {
+    let (mut test, view, submitted) = opened(with_a_submodule_and_a_conflict());
+    let before = labels(&test);
+    for row in ["sub", "clash.rs", "s.rs", "lib/"] {
+        press_row(&mut test, row, 0);
+        for key in [NamedKey::Backspace, NamedKey::Delete] {
+            press_key(&mut test, key);
+        }
+        press_chord(&mut test, Action::Discard);
+        assert_eq!(
+            consequences_asked(&submitted),
+            [],
+            "{row}: a discard was asked"
+        );
+        assert_eq!(
+            labels(&test).len(),
+            before.len(),
+            "{row}: something was said"
+        );
+        for said in [
+            "a submodule",
+            "has a conflict",
+            "Staged changes can't be discarded",
+        ] {
+            assert!(
+                !labels(&test).iter().any(|t| t.contains(said)),
+                "{row}: said under the lists: {:?}",
+                labels(&test)
+            );
+        }
+    }
+    // A selection mixing them with a path that can be discarded asks for that path alone.
+    choose_rows(&mut test, view, &["a.rs", "sub", "clash.rs", "lib/"]);
+    press_chord(&mut test, Action::Discard);
+    let asked = consequences_asked(&submitted);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let (asked_id, paths) = asked[0].clone();
+    assert_eq!(
+        paths,
+        ["a.rs"],
+        "the discard took a submodule, a conflict or a nested repository"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::DiscardConsequence {
+            asked: asked_id,
+            outcome: Ok(Consequence::DiscardFiles {
+                files: vec![DiscardedFile {
+                    path: RepoPath::from("a.rs"),
+                    loss: FileLoss::Modified {
+                        index: Oid::from_bytes(&[1; 20]).unwrap_or_else(|_| unreachable!()),
+                        working_tree: Some(
+                            Oid::from_bytes(&[2; 20]).unwrap_or_else(|_| unreachable!()),
+                        ),
+                        executable: false,
+                        lines: Some(1),
+                        mode: None,
+                    },
+                }],
+            }),
+        },
+    );
+    let left = "1 submodule, 1 conflicted file and 1 nested repository are left as they are.";
+    assert_eq!(
+        view.confirming.peek().as_ref().and_then(Confirming::left),
+        Some(left)
+    );
+    assert!(
+        labels(&test).iter().any(|t| t == left),
+        "{:?}",
+        labels(&test)
+    );
+    let mut confirming = view.confirming;
+    confirming.set(None);
+    settle(&mut test);
+
+    // The conflicted row stages whole — `git add`, which marks it resolved.
+    press_row(&mut test, "clash.rs", 0);
+    press_key(&mut test, NamedKey::Enter);
+    assert_eq!(writes(&submitted), [write("stage", &["clash.rs"])]);
+}
+
+/// Phase 06's QA item 4, R7.4, and phase 07's QA item 6: with a confirmation open, Enter,
+/// Backspace and Delete pressed in Local Changes stage and discard nothing — the dialog holds
+/// the keys — and every gesture a list or the diff still reports behind the modal (a press, a
+/// double press, a drop, a chord's action, the diff's chord) is acted on not at all, though the
+/// view is handed the window's own submitter. Caught by: the lists' chords heard behind the
+/// modal, or the view's dialog check gone (`dialog_open`), which asks a stage, a discard's count
+/// and Stage All here.
+#[test]
+fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    let asked_before = submitted.borrow().len();
+    let mut confirming = view.confirming;
+    confirming.set(Some(Confirming::new(DISCARD_TITLE, mixed_loss(), |_| {})));
+    settle(&mut test);
+    for key in [NamedKey::Backspace, NamedKey::Delete] {
+        press_key(&mut test, key);
+    }
+    assert!(
+        view.confirming.peek().is_some(),
+        "a key behind the modal closed it"
+    );
+    let recording = Rc::clone(&submitted);
+    let submit: Rc<dyn Fn(Request)> = Rc::new(move |request| recording.borrow_mut().push(request));
+    let selection_before = selected(view);
+    test.run_in(|| {
+        for intent in [
+            ListIntent::Double(ChangeList::Unstaged, 1),
+            ListIntent::Drop {
+                from: ChangeList::Unstaged,
+                path: RepoPath::from("b.rs"),
+            },
+            ListIntent::Act(ChangeList::Unstaged, Action::StageOrUnstage),
+            ListIntent::Act(ChangeList::Unstaged, Action::Discard),
+            ListIntent::Act(ChangeList::Unstaged, Action::StageOrUnstageAll),
+            ListIntent::Toggle(ChangeList::Unstaged, 2),
+            ListIntent::Range(ChangeList::Unstaged, 3),
+        ] {
+            actions::intent(intent, view, Some(Rc::clone(&submit)));
+        }
+        actions::choose(ChangeList::Unstaged, 3, view, Some(&*submit));
+        actions::on_the_diff(Action::StageOrUnstage, view, Some(&submit));
+        actions::on_the_diff(Action::Discard, view, Some(&submit));
+    });
+    settle(&mut test);
+    // Enter, last: the modal's Cancel takes it, closing the dialog and asking nothing.
+    press_key(&mut test, NamedKey::Enter);
+    assert_eq!(writes(&submitted), []);
+    assert_eq!(consequences_asked(&submitted), []);
+    assert_eq!(
+        submitted.borrow().len(),
+        asked_before,
+        "something was asked behind the modal: {:?}",
+        &submitted.borrow()[asked_before..]
+    );
+    assert_eq!(
+        selected(view),
+        selection_before,
+        "the selection moved behind the modal"
+    );
+}
+
+/// Phase 06's QA item 21: Backspace and Delete typed into the filter field while Local Changes
+/// is shown edit the filter and discard nothing. Caught by: a bare key the field let bubble to
+/// the list's chords.
+#[test]
+fn backspace_in_the_filter_edits_the_filter_and_discards_nothing() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    // The filter field sits over Unstaged's heading.
+    let heading = at(&test, cairn_ui::UNSTAGED_CAPTION, 0);
+    test.click_cursor((
+        heading.0 + 40.,
+        heading.1 - f64::from(cairn_ui::LIST_HEADER_HEIGHT),
+    ));
+    settle(&mut test);
+    test.write_text("ab");
+    settle(&mut test);
+    press_key(&mut test, NamedKey::Backspace);
+    press_key(&mut test, NamedKey::Delete);
+    press_key(&mut test, NamedKey::Enter);
+    assert_eq!(*view.local.filter_text.peek(), "a");
+    assert_eq!(consequences_asked(&submitted), []);
+    assert_eq!(writes(&submitted), []);
+}
+
+/// Phase 06's QA item 5: a credential prompt that arrives while a confirmation is open is drawn
+/// and can be answered — the confirmation set aside, kept unanswered — and the confirmation is
+/// drawn again once the prompt is gone. Caught by: a prompt behind the modal no key can reach,
+/// or a confirmation lost to the prompt.
+#[test]
+fn a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered() {
+    let (mut test, view, _) = opened(several());
+    let mut confirming = view.confirming;
+    confirming.set(Some(Confirming::new(DISCARD_TITLE, mixed_loss(), |_| {})));
+    settle(&mut test);
+    let action = mixed_loss().action();
+    assert!(labels(&test).contains(&action));
+    let mut prompt = view.prompt;
+    prompt.set(Some(PromptView {
+        id: PromptId::for_tests(4),
+        text: "Enter passphrase for key '/k': ".to_owned(),
+        asking: Some("Stage 1 File".to_owned()),
+    }));
+    settle(&mut test);
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|t| t == "Stage 1 File is asking for a credential"),
+        "{:?}",
+        labels(&test)
+    );
+    assert!(
+        !labels(&test).contains(&action),
+        "the confirmation over the prompt"
+    );
+    assert!(
+        view.confirming.peek().is_some(),
+        "the confirmation was lost"
+    );
+    prompt.set(None);
+    settle(&mut test);
+    assert!(
+        labels(&test).contains(&action),
+        "the confirmation did not come back"
+    );
+}
+
+/// C18, R8.5, L6: Local Changes' diff is always the exact one — asked with whitespace never
+/// ignored though the shared setting ignores it, its bar's toggle disabled — and the setting is
+/// left as it was. Caught by: the working-tree query asked at the shared setting, or a toggle
+/// that changes it from here.
+#[test]
+fn local_changes_diff_is_always_exact_and_leaves_the_setting_alone() {
+    let (mut test, view, submitted) = launch();
+    let mut settings = view.diff_settings;
+    test.run_in(|| settings.write().toggle_ignore_whitespace());
+    apply(&mut test, view, &submitted, status(several()));
+    open_local_changes(&mut test);
+    let first = asked(&submitted);
+    assert_eq!(first.len(), 1);
+    assert!(
+        !first[0].options.ignore_whitespace,
+        "{:?}",
+        first[0].options
+    );
+    crate::local_changes::tests::answer(&mut test, view, &submitted, &first[0], "LINE");
+    let toggle = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(IGNORE_WHITESPACE_LABEL))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no ignore-whitespace toggle in Local Changes' bar"));
+    test.click_cursor((f64::from(toggle.x), f64::from(toggle.y)));
+    settle(&mut test);
+    assert!(
+        view.diff_settings.peek().ignore_whitespace(),
+        "the shared setting moved"
+    );
+    assert_eq!(asked(&submitted).len(), 1, "a disabled toggle asked again");
+}
+
+/// C28 (R14.3, R14.5, R14.6; R8.6 superseded): nothing is drawn under the lists for a write —
+/// queued or running, it is the status box's — a stale patch's ending opens "Couldn't <name>"
+/// naming its path once, with "Nothing was changed." once and no Error Details, and a write
+/// done says nothing at all. Caught by: a line under the lists, a stale ending drawn as
+/// nothing, or the tail said twice.
+#[test]
+fn a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs"]);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert!(
+        !labels(&test)
+            .iter()
+            .any(|t| t.contains("Stag") && t.contains("2 files")),
+        "a queued write drawn under the lists: {:?}",
+        labels(&test)
+    );
+    let id = submitted
+        .borrow()
+        .iter()
+        .find_map(|request| match request {
+            Request::Write { id, .. } => Some(*id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no write asked"));
+    apply(&mut test, view, &submitted, Update::WriteStarted { id });
+    assert!(
+        !labels(&test)
+            .iter()
+            .any(|t| t.contains("Stag") && t.contains("2 files")),
+        "a running write drawn under the lists: {:?}",
+        labels(&test)
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::Stale {
+                path: "b.rs".to_owned(),
+                said: "b.rs changed after its diff was read.".to_owned(),
+            },
+            read_again: ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    let shown = labels(&test);
+    assert!(
+        shown.iter().any(|t| t == "Couldn't Stage 2 Files"),
+        "{shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "b.rs changed after its diff was read. Nothing was changed."),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|t| t == cairn_ui::ERROR_DETAILS),
+        "{shown:?}"
+    );
+    click(&mut test, cairn_ui::CLOSE_CAPTION);
+    assert!(!labels(&test).iter().any(|t| t.starts_with("Couldn't")));
+    // The next write, done, leaves nothing said.
+    press_row(&mut test, "c.rs", 0);
+    press_chord(&mut test, Action::StageOrUnstage);
+    let id = submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::Write { id, .. } => Some(*id),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or_else(|| panic!("no second write"));
+    apply(&mut test, view, &submitted, Update::WriteStarted { id });
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::Done(Done {
+                description: "staged 1 file".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+                replaced: None,
+                cost_after: None,
+            }),
+            read_again: ReadAgain::Status,
+            unspent: crate::worker::Unspent::none(),
+        },
+    );
+    assert!(
+        !labels(&test)
+            .iter()
+            .any(|t| t.starts_with("Couldn't") || t == cairn_ui::GIT_ERROR_TITLE),
+        "a success opened a dialog: {:?}",
+        labels(&test)
+    );
+}
+
+/// Phase 03's QA item 4, decided here: the engine counts any path absent from the index as
+/// untracked, so the window must ask only for paths `git status` listed — a selection naming a
+/// path a refresh took away (or never listed) asks for the paths the lists drawn still list,
+/// and nothing when none is. Caught by: a selection's paths handed to the engine unchecked.
+#[test]
+fn a_discard_names_only_paths_the_lists_drawn_still_list() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    let mut local = view.local.state;
+    let spanning = |paths: &[&str]| {
+        cairn_ui::LocalSelection::spanning(
+            ChangeList::Unstaged,
+            RepoPath::from(paths[0]),
+            RepoPath::from(paths[0]),
+            paths.iter().map(|path| RepoPath::from(*path)),
+        )
+    };
+    test.run_in(|| {
+        local
+            .write()
+            .set_selection(Some(spanning(&["a.rs", "gone.rs", "ignored.txt"])))
+    });
+    settle(&mut test);
+    press_key(&mut test, NamedKey::Backspace);
+    assert_eq!(
+        consequences_asked(&submitted)
+            .into_iter()
+            .map(|(_, paths)| paths)
+            .collect::<Vec<_>>(),
+        [vec!["a.rs".to_owned()]]
+    );
+}
+
+/// R8.1, C25, observed `lc2`: the extending press toggles a path in without moving the primary
+/// — the diff stays on the file clicked first — and out; the primary toggled out moves to the
+/// nearest path still selected and its diff is asked, so the diff never shows a path the
+/// selection left; the last path toggled out leaves nothing selected and no diff. Caught by:
+/// the path toggled in made primary (the diff jumping to it), a toggle that only adds, or a
+/// diff left on a path toggled out.
+#[test]
+fn the_extending_press_toggles_and_the_diff_stays_on_the_file_clicked_first() {
+    let (mut test, view, _) = opened(several());
+    assert_eq!(
+        chosen(view).as_deref(),
+        Some("a.rs"),
+        "the view's first path"
+    );
+    hold(&mut test, view, Action::ExtendSelection);
+    press_row(&mut test, "c.rs", 0);
+    assert_eq!(selected(view), ["a.rs", "c.rs"]);
+    assert_eq!(
+        primary(view).as_deref(),
+        Some("a.rs"),
+        "the file clicked first"
+    );
+    assert_eq!(chosen(view).as_deref(), Some("a.rs"));
+    press_row(&mut test, "a.rs", 0);
+    assert_eq!(selected(view), ["c.rs"]);
+    assert_eq!(primary(view).as_deref(), Some("c.rs"));
+    assert_eq!(chosen(view).as_deref(), Some("c.rs"));
+    press_row(&mut test, "c.rs", 0);
+    let_go(&mut test, view);
+    assert_eq!(selected(view), Vec::<String>::new());
+    assert_eq!(primary(view), None);
+    assert_eq!(chosen(view), None, "a diff left for a path toggled out");
+}
+
+/// C24, R8.7, L25: a conflicted row stages whole — `git add`, which marks it resolved — by
+/// every route the person has: its double press, a drag into Staged, Unstaged's Stage button
+/// and its menu's Stage, as by the chord. Caught by: a route that leaves a conflicted row out,
+/// or takes it by another verb.
+#[test]
+fn a_conflicted_row_stages_whole_by_every_route() {
+    let (mut test, _, submitted) = opened(with_a_submodule_and_a_conflict());
+    let row = at(&test, "clash.rs", 0);
+    test.click_cursor(row);
+    test.click_cursor(row);
+    settle(&mut test);
+    let staged = at(&test, STAGED_CAPTION, 0);
+    let into = (staged.0 + 40., staged.1 + 40.);
+    test.press_cursor(row);
+    test.move_cursor((row.0, row.1 + 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    press_row(&mut test, "clash.rs", 0);
+    click(&mut test, STAGE_CAPTION);
+    right_click(&mut test, "clash.rs");
+    let stage = at(&test, STAGE_CAPTION, 1);
+    test.click_cursor(stage);
+    settle(&mut test);
+    assert_eq!(writes(&submitted), vec![write("stage", &["clash.rs"]); 4]);
+    assert_eq!(consequences_asked(&submitted), []);
+}
+
+/// C18, R8.2: a staged selection unstages by every route but the double press (which takes its
+/// row): dragged from Staged and dropped on Unstaged, Staged's Unstage button, and the menu's
+/// Unstage — each one write naming exactly the selection. Caught by: a route that unstages the
+/// row it began on alone, or stages instead.
+#[test]
+fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    let from = at(&test, "s.rs", 0);
+    let into = at(&test, "a.rs", 0);
+    test.press_cursor(from);
+    test.move_cursor((from.0, from.1 - 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    // The headless runner's presses come with no time between them: a press on s.rs straight
+    // after the drop's release would be read as the second of a double press, which stages its
+    // row (C18's double-press route). A press on another row first keeps the routes apart.
+    press_row(&mut test, "b.rs", 0);
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    click(&mut test, cairn_ui::UNSTAGE_CAPTION);
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    right_click(&mut test, "u.rs");
+    let unstage = at(&test, cairn_ui::UNSTAGE_CAPTION, 1);
+    test.click_cursor(unstage);
+    settle(&mut test);
+    assert_eq!(
+        writes(&submitted),
+        vec![write("unstage", &["s.rs", "u.rs"]); 3]
+    );
+    let row = at(&test, "s.rs", 0);
+    test.click_cursor(row);
+    test.click_cursor(row);
+    settle(&mut test);
+    assert_eq!(writes(&submitted)[3..], [write("unstage", &["s.rs"])]);
+}
+
+/// Phase 07's QA item 1: Local Changes let go of while a discard's loss is being counted ends
+/// the count — `Request::StopCounting`, so the local lane is not held for a confirmation nobody
+/// will see — and forgets it. Caught by: a count left running once the view is gone.
+#[test]
+fn leaving_local_changes_ends_a_discards_count() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    press_chord(&mut test, Action::Discard);
+    assert_eq!(consequences_asked(&submitted).len(), 1);
+    let stops = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .filter(|request| matches!(request, Request::StopCounting))
+            .count()
+    };
+    assert_eq!(stops(&submitted), 0);
+    let mut main = view.sidebar.main;
+    test.run_in(|| main.set(cairn_ui::MainView::AllCommits));
+    settle(&mut test);
+    assert_eq!(stops(&submitted), 1, "the count was left running");
+    assert!(!view.local.acting.peek().is_reading());
+}
+
+/// Types `text` into the filter and applies the worker's answer for it, as the real pass makes
+/// it.
+fn filter_to(test: &mut TestingRunner, view: View, submitted: &Submitted, text: &str) {
+    let mut typed = view.local.filter_text;
+    test.run_in(|| typed.set(text.to_owned()));
+    settle(test);
+    let lists = submitted
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            Request::FilterLocalChanges { changes, .. } => Some(std::sync::Arc::clone(changes)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the filter was not asked"));
+    let rows = lists
+        .matching(text, || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    apply(
+        test,
+        view,
+        submitted,
+        Update::FilteredLocalChanges {
+            changes: lists,
+            text: text.to_owned(),
+            rows,
+        },
+    );
+}
+
+/// Unstaged: a.rs, b.rs, cx.rs, dx.rs, ex.rs, and clash.rs (conflicted); Staged: sx.rs, t.rs.
+fn filterable() -> Vec<StatusEntry> {
+    vec![
+        changed("a.rs", None, Some(UnstagedChange::Modified)),
+        changed("b.rs", None, Some(UnstagedChange::Modified)),
+        changed("cx.rs", None, Some(UnstagedChange::Modified)),
+        changed("dx.rs", None, Some(UnstagedChange::Modified)),
+        untracked("ex.rs"),
+        conflicted("clash.rs"),
+        changed("sx.rs", Some(StagedChange::Modified), None),
+        changed("t.rs", Some(StagedChange::Modified), None),
+    ]
+}
+
+/// Rule 8, C18, the QA brief ("no route acts on anything but the selection"): the Staged
+/// list's Unstage is greyed while the selection is Unstaged's, so it unstages nothing; a drag
+/// begun on a row the selection does not hold carries that row alone — the selection made of it
+/// as it drops, as a native list's drag does — and the selection then moves on by the rule;
+/// with Stage All's heading key held both headings act on their whole list, whatever is
+/// selected. Caught by: a greyed button that still acts, a drag that stages the selection it
+/// did not begin in, or a held heading acting on the selection.
+#[test]
+fn every_route_takes_the_selection_and_nothing_the_person_did_not_select() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs"]);
+    click(&mut test, cairn_ui::UNSTAGE_CAPTION);
+    assert_eq!(
+        writes(&submitted),
+        [],
+        "Unstage acted on Unstaged's selection"
+    );
+
+    let from = at(&test, "c.rs", 0);
+    let staged = at(&test, STAGED_CAPTION, 0);
+    let into = (staged.0 + 40., staged.1 + 40.);
+    test.press_cursor(from);
+    test.move_cursor((from.0, from.1 + 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+    assert_eq!(selected(view), ["d.rs"], "the row in c.rs's place");
+
+    choose_rows(&mut test, view, &["a.rs"]);
+    hold(&mut test, view, Action::StageOrUnstageAll);
+    click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
+    let_go(&mut test, view);
+    assert_eq!(
+        writes(&submitted)[1..],
+        [write("unstage all", &["new.rs", "old.rs", "s.rs", "u.rs"])]
+    );
+    assert_eq!(
+        selected(view),
+        ["a.rs"],
+        "Unstage All took Unstaged's selection"
+    );
+}
+
+/// L3, the QA brief ("no file is ever acted on that the filter hides"): while a filter's first
+/// rows are on their way the lists show nothing and the selection is left as it was — so the
+/// stage and discard chords heard on the diff then take nothing: no write, no consequence, no
+/// dialog — every route takes only the selected paths the lists SHOW. Caught by: an action that
+/// takes the selection's listed paths without asking whether the filter shows them (phase 16's
+/// QA #1).
+#[test]
+fn nothing_is_acted_on_while_the_filters_rows_are_on_their_way() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "a.rs", 0);
+    assert_eq!(selected(view), ["a.rs"]);
+    let mut local = view.local.state;
+    let _ = test.run_in(|| local.write().filter("x"));
+    settle(&mut test);
+    assert_eq!(
+        selected(view),
+        ["a.rs"],
+        "the selection was moved while waiting"
+    );
+    let submit: crate::local_changes::actions::Submit = {
+        let submitted = Rc::clone(&submitted);
+        Rc::new(move |request| submitted.borrow_mut().push(request))
+    };
+    for action in [Action::StageOrUnstage, Action::Discard] {
+        test.run_in(|| actions::on_the_diff(action, view, Some(&submit)));
+        settle(&mut test);
+    }
+    assert_eq!(
+        writes(&submitted),
+        [],
+        "a path the lists do not show was written"
+    );
+    assert_eq!(consequences_asked(&submitted), [], "a discard was counted");
+    assert!(view.confirming.peek().is_none(), "a dialog opened");
+}
+
+/// Phase 07's QA item 7, R8.3: the selection moves to the row that takes the FIRST acted row's
+/// place — c.rs staged out of a, b, c, d leaves d.rs selected, not the list's first row — and,
+/// through a filter, by the rows the filter shows: cx.rs staged out of cx, dx, ex leaves dx.rs.
+/// Caught by: the nearest measured from the top of the list, or from the row's place in the
+/// whole list rather than the rows shown.
+#[test]
+fn the_selection_moves_to_the_row_that_takes_the_acted_rows_place() {
+    let (mut test, view, submitted) = opened(several());
+    press_row(&mut test, "c.rs", 0);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+    assert_eq!(selected(view), ["d.rs"]);
+    assert_eq!(chosen(view).as_deref(), Some("d.rs"));
+
+    let (mut test, view, submitted) = opened(filterable());
+    filter_to(&mut test, view, &submitted, "x");
+    press_row(&mut test, "cx.rs", 0);
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["cx.rs"])]);
+    assert_eq!(selected(view), ["dx.rs"]);
+}
+
+/// The user's decision (2026-10-09, phase 07's QA item 11): with a filter on, Stage All and
+/// Unstage All take the rows the filter shows and no other — a hidden row, a hidden conflicted
+/// row among them, stays as it is — and with none on, every row. Caught by: an All that takes
+/// the rows the filter hides.
+#[test]
+fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
+    let (mut test, view, submitted) = opened(filterable());
+    filter_to(&mut test, view, &submitted, "x");
+    let (x, y) = at(&test, STAGE_CAPTION, 0);
+    test.click_cursor((x - 20., y));
+    settle(&mut test);
+    right_click(&mut test, "sx.rs");
+    click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
+    assert_eq!(
+        writes(&submitted),
+        [
+            write("stage all", &["cx.rs", "dx.rs", "ex.rs"]),
+            write("unstage all", &["sx.rs"]),
+        ]
+    );
+}
+
+/// Phase 07's QA item 5: a refresh that takes the selected paths away moves the selection with
+/// the path chosen — so when one of them is listed again it is not selected unseen, and the
+/// stage chord stages only what is drawn selected; and a ⌘- or Ctrl-press that toggles the last
+/// path out leaves nothing selected — the diff saying "No file selected" — so the stage chord
+/// stages nothing. Caught by: a selection that keeps paths a refresh took away, or an emptied
+/// selection that falls back to the path toggled out.
+#[test]
+fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs"]);
+    let without = |gone: &[&str]| {
+        several()
+            .into_iter()
+            .filter(|entry| !gone.contains(&entry.path().to_string().as_str()))
+            .collect::<Vec<_>>()
+    };
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(without(&["a.rs", "b.rs"])),
+    );
+    settle(&mut test);
+    apply(&mut test, view, &submitted, status(without(&["b.rs"])));
+    settle(&mut test);
+    assert_eq!(
+        selected(view),
+        ["c.rs"],
+        "the selection kept a path the refresh took away"
+    );
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+
+    press_row(&mut test, "d.rs", 0);
+    hold(&mut test, view, Action::ExtendSelection);
+    press_row(&mut test, "d.rs", 0);
+    let_go(&mut test, view);
+    assert_eq!(selected(view), Vec::<String>::new());
+    // R8.1: with nothing selected the diff says so, in Fork's words.
+    assert!(
+        crate::local_changes::tests::labels(&test)
+            .iter()
+            .any(|label| label == crate::local_changes::pane::NO_FILE_SELECTED),
+        "{:?}",
+        crate::local_changes::tests::labels(&test)
+    );
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted)[1..], [], "a path toggled out was staged");
+}

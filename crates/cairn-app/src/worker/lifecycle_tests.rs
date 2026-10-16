@@ -20,7 +20,7 @@ use cairn_git::ops::GitBinary;
 use cairn_model::CommandExit;
 
 use super::discovery::Discovery;
-use super::fetch_tests::{
+use super::network::tests::{
     Home, RuntimeDir, UnbornRepository, WAIT, built_helper, collect_until, next_by, with_origin,
 };
 use super::pool::{RepositoryHandle, Updates, open};
@@ -265,7 +265,7 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     let discovery = Discovery::start_with(stub.startup(None));
     for _ in 0..3 {
         let (handle, mut updates) = opened(&fixture.path, &discovery);
-        super::fetch_tests::opened_as(&mut updates);
+        super::network::tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory {
             rows: 1,
             lost: false,

@@ -1,54 +1,18 @@
 //! The Cairn binary.
 
-mod activity;
-#[cfg(test)]
-mod activity_tests;
-mod changes_tab;
 mod closing;
-mod commit_box_pane;
-mod commit_box_state;
-#[cfg(test)]
-mod commit_box_tests;
-mod confirming;
-mod create_branch;
-#[cfg(test)]
-mod create_branch_tests;
-mod detail_pane;
-mod diff_actions;
-mod diff_state;
-mod ending_dialog;
-mod fetch_state;
-mod file_filter;
-mod history_state;
-mod leftover_lock;
-mod local_changes_actions;
-#[cfg(test)]
-mod local_changes_actions_tests;
-#[cfg(test)]
-mod local_changes_gesture_tests;
-mod local_changes_pane;
-mod local_changes_state;
-#[cfg(test)]
-mod local_changes_tests;
-mod local_writes;
-mod lost_commits;
+mod commit_box;
+mod detail;
+mod diff;
+mod history;
+mod local_changes;
 mod modal;
-mod next_selection;
-mod output_tail;
-mod ref_find;
+mod operations;
 mod refresh;
-mod refresh_state;
 mod repository_path;
-mod row_finder;
-mod selection;
 mod session;
 mod shortcuts;
-mod shown_output;
-mod sidebar_pane;
-mod sidebar_state;
-#[cfg(test)]
-mod sidebar_tests;
-mod status_text;
+mod sidebar;
 mod window;
 #[cfg(test)]
 mod window_check;
@@ -62,9 +26,9 @@ use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
 
 use closing::Closing;
-use diff_state::DiffState;
-use fetch_state::{FetchStatus, PromptView};
-use history_state::Progress;
+use diff::state::DiffState;
+use history::state::Progress;
+use operations::fetch::{FetchStatus, PromptView};
 use window::View;
 use worker::Request;
 
@@ -103,8 +67,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let fetch = use_state(|| FetchStatus::Idle);
     let prompt = use_state(|| None::<PromptView>);
     let remotes = use_state(Vec::<RemoteSummary>::new);
-    let endings = use_state(crate::ending_dialog::Endings::default);
-    let lock = use_state(crate::leftover_lock::LeftoverLock::default);
+    let endings = use_state(crate::operations::ending_dialog::Endings::default);
+    let lock = use_state(crate::operations::leftover_lock::LeftoverLock::default);
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
     let history_cursor = use_state(|| 0usize);
@@ -118,28 +82,28 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let change_cursor = use_state(|| None);
     // Session state of the Changes tab: its filter and its list's width.
     let filter_text = use_state(String::new);
-    let changes_list_width = use_state(|| changes_tab::LIST_WIDTH);
+    let changes_list_width = use_state(|| detail::changes_tab::LIST_WIDTH);
     // The second commit of a comparison, and the keys a press on a row is resolved against.
     let pair = use_state(|| None);
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     // What the last refresh answered (R10).
-    let refreshed = use_state(refresh_state::RefreshState::default);
+    let refreshed = use_state(refresh::state::RefreshState::default);
     // What the title bar calls the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
     // The sidebar's state, for the session (refs-and-status R8).
-    let sidebar = sidebar_state::SidebarView::used();
+    let sidebar = sidebar::state::SidebarView::used();
     // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
-    let local = local_changes_state::LocalChangesView::used();
+    let local = local_changes::state::LocalChangesView::used();
     // The local writes, for the session (staging-and-commit R4).
-    let writes = use_state(local_writes::LocalWrites::default);
+    let writes = use_state(operations::local_writes::LocalWrites::default);
     // A destructive operation's confirmation, while one is open (staging-and-commit R7.4).
-    let confirming = use_state(|| None::<confirming::Confirming>);
+    let confirming = use_state(|| None::<operations::confirming::Confirming>);
     // Show Lost Commits, off as the window opens (staging-and-commit R11).
     let show_lost = use_state(|| false);
     // Create Branch, for the session (staging-and-commit R11.3).
-    let branch = create_branch::CreateBranchView::used();
+    let branch = operations::create_branch::CreateBranchView::used();
     // The activity popover's operations, for the session (staging-and-commit R12).
-    let activity = activity::ActivityView::used();
+    let activity = operations::activity::ActivityView::used();
     let view = View {
         rows,
         progress,

@@ -39,7 +39,7 @@ use std::sync::Arc;
 use cairn_model::{ChangeSet, Disclosure, LocalChanges, Oid, RefsSnapshot};
 
 use super::epoch::Epoch;
-use super::local_lane::{LocalWrite, OperationId};
+use super::local::lane::{LocalWrite, OperationId};
 
 use super::request::{Comparison, DiffQuery, FileQuery, Request, Retired};
 

@@ -14,12 +14,12 @@ use cairn_model::{OperationInProgress, shown_path};
 
 /// The sentence Fork's Git Error dialog says of any git failure, as the dialog's own constant
 /// reads (the Git Error dialog's `GIT_ERROR_TEXT`; this module, on the worker side, may not name the render
-/// crate — `crate::ending_dialog`'s tests hold the two equal).
+/// crate — `crate::operations::ending_dialog`'s tests hold the two equal).
 pub(crate) const GIT_FAILED: &str =
     "An unexpected error occurred while performing the git request.";
 
 /// A commit refused during an operation git refuses it in, as the commit box's line says it
-/// (the commit box's `operation_line`, held equal by `crate::ending_dialog`'s tests).
+/// (the commit box's `operation_line`, held equal by `crate::operations::ending_dialog`'s tests).
 pub(crate) fn commit_refused_in(operation: &OperationInProgress) -> String {
     let name = operation.name();
     let name = match operation {
@@ -39,7 +39,7 @@ pub(crate) fn commit_refused_in(operation: &OperationInProgress) -> String {
 }
 
 /// Create Branch's Discard refused during an operation, as its dialog says it
-/// (`discard_refusal`, held equal by `crate::ending_dialog`'s tests).
+/// (`discard_refusal`, held equal by `crate::operations::ending_dialog`'s tests).
 pub(crate) fn checkout_refused_in(operation: &OperationInProgress) -> String {
     let named = match operation {
         OperationInProgress::Merge => "A merge",

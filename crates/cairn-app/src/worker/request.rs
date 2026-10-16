@@ -15,7 +15,7 @@ use cairn_model::{
 
 use super::askpass::PromptId;
 use super::epoch::QueryLane;
-use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
+use super::local::lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 
 /// What a changes query compares (R2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -609,7 +609,7 @@ pub enum Update {
     /// The fetch failed: the Git Error dialog's command, output and sentence (R14.3).
     FetchFailed {
         remote: String,
-        failure: super::local_lane::Failure,
+        failure: super::local::lane::Failure,
     },
     /// A fetch of `remote` was not started because one is already in flight;
     /// `reason` says which, as display text. Nothing else about the fetch in

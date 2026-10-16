@@ -6,8 +6,8 @@ use std::sync::Arc;
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
-use crate::fetch_state::{FetchStatus, PromptView};
-use crate::history_state::{self, Progress};
+use crate::history::state::{self, Progress};
+use crate::operations::fetch::{FetchStatus, PromptView};
 use crate::window::View;
 use crate::worker::{PromptId, ReadAgain, Refreshed, Request, Retired, Update, expanded_diffs};
 
@@ -52,7 +52,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             complete,
         } => {
             // Count before handing the rows over; afterwards it rereads the whole history.
-            let widest = history_state::widest_lane(&page);
+            let widest = state::widest_lane(&page);
             let (loaded, held) = {
                 let mut history = rows.write();
                 let held = history.append(page);
@@ -60,11 +60,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             };
             progress.write().appended(widest, complete, loaded, held);
             // A find in the sidebar looks through the rows that arrived (R8.5).
-            crate::ref_find::pages_arrived(view, Some(worker.submit));
+            crate::sidebar::ref_find::pages_arrived(view, Some(worker.submit));
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
-            crate::ref_find::failed(view);
+            crate::sidebar::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
@@ -75,26 +75,26 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         // What removing the stale lock would cost, read at the press (the user's decision H).
         Update::LockConsequence { asked, outcome } => {
-            crate::leftover_lock::answered(view, asked, outcome);
+            crate::operations::leftover_lock::answered(view, asked, outcome);
         }
         // What a discard would lose, for the confirmation Local Changes opened at the press
         // (R7.4, R8.4): kept only for the discard asked last and only while that confirmation is
         // still open and counting — one let go of drops it.
-        Update::CommitReads(reads) => crate::commit_box_pane::reads_arrived(*reads, view),
+        Update::CommitReads(reads) => crate::commit_box::pane::reads_arrived(*reads, view),
         Update::BranchName { name, outcome } => {
-            crate::create_branch::name_checked(view, name, outcome);
+            crate::operations::create_branch::name_checked(view, name, outcome);
         }
         Update::CheckoutConsequence { asked, outcome } => {
-            crate::create_branch::consequence_arrived(view, asked, outcome);
+            crate::operations::create_branch::consequence_arrived(view, asked, outcome);
         }
         Update::Amending { status, read } => {
-            crate::commit_box_pane::amend_arrived(status, *read, view, worker.submit);
+            crate::commit_box::pane::amend_arrived(status, *read, view, worker.submit);
         }
         Update::DiscardConsequence { asked, outcome } => {
-            crate::local_changes_actions::consequence_arrived(view, asked, outcome);
+            crate::local_changes::actions::consequence_arrived(view, asked, outcome);
         }
         Update::ConfiguredContext { context } => {
-            crate::diff_actions::configured(context, view, worker.submit);
+            crate::diff::actions::configured(context, view, worker.submit);
         }
         Update::FetchStarted { remote } => {
             activity.log.write().fetch_started(&remote);
@@ -119,7 +119,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // What an operation ran, for the activity popover (R12.1).
         Update::OperationRan { by, commands } => {
             let key = match by {
-                crate::worker::RanBy::Write(id) => Some(crate::activity::ActivityKey::Write(id)),
+                crate::worker::RanBy::Write(id) => {
+                    Some(crate::operations::activity::ActivityKey::Write(id))
+                }
                 crate::worker::RanBy::Fetch => activity.log.peek().fetch_key(),
             };
             if let Some(key) = key {
@@ -130,7 +132,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             activity
                 .log
                 .write()
-                .fetch_ended(&remote, crate::activity::Outcome::Succeeded);
+                .fetch_ended(&remote, crate::operations::activity::Outcome::Succeeded);
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -141,7 +143,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::FetchCancelled { remote } => {
             activity.log.write().fetch_ended(
                 &remote,
-                crate::activity::Outcome::Cancelled(crate::activity::FETCH_CANCELLED.to_owned()),
+                crate::operations::activity::Outcome::Cancelled(
+                    crate::operations::activity::FETCH_CANCELLED.to_owned(),
+                ),
             );
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
@@ -153,16 +157,18 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::FetchFailed { remote, failure } => {
             activity.log.write().fetch_ended(
                 &remote,
-                crate::activity::Outcome::Failed(failure.said.clone()),
+                crate::operations::activity::Outcome::Failed(failure.said.clone()),
             );
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
             let mut endings = view.endings;
-            endings.write().push(crate::ending_dialog::of_failure(
-                &format!("Fetch '{remote}'"),
-                &failure,
-            ));
+            endings
+                .write()
+                .push(crate::operations::ending_dialog::of_failure(
+                    &format!("Fetch '{remote}'"),
+                    &failure,
+                ));
             fetch.set(FetchStatus::Failed { remote });
             refresh_after_an_operation(worker);
         }
@@ -171,7 +177,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if let Some(asked) = writes.peek().running() {
                 activity.log.write().write_started(asked);
             }
-            crate::commit_box_pane::write_started(id, view);
+            crate::commit_box::pane::write_started(id, view);
         }
         // The commit box's commit's output, kept for the Git Error dialog (R10.5), and every
         // write's for the activity popover (R10.4, R12.1).
@@ -179,12 +185,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::WriteOutput { id, tap } => {
             let drained = tap.drain();
             for lines in drained.iter() {
-                crate::commit_box_pane::write_output(id, lines, view);
+                crate::commit_box::pane::write_output(id, lines, view);
             }
-            activity
-                .log
-                .write()
-                .output(crate::activity::ActivityKey::Write(id), &drained);
+            activity.log.write().output(
+                crate::operations::activity::ActivityKey::Write(id),
+                &drained,
+            );
         }
         Update::WriteEnded {
             id,
@@ -199,8 +205,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 worker.submit
             };
             let the_boxs =
-                crate::commit_box_pane::write_ended(id, &ending, &mut unspent, view, asking);
-            crate::create_branch::write_ended(view, id, &ending, asking);
+                crate::commit_box::pane::write_ended(id, &ending, &mut unspent, view, asking);
+            crate::operations::create_branch::write_ended(view, id, &ending, asking);
             // A write that never started is named as it was asked (the user's decision N), and
             // a destructive one quotes the prompt it was asked with however it ended (R12.1).
             let asked = {
@@ -218,7 +224,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 let name = asked
                     .as_ref()
                     .map_or_else(|| "A write".to_owned(), |asked| asked.name.clone());
-                if let Some(shown) = crate::ending_dialog::of_write(&name, &ending) {
+                if let Some(shown) = crate::operations::ending_dialog::of_write(&name, &ending) {
                     let mut endings = view.endings;
                     endings.write().push(shown);
                 }
@@ -254,12 +260,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             // What the commit box reads is asked again: a merge begun, a hook added, a commit
             // made (R10).
             if !worker.closing {
-                crate::commit_box_pane::refs_arrived(view, worker.submit);
+                crate::commit_box::pane::refs_arrived(view, worker.submit);
             }
             if reopen && !worker.closing {
                 reopen_history(rows, progress, *view.show_lost.peek(), worker.submit);
                 // A find looking in the history it replaced looks in the new one.
-                crate::ref_find::reopened(view, Some(worker.submit));
+                crate::sidebar::ref_find::reopened(view, Some(worker.submit));
             }
         }
         Update::AheadBehind { counts } => {
@@ -284,7 +290,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             // The selection moved by the rule as the lists were drawn (R8.3, L5): its primary's
             // diff asked here, as the status arrives, never by a render effect.
             if !worker.closing {
-                crate::diff_actions::show_primary(view, Some(worker.submit), false);
+                crate::diff::actions::show_primary(view, Some(worker.submit), false);
             }
         }
         Update::FilteredLocalChanges {
@@ -299,7 +305,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
             // The filter pruned the selection to the rows it shows (L3): the primary's diff.
             if !worker.closing {
-                crate::diff_actions::show_primary(view, Some(worker.submit), false);
+                crate::diff::actions::show_primary(view, Some(worker.submit), false);
             }
         }
         Update::RefreshFailed { what, message } => {
@@ -361,7 +367,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 crate::worker::FileTarget::WorkingTree { .. } => {
                     // Kept only for the path chosen in Local Changes, asked as it is now.
                     let (_, freeing) = if diff.peek().wants_file(&query) {
-                        let drawn = |diff: &crate::diff_state::DiffState| {
+                        let drawn = |diff: &crate::diff::state::DiffState| {
                             diff.shown_working().map(cairn_model::ShownDiff::content)
                         };
                         let before = drawn(&diff.peek());
@@ -545,9 +551,9 @@ mod tests {
                         remotes: State::create(Vec::new()),
                         endings: State::create(Default::default()),
                         lock: State::create(Default::default()),
-                        diff: State::create(crate::diff_state::DiffState::default()),
+                        diff: State::create(crate::diff::state::DiffState::default()),
                         filter_text: State::create(String::new()),
-                        changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+                        changes_list_width: State::create(crate::detail::changes_tab::LIST_WIDTH),
                         pair: State::create(None),
                         held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                         history_scroll: ScrollController::new(0, 0, Vec::new()),
@@ -558,15 +564,17 @@ mod tests {
                         diff_settings: State::create(cairn_ui::DiffSettings::default()),
                         diff_scroll: ScrollController::new(0, 0, Vec::new()),
                         change_cursor: State::create(None),
-                        refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                        refreshed: State::create(crate::refresh::state::RefreshState::default()),
                         repository: State::create(None),
-                        sidebar: crate::sidebar_state::SidebarView::created(),
-                        local: crate::local_changes_state::LocalChangesView::created(),
-                        writes: State::create(crate::local_writes::LocalWrites::default()),
+                        sidebar: crate::sidebar::state::SidebarView::created(),
+                        local: crate::local_changes::state::LocalChangesView::created(),
+                        writes: State::create(
+                            crate::operations::local_writes::LocalWrites::default(),
+                        ),
                         confirming: State::create(None),
                         show_lost: State::create(false),
-                        activity: crate::activity::ActivityView::created(),
-                        branch: crate::create_branch::CreateBranchView::created(),
+                        activity: crate::operations::activity::ActivityView::created(),
+                        branch: crate::operations::create_branch::CreateBranchView::created(),
                     }
                 })
             },
@@ -614,10 +622,10 @@ mod tests {
     /// epoch and only the window's own check can refuse it. The negative follows: asked
     /// again and selected, it is kept. Mutation that reddens it: this arm storing whatever
     /// change set arrives rather than asking `DiffState` whether it names the selection
-    /// (each of `DiffState`'s two checks alone is decided by `diff_state`'s own tests).
+    /// (each of `DiffState`'s two checks alone is decided by `diff::state`'s own tests).
     #[test]
     fn an_answer_naming_another_selection_is_never_drawn() {
-        use crate::diff_state::Answer;
+        use crate::diff::state::Answer;
         use crate::worker::{Comparison, changes_answer, checkout, commits};
 
         let (handle, mut updates) = checkout();
@@ -664,7 +672,7 @@ mod tests {
             ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid, RepoPath,
         };
 
-        use crate::diff_state::{Answer, answered_expansion};
+        use crate::diff::state::{Answer, answered_expansion};
         use crate::worker::{
             AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandedFile,
             FileQuery, FileTarget, OpenedFile,
@@ -1235,7 +1243,7 @@ mod tests {
                 of: Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap()),
                 file,
             },
-            options: crate::diff_actions::options(cairn_ui::DiffSettings::default()),
+            options: crate::diff::actions::options(cairn_ui::DiffSettings::default()),
         };
         // Shown in the Changes tab, whose file a setting asks again at once (phase 08: the
         // Commit tab's files opened in place share the lane, and the hidden one waits).
@@ -1290,7 +1298,7 @@ mod tests {
     fn a_configuration_edit_mid_session_reaches_the_next_answer() {
         use cairn_model::Context;
 
-        use crate::diff_state::Answer;
+        use crate::diff::state::Answer;
         use crate::worker::{Configurable, FileQuery, FileTarget, next_update};
 
         let repository = Configurable::new("diff-context-edit");
@@ -1345,7 +1353,7 @@ mod tests {
         let settings = || test.run_in(|| view.diff_settings.peek().context());
         let change = |change: fn(&mut cairn_ui::DiffSettings) -> bool| {
             let submit = |request| asked.submitted.borrow_mut().push(request);
-            test.run_in(|| crate::diff_actions::change_settings(view, Some(&submit), change));
+            test.run_in(|| crate::diff::actions::change_settings(view, Some(&submit), change));
         };
 
         // At open: git's default, since nothing is configured.
@@ -1360,7 +1368,7 @@ mod tests {
                 of: repository.of,
                 file: repository.file.clone(),
             },
-            options: crate::diff_actions::options(test.run_in(|| *view.diff_settings.peek())),
+            options: crate::diff::actions::options(test.run_in(|| *view.diff_settings.peek())),
         };
         let mut diff = view.diff;
         let asked_first = test.run_in(|| diff.write().select_file(query));
@@ -1422,7 +1430,7 @@ mod tests {
     /// room), the selection cleared, or a reopen on a refresh that said not to.
     #[test]
     fn a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection() {
-        use crate::history_state::Status;
+        use crate::history::state::Status;
 
         let (test, mut view, asked) = launch(FetchStatus::Idle);
         let chosen = Some(cairn_model::RowId::Commit(oid(1)));
@@ -1518,7 +1526,7 @@ mod tests {
     fn a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last() {
         use cairn_model::{AheadBehind, RefName, StatusEntry, WorkingTreeStatus};
 
-        use crate::history_state::Status;
+        use crate::history::state::Status;
         use crate::worker::Refreshed;
 
         let (test, view, asked) = launch(FetchStatus::Idle);

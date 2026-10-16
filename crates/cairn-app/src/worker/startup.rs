@@ -156,8 +156,8 @@ mod tests {
     /// The channel's socket is what git is told to have the helper connect to.
     #[test]
     fn a_runtime_directory_gives_the_environment_a_socket_and_prompting() {
-        let runtime = crate::worker::fetch_tests::RuntimeDir::new();
-        let helper = crate::worker::fetch_tests::built_helper();
+        let runtime = crate::worker::network::tests::RuntimeDir::new();
+        let helper = crate::worker::network::tests::built_helper();
         let startup = Startup::new(
             {
                 let runtime = runtime.path.clone();
@@ -201,7 +201,7 @@ mod tests {
     fn without_a_runtime_directory_git_is_still_found_and_the_reason_is_named() {
         let startup = Startup::new(
             |name| (name == "PATH").then(|| std::env::var_os("PATH")).flatten(),
-            crate::worker::fetch_tests::built_helper(),
+            crate::worker::network::tests::built_helper(),
         );
         let backend = Backend::open(&startup, &found(&startup));
         assert!(backend.channel.is_none());
@@ -223,7 +223,7 @@ mod tests {
     /// A helper that is not built is named as the reason, with the command that builds it.
     #[test]
     fn a_missing_helper_is_named_with_how_to_build_it() {
-        let runtime = crate::worker::fetch_tests::RuntimeDir::new();
+        let runtime = crate::worker::network::tests::RuntimeDir::new();
         let startup = Startup::new(
             {
                 let runtime = runtime.path.clone();

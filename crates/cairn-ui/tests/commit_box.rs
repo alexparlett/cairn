@@ -137,7 +137,7 @@ fn the_amend_toggle_reports_its_toggled_state_to_assistive_technology() {
 
 /// R10.6, C1 and C6: amending, the one button reads Fork's "Amend Last Commit" with nothing
 /// under it and reports the press — the box builds no token; the chord's press is the window's
-/// test (`commit_box_tests.rs`). Caught by: a line under the button, or the press unheard.
+/// test (`commit_box/tests.rs`). Caught by: a line under the button, or the press unheard.
 #[test]
 fn amend_last_commit_reports_its_press_and_draws_no_line() {
     let (mut test, reports) = launch(true, CommitButton::Amend, "Fix", false, None, None);

@@ -1,10 +1,9 @@
 //! Both versions of one file as lines, and the exact ranges between them that differ.
 //!
-//! This is the one exact answer of decision L2. Hunks, rows and patches are projections
-//! of it and hold no state of their own. It deliberately has no room for the
-//! whitespace-ignoring ranges: those are display-only, they live in
-//! [`crate::DisplayOverlay`], and keeping them out of this type is what makes them
-//! unreachable from the patch emitter by construction rather than by care (R1.7).
+//! This is the one exact answer of a file's diff. Hunks, rows and patches are projections of it and
+//! hold no state of their own. It deliberately has no room for the whitespace-ignoring ranges:
+//! those are display-only, they live in [`crate::DisplayOverlay`], and keeping them out of this
+//! type is what makes them unreachable from the patch emitter by construction rather than by care.
 
 use std::borrow::Cow;
 
@@ -110,11 +109,11 @@ impl DiffLine {
         self.terminated
     }
 
-    /// Text for a human. Borrowed when the bytes are UTF-8, so a redraw allocates nothing —
-    /// but it reads the whole line every call to decide that, and copies it when they are
-    /// not. A row that only needs a prefix (R6.9's truncated long line) should slice
-    /// [`Self::bytes`] first; over the limit R2.6 allows loading anyway, this is the
-    /// difference between microseconds and milliseconds a frame.
+    /// Text for a human. Borrowed when the bytes are UTF-8, so a redraw allocates nothing — but it
+    /// reads the whole line every call to decide that, and copies it when they are not. A row that
+    /// only needs a prefix (a long line drawn cut) should slice [`Self::bytes`] first; over the
+    /// limit a file may be loaded anyway, this is the difference between microseconds and
+    /// milliseconds a frame.
     pub fn text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.bytes)
     }
@@ -152,7 +151,7 @@ impl ChangedRange {
     }
 }
 
-/// Both versions of one file and the exact ranges that differ (R1.2).
+/// Both versions of one file and the exact ranges that differ.
 ///
 /// A patch is built from this and nothing else. Reaching the whitespace-ignoring ranges
 /// from here does not compile, because they are not here:
@@ -284,14 +283,14 @@ impl TextDiff {
         self.new.get(line.index() as usize)
     }
 
-    /// The exact changed ranges, and the only source a patch is allowed to read (R1.7).
+    /// The exact changed ranges, and the only source a patch is allowed to read.
     pub fn changes(&self) -> &[ChangedRange] {
         &self.changes
     }
 
-    /// The same change seen from its other end (R2.1): the new side becomes the old and the
-    /// old the new, each change's two spans swapped. Unstage and discard are the forward
-    /// patch rule ([`crate::emit_patch`]) over this, so no `git apply -R` ever runs (L17a).
+    /// The same change seen from its other end: the new side becomes the old and the old the new,
+    /// each change's two spans swapped. Unstage and discard are the forward patch rule
+    /// ([`crate::emit_patch`]) over this, so no `git apply -R` ever runs.
     ///
     /// A change that both removes and adds lines comes out as **two** changes at one place:
     /// its insertion first, then its removal. The forward rule keeps an unselected removed
@@ -571,8 +570,8 @@ mod tests {
         let _ = TextDiff::new(lines(2), lines(2), vec![change((0, 5), (0, 5))]);
     }
 
-    /// The order the doc comment has always promised, now said out loud where a producer
-    /// can hear it.
+    /// The order the doc comment promises, asserted in a debug build where a producer that
+    /// breaks it is told so.
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "behind the old 6 / new 6")]
@@ -584,7 +583,7 @@ mod tests {
         );
     }
 
-    /// R2.1: the sides swap, so the inverted diff's old side is the original's new side
+    /// The sides swap, so the inverted diff's old side is the original's new side
     /// byte for byte, and its changes are the original's with their spans swapped.
     /// Caught by: a side left in place, or a span left unswapped.
     #[test]

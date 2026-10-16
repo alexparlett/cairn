@@ -1,7 +1,6 @@
-//! Credentials in a URL removed from git's text before anything keeps or draws it
-//! (staging-and-commit R12.2, R4.10; #46). git can quote a remote's URL in what it writes, and a
-//! URL configured with userinfo — `https://user:token@host/repo.git` — carries a credential in it
-//! that is not a [`crate::Secret`].
+//! Credentials in a URL removed from git's text before anything keeps or draws it (#46). git can
+//! quote a remote's URL in what it writes, and a URL configured with userinfo —
+//! `https://user:token@host/repo.git` — carries a credential in it that is not a [`crate::Secret`].
 //!
 //! **Scrubbed once, as whole lines.** The engine's runner splits git's output into whole lines
 //! and hands each to a [`Scrubber`] as it is split, before anything is cut or kept. The scrubber
@@ -11,12 +10,12 @@
 //! and hands on is a [`ScrubbedLine`] or [`ScrubbedLines`], which only a scrubber's output can
 //! fill. So git's text crosses into the application only scrubbed, and no view scrubs again.
 //!
-//! The rule only removes, never classifies: in every `scheme://` URL, everything between the
-//! `//` and the last `@` before the authority ends — at whitespace, `/`, `?`, `#`, `<`, `>` or
-//! the end of the line, never at a quote, which a userinfo may hold — is removed, the `@` with it, so `https://user:token@host/x`
-//! reads `https://host/x`. That covers http(s), `ssh://user:pass@host` and any other scheme
-//! (`git+ssh://`, `ftp://`). An scp-like address (`git@host:path`) is no URL and carries no
-//! password, so it is left as git wrote it.
+//! The rule only removes, never classifies: in every `scheme://` URL, everything between the `//`
+//! and the last `@` before the authority ends — at whitespace, `/`, `?`, `#`, `<`, `>` or the end
+//! of the line, never at a quote, which a userinfo may hold — is removed, the `@` with it, so
+//! `https://user:token@host/x` reads `https://host/x`. That covers http(s), `ssh://user:pass@host`
+//! and any other scheme (`git+ssh://`, `ftp://`). An scp-like address (`git@host:path`) is no URL
+//! and carries no password, so it is left as git wrote it.
 //!
 //! A line longer than the runner's piece limit is handed on in pieces, and a piece can end
 //! inside a URL's authority, so a scrubber carries across the pieces of one line what the last
@@ -193,12 +192,11 @@ impl std::fmt::Display for ScrubbedLine {
 }
 
 /// git's text as whole lines, each scrubbed of a URL's userinfo as it was added — what the
-/// engine hands the application of anything git wrote (R4.10): the lines one read of a pipe
-/// completed, a failure's retained output, a command log record's. A line holds no `\n`.
-/// Lines are added only as [`ScrubbedLine`]s, or scrubbed on the way in ([`Self::scrubbing`]),
-/// so nothing in it was not scrubbed. Bounded by its holder through [`Self::keep_last`], which
-/// lets go of whole lines, oldest first, and says so ([`Self::older_dropped`]) — never a cut
-/// inside a line.
+/// engine hands the application of anything git wrote: the lines one read of a pipe completed, a
+/// failure's retained output, a command log record's. A line holds no `\n`. Lines are added only as
+/// [`ScrubbedLine`]s, or scrubbed on the way in ([`Self::scrubbing`]), so nothing in it was not
+/// scrubbed. Bounded by its holder through [`Self::keep_last`], which lets go of whole lines,
+/// oldest first, and says so ([`Self::older_dropped`]) — never a cut inside a line.
 ///
 /// ```compile_fail
 /// // No literal: the fields are private.
@@ -393,7 +391,7 @@ impl PartialEq<String> for ScrubbedLines {
     }
 }
 
-/// `line` without its terminal control sequences (R10.5; Fork Tracker #1218 prints them raw):
+/// `line` without its terminal control sequences (Fork prints them raw, Fork Tracker #1218):
 /// every CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or `ESC \`) and two-byte escape, and every
 /// other control character but a tab — a carriage return a progress meter writes among them.
 pub fn strip_ansi(line: &str) -> String {
@@ -475,8 +473,8 @@ mod tests {
         Scrubber::new().line(line).into_string()
     }
 
-    /// R12.2's first case: an http(s) URL's user and password are removed, and nothing else
-    /// of the line. Caught by: the token drawn, or the host or path lost with it.
+    /// An http(s) URL's user and password are removed, and nothing else of the line. Caught by: the
+    /// token drawn, or the host or path lost with it.
     #[test]
     fn an_https_urls_userinfo_is_removed_and_the_rest_kept() {
         assert_eq!(
@@ -501,9 +499,8 @@ mod tests {
         );
     }
 
-    /// R12.2's ssh-style case: an `ssh://` URL's userinfo is removed as an http one's is, and
-    /// an scp-like address, which is no URL and holds no password, is left. Caught by: a rule
-    /// keyed on `http` alone.
+    /// An `ssh://` URL's userinfo is removed as an http one's is, and an scp-like address, which is
+    /// no URL and holds no password, is left. Caught by: a rule keyed on `http` alone.
     #[test]
     fn an_ssh_urls_userinfo_is_removed_and_an_scp_address_left() {
         assert_eq!(
@@ -520,10 +517,10 @@ mod tests {
         );
     }
 
-    /// R12.2's split case: a URL whose authority a piece's end cuts — a line longer than the
-    /// runner's piece limit — loses the userinfo on both sides of the cut, and a whole line
-    /// carries nothing to the next. Caught by: pieces scrubbed one at a time with nothing
-    /// carried, or a carry left over past a line's end.
+    /// A URL whose authority a piece's end cuts — a line longer than the runner's piece limit —
+    /// loses the userinfo on both sides of the cut, and a whole line carries nothing to the next.
+    /// Caught by: pieces scrubbed one at a time with nothing carried, or a carry left over past a
+    /// line's end.
     #[test]
     fn a_url_split_across_pieces_loses_its_userinfo_on_both_sides() {
         let mut scrubber = Scrubber::new();
@@ -556,10 +553,9 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA (TC3), for pieces: a line cut into two pieces at any byte — inside the
-    /// scheme, at or inside its `://`, in the userinfo, the host or after it — loses no
-    /// userinfo on either side of the cut. Caught by: a carry that waits for a whole `://`
-    /// before it starts.
+    /// A line cut into two pieces at any byte — inside the scheme, at or inside its `://`, in the
+    /// userinfo, the host or after it — loses no userinfo on either side of the cut. Caught by: a
+    /// carry that waits for a whole `://` before it starts.
     #[test]
     fn a_url_cut_at_any_byte_loses_its_userinfo() {
         let line = "error: 'https://user:tok@host/r' failed";
@@ -590,9 +586,8 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA (TC4): an apostrophe is legal in a userinfo, so it never ends one; a quote
-    /// git puts around a URL is kept. Caught by: an authority ended at a quote, the token after
-    /// it drawn.
+    /// An apostrophe is legal in a userinfo, so it never ends one; a quote git puts around a URL is
+    /// kept. Caught by: an authority ended at a quote, the token after it drawn.
     #[test]
     fn an_apostrophe_in_a_userinfo_does_not_end_it() {
         assert_eq!(
@@ -621,10 +616,11 @@ mod tests {
         assert_eq!(lines.to_string(), lines.text());
     }
 
-    /// The phase 12 QA's first finding: a terminal control character or escape sequence
-    /// between a scheme and its `://` hid the URL from the scrubber, and the window, stripping
-    /// escapes after, drew the credential whole. A line is stripped of them first, so what is
-    /// kept and drawn carries no userinfo. Caught by: scrubbing the line as git wrote it.
+    /// A terminal control character or escape sequence between a scheme and its `://` would
+    /// hide the URL from a scrubber reading the line as git wrote it, and a window stripping
+    /// escapes afterwards would draw the credential whole. A line is stripped of them first, so
+    /// what is kept and drawn carries no userinfo. Caught by: scrubbing the line as git wrote
+    /// it.
     #[test]
     fn an_escape_inside_a_url_does_not_hide_it() {
         for line in [
@@ -643,9 +639,9 @@ mod tests {
         assert_eq!(scrubber.line("//u:TOKEN@h/x").as_str(), "//h/x");
     }
 
-    /// The phase 12 QA's fifth finding: a whole line's authority ends at the line's end, so a URL
-    /// ending a line keeps its host — `From https://github.com` drawn whole, as git wrote it —
-    /// and loses only its userinfo. Caught by: a host at a line's end taken for a cut userinfo.
+    /// A whole line's authority ends at the line's end, so a URL ending a line keeps its host —
+    /// `From https://github.com` drawn whole, as git wrote it — and loses only its userinfo. Caught
+    /// by: a host at a line's end taken for a cut userinfo.
     #[test]
     fn a_url_ending_a_line_keeps_its_host() {
         assert_eq!(
@@ -657,9 +653,9 @@ mod tests {
         assert_eq!(scrubbed("to https://u:p@ss@h"), "to https://h");
     }
 
-    /// The phase 12 QA's fourth finding: a piece ending inside a userinfo — after an `@` of a
-    /// password that holds one, or anywhere in one longer than a piece — never draws any of it.
-    /// Caught by: a carry made only when no `@` was seen, or a carried run filling a piece drawn.
+    /// A piece ending inside a userinfo — after an `@` of a password that holds one, or anywhere in
+    /// one longer than a piece — never draws any of it. Caught by: a carry made only when no `@`
+    /// was seen, or a carried run filling a piece drawn.
     #[test]
     fn a_userinfo_cut_by_pieces_is_never_drawn() {
         let line = "x https://u:SEC@RET@host/y z";
@@ -684,9 +680,9 @@ mod tests {
         assert_eq!(format!("{first}{middle}{last}"), "see https://host/x done");
     }
 
-    /// R10.5: a hook's coloured output reads as its text — colours, cursor moves and window
-    /// titles gone, a carriage return gone, a tab kept. Caught by: an escape's tail left in
-    /// (`[31m`), or an OSC swallowing the text after it.
+    /// A hook's coloured output reads as its text — colours, cursor moves and window titles gone, a
+    /// carriage return gone, a tab kept. Caught by: an escape's tail left in (`[31m`), or an OSC
+    /// swallowing the text after it.
     #[test]
     fn ansi_sequences_and_control_characters_are_stripped() {
         assert_eq!(
@@ -710,8 +706,8 @@ mod tests {
         assert_eq!(scrubbed("ünicode https://ü:p@h/x"), "ünicode https://h/x");
     }
 
-    /// R4.10's tail: bounded by letting go of whole lines, oldest first, and saying so with a
-    /// plain fact — never a cut inside a line, never the newest line let go of. Caught by: a
+    /// A tail of git's lines is bounded by letting go of whole lines, oldest first, and saying so
+    /// with a plain fact — never a cut inside a line, never the newest line let go of. Caught by: a
     /// byte cut, the head kept instead of the end, or a dropped line not said.
     #[test]
     fn keeping_the_last_lets_go_of_whole_oldest_lines_and_says_so() {

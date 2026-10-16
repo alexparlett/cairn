@@ -1,6 +1,6 @@
 //! What the model promises about selections and patches, over the awkward cases.
 //!
-//! Criterion C4 of `docs/prd/diff-engine.md` lives here:
+//! That a selection and its patch are the same in every view is pinned here:
 //! `a_selection_and_its_patch_are_the_same_in_every_view`.
 //!
 //! The round-trip tests judge the emitter against two other paths written from different
@@ -99,9 +99,8 @@ fn every_other_change(text: &TextDiff) -> Selection {
     selection
 }
 
-/// **PRD criterion C4.** A selection survives unified rows, side-by-side rows, every
-/// context size and entire-file mode unchanged, and the emitter's output depends on none of
-/// them.
+/// A selection survives unified rows, side-by-side rows, every context size and entire-file mode
+/// unchanged, and the emitter's output depends on none of them.
 ///
 /// What it decides, in three parts. Every changed line is offered by every projection at
 /// every context, so clicking them all in any one view builds the identical `Selection`.
@@ -198,11 +197,11 @@ fn a_selection_and_its_patch_are_the_same_in_every_view() {
     }
 }
 
-/// C4's other half, stated independently. Asserting `emit_patch(x) == emit_patch(x)` cannot
-/// fail — the emitter is pure and no view can reach its arguments — so the claim that the
-/// patch does not follow the view needs a construction that does not come from the emitter:
-/// these exact bytes, and a context count taken from `PATCH_CONTEXT` rather than from
-/// whatever the views were built at.
+/// The other half of `a_selection_and_its_patch_are_the_same_in_every_view`, stated independently.
+/// Asserting `emit_patch(x) == emit_patch(x)` cannot fail — the emitter is pure and no view can
+/// reach its arguments — so the claim that the patch does not follow the view needs a construction
+/// that does not come from the emitter: these exact bytes, and a context count taken from
+/// `PATCH_CONTEXT` rather than from whatever the views were built at.
 ///
 /// Caught by: a changed `PATCH_CONTEXT`, a recount, a header, or an emitter that read a
 /// context from anywhere.
@@ -337,8 +336,7 @@ fn a_patch_gives_what_the_selection_means_over_every_awkward_case() {
     }
 }
 
-/// Selecting everything reproduces the new version exactly — the whole-file stage, which is
-/// what C1 will put through real git.
+/// Selecting everything reproduces the new version exactly — the whole-file stage.
 #[test]
 fn selecting_every_change_reproduces_the_new_version() {
     for fixture in corpus() {
@@ -354,7 +352,7 @@ fn selecting_every_change_reproduces_the_new_version() {
     }
 }
 
-/// The same patch backwards takes the result back to what it was made from (R1.6).
+/// The same patch backwards takes the result back to what it was made from.
 ///
 /// Skipped for a selection whose result is not a file a patch could be taken of again: a
 /// kept last line that never ended, with lines added after it, leaves the run-on line in the
@@ -446,14 +444,14 @@ fn a_patch_is_the_same_bytes_whatever_the_view_was_built_at() {
     );
 }
 
-/// R2.1, R2.7: unstage and discard — the forward rule over the inverted diff — undo exactly
-/// what git's mirrored rule says, for every seeded selection over every awkward case, and
-/// stage is the forward rule as it always was. Caught by: an inversion that leaves a span
-/// or a set on its side (the patch does not apply to the new side), and one that inverts a
-/// replacement as one change (what stays lands ahead of what comes back).
+/// Unstage and discard — the forward rule over the inverted diff — undo exactly what git's mirrored
+/// rule says, for every seeded selection over every awkward case, and stage is the forward rule
+/// over the diff as it stands. Caught by: an inversion that leaves a span or a set on its side (the
+/// patch does not apply to the new side), and one that inverts a replacement as one change (what
+/// stays lands ahead of what comes back).
 ///
 /// The oracle is `diffs::mirrored_result`, which never inverts; that real `git apply` agrees
-/// with both is `cairn-git`'s C3.
+/// with both is pinned in `cairn-git`'s tests.
 #[test]
 fn undoing_a_selection_leaves_what_the_mirrored_rule_says() {
     for fixture in corpus()

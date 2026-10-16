@@ -1,6 +1,6 @@
-//! The Local Changes view's two lists over a status (refs-and-status R9.1, R9.2): which of the
-//! paths `git status` listed go in Unstaged and which in Staged, in what order, and what each
-//! row draws — its path, a rename's or a copy's source, and its kind of change.
+//! The Local Changes view's two lists over a status: which of the paths `git status` listed go in
+//! Unstaged and which in Staged, in what order, and what each row draws — its path, a rename's or a
+//! copy's source, and its kind of change.
 //!
 //! **Laid out once, where it may take its time.** A status can list tens of thousands of paths
 //! (11,000 on the bench's scratch clone), so the lists are sorted when the status is read — on
@@ -9,13 +9,12 @@
 //! ([`LocalChanges::row_of`]), and the filter is a pass run on a worker
 //! ([`LocalChanges::matching`]). Nothing here is proportional to the status but those two.
 //!
-//! **Which list.** A tracked path is in Staged when it has a staged change, and in Unstaged when
-//! it has an unstaged one — in both when it has both (R9.1) — or when git listed it for a
-//! submodule's state alone; a conflicted path and an untracked one are in Unstaged, as Fork
-//! puts them (`fork-refs-and-status-ui.md` section 6). Each list is in Fork's natural order of
-//! its paths ([`path_order`], the sidebar's `natural_order`: case ignored, numbers read as
-//! numbers; the user's decision, 2026-10-07), so tracked and untracked paths are mixed by name,
-//! as Fork mixes them (it declined to list tracked paths first).
+//! **Which list.** A tracked path is in Staged when it has a staged change, and in Unstaged when it
+//! has an unstaged one — in both when it has both — or when git listed it for a submodule's state
+//! alone; a conflicted path and an untracked one are in Unstaged, as Fork puts them. Each list is
+//! in Fork's natural order of its paths ([`path_order`], the sidebar's `natural_order`: case
+//! ignored, numbers read as numbers), so tracked and untracked paths are mixed by name, as Fork
+//! mixes them, rather than tracked paths listed first.
 
 use std::cmp::Ordering;
 
@@ -51,7 +50,7 @@ impl ChangeList {
     pub const ALL: [Self; 2] = [Self::Unstaged, Self::Staged];
 }
 
-/// The kind of change a row's badge names (R9.1). Each is told apart by its badge's shape, never
+/// The kind of change a row's badge names. Each is told apart by its badge's shape, never
 /// its colour alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeKind {
@@ -72,7 +71,7 @@ pub enum ChangeKind {
 
 /// Where a row's path stands, which decides what its diff is asked as: a tracked path's diff
 /// is its list's side, an untracked path's is against nothing, and a conflicted path has none
-/// (its notice stands in place of one, R9.4).
+/// (its notice stands in place of one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathState {
     Tracked,
@@ -93,17 +92,16 @@ pub struct LocalChange<'a> {
 impl LocalChange<'_> {
     /// Whether the row is a repository nested in the working tree: an untracked row git lists
     /// as its directory, with a trailing `/` — git lists every other untracked path one per file
-    /// ([`StatusEntry::Untracked`]). A discard never touches one (staging-and-commit R8.4, the
-    /// user's decision of 2026-10-10 on phase 15's Q6).
+    /// ([`StatusEntry::Untracked`]). A discard never touches one.
     pub fn is_nested_repository(&self) -> bool {
         self.state == PathState::Untracked && self.path.as_bytes().ends_with(b"/")
     }
 }
 
-/// Which rows of each list a filter's text leaves, by their place in the list, in order, and
-/// how many distinct paths those rows show — a path left in both lists counted once, as
-/// [`LocalChanges::paths`] counts the status's (the user's decision, 2026-10-07: "Showing N of M
-/// files" counts paths, as the sidebar's count does).
+/// Which rows of each list a filter's text leaves, by their place in the list, in order, and how
+/// many distinct paths those rows show — a path left in both lists counted once, as
+/// [`LocalChanges::paths`] counts the status's: "Showing N of M files" counts paths, as the
+/// sidebar's count does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MatchedRows {
     pub unstaged: Vec<u32>,
@@ -126,9 +124,8 @@ pub enum StagedAgainst {
     /// `HEAD`: what `git diff --cached` shows, as `git status` lists it.
     Head,
     /// `HEAD`'s parent — `None` for a root commit, whose amend compares with the empty tree:
-    /// amend's staged list (staging-and-commit R6.3, R10.3), what the amended commit will hold
-    /// that the parent does not, so a file of the commit being amended can be unstaged out
-    /// of it.
+    /// amend's staged list, what the amended commit will hold that the parent does not, so a file
+    /// of the commit being amended can be unstaged out of it.
     HeadParent(Option<Oid>),
 }
 
@@ -138,7 +135,7 @@ pub struct LocalChanges {
     status: WorkingTreeStatus,
     unstaged: Vec<u32>,
     staged: Vec<u32>,
-    /// How many distinct paths the status lists (R9.2).
+    /// How many distinct paths the status lists.
     paths: usize,
     staged_against: StagedAgainst,
 }
@@ -182,13 +179,13 @@ impl LocalChanges {
         }
     }
 
-    /// The lists while Amend is ticked (staging-and-commit R10.3, as Fork lists an amend's
-    /// files among the staged changes): Unstaged as `status` lists it, and Staged as amend's
-    /// staged list — `staged`, the index against `HEAD`'s `parent` (`None` for a root
-    /// commit), which `cairn_git`'s `Repository::amend_staged` reads — so the commit being
-    /// amended shows what it will hold, and a file of it can be unstaged out of it. A
-    /// path's staged change is the one `staged` names, or none; a path neither list then
-    /// holds is not listed. Laid out where the status is, never on the UI thread.
+    /// The lists while Amend is ticked (as Fork lists an amend's files among the staged changes):
+    /// Unstaged as `status` lists it, and Staged as amend's staged list — `staged`, the index
+    /// against `HEAD`'s `parent` (`None` for a root commit), which `cairn_git`'s
+    /// `Repository::amend_staged` reads — so the commit being amended shows what it will hold, and
+    /// a file of it can be unstaged out of it. A path's staged change is the one `staged` names, or
+    /// none; a path neither list then holds is not listed. Laid out where the status is, never on
+    /// the UI thread.
     pub fn amending(
         status: WorkingTreeStatus,
         staged: Vec<ChangedFile>,
@@ -224,7 +221,7 @@ impl LocalChanges {
     }
 
     /// How many distinct paths the status lists: a path in both lists counts once, and so does
-    /// a path whose staged deletion and untracked copy git lists apart (R9.2).
+    /// a path whose staged deletion and untracked copy git lists apart.
     pub fn paths(&self) -> usize {
         self.paths
     }
@@ -272,7 +269,7 @@ impl LocalChanges {
     /// The row of `list` that `path` is listed on or would be listed at: the first row whose
     /// path is not before it in [`path_order`] — the list's length when every path is. A path a
     /// refresh or an action took away is found its place by it: the row there now is the one
-    /// that took its place (staging-and-commit R8.3, L5). A binary search, like [`Self::row_of`].
+    /// that took its place. A binary search, like [`Self::row_of`].
     pub fn row_from(&self, list: ChangeList, path: &RepoPath) -> usize {
         let entries = self.entries();
         self.list(list).partition_point(|index| {
@@ -280,12 +277,11 @@ impl LocalChanges {
         })
     }
 
-    /// The paths a whole-file stage or unstage of `rows` of `list` names
-    /// (staging-and-commit R3.4, R8.2): each row's path, and a rename's source beside it, so a
-    /// rename moves whole — `git reset -q -- <old> <new>` unstages a staged rename, `git add
-    /// -- <old> <new>` stages one the working tree pairs. A copy's source is unchanged and is
-    /// left out, and so is a row past the list's end; each path is named once, in the order
-    /// first met.
+    /// The paths a whole-file stage or unstage of `rows` of `list` names: each row's path, and a
+    /// rename's source beside it, so a rename moves whole — `git reset -q -- <old> <new>` unstages
+    /// a staged rename, `git add -- <old> <new>` stages one the working tree pairs. A copy's source
+    /// is unchanged and is left out, and so is a row past the list's end; each path is named once,
+    /// in the order first met.
     pub fn whole_file_paths(
         &self,
         list: ChangeList,
@@ -586,14 +582,13 @@ mod tests {
         }
     }
 
-    /// Staging-and-commit R10.3: while Amend is ticked, Staged lists amend's staged list —
-    /// a file of the commit being amended that the index still holds as it committed it
-    /// among them, with its kind against `HEAD`'s parent and a rename's source — and Unstaged
-    /// is the status's, unchanged; a path status listed for a staged change alone that the
-    /// amend does not hold is in neither list; the lists say what Staged is against. Caught
-    /// by: the status's staged changes kept (a file of the amended commit missing, so it can
-    /// never be unstaged out of it), an unstaged change lost, or a path left in Unstaged for
-    /// want of a change.
+    /// While Amend is ticked, Staged lists amend's staged list — a file of the commit being amended
+    /// that the index still holds as it committed it among them, with its kind against `HEAD`'s
+    /// parent and a rename's source — and Unstaged is the status's, unchanged; a path status listed
+    /// for a staged change alone that the amend does not hold is in neither list; the lists say
+    /// what Staged is against. Caught by: the status's staged changes kept (a file of the amended
+    /// commit missing, so it can never be unstaged out of it), an unstaged change lost, or a path
+    /// left in Unstaged for want of a change.
     #[test]
     fn amending_lists_amends_staged_list_beside_the_status_unstaged_one() {
         let parent = Oid::from_bytes(&[3; 20]).ok();
@@ -659,11 +654,11 @@ mod tests {
         assert_eq!(root.staged_against(), StagedAgainst::HeadParent(None));
     }
 
-    /// R9.1: a path with a staged and an unstaged change is in both lists; one with only a
-    /// staged change is in Staged alone; conflicted and untracked paths are in Unstaged; and each
-    /// list is in its paths' order, untracked mixed with tracked by name — whatever order git
-    /// listed them in. Caught by: a path both staged and unstaged in one list only, a conflict or
-    /// an untracked path in Staged, or git's order kept (untracked after tracked).
+    /// A path with a staged and an unstaged change is in both lists; one with only a staged change
+    /// is in Staged alone; conflicted and untracked paths are in Unstaged; and each list is in its
+    /// paths' order, untracked mixed with tracked by name — whatever order git listed them in.
+    /// Caught by: a path both staged and unstaged in one list only, a conflict or an untracked path
+    /// in Staged, or git's order kept (untracked after tracked).
     #[test]
     fn each_path_is_in_the_lists_its_changes_put_it_in_ordered_by_name() {
         let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
@@ -720,10 +715,9 @@ mod tests {
         assert_eq!(changes.get(ChangeList::Staged, 2), None);
     }
 
-    /// R9.1's badges: every staged and unstaged kind, a rename's and a copy's source, an
-    /// intent-to-add entry as added, and a submodule as a submodule whatever changed in it.
-    /// Caught by: a kind mapped to another's badge, a source dropped, or a submodule drawn as a
-    /// modified file.
+    /// The badges: every staged and unstaged kind, a rename's and a copy's source, an intent-to-add
+    /// entry as added, and a submodule as a submodule whatever changed in it. Caught by: a kind
+    /// mapped to another's badge, a source dropped, or a submodule drawn as a modified file.
     #[test]
     fn each_change_is_drawn_as_its_kind_with_a_sources_path() {
         let similar = Similarity::from_percent(90);
@@ -823,9 +817,9 @@ mod tests {
         assert_eq!(changes.row_of(S, &RepoPath::from("g")), None);
     }
 
-    /// R9.2: the count is of distinct paths — a path in both lists once, and a path git lists
-    /// twice (its staged deletion, and an untracked file at the same name) once — and nothing
-    /// for a status git gave no list in. Caught by: counting rows, or entries.
+    /// The count is of distinct paths — a path in both lists once, and a path git lists twice (its
+    /// staged deletion, and an untracked file at the same name) once — and nothing for a status git
+    /// gave no list in. Caught by: counting rows, or entries.
     #[test]
     fn the_count_is_of_distinct_paths() {
         let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
@@ -887,10 +881,10 @@ mod tests {
         );
     }
 
-    /// A path's place in a list (staging-and-commit R8.3, L5): its own row while it is listed,
-    /// else the row of the first path after it in the list's order — numbers read as numbers,
-    /// case ignored — and the list's length past its last. Caught by: a place found in the
-    /// paths' bytes rather than the list's order (`b10` before `b9`), or the row before it.
+    /// A path's place in a list: its own row while it is listed, else the row of the first path
+    /// after it in the list's order — numbers read as numbers, case ignored — and the list's length
+    /// past its last. Caught by: a place found in the paths' bytes rather than the list's order
+    /// (`b10` before `b9`), or the row before it.
     #[test]
     fn a_path_is_given_its_place_in_a_list_listed_or_not() {
         let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
@@ -945,10 +939,10 @@ mod tests {
         assert_eq!(changes.matching("src", || false), None);
     }
 
-    /// The user's decision (2026-10-07): what a filter leaves is counted in distinct paths, as
-    /// the status is — a path left in both lists once, and a staged deletion and an untracked
-    /// file of one name once — and a path left in one list alone once. Caught by: counting the
-    /// rows left (4 for "gone" and "both" alike), or counting only one list's rows.
+    /// What a filter leaves is counted in distinct paths, as the status is — a path left in both
+    /// lists once, and a staged deletion and an untracked file of one name once — and a path left
+    /// in one list alone once. Caught by: counting the rows left (4 for "gone" and "both" alike),
+    /// or counting only one list's rows.
     #[test]
     fn what_a_filter_leaves_is_counted_in_distinct_paths() {
         let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
@@ -975,11 +969,10 @@ mod tests {
         assert_eq!(paths("o"), 2);
     }
 
-    /// The user's decision (2026-10-07): each list is in Fork's natural order — case ignored,
-    /// numbers read as numbers — and a path is found by a search in that same order, two paths
-    /// that read alike as text (bytes that are not UTF-8) told apart by their bytes. Caught by:
-    /// a bytewise sort (`B10` before `a`, `b10` before `b2`), or a search in another order than
-    /// the sort's (a path listed and not found).
+    /// Each list is in Fork's natural order — case ignored, numbers read as numbers — and a path is
+    /// found by a search in that same order, two paths that read alike as text (bytes that are not
+    /// UTF-8) told apart by their bytes. Caught by: a bytewise sort (`B10` before `a`, `b10` before
+    /// `b2`), or a search in another order than the sort's (a path listed and not found).
     #[test]
     fn each_list_is_in_natural_order_and_found_in_it() {
         let paths: Vec<Vec<u8>> = vec![
@@ -1047,10 +1040,10 @@ mod tests {
         }
     }
 
-    /// R3.4, R8.2: a whole-file stage or unstage names each row's path, and a rename's source
-    /// beside it in either list, so the rename moves whole; a copy's source is left alone; a
-    /// path met twice is named once; a row past the end names nothing. Caught by: an unstaged
-    /// rename leaving its source staged, a copy's source reset, or a path named twice.
+    /// A whole-file stage or unstage names each row's path, and a rename's source beside it in
+    /// either list, so the rename moves whole; a copy's source is left alone; a path met twice is
+    /// named once; a row past the end names nothing. Caught by: an unstaged rename leaving its
+    /// source staged, a copy's source reset, or a path named twice.
     #[test]
     fn a_whole_file_action_names_each_rows_path_and_a_renames_source() {
         let renamed = |from: &str| StagedChange::Renamed {
@@ -1101,10 +1094,9 @@ mod tests {
         );
     }
 
-    /// The user's decision of 2026-10-10 (phase 15, Q6): an untracked row with a trailing `/` —
-    /// how git lists a nested repository — is one, and nothing else is: an untracked file, a
-    /// tracked directory-like path, a submodule. Caught by: a nested repository read as a file a
-    /// discard deletes, or a file kept as if it were one.
+    /// An untracked row with a trailing `/` — how git lists a nested repository — is one, and
+    /// nothing else is: an untracked file, a tracked directory-like path, a submodule. Caught by: a
+    /// nested repository read as a file a discard deletes, or a file kept as if it were one.
     #[test]
     fn a_nested_repository_is_the_untracked_row_git_lists_as_its_directory() {
         let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![

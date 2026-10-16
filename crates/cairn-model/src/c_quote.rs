@@ -1,4 +1,4 @@
-//! A path as a patch spells it: git's `quote_c_style`, byte for byte (R2.5, L17e).
+//! A path as a patch spells it: git's `quote_c_style`, byte for byte.
 //!
 //! `git apply` refuses a raw tab in a path line and reads a quoted name back through
 //! `unquote_c_style`, so every path the emitter writes goes through here. The rules are
@@ -87,7 +87,7 @@ mod tests {
 
     /// Each awkward name in the spelling `git diff` printed for it under git 2.56.0 and
     /// 2.30.9 (`docs/systems/diff.md`, "Path lines"); what proves these against git itself
-    /// is `cairn-git`'s C3, which applies each with real `git apply`.
+    /// is `cairn-git`'s test that applies each with real `git apply`.
     #[test]
     fn each_awkward_name_is_spelled_as_git_spells_it() {
         for (name, spelled) in [

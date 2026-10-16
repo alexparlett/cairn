@@ -1,7 +1,7 @@
 //! A page of history rows as the worker hands it over: its rows, its own text and the
 //! authors it names, its lane changes and its snapshots, its rows' labels and its stashes —
 //! flat vectors, so a page is a handful of allocations whatever its length, and appending
-//! it to a [`crate::History`] copies it into the history's stores (PRD R4.3, R4.7).
+//! it to a [`crate::History`] copies it into the history's stores.
 
 use crate::{GraphRow, Label, Lane, LaneChange, LaneSnapshot, Oid, RefKind};
 
@@ -17,7 +17,7 @@ pub struct PagedCommit<'a> {
     pub author_time: i64,
 }
 
-/// What a stash's row says beyond its lane (PRD R4.2): the stash commit is the row's id.
+/// What a stash's row says beyond its lane: the stash commit is the row's id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PagedStash<'a> {
     /// `0` is the newest: `stash@{0}`.
@@ -65,7 +65,7 @@ pub(crate) struct PageRow {
     pub(crate) head: bool,
     /// The row is a stash's, not a commit's.
     pub(crate) stash: Option<PageStash>,
-    /// No ref reaches the row's commit: only a reflog does (staging-and-commit R11.1).
+    /// No ref reaches the row's commit: only a reflog does.
     pub(crate) lost: bool,
 }
 
@@ -97,7 +97,7 @@ impl RowsPage {
     }
 
     /// Appends the row `graph` lays out, for the commit `commit` describes, carrying the
-    /// refs that point at it and whether it is `HEAD`'s (PRD R4.3). The labels are kept
+    /// refs that point at it and whether it is `HEAD`'s. The labels are kept
     /// bytewise by full name — a snapshot's own order, which a walk hands them in — so that
     /// [`crate::RowLabels::find`] can search them; any other order is sorted into that one.
     pub fn push_labelled(
@@ -130,7 +130,7 @@ impl RowsPage {
     }
 
     /// Appends the row `graph` lays out for a commit no ref reaches — one only a reflog's
-    /// entry does, which Show Lost Commits draws dimmed (staging-and-commit R11.1). No ref
+    /// entry does, which Show Lost Commits draws dimmed. No ref
     /// points at it and it is not `HEAD`'s, or a ref would reach it.
     pub fn push_lost(&mut self, graph: GraphRow, commit: PagedCommit<'_>) {
         let at = self.labels.len();
@@ -151,7 +151,7 @@ impl RowsPage {
         self.rows.get(index).is_some_and(|row| row.lost)
     }
 
-    /// Appends the row `graph` lays out for a stash (PRD R4.2): its id is the stash commit,
+    /// Appends the row `graph` lays out for a stash: its id is the stash commit,
     /// its subject the stash's message.
     pub fn push_stash(&mut self, graph: GraphRow, stash: PagedStash<'_>) {
         let commit = PagedCommit {

@@ -172,11 +172,11 @@ impl RefsSnapshot {
             .and_then(|at| self.refs.get(at))
     }
 
-    /// Whether a history walked from `other` is the one walked from this: the same refs
-    /// naming the same objects (a symbolic ref's target among them), the same `HEAD` and the
-    /// same stash list (PRD R10.4). An upstream's configuration and the count of refs that
-    /// could not be read draw nothing in the graph, so they are left out: a refresh that
-    /// finds only those changed leaves the history alone.
+    /// Whether a history walked from `other` is the one walked from this: the same refs naming the
+    /// same objects (a symbolic ref's target among them), the same `HEAD` and the same stash list.
+    /// An upstream's configuration and the count of refs that could not be read draw nothing in the
+    /// graph, so they are left out: a refresh that finds only those changed leaves the history
+    /// alone.
     pub fn walks_as(&self, other: &Self) -> bool {
         self.head == other.head
             && self.stashes == other.stashes
@@ -190,11 +190,11 @@ impl RefsSnapshot {
     }
 
     /// The refs and stashes whose names hold `text`, by index in [`Self::refs`] and
-    /// [`Self::stashes`], in order — or `None` when `keep_going` says to stop, asked before
-    /// the first and every few thousand after. The sidebar's filter (PRD R8.3): a ref by its
-    /// name past its namespace (`main`, `origin/main`, `v1.0`), a stash by its message; the
-    /// text anywhere in it, case ignored, as the Changes tab's file filter reads its text. An
-    /// empty `text` matches everything. A pass over every ref, so a worker's.
+    /// [`Self::stashes`], in order — or `None` when `keep_going` says to stop, asked before the
+    /// first and every few thousand after. The sidebar's filter: a ref by its name past its
+    /// namespace (`main`, `origin/main`, `v1.0`), a stash by its message; the text anywhere in it,
+    /// case ignored, as the Changes tab's file filter reads its text. An empty `text` matches
+    /// everything. A pass over every ref, so a worker's.
     pub fn matching(
         &self,
         text: &str,
@@ -425,12 +425,11 @@ mod tests {
         }
     }
 
-    /// PRD R10.4: a refresh reopens the history when a ref moved, appeared or went, a
-    /// symbolic ref was retargeted, `HEAD`'s state changed or the stash list did, and not
-    /// for what the graph does not draw — an upstream's configuration, the count of refs
-    /// that could not be read. Caught by: comparing whole snapshots (an upstream edit reopens
-    /// the history), or leaving any drawn part out (a moved ref, a checkout that moves no
-    /// ref, a dropped stash leave the graph stale).
+    /// A refresh reopens the history when a ref moved, appeared or went, a symbolic ref was
+    /// retargeted, `HEAD`'s state changed or the stash list did, and not for what the graph does
+    /// not draw — an upstream's configuration, the count of refs that could not be read. Caught by:
+    /// comparing whole snapshots (an upstream edit reopens the history), or leaving any drawn part
+    /// out (a moved ref, a checkout that moves no ref, a dropped stash leave the graph stale).
     #[test]
     fn a_walk_is_the_same_unless_what_it_draws_changed() {
         let base = snapshot_of(&["refs/heads/main", "refs/heads/topic"], &["On main: wip"]);
@@ -478,11 +477,10 @@ mod tests {
         }
     }
 
-    /// PRD R8.3: the sidebar's filter keeps the refs whose name past its namespace holds the
-    /// text, and the stashes whose message does, case ignored; an empty text keeps
-    /// everything; a stop asked for is honoured. Caught by: matching the full name (`heads`
-    /// would keep every branch), a case-sensitive match, stashes left out, or a filter that
-    /// runs on after it was told to stop.
+    /// The sidebar's filter keeps the refs whose name past its namespace holds the text, and the
+    /// stashes whose message does, case ignored; an empty text keeps everything; a stop asked for
+    /// is honoured. Caught by: matching the full name (`heads` would keep every branch), a
+    /// case-sensitive match, stashes left out, or a filter that runs on after it was told to stop.
     #[test]
     fn the_sidebar_filter_keeps_the_names_that_hold_its_text() {
         let snapshot = snapshot_of(

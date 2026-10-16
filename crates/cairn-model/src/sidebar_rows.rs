@@ -1,22 +1,20 @@
-//! The sidebar's list of refs as rows (refs-and-status R8.1-R8.4): its sections in Fork's
-//! order — Branches, Remotes, Tags, Stashes — branches and remote-tracking refs grouped into
-//! folders split at `/`, each a row of its own, and only what its open sections and folders
-//! show. Laid out from a snapshot, a filter's text and what is open, in one pass over every
-//! ref, so a worker's — the window keeps the rows it answers and reads each ref's name from
-//! the snapshot by index as it draws the row.
+//! The sidebar's list of refs as rows: its sections in Fork's order — Branches, Remotes, Tags,
+//! Stashes — branches and remote-tracking refs grouped into folders split at `/`, each a row of its
+//! own, and only what its open sections and folders show. Laid out from a snapshot, a filter's text
+//! and what is open, in one pass over every ref, so a worker's — the window keeps the rows it
+//! answers and reads each ref's name from the snapshot by index as it draws the row.
 //!
-//! At each level of a section, folders come first and then the refs, each in natural order —
-//! case ignored, a run of digits read as a number, so `b2` comes before `b10` and `Alpha`
-//! before `beta` before `Gamma` ([`natural_order`]): Fork's natural sort, folders first (the
-//! user's decision, 2026-10-07). Tags are listed whole in the same order; stashes in the stash
-//! list's. The snapshot's own order (bytewise by name) sorts every name under one folder
-//! together — the names between two that start `feature/` start `feature/` too — so a folder
-//! is found as a run of the refs at its level, and only then put in its place.
+//! At each level of a section, folders come first and then the refs, each in natural order — case
+//! ignored, a run of digits read as a number, so `b2` comes before `b10` and `Alpha` before `beta`
+//! before `Gamma` ([`natural_order`]): Fork's natural sort, folders first. Tags are listed whole in
+//! the same order; stashes in the stash list's. The snapshot's own order (bytewise by name) sorts
+//! every name under one folder together — the names between two that start `feature/` start
+//! `feature/` too — so a folder is found as a run of the refs at its level, and only then put in
+//! its place.
 //!
-//! While the filter holds text every section and folder is drawn open, so what matches is
-//! never hidden behind a closed one, and a section with no match has no caption (the user's
-//! decision, 2026-10-07). A detached `HEAD` is the first row under Branches, as Fork draws
-//! it.
+//! While the filter holds text every section and folder is drawn open, so what matches is never
+//! hidden behind a closed one, and a section with no match has no caption. A detached `HEAD` is the
+//! first row under Branches, as Fork draws it.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -47,7 +45,7 @@ impl SidebarSection {
         }
     }
 
-    /// Whether the section's refs are grouped into folders by `/` (R8.2): branches and
+    /// Whether the section's refs are grouped into folders by `/`: branches and
     /// remote-tracking refs, never tags.
     fn has_folders(self) -> bool {
         match self {
@@ -234,7 +232,7 @@ impl<F: FnMut() -> bool> Pass<F> {
 }
 
 impl RefsSnapshot {
-    /// The sidebar's rows for this snapshot (R8.1-R8.3): every section's caption in Fork's
+    /// The sidebar's rows for this snapshot: every section's caption in Fork's
     /// order and, under each open one, the refs whose names hold `text` (`matching`'s rule),
     /// branches and remote-tracking refs grouped into folders by `/`, folders first at each
     /// level, and the stashes whose messages hold it. `None` when `keep_going` says to stop,
@@ -507,7 +505,7 @@ mod tests {
         "refs/tags/release/2.0",
     ];
 
-    /// R8.1, R8.2: the sections in Fork's order, every one drawn; branches and remotes in
+    /// The sections in Fork's order, every one drawn; branches and remotes in
     /// folders split at `/`, folders first at each level then the refs, each in name order; a
     /// closed folder hides what it holds; tags never foldered; every stash listed. Caught
     /// by: sections out of order or one missing, a folder's refs drawn under a closed folder,
@@ -549,7 +547,7 @@ mod tests {
         );
     }
 
-    /// R8.3 and the user's decision (2026-10-07): the filter keeps the refs whose name holds
+    /// The filter keeps the refs whose name holds
     /// the text and the stashes whose message does, and draws every section and folder open —
     /// a closed one too — so a match is never hidden; a section nothing matched in draws no
     /// caption. Caught by: matches left inside a closed folder or section, or a caption drawn
@@ -595,7 +593,7 @@ mod tests {
         assert!(drawn(&snapshot, &rows).contains(&"[Tags]".to_owned()));
     }
 
-    /// The user's decision (2026-10-07): Fork's natural order, folders first — at each level
+    /// Fork's natural order, folders first — at each level
     /// folders, then refs, each with case ignored and numbers read as numbers; tags the same.
     /// Caught by: bytewise order (`Gamma` before `alpha`, `b10` before `b2`), or folders mixed
     /// in among the refs.

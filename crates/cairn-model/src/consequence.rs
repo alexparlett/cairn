@@ -1,15 +1,12 @@
 //! What a destructive operation will destroy, and the words a person is shown
 //! for it.
 //!
-//! A [`Consequence`] is computed by the engine from the repository as it is,
-//! and the prompt and the button's label are rendered from it here, beside the
-//! type, so no text that names a count or a path can be typed apart from the
-//! value it describes. [`crate::Confirmed`] carries one, with the prompt
-//! rendered from it, and every destructive operation re-reads the state it
-//! names immediately before it runs, refusing when anything moved
-//! (`docs/prd/staging-and-commit.md` R1). An operation derives every target —
-//! each path, each line — from the `Consequence` it was confirmed with, never
-//! from a parameter beside it.
+//! A [`Consequence`] is computed by the engine from the repository as it is, and the prompt and the
+//! button's label are rendered from it here, beside the type, so no text that names a count or a
+//! path can be typed apart from the value it describes. [`crate::Confirmed`] carries one, with the
+//! prompt rendered from it, and every destructive operation re-reads the state it names immediately
+//! before it runs, refusing when anything moved. An operation derives every target — each path,
+//! each line — from the `Consequence` it was confirmed with, never from a parameter beside it.
 //!
 //! Every count and path a prompt renders is read from the value: nothing here
 //! looks at a repository, a clock or a setting, so the same `Consequence`
@@ -25,10 +22,9 @@ use crate::{FileMode, Oid, Patch, RefName, RepoPath, Selection};
 
 /// What one destructive operation will destroy, as the engine read it.
 ///
-/// One variant per destructive operation of R1.5. Discarding files and
-/// deleting untracked files share [`Consequence::DiscardFiles`]: Fork confirms
-/// a selection of both in one dialog, with one prompt naming each kind
-/// (`docs/prd/staging-and-commit.md` R3, L8), and one prompt is one confirmation.
+/// One variant per destructive operation. Discarding files and deleting untracked files share
+/// [`Consequence::DiscardFiles`]: Fork confirms a selection of both in one dialog, with one prompt
+/// naming each kind, and one prompt is one confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Consequence {
     /// Selected lines of one path's unstaged change, and its mode change when
@@ -61,9 +57,9 @@ pub enum Consequence {
         /// then the working tree's, which the discard puts back to the first.
         /// Present exactly when the selection holds the mode.
         mode: Option<(FileMode, FileMode)>,
-        /// Whether the selection is the chunk a hovered chunk's own Discard took — every
-        /// changed line of the hunk drawn — rather than lines selected by a drag: the prompt
-        /// names it "this chunk" (staging-and-commit phase 15). Words alone: no re-check reads it.
+        /// Whether the selection is the chunk a hovered chunk's own Discard took — every changed
+        /// line of the hunk drawn — rather than lines selected by a drag: the prompt names it "this
+        /// chunk". Words alone: no re-check reads it.
         chunk: bool,
         /// The patch the discard applies, emitted from the diff the user confirmed
         /// with this selection: what runs is what was confirmed, never a patch built
@@ -74,9 +70,9 @@ pub enum Consequence {
     /// index, each untracked file deleted. Never empty when the engine builds
     /// it.
     DiscardFiles { files: Vec<DiscardedFile> },
-    /// `HEAD` replaced by an amended commit (staging-and-commit R6.4): the commit, the remote
-    /// ref that has it, and whether git will log the move — what the amend re-checks, and
-    /// nothing drawn for display alone, so no display field is ever a freshness condition.
+    /// `HEAD` replaced by an amended commit: the commit, the remote ref that has it, and whether
+    /// git will log the move — what the amend re-checks, and nothing drawn for display alone, so no
+    /// display field is ever a freshness condition.
     Amend {
         commit: Oid,
         published: Publication,
@@ -101,11 +97,10 @@ pub enum Consequence {
         device: u64,
         inode: u64,
     },
-    /// A branch created at a commit and checked out with Fork's forced checkout (`git checkout
-    /// -q --no-track -f -b <branch> <at> --`; staging-and-commit R11.3, the user's decision of
-    /// 2026-10-10): the local changes and any untracked files in the way discarded, as git
-    /// decides. Fixed and generic — it predicts nothing of what git deletes (the redesign's rule
-    /// 7) — and what the re-check holds: `HEAD`, the commit and the name, nothing else (R1.4).
+    /// A branch created at a commit and checked out with Fork's forced checkout (`git checkout -q
+    /// --no-track -f -b <branch> <at> --`): the local changes and any untracked files in the way
+    /// discarded, as git decides. Fixed and generic — it predicts nothing of what git deletes — and
+    /// what the re-check holds: `HEAD`, the commit and the name, nothing else.
     CheckoutDiscarding {
         /// The branch created, as typed.
         branch: String,
@@ -144,16 +139,14 @@ pub enum FileLoss {
         /// Changed lines of the unstaged diff; `None` for a change that has no
         /// lines (binary).
         lines: Option<usize>,
-        /// The mode change the restore takes back, as the diff draws it: the
-        /// index's mode, then the working tree's. Detail of the file, never the
-        /// prompt's sentence (the redesign's D2).
+        /// The mode change the restore takes back, as the diff draws it: the index's mode, then the
+        /// working tree's. Detail of the file, never the prompt's sentence.
         mode: Option<(FileMode, FileMode)>,
     },
-    /// A file added with `git add -N`, whose index entry is the empty blob:
-    /// `git restore` writes that entry back, so the discard leaves the file
-    /// EMPTY and the entry in place, as the user's own `git restore` does (the
-    /// user's decision of 2026-10-08; N3, checked against real git in phase 15:
-    /// git empties it and keeps the entry, on every git the gate runs).
+    /// A file added with `git add -N`, whose index entry is the empty blob: `git restore` writes
+    /// that entry back, so the discard leaves the file EMPTY and the entry in place, as `git
+    /// restore` run by hand does (checked against real git: git empties it and keeps the entry, on
+    /// every git the gate runs).
     Emptied {
         /// The intent-to-add entry's blob, the empty one, what the file becomes.
         index: Oid,
@@ -176,16 +169,14 @@ pub enum FileLoss {
     },
 }
 
-/// Whether git records an amend's move of the branch and `HEAD` in a reflog —
-/// and so whether the replaced commit can be found again afterwards (R10.6,
-/// decided by the user on 2026-10-08).
+/// Whether git records an amend's move of the branch and `HEAD` in a reflog — and so whether the
+/// replaced commit can be found again afterwards.
 ///
-/// git writes the entry when `core.logAllRefUpdates` is `true` or `always` —
-/// `true` by default in a repository with a working tree, `false` in a bare one
-/// — or, whatever it is set to, when the ref's log file already exists, since
-/// git appends to an existing log (checked with git 2.56: an amend under
-/// `false` from the start writes no `.git/logs`, and under `false` set after
-/// the logs exist still appends to them). The engine reads which (phase 05).
+/// git writes the entry when `core.logAllRefUpdates` is `true` or `always` — `true` by default in a
+/// repository with a working tree, `false` in a bare one — or, whatever it is set to, when the
+/// ref's log file already exists, since git appends to an existing log (checked with git 2.56: an
+/// amend under `false` from the start writes no `.git/logs`, and under `false` set after the logs
+/// exist still appends to them). The engine reads which.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reflog {
     /// git will write the entry: the replaced commit stays findable.
@@ -258,9 +249,9 @@ impl Consequence {
         }
     }
 
-    /// How many files "Show files" lists under the prompt (staging-and-commit R1.2, R7.4, the
-    /// redesign's D2): a discard of several files lists each; one file, lines and every other
-    /// operation list none, since what they take is already on screen (rule 6).
+    /// How many files "Show files" lists under the prompt: a discard of several files lists each;
+    /// one file, lines and every other operation list none, since what they take is already on
+    /// screen.
     pub fn listed(&self) -> usize {
         match self {
             Self::DiscardFiles { files } if files.len() > 1 => files.len(),
@@ -273,11 +264,10 @@ impl Consequence {
     }
 
     /// The `at`th file "Show files" lists: its path, quoted as a prompt quotes one, and what
-    /// happens to it in the user's words of 2026-10-10 (phase 15's Q3) — "14 lines" or "1
-    /// line", "Binary", "Restored" (a file deleted in the working tree, brought back),
-    /// "Deleted" (an untracked file), "Emptied" (an intent-to-add file), "Mode change", "14
-    /// lines and mode change", "Binary and mode change"; no mode in octal. Read one row at a
-    /// time, so a virtualized list asks only for the rows it draws. `None` past
+    /// happens to it — "14 lines" or "1 line", "Binary", "Restored" (a file deleted in the working
+    /// tree, brought back), "Deleted" (an untracked file), "Emptied" (an intent-to-add file), "Mode
+    /// change", "14 lines and mode change", "Binary and mode change"; no mode in octal. Read one
+    /// row at a time, so a virtualized list asks only for the rows it draws. `None` past
     /// [`Self::listed`].
     pub fn listed_file(&self, at: usize) -> Option<(String, String)> {
         let file = match self {
@@ -331,10 +321,10 @@ impl Consequence {
         }
     }
 
-    /// Whether the operation must be confirmed before it runs (staging-and-commit R1.5): every
-    /// destructive operation but an amend git logs and no remote has, which Show Lost Commits
-    /// recovers and which runs at once, asking nothing. An amend a remote already has, or one
-    /// git keeps no reflog for, is confirmed first.
+    /// Whether the operation must be confirmed before it runs: every destructive operation but an
+    /// amend git logs and no remote has, which Show Lost Commits recovers and which runs at once,
+    /// asking nothing. An amend a remote already has, or one git keeps no reflog for, is confirmed
+    /// first.
     pub fn needs_confirming(&self) -> bool {
         match self {
             Self::Amend {
@@ -379,7 +369,7 @@ impl Consequence {
                 )
             }
             Self::Amend { .. } => "Amend".to_owned(),
-            // Confirmed by the Create Branch dialog's own button, which reads so (B3).
+            // Confirmed by the Create Branch dialog's own button, which reads so.
             Self::CheckoutDiscarding { .. } => "Create and Checkout".to_owned(),
             Self::RemoveLock {
                 path,
@@ -401,8 +391,8 @@ impl Consequence {
 
     /// What the operation is called where its run is listed — the activity popover — in Fork's
     /// imperative form, as its Activity Manager names one ("Fetch 'origin'", "Create branch
-    /// 'side'"; `fork-activity-result-lines-2026-10-11.md`): "Discard lines of a.rs", "Discard
-    /// Changes", "Amend", "Create branch 'topic'", "Remove index.lock".
+    /// 'side'"): "Discard lines of a.rs", "Discard Changes", "Amend", "Create branch 'topic'",
+    /// "Remove index.lock".
     pub fn name(&self) -> String {
         match self {
             Self::DiscardLines {
@@ -416,7 +406,7 @@ impl Consequence {
                 chunk: _,
                 patch: _,
             } => format!("Discard lines of {}", quoted(path.as_bytes())),
-            // Fork's row names no count (§2), unlike its dialog's title.
+            // Fork's row names no count, unlike its dialog's title.
             Self::DiscardFiles { files: _ } => "Discard Changes".to_owned(),
             Self::Amend { .. } => "Amend".to_owned(),
             Self::CheckoutDiscarding {
@@ -443,10 +433,10 @@ impl Consequence {
     }
 
     /// What it did once it succeeded, said in its activity entry in place of the prompt it
-    /// confirmed, for the one operation whose prompt is never drawn — Create Branch's Discard,
-    /// its dialog's press its confirmation (R12.1; the user's decision of 2026-10-10 on phase
-    /// 14's open item 11): "Discarded local changes and any untracked files in the way, then
-    /// checked out 'topic' at a1b2c3d." `None` for every operation whose prompt is quoted.
+    /// confirmed, for the one operation whose prompt is never drawn — Create Branch's Discard, its
+    /// dialog's press its confirmation: "Discarded local changes and any untracked files in the
+    /// way, then checked out 'topic' at a1b2c3d." `None` for every operation whose prompt is
+    /// quoted.
     pub fn happened(&self) -> Option<String> {
         match self {
             Self::CheckoutDiscarding {
@@ -482,12 +472,11 @@ impl Consequence {
         }
     }
 
-    /// What an amend run at the press turned out to cost, read once git was reaped, as its
-    /// activity entry says it (R1.5, C35; the user's ratification of 2026-10-10, option B) —
-    /// only where it would now have needed confirming: a remote came to have the replaced
-    /// commit while the amend ran ("Amended 3f2a1c9, which was pushed to origin/main while the
-    /// amend ran. Sharing the amended commit needs a force push."), or git kept no reflog of the
-    /// move, so the replaced commit can't be recovered. It reports and prevents nothing. `None`
+    /// What an amend run at the press turned out to cost, read once git was reaped, as its activity
+    /// entry says it — only where it would now have needed confirming: a remote came to have the
+    /// replaced commit while the amend ran ("Amended 3f2a1c9, which was pushed to origin/main while
+    /// the amend ran. Sharing the amended commit needs a force push."), or git kept no reflog of
+    /// the move, so the replaced commit can't be recovered. It reports and prevents nothing. `None`
     /// for an amend still recoverable, and for every other operation.
     pub fn amend_reported(&self) -> Option<String> {
         if !self.needs_confirming() {
@@ -526,10 +515,10 @@ impl Consequence {
     }
 }
 
-/// R10.6's dialog text (the redesign of 2026-10-10): one fixed sentence for each reason the amend
-/// is confirmed, naming the commit — that a remote already has it, and that git keeps no reflog
-/// to recover it from — both where both hold. An amend for neither is recoverable and never
-/// asks; its prompt, drawn by no dialog, says where the old commit stays.
+/// The amend dialog's text: one fixed sentence for each reason the amend is confirmed, naming the
+/// commit — that a remote already has it, and that git keeps no reflog to recover it from — both
+/// where both hold. An amend for neither is recoverable and never asks; its prompt, drawn by no
+/// dialog, says where the old commit stays.
 fn amend_prompt(commit: Oid, published: &Publication, reflog: Reflog) -> String {
     let short = commit.short();
     let short = short.as_str();
@@ -551,15 +540,14 @@ fn amend_prompt(commit: Oid, published: &Publication, reflog: Reflog) -> String 
     }
 }
 
-/// How every destructive prompt but an amend's ends (staging-and-commit R1.2, the redesign's D2).
+/// How every destructive prompt but an amend's ends.
 const UNDONE: &str = "You can't undo this.";
 
-/// The one sentence frame for whole files (R1.2, R8.4, the redesign's D2): the question naming
-/// what is discarded — one file by its path, several by their count — then the worst loss only
-/// when it is worse than changes, which is an untracked file deleted, then that it can't be
-/// undone: "Discard all changes in 31 files? 2 untracked files will be deleted. You can't undo
-/// this." What happens to each file (restored, emptied, its lines, a mode change) is the
-/// detail behind "Show files", never the sentence's.
+/// The one sentence frame for whole files: the question naming what is discarded — one file by its
+/// path, several by their count — then the worst loss only when it is worse than changes, which is
+/// an untracked file deleted, then that it can't be undone: "Discard all changes in 31 files? 2
+/// untracked files will be deleted. You can't undo this." What happens to each file (restored,
+/// emptied, its lines, a mode change) is the detail behind "Show files", never the sentence's.
 fn discard_files_prompt(files: &[DiscardedFile]) -> String {
     let what = match files {
         [only] => quoted(only.path.as_bytes()),
@@ -580,12 +568,11 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
     format!("Discard all changes in {what}? {worst}{UNDONE}")
 }
 
-/// The question for a discard of lines (R8.4, the redesign's D2), naming no mode in octal —
-/// the mode row is on screen: "Discard 2 changed lines in src/main.rs?", the chunk a hovered
-/// chunk's Discard took "Discard this chunk (6 lines) in src/main.rs?", a mode change alone
-/// "Discard the mode change of run.sh?". Lines and the mode together — which no route of the
-/// view asks, the mode row acting on the mode alone — read "Discard 2 changed lines and the
-/// mode change in run.sh?".
+/// The question for a discard of lines, naming no mode in octal — the mode row is on screen:
+/// "Discard 2 changed lines in src/main.rs?", the chunk a hovered chunk's Discard took "Discard
+/// this chunk (6 lines) in src/main.rs?", a mode change alone "Discard the mode change of run.sh?".
+/// Lines and the mode together — which no route of the view asks, the mode row acting on the mode
+/// alone — read "Discard 2 changed lines and the mode change in run.sh?".
 fn lines_question(
     path: &str,
     lines: usize,
@@ -613,13 +600,11 @@ fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// A path as a person is shown it anywhere the window draws one in a sentence
-/// (staging-and-commit R14.2, phase 15's QA item 3): as git's `quote_c_style`
-/// writes it under `core.quotePath=false` — as it is when nothing in it needs
-/// quoting, otherwise in double quotes with `"`, `\` and control characters
-/// escaped — and, beyond git, with the line separators and bidirectional
-/// controls escaped too, so a name holding a newline or a right-to-left
-/// override cannot reshape the sentence around it. The one path-display
+/// A path as a person is shown it anywhere the window draws one in a sentence: as git's
+/// `quote_c_style` writes it under `core.quotePath=false` — as it is when nothing in it needs
+/// quoting, otherwise in double quotes with `"`, `\` and control characters escaped — and, beyond
+/// git, with the line separators and bidirectional controls escaped too, so a name holding a
+/// newline or a right-to-left override cannot reshape the sentence around it. The one path-display
 /// function: a prompt's paths and an ending's are both spelled by it.
 pub fn shown_path(path: &str) -> String {
     quoted(path.as_bytes())
@@ -726,10 +711,10 @@ mod tests {
         Oid::from_bytes(&[byte; 20]).unwrap()
     }
 
-    /// Phase 15's QA item 3: a path drawn in a sentence is the one path-display function's — a
-    /// plain name as it is, and a name holding a newline, a right-to-left override or a quote
-    /// C-quoted, so none can reshape the sentence it is drawn in. Caught by: the raw path drawn,
-    /// or the bidirectional control let through as git itself would.
+    /// A path drawn in a sentence is the one path-display function's — a plain name as it is, and a
+    /// name holding a newline, a right-to-left override or a quote C-quoted, so none can reshape
+    /// the sentence it is drawn in. Caught by: the raw path drawn, or the bidirectional control let
+    /// through as git itself would.
     #[test]
     fn a_path_shown_in_a_sentence_is_c_quoted_where_it_could_reshape_it() {
         assert_eq!(shown_path("src/a.rs"), "src/a.rs");
@@ -761,11 +746,10 @@ mod tests {
         }
     }
 
-    /// R12.1 (the user's decision of 2026-10-10 on phase 14's open item 11): Create Branch's
-    /// Discard, whose prompt is never drawn, says in its activity entry what happened, rendered
-    /// from its consequence, and names the branch its result line says; every operation whose
-    /// prompt is quoted says nothing of the kind. Caught by: the prompt's question quoted for
-    /// it, or a description given to an operation that quotes its prompt.
+    /// Create Branch's Discard, whose prompt is never drawn, says in its activity entry what
+    /// happened, rendered from its consequence, and names the branch its result line says; every
+    /// operation whose prompt is quoted says nothing of the kind. Caught by: the prompt's question
+    /// quoted for it, or a description given to an operation that quotes its prompt.
     #[test]
     fn a_forced_checkout_says_what_happened_and_the_rest_quote_their_prompt() {
         assert_eq!(
@@ -790,11 +774,11 @@ mod tests {
         }
     }
 
-    /// C35 (the user's ratification of 2026-10-10, option B): an amend run at the press reports,
-    /// once git was reaped, what it would now have needed confirming — pushed while it ran, in
-    /// the PRD's words, and no reflog kept, that the replaced commit can't be recovered — and
-    /// nothing for an amend still recoverable or any other operation. Caught by: a recoverable
-    /// amend reported, the remote or the reflog fact left out, or the push named wrongly.
+    /// An amend run at the press reports, once git was reaped, what it would now have needed
+    /// confirming — pushed while it ran, and no reflog kept, that the replaced commit can't be
+    /// recovered — and nothing for an amend still recoverable or any other operation. Caught by: a
+    /// recoverable amend reported, the remote or the reflog fact left out, or the push named
+    /// wrongly.
     #[test]
     fn an_amend_reports_what_it_turned_out_to_cost_only_where_it_would_now_be_confirmed() {
         let amend = |published, reflog| Consequence::Amend {
@@ -844,12 +828,11 @@ mod tests {
         assert_eq!(checkout().amend_reported(), None);
     }
 
-    /// Create Branch's Discard (R11.3, the user's decision of 2026-10-10): the prompt the
-    /// dialog's press confirms is fixed and generic — it names the branch and the commit, says
-    /// local changes and untracked files in the way go and that it can't be undone, and names
-    /// no file, so nothing is predicted of what git deletes; the button is the dialog's own.
-    /// Caught by: a file or a count put back in, the branch or commit left out of what is
-    /// confirmed, or a second dialog's button.
+    /// Create Branch's Discard: the prompt the dialog's press confirms is fixed and generic — it
+    /// names the branch and the commit, says local changes and untracked files in the way go and
+    /// that it can't be undone, and names no file, so nothing is predicted of what git deletes; the
+    /// button is the dialog's own. Caught by: a file or a count put back in, the branch or commit
+    /// left out of what is confirmed, or a second dialog's button.
     #[test]
     fn a_checkout_that_discards_says_so_in_fixed_words() {
         assert_eq!(
@@ -933,10 +916,9 @@ mod tests {
         }
     }
 
-    /// The redesign's D2 (R1.2, R8.4): a discard of files asks in one sentence — one file named
-    /// by its path, several counted — and the button counts the files. Caught by: a kind of
-    /// change or a path listed in the sentence, a count taken from anything but the files, or a
-    /// prompt ending otherwise than the frame.
+    /// A discard of files asks in one sentence — one file named by its path, several counted — and
+    /// the button counts the files. Caught by: a kind of change or a path listed in the sentence, a
+    /// count taken from anything but the files, or a prompt ending otherwise than the frame.
     #[test]
     fn a_discard_of_files_asks_in_the_one_sentence_frame() {
         let one = Consequence::DiscardFiles {
@@ -977,12 +959,11 @@ mod tests {
         );
     }
 
-    /// The phase's QA brief: the worst loss in the sentence is the worst one in the list, so a
-    /// selection holding an untracked file always says it will be deleted — alone, beside every
-    /// other kind, and named by its path when it is the one file — and one holding none never
-    /// says it. Restored, emptied, binary and mode changes are changes, behind "Show files".
-    /// Caught by: the deletion said only for several files, or only when every file is
-    /// untracked, or said where nothing is deleted.
+    /// The worst loss in the sentence is the worst one in the list, so a selection holding an
+    /// untracked file always says it will be deleted — alone, beside every other kind, and named by
+    /// its path when it is the one file — and one holding none never says it. Restored, emptied,
+    /// binary and mode changes are changes, behind "Show files". Caught by: the deletion said only
+    /// for several files, or only when every file is untracked, or said where nothing is deleted.
     #[test]
     fn the_worst_loss_is_said_whenever_an_untracked_file_is_deleted() {
         let alone = Consequence::DiscardFiles {
@@ -1040,11 +1021,11 @@ mod tests {
         }
     }
 
-    /// The redesign's D2 and 4b: lines from the diff are counted, both sides of the selection;
-    /// the chunk a hovered chunk's Discard took is named as the chunk with its lines; a mode
-    /// change alone is named in words, no octal; and the button counts what it discards.
-    /// Caught by: counting one side only, a chunk worded as lines or lines as a chunk, a mode
-    /// named in octal, or the button counting otherwise than the prompt.
+    /// Lines from the diff are counted, both sides of the selection; the chunk a hovered chunk's
+    /// Discard took is named as the chunk with its lines; a mode change alone is named in words, no
+    /// octal; and the button counts what it discards. Caught by: counting one side only, a chunk
+    /// worded as lines or lines as a chunk, a mode named in octal, or the button counting otherwise
+    /// than the prompt.
     #[test]
     fn a_discard_of_lines_names_the_lines_the_chunk_or_the_mode() {
         let consequence = lines("src/lib.rs", selection(3, 1));
@@ -1122,11 +1103,10 @@ mod tests {
         }
     }
 
-    /// The user's decision of 2026-10-10 on phase 15's Q3: "Show files" lists each file of a
-    /// discard of several, its path quoted and what happens to it in the decided words, no
-    /// octal; one file, lines and the other operations list nothing. Caught by: a kind worded
-    /// otherwise, a mode named in octal, a binary file counted as no lines, a row past the end,
-    /// or a list where what is taken is already on screen.
+    /// "Show files" lists each file of a discard of several, its path quoted and what happens to it
+    /// in its fixed words, no octal; one file, lines and the other operations list nothing. Caught
+    /// by: a kind worded otherwise, a mode named in octal, a binary file counted as no lines, a row
+    /// past the end, or a list where what is taken is already on screen.
     #[test]
     fn show_files_lists_each_file_and_what_happens_to_it() {
         let changed = |path: &str, lines, mode| DiscardedFile {
@@ -1201,9 +1181,9 @@ mod tests {
         }
     }
 
-    /// Phase 14's QA item 5b and R1.2: every destructive prompt but an amend's — whose fixed
-    /// sentences R10.6 sets — ends in the frame's "You can't undo this.", never "this action".
-    /// Caught by: one operation's prompt left on the old ending.
+    /// Every destructive prompt but an amend's — which has fixed sentences of its own — ends in
+    /// the frame's "You can't undo this.", never "this action". Caught by: one operation's
+    /// prompt ending otherwise.
     #[test]
     fn every_destructive_prompt_ends_in_the_frame() {
         let every = [
@@ -1221,9 +1201,9 @@ mod tests {
         }
     }
 
-    /// Phase 03's QA item 2: the executable bit is part of what a discard re-checks, so two
-    /// consequences that differ in it alone are different values — and, until the user
-    /// settles how a mode change is worded, render the same words.
+    /// The executable bit is part of what a discard re-checks, so two consequences that differ
+    /// in it alone are different values — and render the same words, since the prompt does not
+    /// word the executable bit.
     #[test]
     fn the_executable_bit_is_compared_but_not_yet_worded() {
         let with = |executable| Consequence::DiscardFiles {
@@ -1242,9 +1222,9 @@ mod tests {
         assert_eq!(with(true).prompt(), with(false).prompt());
     }
 
-    /// Phase 03's QA item 5: the patch a discard of lines applies is part of the value the user
-    /// confirms, so a consequence with another patch is another consequence; the prompt is
-    /// rendered from the selection and does not change with it.
+    /// The patch a discard of lines applies is part of the value the user confirms, so a
+    /// consequence with another patch is another consequence; the prompt is rendered from the
+    /// selection and does not change with it.
     #[test]
     fn the_confirmed_patch_is_part_of_the_value() {
         let with = |patch: &str| Consequence::DiscardLines {
@@ -1278,10 +1258,10 @@ mod tests {
         assert_eq!(with("a").prompt(), with("b").prompt());
     }
 
-    /// R10.6 as the redesign of 2026-10-10 fixed it: one sentence for each reason an amend is
-    /// confirmed — a remote has the commit (its upstream named, or "a remote"), git keeps no
-    /// reflog — the id named in each, both where both hold; the button "Amend". Caught by: a
-    /// subject or a force-push sentence back in the prompt, or a reason left unsaid.
+    /// One sentence for each reason an amend is confirmed — a remote has the commit (its upstream
+    /// named, or "a remote"), git keeps no reflog — the id named in each, both where both hold; the
+    /// button "Amend". Caught by: a subject or a force-push sentence in the prompt, or a reason
+    /// left unsaid.
     #[test]
     fn an_amend_says_why_it_is_confirmed_in_fixed_sentences() {
         let commit = oid(0xab);
@@ -1327,10 +1307,10 @@ mod tests {
         }
     }
 
-    /// R1.5 as the redesign amended it: an amend git logs and no remote has is recoverable and
-    /// asks nothing; one a remote has, or one git keeps no reflog for, is confirmed; and every
-    /// other destructive operation is confirmed always. Caught by: a published or unlogged amend
-    /// run unconfirmed, or a discard let through without a confirmation.
+    /// An amend git logs and no remote has is recoverable and asks nothing; one a remote has, or
+    /// one git keeps no reflog for, is confirmed; and every other destructive operation is
+    /// confirmed always. Caught by: a published or unlogged amend run unconfirmed, or a discard let
+    /// through without a confirmation.
     #[test]
     fn only_an_amend_git_logs_and_no_remote_has_runs_unconfirmed() {
         let amend = |published, reflog| Consequence::Amend {
@@ -1361,10 +1341,9 @@ mod tests {
         );
     }
 
-    /// Phase 11's QA: each operation's name, in Fork's imperative form, as the activity
-    /// popover lists it; a path quoted as git quotes it, so a name cannot rewrite the list. A
-    /// discard of files is Fork's "Discard Changes", with no count, however many files
-    /// (`fork-activity-result-lines-2026-10-11.md` §2; merge bar, phase 21, item 15).
+    /// Each operation's name, in Fork's imperative form, as the activity popover lists it; a path
+    /// quoted as git quotes it, so a name cannot rewrite the list. A discard of files is Fork's
+    /// "Discard Changes", with no count, however many files.
     #[test]
     fn each_operation_is_named_in_forks_imperative_form() {
         assert_eq!(

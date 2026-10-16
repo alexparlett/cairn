@@ -274,7 +274,7 @@ fn with_no_cairn_listening_the_helper_fails_closed() {
 }
 
 /// The user cancels: nothing reaches git, and the token dies with the refusal
-/// so git's retry is refused too rather than asking again (PRD R2.5).
+/// so git's retry is refused too rather than asking again.
 #[test]
 fn a_refused_prompt_fails_closed_and_retires_the_token() {
     let runtime = RuntimeDir::new();

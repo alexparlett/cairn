@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use crate::{ChangedRange, LineSpan, TextDiff};
 
-/// How much unchanged text a hunk shows around its changes (R1.4).
+/// How much unchanged text a hunk shows around its changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Context {
     Lines(u32),
@@ -13,11 +13,11 @@ pub enum Context {
 }
 
 impl Context {
-    /// What a diff view opens at, and the only context a patch is ever built with (R1.6).
+    /// What a diff view opens at, and the only context a patch is ever built with.
     pub const DEFAULT_LINES: u32 = 3;
 
-    /// Zero is raised to one: git apply wants at least one line of context, and R6.3 puts
-    /// the same floor under the view's control.
+    /// Zero is raised to one: git apply wants at least one line of context, and the view's
+    /// context control has the same floor.
     pub fn lines(count: u32) -> Self {
         Self::Lines(count.max(1))
     }
@@ -92,7 +92,7 @@ impl Hunk {
     }
 }
 
-/// The hunks of one diff at one context (R1.4).
+/// The hunks of one diff at one context.
 ///
 /// Reached by index rather than as a slice: a hunk list is as long as a file has separate
 /// changes, and handing it out whole invites a caller to walk it per frame.
@@ -269,8 +269,8 @@ mod tests {
         }
     }
 
-    /// Zero context would make a patch git apply refuses, and R6.3 puts the same floor
-    /// under the view.
+    /// Zero context would make a patch git apply refuses, and the view's context control has
+    /// the same floor.
     #[test]
     fn a_context_of_zero_is_raised_to_one() {
         assert_eq!(Context::lines(0), Context::Lines(1));
@@ -426,11 +426,10 @@ mod tests {
         );
     }
 
-    /// Git parity (phase 06): `git diff -U<n>` prints no hunk for a file with no change to
-    /// show, however large `n` is — a rename that kept its content, or a file whose every
-    /// change ignoring whitespace hides — so the entire file of one is no hunk either. This
-    /// replaced phase 01's rule that drew such a file whole. Caught by: an entire-file hunk
-    /// built over no change.
+    /// Git parity: `git diff -U<n>` prints no hunk for a file with no change to show,
+    /// however large `n` is — a rename that kept its content, or a file whose every change
+    /// ignoring whitespace hides — so the entire file of one is no hunk either. Caught by: an
+    /// entire-file hunk built over no change, which would draw such a file whole.
     #[test]
     fn the_entire_file_of_an_unchanged_file_is_no_hunk_as_git_prints_none() {
         let text = text(5, 5, Vec::new());

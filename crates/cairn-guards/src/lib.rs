@@ -554,15 +554,14 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
-/// Every spelling of a keyboard modifier the toolkit offers a render file (D5, PRD R8.3),
-/// read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and Freya's
-/// `ModifiersExt`: the held-keys type and its helper trait, the event field that carries
-/// them, the type's constants (`Modifiers::CONTROL`), the modifier keys themselves
-/// (`NamedKey::Control`, `Code::ControlLeft`), the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`,
-/// `Code::ScrollLock`: a component reading one is reading the held keys) and the platform
-/// helpers that pick one. Whole identifiers, so an alias is caught on its import line and a
-/// qualified path on its last segment. `Fn`, the function key, is matched only after `::`:
-/// bare, it is Rust's closure trait.
+/// Every spelling of a keyboard modifier the toolkit offers a render file, read from the vendored
+/// `keyboard-types` (the version `Cargo.lock` pins) and Freya's `ModifiersExt`: the held-keys type
+/// and its helper trait, the event field that carries them, the type's constants
+/// (`Modifiers::CONTROL`), the modifier keys themselves (`NamedKey::Control`, `Code::ControlLeft`),
+/// the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`, `Code::ScrollLock`: a component reading one is
+/// reading the held keys) and the platform helpers that pick one. Whole identifiers, so an alias is
+/// caught on its import line and a qualified path on its last segment. `Fn`, the function key, is
+/// matched only after `::`: bare, it is Rust's closure trait.
 pub const MODIFIER_IDENTS: &[&str] = &[
     // The type, its OS-aware helper trait and what it offers, and the event's field.
     "Modifiers",
@@ -694,8 +693,8 @@ pub fn modifier_constants_blanked(source: &str) -> String {
 }
 
 /// A held key's name that a literal is a chord's when it is all the literal holds: `"Alt"`
-/// alone is a person's key name where `"Alternative"` is not (phase 10's QA, item 7: the
-/// spellings [`MODIFIER_TEXT`] matches only beside a `+` or a `-`).
+/// alone is a person's key name where `"Alternative"` is not. These are the spellings
+/// [`MODIFIER_TEXT`] matches only beside a `+` or a `-`.
 pub const MODIFIER_WORDS: &[&str] = &[
     "Alt", "Shift", "Super", "Meta", "Option", "Opt", "Control", "Command", "Cmd", "Ctrl",
 ];
@@ -721,9 +720,9 @@ pub fn spells_a_chord(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
-/// The held keys a chord is spelled with for a person, each alone (the user's decision,
-/// 2026-10-09): the only literal the one rostered chord-name module may hold that spells a
-/// chord, so a name there is put together from the table's data and never typed out whole.
+/// The held keys a chord is spelled with for a person, each alone: the only literal the one
+/// rostered chord-name module may hold that spells a chord, so a name there is put together from
+/// the table's data and never typed out whole.
 pub const MODIFIER_NAMES: &[&str] = &["Ctrl", "Alt", "Shift", "Super", "⌘", "⌥", "⇧", "⌃"];
 
 /// 1-based lines where a production literal of `source` spells a chord ([`spells_a_chord`])
@@ -892,15 +891,14 @@ pub fn names_an_element(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
-/// What builds a text field, or replaces the key handler a field was built with
-/// (staging-and-commit R7.1): Freya's `Input` — however it is reached, by its constructor, an
-/// import, an alias or its default key handler — the builder method that swaps the handler,
-/// and every other way the toolkit offers to edit text: the editor hook and its handle and
-/// configuration (`use_editable`, `UseEditable`, `EditableConfig`, reached through
-/// `freya::text_edit`, the module re-exporting the editor), the selectable text that runs the
-/// same editor, and the code editor. Every render file but the one key policy's
-/// (`cairn_ui::text_field`) leaves them alone, so a field that claims the window's chords
-/// cannot be written by accident.
+/// What builds a text field, or replaces the key handler a field was built with: Freya's `Input` —
+/// however it is reached, by its constructor, an import, an alias or its default key handler — the
+/// builder method that swaps the handler, and every other way the toolkit offers to edit text: the
+/// editor hook and its handle and configuration (`use_editable`, `UseEditable`, `EditableConfig`,
+/// reached through `freya::text_edit`, the module re-exporting the editor), the selectable text
+/// that runs the same editor, and the code editor. Every render file but the one key policy's
+/// (`cairn_ui::text_field`) leaves them alone, so a field that claims the window's chords cannot be
+/// written by accident.
 pub const TEXT_FIELD_IDENTS: &[&str] = &[
     "Input",
     "on_pre_key_down",
@@ -936,7 +934,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
 }
 
 /// [`reads_row_content_partially`] for any enum a view must read by naming every variant —
-/// `RowContent`, and `DiffContent`, whose every state is something a view draws (R6.8).
+/// `RowContent`, and `DiffContent`, whose every state is something a view draws.
 pub fn reads_enum_partially(source: &str, name: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
@@ -2267,14 +2265,14 @@ fn path_offsets(code: &str, segments: &[&str]) -> Vec<(usize, usize)> {
     found
 }
 
-/// What changes a file or directory on disk, by the names `std` gives it (staging-and-commit
-/// R12.5), matched wherever they appear as an identifier, since nothing that only reads has
-/// their name: removing (`fs::remove_file`, `remove_dir`, `remove_dir_all`), creating
-/// (`create_dir`, `create_dir_all`, `File::create_new`, and `OpenOptions` and `DirBuilder`,
-/// the builders that open or make one for writing), linking (`hard_link`, `soft_link`, unix's
-/// `symlink`), changing permissions, ownership, length or times (`set_permissions`, `chown`,
-/// `fchown`, `lchown`, `set_len`, `set_modified`, `set_times`), and binding a socket, which
-/// creates its file (`UnixListener`, `UnixDatagram`). An alias is caught on its import line.
+/// What changes a file or directory on disk, by the names `std` gives it, matched wherever they
+/// appear as an identifier, since nothing that only reads has their name: removing
+/// (`fs::remove_file`, `remove_dir`, `remove_dir_all`), creating (`create_dir`, `create_dir_all`,
+/// `File::create_new`, and `OpenOptions` and `DirBuilder`, the builders that open or make one for
+/// writing), linking (`hard_link`, `soft_link`, unix's `symlink`), changing permissions, ownership,
+/// length or times (`set_permissions`, `chown`, `fchown`, `lchown`, `set_len`, `set_modified`,
+/// `set_times`), and binding a socket, which creates its file (`UnixListener`, `UnixDatagram`). An
+/// alias is caught on its import line.
 pub const FILESYSTEM_MUTATION_IDENTS: &[&str] = &[
     "remove_file",
     "remove_dir",
@@ -2746,12 +2744,12 @@ pub fn gate_dispatch_arms(gate: &str) -> Result<Vec<(String, String)>, String> {
     Err("the dispatch never reaches `esac`".to_owned())
 }
 
-/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full
-/// gate, the merge bar. Read from the script's tail — everything after the `--step`
-/// block's closing `fi`, up to `finish` — counting a call at the top level or in the
-/// full branch of the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`),
-/// and not in its `else`, which is the day loop's. Any other line there is an `Err`
-/// rather than a guess, so a new conditional cannot hide a step from this reading.
+/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full gate, which a
+/// change passes before it merges. Read from the script's tail — everything after the `--step`
+/// block's closing `fi`, up to `finish` — counting a call at the top level or in the full branch of
+/// the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`), and not in its `else`,
+/// which is the day loop's. Any other line there is an `Err` rather than a guess, so a new
+/// conditional cannot hide a step from this reading.
 pub fn gate_full_sequence(gate: &str) -> Result<BTreeSet<String>, String> {
     let mut lines = gate
         .lines()

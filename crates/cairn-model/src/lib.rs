@@ -109,7 +109,7 @@ pub struct CommitSummary {
     pub author_time: i64,
 }
 
-/// A stash as the history list draws its row (PRD R4.2, R5.4), read out of a [`History`]:
+/// A stash as the history list draws its row, read out of a [`History`]:
 /// the stash commit `stash@{index}` names, the commit it was made on — its first parent, and
 /// the one line its row draws — and the stash list's message, its row's subject. Its index
 /// and untracked commits are not rows, and are the details query's.

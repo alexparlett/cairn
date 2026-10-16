@@ -1,15 +1,15 @@
-//! The unified patch a selection makes (R1.6).
+//! The unified patch a selection makes.
 //!
-//! What goes in is a [`ChangedFile`], a [`TextDiff`] and a [`Selection`]; what comes out is
-//! bytes `git apply --cached` accepts against the old version. There is no context
-//! argument and no view: three lines of context, always, whatever is on screen. And the
-//! input type carries no whitespace-ignoring ranges, so R1.7 holds by construction rather
-//! than by care — the ranges a view may draw instead live in [`crate::DisplayOverlay`],
-//! which this function never sees.
+//! What goes in is a [`ChangedFile`], a [`TextDiff`] and a [`Selection`]; what comes out is bytes
+//! `git apply --cached` accepts against the old version. There is no context argument and no view:
+//! three lines of context, always, whatever is on screen. And the input type carries no
+//! whitespace-ignoring ranges, so a patch is never built from what a whitespace-ignoring view
+//! draws, by construction rather than by care — the ranges a view may draw instead live in
+//! [`crate::DisplayOverlay`], which this function never sees.
 //!
-//! The rules the format imposes, each read out of git's own `add-patch.c` and `apply.c` and
-//! matched by hand against `git diff` output. The tests below pin the shapes; what proves
-//! them against real `git apply` is C1-C3, in `cairn-git`:
+//! The rules the format imposes, each read out of git's own `add-patch.c` and `apply.c` and matched
+//! by hand against `git diff` output. The tests below pin the shapes; what proves them against real
+//! `git apply` is `cairn-git`'s round trips (`tests/diff_engine/diff/patches.rs`):
 //!
 //! - An unselected removed line becomes context; an unselected added line is dropped.
 //! - Counts are recounted from the lines actually emitted, and a hunk's new start is its
@@ -18,11 +18,11 @@
 //! - `\ No newline at end of file` follows the line it belongs to, whatever marker that
 //!   line ended up with.
 //! - A deletion with some removals left out is a modification of the file, not a deletion.
-//! - The mode change is its own item (R2.4): `old mode`/`new mode` are written only when the
+//! - The mode change is its own item: `old mode`/`new mode` are written only when the
 //!   selection holds it, so a selection of lines alone stages no mode change and a
 //!   selection of the mode alone is the two header lines and nothing else.
-//! - Every path is written as git's `quote_c_style` writes it (R2.5, `crate::c_quote`),
-//!   and a `---`/`+++` line naming a path with a space ends in a tab, as `git diff`'s does.
+//! - Every path is written as git's `quote_c_style` writes it (`crate::c_quote`), and a
+//!   `---`/`+++` line naming a path with a space ends in a tab, as `git diff`'s does.
 //!
 //! Unstage and discard are this same rule over the inverted diff ([`TextDiff::inverted`],
 //! [`Selection::inverted`], [`ChangedFile::inverted`]); [`crate::action_patch`] is what
@@ -37,7 +37,7 @@ use crate::{
     RepoPath, Selection, TextDiff,
 };
 
-/// The context a patch carries, whatever the view shows (R1.6).
+/// The context a patch carries, whatever the view shows.
 pub const PATCH_CONTEXT: u32 = 3;
 
 const NO_NEWLINE: &[u8] = b"\\ No newline at end of file\n";
@@ -113,8 +113,8 @@ pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) ->
 /// That is what `git diff` writes and the only form `git apply` takes. One `diff --git`
 /// carrying `old mode`/`new mode` — which is what every other mode change is — is refused
 /// with "wrong type", because the preimage git would patch is not the kind the new mode
-/// names. Verified against `git apply --check --cached` in `cairn-git`'s C1 and C3 tests,
-/// forwards and in reverse.
+/// names. Verified against `git apply --check --cached` by `cairn-git`'s round trips through
+/// real `git apply`, forwards and in reverse.
 ///
 /// A type change is all or nothing: half of a file becoming a symbolic link is not a state
 /// a repository can hold, and the second section would land on a path the first had left in
@@ -441,7 +441,8 @@ mod tests {
     /// git writes a type change as TWO file patches at one path, and `git apply` refuses
     /// anything else with "wrong type". Caught by: emitting one section with
     /// `old mode`/`new mode`, which is what every other mode change is and what a real
-    /// `git apply --cached` rejects (pinned end to end by `cairn-git`'s C1 and C3).
+    /// `git apply --cached` rejects (pinned end to end by `cairn-git`'s round trips through
+    /// real `git apply`).
     #[test]
     fn a_type_change_is_written_as_a_deletion_and_an_addition() {
         let (file, text) = type_changed();
@@ -560,7 +561,7 @@ mod tests {
         assert!(patch.contains("@@ -3,7 +3,7 @@"));
     }
 
-    /// R1.6's line rules: a removal left out becomes context and an addition left out goes
+    /// The line rules: a removal left out becomes context and an addition left out goes
     /// away, and the counts follow the lines that were emitted.
     #[test]
     fn an_unselected_removal_becomes_context_and_an_unselected_addition_is_dropped() {
@@ -648,7 +649,7 @@ mod tests {
         );
     }
 
-    /// R1.6 again: the marker stays with its line when that line becomes context.
+    /// The marker stays with its line when that line becomes context.
     #[test]
     fn the_marker_follows_a_removal_that_was_turned_into_context() {
         let (file, text) = modified(b"a\nb", b"a\nB\n", vec![change((1, 1), (1, 1))]);
@@ -811,9 +812,9 @@ mod tests {
         );
     }
 
-    /// R2.4: on a file whose mode changed beside its lines, the lines and the mode are two
-    /// items. Caught by: writing `old mode`/`new mode` whenever the mode changed (the rule
-    /// before this packet), or dropping the lines when the mode is selected.
+    /// On a file whose mode changed beside its lines, the lines and the mode are two
+    /// items. Caught by: writing `old mode`/`new mode` whenever the mode changed, or dropping
+    /// the lines when the mode is selected.
     #[test]
     fn the_lines_and_the_mode_change_are_selected_apart() {
         let file = ChangedFile {
@@ -931,9 +932,10 @@ mod tests {
         );
     }
 
-    /// R2.5: every path line is C-quoted as `git diff` writes it, and a `---`/`+++` line
-    /// naming a space ends in a tab. The spellings are what git 2.56.0 and 2.30.9 printed
-    /// for these names; that git applies them is `cairn-git`'s C3.
+    /// Every path line is C-quoted as `git diff` writes it, and a `---`/`+++` line naming a
+    /// space ends in a tab. The spellings are what git 2.56.0 and 2.30.9 printed for these
+    /// names; that git applies them is pinned by `cairn-git`'s round trips through real
+    /// `git apply`.
     #[test]
     fn every_path_line_is_quoted_as_git_quotes_it() {
         let file = ChangedFile {
@@ -966,7 +968,8 @@ mod tests {
     }
 
     /// A path git cannot spell as text still has to name the same file: its bytes go out
-    /// escaped, every one, and `git apply` reads them back (C3's invalid UTF-8 case).
+    /// escaped, every one, and `git apply` reads them back, as `cairn-git`'s round trips
+    /// through real `git apply` pin.
     #[test]
     fn a_path_goes_out_as_the_bytes_git_stores() {
         let file = ChangedFile {

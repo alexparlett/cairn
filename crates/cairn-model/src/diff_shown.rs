@@ -7,19 +7,18 @@
 //! pass over every drawn byte — about 39 ms for a 64 MiB file loaded past the limits. A view
 //! then reads rows from it one at a time ([`UnifiedLayout::row`], [`SideBySideLayout::row`]).
 //!
-//! **A line past the long-line limit is drawn cut** (R6.9). Only a diff loaded past R2.6's
-//! ceilings holds one — the engine refuses any other with a line longer than
-//! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row and
-//! a horizontal extent of its whole width. [`drawn_bytes`] is the cut every view draws to, and
-//! the widest line is measured to it.
+//! **A line past the long-line limit is drawn cut**. Only a diff loaded past the default ceilings
+//! ([`DiffLimits`]) holds one — the engine refuses any other with a line longer than
+//! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row and a
+//! horizontal extent of its whole width. [`drawn_bytes`] is the cut every view draws to, and the
+//! widest line is measured to it.
 //!
-//! **What it was drawn from** (staging-and-commit R9.6, L4): a diff keyed with what it was asked
-//! as ([`ShownDiff::keyed`]) carries a hash of that and of the whole answer — its paths, modes
-//! and ids, every line of both sides and the ranges that differ, the context it is drawn at —
-//! computed where it is built. Two answers with the same [`ShownDiff::content`] draw the same
-//! rows over the same text, so a line selection made over one names the same lines of the other:
-//! what lets a refresh that re-reads a file unchanged keep a selection, and one that reads
-//! another byte drop it.
+//! **What it was drawn from**: a diff keyed with what it was asked as ([`ShownDiff::keyed`])
+//! carries a hash of that and of the whole answer — its paths, modes and ids, every line of both
+//! sides and the ranges that differ, the context it is drawn at — computed where it is built. Two
+//! answers with the same [`ShownDiff::content`] draw the same rows over the same text, so a line
+//! selection made over one names the same lines of the other: what lets a refresh that re-reads a
+//! file unchanged keep a selection, and one that reads another byte drop it.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -29,7 +28,7 @@ use crate::{
     SideBySideLayout, TextDiff, UnifiedLayout,
 };
 
-/// How many of a line's bytes a view draws at most: the long-line limit (R2.6, R6.9).
+/// How many of a line's bytes a view draws at most: the long-line limit.
 pub const LINE_CUT_BYTES: usize = DiffLimits::MAX_LINE_BYTES as usize;
 
 /// The column a tab moves to a multiple of, as `git diff` shows it in a terminal.
@@ -184,7 +183,7 @@ impl ShownDiff {
         }
     }
 
-    /// Whether ignoring whitespace hides a change that is really there (R6.7) — false when
+    /// Whether ignoring whitespace hides a change that is really there — false when
     /// whitespace is not ignored, and false when ignoring it hides nothing.
     pub fn hides_changes(&self) -> bool {
         self.hides_changes
@@ -246,11 +245,11 @@ mod tests {
     use super::*;
     use crate::{ChangeStatus, ChangedFile, ChangedRange, DiffContent, LineSpan, RepoPath};
 
-    /// R6.9: a line longer than the long-line limit is drawn to the limit, never past it,
+    /// A line longer than the long-line limit is drawn to the limit, never past it,
     /// ending on a character — a two-, three- or four-byte character straddling the cut is
     /// left out whole; at the limit exactly nothing is cut, and one byte past it is cut to
     /// it. Caught by: drawing the whole line, cutting inside a character (backing off fewer
-    /// than three continuation bytes), or the cut drifting from R2.6's 2,048 bytes.
+    /// than three continuation bytes), or the cut drifting from the limit's 2,048 bytes.
     #[test]
     fn a_line_past_the_limit_is_cut_at_the_limit_on_a_character() {
         let long = vec![b'a'; 3 * 1024 * 1024];
@@ -274,7 +273,7 @@ mod tests {
             assert!(std::str::from_utf8(drawn).is_ok(), "{character}");
         }
 
-        // R2.6's number, written out, so the cut cannot drift from it unseen.
+        // The limit's number, written out, so the cut cannot drift from it unseen.
         let (drawn, cut) = drawn_bytes(&[b'a'; 2_049]);
         assert!(cut, "a line one byte past the limit is drawn whole");
         assert_eq!(drawn.len(), 2_048);
@@ -353,7 +352,7 @@ mod tests {
         }
     }
 
-    /// R9.6, L4 (C26): two answers to one question whose text is the same in every byte are
+    /// Two answers to one question whose text is the same in every byte are
     /// one content, built apart; one byte of another line, another path, another question (the
     /// side or the options a caller keys with) or another context is another; a diff never
     /// keyed is 0. Caught by: a content of the drawn rows alone (a byte changed outside the

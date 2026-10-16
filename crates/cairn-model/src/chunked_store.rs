@@ -1,5 +1,5 @@
 //! Stores that grow in fixed chunks, never by doubling: a history's rows, its text, its
-//! lane changes and its lane snapshots (PRD R4.7).
+//! lane changes and its lane snapshots.
 //!
 //! A chunk is allocated once, at its full size, and never grows or moves, so what a store
 //! holds is its chunks' capacity and a page appended costs at most a new chunk — never a

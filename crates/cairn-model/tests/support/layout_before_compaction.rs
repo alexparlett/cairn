@@ -1,14 +1,12 @@
-//! The lane assigner as it stood before rows were compacted (`f34631c`'s
-//! `crates/cairn-model/src/lane_assignment.rs`), kept verbatim as the oracle the
-//! compact rows are checked against: every row it retains carries every edge crossing
-//! it, which is what the drawn edges must still be. Only the names changed — its row
-//! is `RowBeforeCompaction` and the assigner `AssignerBeforeCompaction`, so neither
-//! is mistaken for the model's — and the module header and `GraphRow`'s definition
-//! were brought in from `graph.rs`.
+//! The lane assigner as it stood before rows were compacted, kept verbatim as the oracle the
+//! compact rows are checked against: every row it retains carries every edge crossing it, which
+//! is what the drawn edges must still be. Only the names differ from the original — its row is
+//! `RowBeforeCompaction` and the assigner `AssignerBeforeCompaction`, so neither is mistaken for
+//! the model's — and the module header and `GraphRow`'s definition come from `graph.rs`.
 //!
 //! Test code only: `crates/cairn-model/tests/` includes it as a module, and
-//! `crates/cairn-git/tests/` and `crates/cairn-ui/tests/` include it by path. Never
-//! edit the algorithm below; a change to the layout is a change to what C15 compares
+//! `crates/cairn-git/tests/` and `crates/cairn-ui/tests/` include it by path. Never edit the
+//! algorithm below; a change to the layout is a change to what the compact rows are compared
 //! against, and belongs in the model's assigner with its own tests.
 
 #![allow(dead_code)]

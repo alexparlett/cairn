@@ -2,7 +2,7 @@
 
 use crate::{ChangedFile, DisplayOverlay, Oid, TextDiff};
 
-/// The sizes past which a file is not diffed as text by default (R2.6, decision L10).
+/// The sizes past which a file is not diffed as text by default.
 ///
 /// The line-length limit is Fork's, whose own is documented in characters; bytes is
 /// Cairn's reading of it — identical for ASCII and stricter for anything else.
@@ -42,10 +42,10 @@ pub enum SizeLimit {
     LineLength { limit: u32, measured: u32 },
 }
 
-/// What stands where the rows would be (R1.2).
+/// What stands where the rows would be.
 ///
-/// Every variant is a state a view has to draw something for (R6.8), so read one by
-/// naming every variant: a wildcard arm compiles the day a ninth state lands and draws
+/// Every variant is a state a view has to draw something for, so read one by naming
+/// every variant: a wildcard arm still compiles when another state is added, and draws
 /// nothing for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffContent {
@@ -75,7 +75,7 @@ pub enum DiffContent {
         old_target: Option<Oid>,
         new_target: Option<Oid>,
         /// The new side is a working tree whose checkout of the submodule has changes of
-        /// its own — what `git diff` prints as `-dirty` after the commit (R3.4). Always
+        /// its own — what `git diff` prints as `-dirty` after the commit. Always
         /// false where the new side is a commit or the index, which record no such thing.
         dirty: bool,
     },
@@ -141,8 +141,8 @@ mod tests {
         }
     }
 
-    /// The numbers are R2.6's, and an engine reading a different ceiling would answer
-    /// "too large" for files Fork shows.
+    /// The default limits, pinned as numbers: an engine reading a different ceiling would
+    /// answer "too large" for files Fork shows.
     #[test]
     fn the_default_limits_are_the_ones_the_packet_committed_to() {
         let limits = DiffLimits::default();

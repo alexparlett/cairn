@@ -60,7 +60,8 @@ pub enum ChangeStatus {
     Copied(Similarity),
 }
 
-/// One path's row in a change set (R1.1). It carries no line counts, by decision L10.
+/// One path's row in a change set. It carries no line counts, as Fork's list shows none:
+/// they would cost a full blob read per file.
 ///
 /// `old_path` and `new_path` name the same path for anything but a rename or a copy —
 /// which is what git's own `diff --git` line spells, even for an added or a deleted file.
@@ -109,10 +110,10 @@ impl ChangedFile {
         }
     }
 
-    /// The same path's change seen from its other end (R2.1): paths, modes and ids swapped,
+    /// The same path's change seen from its other end: paths, modes and ids swapped,
     /// an addition a deletion and a deletion an addition, a rename renamed back — so the
     /// forward patch rule over the inverted file and [`crate::TextDiff::inverted`] undoes
-    /// the original (L17a).
+    /// the original, and no patch is applied with `-R`.
     ///
     /// A copy is the one change that does not invert into its own kind: `B` copied from `A`
     /// left `A` where it was, so undoing it is `B` deleted — a deletion at the copy's
@@ -225,7 +226,7 @@ mod tests {
         Oid::from_bytes(&[byte; 20]).ok()
     }
 
-    /// R2.1: everything with two sides swaps them. Caught by: a field left on its side —
+    /// Everything with two sides swaps them. Caught by: a field left on its side —
     /// a path, a mode or an id — which a patch then writes the wrong way round.
     #[test]
     fn inverting_swaps_paths_modes_and_ids() {

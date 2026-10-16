@@ -3,9 +3,8 @@
 //! `git` cannot ask a GUI for a password; it can only run a program with the
 //! prompt on `argv[1]` and read the answer from that program's stdout
 //! (`GIT_ASKPASS`; `ssh` does the same through `SSH_ASKPASS`). So the helper
-//! is a process — decision L2 of the credential-prompts packet — and this
-//! crate is both halves of the conversation: the binary `git` runs, and the
-//! [`Channel`] the running Cairn listens on. The secret's whole life is: the
+//! is a process, and this crate is both halves of the conversation: the
+//! binary `git` runs, and the [`Channel`] the running Cairn listens on. The secret's whole life is: the
 //! dialog in Cairn, this channel, the helper's stdout, git's stdin. It never
 //! enters `cairn-git`, and it never enters application state.
 //!
@@ -15,13 +14,13 @@
 //! created `0700`, the socket itself `0600`, never the Linux abstract
 //! namespace (which carries no permissions at all). The helper finds it, and
 //! the token for the operation it serves, in its environment — never on
-//! `argv`, which `/proc` makes world-readable (L6). The token is issued when
+//! `argv`, which `/proc` makes world-readable. The token is issued when
 //! an operation begins and is dead once the operation ends or a prompt under
 //! it is refused, so a helper cannot be answered for an operation Cairn is
 //! not running.
 //!
 //! **What this protects against is other users on the machine, not other
-//! processes running as the same user** (decision L10). Same-user isolation
+//! processes running as the same user**. Same-user isolation
 //! is not achievable: a process running as the user can read this process's
 //! environment through `/proc`, and with it the socket path and the token.
 //! It is also not worth pursuing, because that same process could read
@@ -44,7 +43,7 @@
 //! every HTTPS credential. So a token is good for the prompts of ONE
 //! operation, and is retired the moment that operation ends, or the moment
 //! the user refuses a prompt under it — after a cancel, git's next ask fails
-//! closed rather than asking again (PRD R2.5).
+//! closed rather than asking again.
 //!
 //! # The helper's failure mode is silence
 //!

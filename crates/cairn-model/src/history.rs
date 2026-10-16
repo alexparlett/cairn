@@ -1,4 +1,4 @@
-//! The rows a reader keeps of a history, and how each is read (PRD R4.7, L14).
+//! The rows a reader keeps of a history, and how each is read.
 //!
 //! A kept row is slim: its commit's id once, a parent count, its subject as a span of a
 //! text store the whole history shares, its author as a number in an author table the
@@ -8,10 +8,10 @@
 //! fixed chunks, never by doubling ([`crate::chunked_store`]), and a row is read through the
 //! [`History`] that holds them, as a [`HistoryRow`].
 //!
-//! A row is a commit's or a stash's (PRD R4.2): one bit of its flags says which. What a
-//! stash's row keeps beyond a commit's — its `stash@{n}` and the commit it was made on — and
-//! the refs that label a commit (R4.3) are kept beside the rows, in stores of their own,
-//! one entry for each such row, found by the row's number: a row with none costs nothing.
+//! A row is a commit's or a stash's: one bit of its flags says which. What a stash's row keeps
+//! beyond a commit's — its `stash@{n}` and the commit it was made on — and the refs that label a
+//! commit are kept beside the rows, in stores of their own, one entry for each such row, found by
+//! the row's number: a row with none costs nothing.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -26,7 +26,7 @@ use crate::{CommitSummary, LaidOutRows, Lane, LaneChange, Oid, RowEdges, StashSu
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowContent {
     Commit(CommitSummary),
-    /// A stash's own row, drawn above the commit it was made on (PRD R4.2).
+    /// A stash's own row, drawn above the commit it was made on.
     Stash(StashSummary),
 }
 
@@ -76,7 +76,7 @@ const STASH: u8 = 1;
 const HEAD: u8 = 1 << 1;
 /// A row's flags: refs point at its commit ([`LabelledRow`] holds them).
 const LABELLED: u8 = 1 << 2;
-/// A row's flags: no ref reaches its commit, only a reflog's entry (staging-and-commit R11.1).
+/// A row's flags: no ref reaches its commit, only a reflog's entry.
 const LOST: u8 = 1 << 3;
 /// No row: `HEAD`'s commit not held yet.
 const NO_ROW: u32 = u32::MAX;
@@ -247,7 +247,7 @@ impl History {
     /// first that many appended never rehash it. What a reopen builds from the history it
     /// replaces (`History::author_count`): the same repository names about as many authors
     /// again, and growing the index back up through every doubling would rehash every
-    /// author so far, on the UI thread, inside an append (phase 04 QA, RR1).
+    /// author so far, on the UI thread, inside an append.
     pub fn with_author_capacity(authors: usize) -> Self {
         Self {
             author_index: HashMap::with_capacity(authors),
@@ -282,10 +282,10 @@ impl History {
         self.rows.get(index).map(row_id)
     }
 
-    /// Where the row drawing `target` is — a commit's own, or a stash's by its stash commit —
-    /// among the rows a press in the sidebar can name (refs-and-status R8.5): those refs label,
-    /// every stash's and `HEAD`'s. A pass over those rows alone, never over every row: a
-    /// history of every commit of rust-lang/rust labels a few hundred.
+    /// Where the row drawing `target` is — a commit's own, or a stash's by its stash commit — among
+    /// the rows a press in the sidebar can name: those refs label, every stash's and `HEAD`'s. A
+    /// pass over those rows alone, never over every row: a history of every commit of
+    /// rust-lang/rust labels a few hundred.
     pub fn labelled_position(&self, target: Oid) -> Option<usize> {
         let holds = |row: u32| {
             self.rows
@@ -640,12 +640,12 @@ impl<'h> HistoryRow<'h> {
     }
 
     /// Whether no ref reaches the row's commit — only a reflog's entry does — so Show Lost
-    /// Commits draws it dimmed (staging-and-commit R11.1). Never a stash's row.
+    /// Commits draws it dimmed. Never a stash's row.
     pub fn is_lost(&self) -> bool {
         self.row.flags & LOST != 0
     }
 
-    /// The refs pointing at the row's commit, and whether it is `HEAD`'s (PRD R4.3), from
+    /// The refs pointing at the row's commit, and whether it is `HEAD`'s, from
     /// the snapshot the walk began from. A stash's row carries none: `refs/stash` labels no
     /// row.
     pub fn labels(&self) -> RowLabels<'h> {
@@ -676,7 +676,7 @@ mod tests {
     }
 
     /// A row's commit is its own id or its stash commit, whichever kind of row it is: what a
-    /// find in the sidebar compares (refs-and-status R8.5). Caught by: a stash's row answering
+    /// find in the sidebar compares. Caught by: a stash's row answering
     /// its base, or either kind answering another commit.
     #[test]
     fn a_row_id_names_the_commit_it_draws() {
@@ -726,7 +726,7 @@ mod tests {
         (labels.is_head(), read)
     }
 
-    /// Show Lost Commits (staging-and-commit R11.1): a row pushed as lost reads back lost, its
+    /// Show Lost Commits: a row pushed as lost reads back lost, its
     /// content a commit's as any row's; every other kind of row does not; and a later page's
     /// `reached` clears exactly the row it names, by number and commit — a page naming
     /// another commit at that number, a stash's row or a number past the end changes
@@ -1199,7 +1199,7 @@ mod tests {
         );
     }
 
-    /// The QA brief's two pages: one that brings a new author, one that brings only known
+    /// Two pages: one that brings a new author, one that brings only known
     /// ones. Both draw, and the table names each author once. Caught by: an author added
     /// again for every page that names them, or a row reading the page's number for its
     /// author rather than the history's.
@@ -1271,12 +1271,11 @@ mod tests {
         assert_eq!(drawn, expected);
     }
 
-    /// Phase 04 QA's RR1, handed to phase 06: a history built for a reopen from the one it
-    /// replaces has room in its author index for as many authors as that one named, so
-    /// appending them all again never grows (and so never rehashes) the index; a history
-    /// built empty grows through its doublings. Caught by: `with_author_capacity` ignoring
-    /// its count (the index starts empty and doubles its way up), or a reopen that builds
-    /// with `History::new`.
+    /// A history built for a reopen from the one it replaces has room in its author index for as
+    /// many authors as that one named, so appending them all again never grows (and so never
+    /// rehashes) the index; a history built empty grows through its doublings. Caught by:
+    /// `with_author_capacity` ignoring its count (the index starts empty and doubles its way up),
+    /// or a reopen that builds with `History::new`.
     #[test]
     fn a_history_sized_for_its_authors_appends_them_without_growing_its_index() {
         let authors: Vec<String> = (0..1_000).map(|n| format!("Author {n}")).collect();
@@ -1400,7 +1399,7 @@ mod tests {
         assert_eq!(history.len(), 2);
     }
 
-    /// The QA brief's subjects: empty, past ASCII and longer than a chunk of the text store.
+    /// Subjects that are empty, past ASCII and longer than a chunk of the text store.
     #[test]
     fn an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly() {
         let long: String = (0..20_000)
@@ -1588,7 +1587,8 @@ mod tests {
         assert_eq!(index_bytes(57_344), 65_536 * bucket + 16);
     }
 
-    /// The slim row's size, which C16's figure is made of. Caught by: a field added to it.
+    /// The slim row's size, which a retained history's memory is made of. Caught by: a field added
+    /// to it.
     #[test]
     fn a_kept_row_is_seventy_two_bytes() {
         assert_eq!(size_of::<StoredRow>(), 72);

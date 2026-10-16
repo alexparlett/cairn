@@ -24,16 +24,15 @@ use cairn_guards::{
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &["zeroize"]),
     // `nix`: SIGTERM on cancel, so git can remove its lock files (issue #19).
-    // `encoding_rs`: a commit in a legacy encoding read as git reads it (user-approved
-    // 2026-10-03).
+    // `encoding_rs`: a commit in a legacy encoding read as git reads it.
     (
         "cairn-git",
         &["cairn-model", "encoding_rs", "gix", "nix", "thiserror"],
     ),
     // `unicode-width`: a tab stops where a terminal stops it, after wide and combining
-    // characters (user-approved 2026-10-03, choosing "terminal widths").
+    // characters.
     // `async-io`: the timer a drag held still at a list's edge scrolls by, a future on the
-    // toolkit's executor rather than a sleep (staging-and-commit L5, user-approved 2026-10-07).
+    // toolkit's executor rather than a sleep.
     (
         "cairn-ui",
         &["async-io", "cairn-model", "freya", "unicode-width"],
@@ -59,9 +58,9 @@ const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-app", &["freya-testing"]),
     // The fetch tests serve a real askpass channel; the engine never links the helper.
     ("cairn-git", &["cairn-askpass"]),
-    // R1.5's pin counts allocations, which needs a counting global allocator. The crate
-    // carries its own `#[global_allocator]`, so it replaces the allocator of the test
-    // binary that links it and of nothing the seam ships.
+    // The model's allocation pins count allocations, which needs a counting global allocator.
+    // The crate carries its own `#[global_allocator]`, so it replaces the allocator of the
+    // test binary that links it and of nothing the seam ships.
     ("cairn-model", &["allocation-counter"]),
 ];
 
@@ -698,19 +697,19 @@ fn top_level_module_declarations(code: &str) -> (BTreeSet<String>, BTreeSet<Stri
     (test_only, otherwise)
 }
 
-/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state.
-/// Every variant is something a view has to draw (R6.8), and a wildcard arm compiles the
-/// day a ninth state lands and draws nothing for it. Production code only — test modules,
-/// `#[cfg(test)]` module files and `tests/` are left out, since a test that asserts one
-/// state (`matches!(content, DiffContent::Binary { .. })`) is a check, not a view.
+/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state. Every variant
+/// is something a view has to draw, and a wildcard arm still compiles when another state is added,
+/// and draws nothing for it. Production code only — test modules, `#[cfg(test)]` module files and
+/// `tests/` are left out, since a test that asserts one state (`matches!(content,
+/// DiffContent::Binary { .. })`) is a check, not a view.
 #[test]
 fn every_view_of_a_file_diff_names_every_state() {
     every_production_view_names_every_variant("DiffContent");
 }
 
 /// The diff's row enums, `cairn_model::UnifiedRow` and `cairn_model::SideBySideRow`, are read
-/// the same way (phase 07, which brought the second reader): each variant is a kind of row a
-/// view draws — a header, a line on one side or both, git's end-of-file marker — and a
+/// the same way, since each has more than one reader: each variant is a kind of row a view
+/// draws — a header, a line on one side or both, git's end-of-file marker — and a
 /// wildcard arm compiles the day another kind lands and draws nothing for it. Production code
 /// only, over every crate's `src/` but the model's and this suite's, as for `DiffContent`.
 #[test]
@@ -967,7 +966,7 @@ fn the_diff_content_matcher_catches_the_shapes_it_claims() {
     assert!(!found.contains(Path::new("crates/x/src/worker/pool.rs")));
     assert!(!found.contains(Path::new("crates/x/src/view/tests.rs")));
 
-    // G2: a declaration inside another module's braces names no file beside its parent,
+    // A declaration inside another module's braces names no file beside its parent,
     // and a file another declaration also names is not test-only — each would otherwise
     // leave a production file unscanned.
     let sources = vec![
@@ -1234,11 +1233,10 @@ fn only_the_ops_module_mutates_a_repository() {
 }
 
 /// Production files outside `ops/` that change the filesystem, each with exactly the kinds of
-/// write the matcher may find there and why that is outside any repository (staging-and-commit
-/// R12.5). A row whose file shows another kind — or no longer shows one of its own — fails the
-/// guard (phase 11's QA, GI5), so a row excuses only what it names and cannot outlive its
-/// reason. A later write outside any repository — a settings store (#89) — adds a row of its
-/// own, with its reason.
+/// write the matcher may find there and why that is outside any repository. A row whose file
+/// shows another kind — or no longer shows one of its own — fails the guard, so a row excuses
+/// only what it names and cannot outlive its reason. A later write outside any repository — a
+/// settings store (#89) — adds a row of its own, with its reason.
 const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &[&str], &str)] = &[
     (
         "crates/cairn-askpass/src/channel.rs",
@@ -1261,9 +1259,9 @@ const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &[&str], &str)] = &[
 ];
 
 /// The filesystem writes `ops/` makes, by file and kind: the one mutation Cairn makes without
-/// `git`, `Remove index.lock…`'s removal (R12.4, L23). Any other kind in `ops/`, or in another
-/// file of it, fails the guard (phase 11's QA, GI6): the exception cannot widen unseen, and a
-/// second git-less write is a reviewed row.
+/// `git`, `Remove index.lock…`'s removal. Any other kind in `ops/`, or in another file of it,
+/// fails the guard: the exception cannot widen unseen, and a second git-less write is a
+/// reviewed row.
 const OPS_FILESYSTEM_WRITES: &[(&str, &[&str])] =
     &[("crates/cairn-git/src/ops/remove_lock.rs", &["remove_file"])];
 
@@ -1284,10 +1282,10 @@ fn production_of(source: &str) -> String {
 }
 
 /// No production file outside `crates/cairn-git/src/ops/` removes, writes, renames, creates,
-/// links or changes the permissions of a file or directory (staging-and-commit R12.5, L23): the
-/// one mutation Cairn makes without `git` — `Remove index.lock…` — is in `ops/`, behind its
-/// confirmation, and anything else that writes the disk is a row of
-/// `FILESYSTEM_MUTATION_EXCEPTIONS`, outside any repository. Test code — test modules, files a
+/// links or changes the permissions of a file or directory: the one mutation Cairn makes
+/// without `git` — `Remove index.lock…` — is in `ops/`, behind its confirmation, and anything
+/// else that writes the disk is a row of `FILESYSTEM_MUTATION_EXCEPTIONS`, outside any
+/// repository. Test code — test modules, files a
 /// parent declares under `#[cfg(test)]` or `#[cfg(all(test, unix))]` — may write what it likes.
 #[test]
 fn only_the_ops_module_changes_the_filesystem() {
@@ -1396,8 +1394,8 @@ fn only_the_ops_module_changes_the_filesystem() {
 /// matching, or one that matches what only reads.
 #[test]
 fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
-    // One case spelled out for every roster entry, apart from the roster (phase 11's QA, TC6):
-    // an entry deleted from it fails here.
+    // One case spelled out for every roster entry, apart from the roster: an entry deleted from
+    // it fails here.
     let spelled: &[(&str, &str)] = &[
         ("remove_file", "fn f() { std::fs::remove_file(p).ok(); }"),
         ("remove_dir", "fn f() { std::fs::remove_dir(p).ok(); }"),
@@ -1488,7 +1486,7 @@ fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
     }
     let caught = [
         "fn f() { std::fs::remove_file(p).ok(); }",
-        // Phase 11's QA (GI1-GI4): the ways a `use` or a `type` hid a spelling.
+        // The ways a `use` or a `type` hides a spelling.
         "use std::fs::{self as f};\nfn g() { f::write(p, b); }",
         "use std::fs::{*};",
         "use std::fs::{self, *};",
@@ -1621,9 +1619,9 @@ const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
      did would need an allowlist row",
 )];
 /// Nothing outside `process/` builds, spawns, waits on or reads a process, or calls a method that
-/// yields one (process-manager R1.3, G2). The environment twin pins that one file builds the
-/// `Command`; this pins that nothing else can drive one, so the runner's stdin, kill and error
-/// mapping cannot be bypassed with the built environment in hand.
+/// yields one. The environment twin pins that one file builds the `Command`; this pins that
+/// nothing else can drive one, so the runner's stdin, kill and error mapping cannot be bypassed
+/// with the built environment in hand.
 #[test]
 fn only_the_process_module_builds_or_runs_a_process() {
     let (mut outside, mut inside) = (0usize, 0usize);
@@ -1658,11 +1656,10 @@ fn only_the_process_module_builds_or_runs_a_process() {
          move with it rather than exempt a directory that is not there"
     );
     // The module does what the matchers look for, so a matcher that stopped reading real code
-    // fails here rather than passing everything. The shapes are the runner's own. `.output()`
-    // and `.wait()` were here while `GitCommand::run` and `stream` existed, and went with them
-    // (process-manager phase 03): SWAPPED, not dropped, for the extension trait that puts each
-    // process in a group of its own and the stdout pipe a thread reads, beside `.try_wait()`,
-    // which is how the runner reaps. Those two stay on PROCESS_IDENTS and
+    // fails here rather than passing everything. The shapes are the runner's own: the extension
+    // trait that puts each process in a group of its own, the stdout pipe a thread reads, and
+    // `.try_wait()`, which is how the runner reaps. The runner calls neither `.output()` nor
+    // `.wait()`, so neither is required here, but both stay on PROCESS_IDENTS and
     // PROCESS_NULLARY_CALLS, so a call outside `process/` still fails.
     for (shape, hits) in [
         ("`.spawn()`", calls_nullary_method(&module, &["spawn"])),
@@ -1726,20 +1723,19 @@ const RUNNER_NAMES: &[&str] = &[
     "KillHandle",
 ];
 
-/// The runner the credential-prompts packet built, which process-manager replaced (R3.7, G18):
-/// the streamed process and its kill handle, by name. Banned everywhere in `cairn-git`,
-/// `process/` included, test modules included: the runner in `runner.rs` is the one way a
-/// process runs, and a second would be a second set of rules for ending one. They stay on
+/// A second runner's streamed process and its kill handle, by name. Banned everywhere in
+/// `cairn-git`, `process/` included, test modules included: the runner in `runner.rs` is the one
+/// way a process runs, and a second would be a second set of rules for ending one. They stay on
 /// [`RUNNER_NAMES`] as well, which is the weaker rule.
 const RETIRED_RUNNER_NAMES: &[&str] = &["Running", "ProcessKill"];
 
-/// That runner's two entry points, the methods `GitCommand` declared for it: `run` to
-/// completion and `stream` with a kill. Banned as a declaration in any `impl` block whose header
+/// That runner's two entry points, as methods of `GitCommand`: `run` to completion and
+/// `stream` with a kill. Banned as a declaration in any `impl` block whose header
 /// names `GitCommand`, and `stream` as a method call anywhere (`run` has innocent namesakes —
 /// the runner's own `Driver::run` — so its call is not matched; its declaration is).
 const RETIRED_RUNNER_METHODS: &[&str] = &["run", "stream"];
 
-/// The type the retired methods were declared on.
+/// The type a retired entry point would be declared on.
 const INVOCATION_BUILDER: &str = "GitCommand";
 
 /// Each `impl` block in `code` (strings and comments blanked) whose header names `ty`, as its
@@ -1864,22 +1860,21 @@ fn other_process_starts(source: &str) -> usize {
     .len()
 }
 
-/// The probe and fetch run on the runner, and the paths they ran on before are gone (process-
-/// manager R3.7, G18): nothing in `cairn-git` names the streamed `Running` or its
-/// `ProcessKill`, declares `GitCommand::run` or `GitCommand::stream`, or calls `.stream(..)` or
-/// `GitCommand::run(..)`/`GitCommand::stream(..)`. Over every file of `crates/cairn-git/src`,
-/// `process/` and test modules included — a test that keeps an old path alive keeps its rules
-/// alive (`tests/` cannot name these crate-private items at all). And production `process/`
-/// starts a process in exactly one place — one line calling `.spawn()`, and none calling
-/// `.output()`, `.status()` or `.exec()` — so a second runner starting its own process by those
-/// method calls, under any name, through an alias, a free function or a macro, fails here even
-/// where the name ban does not see it. Method-call syntax only: a path call
+/// The probe and fetch run on the runner, and on no second path to a process: nothing in
+/// `cairn-git` names a streamed `Running` or its `ProcessKill`, declares `GitCommand::run` or
+/// `GitCommand::stream`, or calls `.stream(..)` or `GitCommand::run(..)`/`GitCommand::stream(..)`.
+/// Over every file of `crates/cairn-git/src`, `process/` and test modules included — a test that
+/// keeps a second path alive keeps its rules alive (`tests/` cannot name these crate-private items
+/// at all). And production `process/` starts a process in exactly one place — one line calling
+/// `.spawn()`, and none calling `.output()`, `.status()` or `.exec()` — so a second runner starting
+/// its own process by those method calls, under any name, through an alias, a free function or a
+/// macro, fails here even where the name ban does not see it. Method-call syntax only: a path call
 /// (`Command::spawn(&mut c)`) or a `nix` start is not counted here; the terminal-prompt twin
 /// catches most of them, and what neither sees is stated in the root `CLAUDE.md`. Proven to
 /// read real code by finding `GitCommand`'s own impl blocks, and the runner's `start` in one
 /// of them.
 ///
-/// Residual review obligation, `qa-checklist`'s (its item 7): the names are read as spelled, so
+/// Residual review obligation, `qa-checklist`'s: the names are read as spelled, so
 /// a retired entry point declared through a `type` alias of the builder, as a free function or
 /// by a macro is seen only if it starts a process; two spawns written on one line count once;
 /// and a second path built ON `start` — a wrapper that
@@ -2164,10 +2159,10 @@ fn runner_violations(path: &Path, source: &str) -> Vec<String> {
 }
 
 /// Only `ops/` and `reads/` name the runner (beside `process/` itself), and only `ops/`
-/// constructs a `WriteAuthority` or builds a write (process-manager R1.2, R1.3, G1, G2). The
-/// compiler refuses most of this already — the authority's constructor is `pub(in crate::ops)`,
-/// the builder type is not re-exported, `process` is a private module — and this twin is what
-/// fails if any of that visibility is widened, which would compile quietly. Over `cairn-git`
+/// constructs a `WriteAuthority` or builds a write. The compiler refuses most of this already —
+/// the authority's constructor is `pub(in crate::ops)`, the builder type is not re-exported,
+/// `process` is a private module — and this twin is what fails if any of that visibility is
+/// widened, which would compile quietly. Over `cairn-git`
 /// alone, because the runner's names are crate-private: another crate cannot name them, which
 /// the visibility pins below keep true.
 /// Where a pin must sit to run: `function` declared once in `code` (comments and strings
@@ -2364,8 +2359,8 @@ fn unasserted_calls(body: &str, calls: &[&str]) -> Vec<String> {
 }
 
 /// Local Changes' list-and-diff bare keys, as the accelerator table's pin declares them
-/// (CLAUDE.md: exactly Backspace and Delete — Enter left the diff's scope on 2026-10-10, R7.3 as
-/// amended): a key added there would be admitted by the pin's rule and its loops alike, so the
+/// (CLAUDE.md: exactly Backspace and Delete — never Enter, since Fork's Return does nothing in
+/// the diff): a key added there would be admitted by the pin's rule and its loops alike, so the
 /// declaration itself is pinned.
 const LOCAL_CHANGES_BARE_KEYS_DECLARATION: &str =
     "const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];";
@@ -2448,11 +2443,11 @@ const ACCELERATOR_PIN_BODY: &[&str] = &[
     "pin_violations(&shared)",
 ];
 
-/// What R4.8 rests on, in `process/runner.rs` and `process/cli.rs`: the bounded-output
-/// helpers declared once each, inside `impl Invocation<Read>`; the ceiling `drive` takes typed
-/// by the invocation's kind, a write's ceiling type `Infallible`, so no generic helper can hand a
-/// write a ceiling; and the compile-time pin present, in code, under no `cfg` that could
-/// compile it away.
+/// What keeps the bounded-output helpers a read's alone, in `process/runner.rs` and
+/// `process/cli.rs`: the helpers declared once each, inside `impl Invocation<Read>`; the ceiling
+/// `drive` takes typed by the invocation's kind, a write's ceiling type `Infallible`, so no generic
+/// helper can hand a write a ceiling; and the compile-time pin present, in code, under no `cfg`
+/// that could compile it away.
 fn bounded_helper_violations(runner: &str, cli: &str) -> Vec<String> {
     let mut found = Vec::new();
     let runner_code = code_without_strings(runner);
@@ -2546,7 +2541,7 @@ fn bounded_helper_violations(runner: &str, cli: &str) -> Vec<String> {
     found
 }
 
-/// The R4.8 check over the real files, and over each way of eroding them.
+/// The bounded-output helper check over the real files, and over each way of eroding them.
 #[test]
 fn the_bounded_output_helper_check_catches_the_shapes_it_claims() {
     let read = |file: &str| {
@@ -2701,8 +2696,8 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         );
     }
 
-    // The bounded-output helpers are a read's alone (staging-and-commit R4.8): the type is the
-    // enforcement, and the pin that fails to compile when either is given to a write must stay.
+    // The bounded-output helpers are a read's alone: the type is the enforcement, and the pin
+    // that fails to compile when either is given to a write must stay.
     let runner = runner.unwrap_or_else(|| panic!("{PROCESS_DIR}/runner.rs is gone"));
     let cli = cli.unwrap_or_else(|| panic!("{PROCESS_DIR}/cli.rs is gone"));
     let found = bounded_helper_violations(&runner, &cli);
@@ -2814,18 +2809,15 @@ fn the_runner_is_named_only_by_ops_and_reads() {
 const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
 
 /// The one file that may build the second porcelain read, `git config` in query form —
-/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04), and
-/// what a commit and an amend will (staging-and-commit R6.11, 2026-10-10).
+/// what a fetch of a remote will read, asked of git, and what a commit and an amend will.
 const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/config.rs";
 
 /// The one file that may build the third porcelain read, `git stash show` in raw form —
-/// what a stash changed, untracked files paired as git pairs them (the user's decision of
-/// 2026-10-07).
+/// what a stash changed, untracked files paired as git pairs them.
 const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
 
 /// The one file that may build the fourth porcelain read, `git stripspace --strip-comments` — a
-/// merge's message cleaned as git's editor cleans it (staging-and-commit R6.10, C32, the user's
-/// decision of 2026-10-10).
+/// merge's message cleaned as git's editor cleans it.
 const STRIPSPACE_READ_FILE: &str = "crates/cairn-git/src/reads/stripspace.rs";
 
 /// The options the stripspace read passes, and must: the strip of comment lines (the editor's
@@ -2915,10 +2907,10 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// exact literal `"stash"` appears in production code of [`STASH_READ_FILE`] alone, exactly
 /// once, `"show"` the literal after it; every literal there that starts with `-` is one of
 /// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
-/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. `stripspace` ([`stripspace_read_violations`]):
-/// the exact literal `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`]
-/// alone, exactly once, and every literal there that starts with `-` is one of
-/// [`STRIPSPACE_OPTIONS`], each of which it passes. Comments and test modules are not read; a verb or an option built by
+/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. `stripspace` ([`stripspace_read_violations`]): the
+/// exact literal `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`] alone,
+/// exactly once, and every literal there that starts with `-` is one of [`STRIPSPACE_OPTIONS`],
+/// each of which it passes. Comments and test modules are not read; a verb or an option built by
 /// `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
@@ -3180,21 +3172,18 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 }
 
 /// The four porcelain verbs a read runs are `git diff --no-index`, built once, by the
-/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
-/// in query form, built once, by the config read (the user's decisions of 2026-10-04 and
-/// 2026-10-10), `git stash show`, built once, by the stash read (the user's decision of
-/// 2026-10-07), and `git stripspace` with `--strip-comments`, `--comment-lines` or no option —
-/// the options checked per file, not per call — built once, by the stripspace read (the user's
-/// decision of 2026-10-10); check 10 of `destructive-ops-reviewer`. Porcelain `git
-/// diff` against the working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git
-/// config` with a setter writes the configuration, and every `git stash` subcommand but
-/// `show` and `list` writes a stash, the working tree or a branch, so a second `"diff"`,
-/// `"config"`, `"stash"` or `"stripspace"` in `reads/`, an option outside the query form in the
-/// config read, a setter anywhere in `reads/`, `stash` without `show` after it, a writing stash
-/// subcommand anywhere in `reads/`, or an option of stripspace's but `--strip-comments` and
-/// `--comment-lines` is the regression this catches. Scoped to those literals; a verb or option built at run time
-/// (`format!`), and whether every other verb a read runs is query plumbing, stay the
-/// reviewer's.
+/// working-tree read, against `/dev/null`, `git config` in query form, built once, by the
+/// config read, `git stash show`, built once, by the stash read, and `git stripspace` with
+/// `--strip-comments`, `--comment-lines` or no option — the options checked per file, not per
+/// call — built once, by the stripspace read. Porcelain `git diff` against the working tree
+/// refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a setter writes the
+/// configuration, and every `git stash` subcommand but `show` and `list` writes a stash, the
+/// working tree or a branch, so a second `"diff"`, `"config"`, `"stash"` or `"stripspace"` in
+/// `reads/`, an option outside the query form in the config read, a setter anywhere in
+/// `reads/`, `stash` without `show` after it, a writing stash subcommand anywhere in `reads/`,
+/// or an option of stripspace's but `--strip-comments` and `--comment-lines` is the regression
+/// this catches. Scoped to those literals; a verb or option built at run time (`format!`), and
+/// whether every other verb a read runs is query plumbing, stay `destructive-ops-reviewer`'s.
 #[test]
 fn the_porcelain_reads_are_the_named_queries() {
     let sources = module_sources(READS_DIR);
@@ -4211,10 +4200,10 @@ fn the_runner_matcher_catches_the_shapes_it_claims() {
     }
 }
 
-/// The four routes to a process that no guard saw before the process-manager packet
-/// (`docs/research/process-manager/runner-and-worker-as-built.md`, section 3), as they would
-/// be written today in a module outside `ops/`, `reads/` and `process/`, and a `reads/` file
-/// that constructs a `WriteAuthority`: each must fail a twin.
+/// Four routes to a process a guard could miss (named in
+/// `docs/research/process-manager/runner-and-worker-as-built.md`, section 3), as they would be
+/// written in a module outside `ops/`, `reads/` and `process/`, and a `reads/` file that
+/// constructs a `WriteAuthority`: each must fail a twin.
 #[test]
 fn the_unguarded_routes_to_a_process_now_fail_a_twin() {
     for (route, path, source) in [
@@ -4486,8 +4475,8 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         mentions_crate(&production, "READ_ONLY").len() >= 2,
         "READ_ONLY is declared in {PROCESS_ENVIRONMENT_FILE} but never applied; a read must get it."
     );
-    // The inherited roster (staging-and-commit R5.2, C12): read with its comments, since each
-    // pinned entry must carry its reason beside it.
+    // The inherited roster: read with its comments, since each pinned entry must carry its
+    // reason beside it.
     let inherited = commented_table(&source, "INHERITED").unwrap_or_else(|| {
         panic!(
             "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const INHERITED` roster; what git \
@@ -4530,8 +4519,7 @@ fn every_git_invocation_disables_the_terminal_prompt() {
     );
 }
 
-/// What a read's environment must carry, each with what goes wrong without it (process-manager
-/// PRD R2.3, and D3 as the user decided it on 2026-10-02).
+/// What a read's environment must carry, each with what goes wrong without it.
 const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
     (
         "GIT_OPTIONAL_LOCKS",
@@ -4548,9 +4536,9 @@ const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// What the inherited roster must copy from the parent (staging-and-commit R5.2, L11 and L26),
-/// each with what goes wrong without it. Each must be an entry of `INHERITED` with a comment
-/// of its own beside it — the reason, which is what makes the leak deliberate.
+/// What the inherited roster must copy from the parent, each with what goes wrong without it. Each
+/// must be an entry of `INHERITED` with a comment of its own beside it — the reason, which is what
+/// makes the leak deliberate.
 const INHERITED_PINS: &[(&str, &str)] = &[
     (
         "GNUPGHOME",
@@ -4590,7 +4578,7 @@ const INHERITED_PINS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Never inherited (R5.2): a stale date left in a shell would stamp every commit with it.
+/// Never inherited: a stale date left in a shell would stamp every commit with it.
 const INHERITED_NEVER: &[&str] = &["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"];
 
 /// The entries of an `INHERITED` roster's text (comments kept), in order, each with whether a
@@ -5168,14 +5156,13 @@ fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
     }
 }
 
-/// The accelerator table (D5, PRD R8): the one render file that may name a modifier,
-/// because it is where every chord is written down.
+/// The accelerator table: the one render file that may name a modifier, because it is where
+/// every chord is written down, per platform.
 const ACCELERATOR_TABLE: &str = "crates/cairn-ui/src/accelerators.rs";
 
-/// The one render file that may spell a chord for a person to read (the user's decision,
-/// 2026-10-09): a tooltip names an action's chord, rendered there from the accelerator table's
-/// data. A row whose file no longer spells a chord fails, so the exemption cannot outlive its
-/// need.
+/// The one render file that may spell a chord for a person to read: a tooltip names an
+/// action's chord, rendered there from the accelerator table's data. A row whose file no longer
+/// spells a chord fails, so the exemption cannot outlive its need.
 const CHORD_NAMES: &[&str] = &["crates/cairn-ui/src/accelerators/chord_names.rs"];
 
 /// Whether `path` is a row of [`CHORD_NAMES`]: exactly, never by a name or a directory.
@@ -5183,7 +5170,7 @@ fn spells_chords_for_people(path: &Path) -> bool {
     CHORD_NAMES.iter().any(|row| path == Path::new(row))
 }
 
-/// PRD R8.3, decision D5: a component asks the accelerator table which action a key press
+/// A component asks the accelerator table which action a key press
 /// is, and never names a modifier itself — not the held-keys type, not the event's field,
 /// not a modifier key, and not a chord spelled out for a person to read. A `Ctrl` written
 /// into a component is a shortcut that is wrong on macOS. The one exception is
@@ -5325,7 +5312,7 @@ fn the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim() {
         "fn f() { let t = \"Return\"; }",
         "#[cfg(test)]\nmod tests {\n    fn f() { let t = \"Ctrl+Shift+.\"; }\n}",
     ];
-    // Phase 10's QA, item 6: the code of the chord-name module names no modifier but the
+    // The code of the chord-name module names no modifier but the
     // table's constants written out.
     let in_code = |source: &str| names_a_modifier_in_code(&modifier_constants_blanked(source));
     for source in [
@@ -5446,7 +5433,7 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "if e.key == Key::Named(NamedKey::NumLock) {}",
         ),
         ("scroll lock as a code", "if e.code == Code::ScrollLock {}"),
-        // Phase 10's QA, item 7: a held key's name alone, with no `+` or `-` beside it.
+        // A held key's name alone, with no `+` or `-` beside it.
         ("Alt alone", "label().text(\"Alt\")"),
         ("Shift alone", "let k = \"Shift\";"),
         ("Super alone", "let k = \"Super\";"),
@@ -5522,7 +5509,7 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
 }
 
 /// The accelerator table holds data and the resolution of a press against it, and nothing
-/// a person reads (CLAUDE.md, Invariants; G3): an element built there, or a chord spelled
+/// a person reads (CLAUDE.md, Invariants): an element built there, or a chord spelled
 /// out in a literal, would be a view inside the one file the modifier guard exempts — the
 /// place a `Ctrl` label could hide from it.
 #[test]
@@ -5545,7 +5532,7 @@ fn the_accelerator_table_holds_data_and_resolution_only() {
          view; the table holds the chord as data.",
         spelled[0]
     );
-    // An action maps to a LIST of chords per platform (staging-and-commit L22), and the pin
+    // An action maps to a LIST of chords per platform, as Fork keeps alternates, and the pin
     // that holds every chord of every list distinct, and every bare one a function key or one
     // of Local Changes' own, stays a test that runs.
     let code = code_without_strings(&table);
@@ -5791,9 +5778,9 @@ fn the_unasserted_call_matcher_catches_the_shapes_it_claims() {
     }
 }
 
-/// The accelerator table's pin (staging-and-commit R7.2): no chord listed twice on a platform,
-/// and a bare chord a function key's or one of Enter, Backspace and Delete in Local Changes'
-/// list-and-diff scope alone, each shown to fail on the shapes it refuses.
+/// The accelerator table's pin: no chord listed twice on a platform, and a bare chord a function
+/// key's, or Backspace or Delete in Local Changes' list-and-diff scope, or Enter in its file
+/// lists' scope alone, each shown to fail on the shapes it refuses.
 const ACCELERATOR_PIN: &str =
     "chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own";
 
@@ -5839,15 +5826,15 @@ fn the_element_matcher_catches_the_shapes_it_claims() {
     );
 }
 
-/// The one key policy every text field takes (staging-and-commit R7.1): the one render file
+/// The one key policy every text field takes: the one render file
 /// that may build Freya's `Input` or replace its key handler.
 const TEXT_FIELD_POLICY: &str = "crates/cairn-ui/src/text_field.rs";
 
-/// R7.1, C15: every text field is built by the one key policy, which hands the window's chords
-/// and held modifiers to the window and keeps its own keys from the views around it. A field
-/// built anywhere else — Freya's `Input` named, or its key handler swapped — would claim every
-/// key again, hiding F5 and the held ⌘ or Ctrl from the window (the hole
-/// `docs/research/staging-and-commit/freya-ui-apis.md` §2 found in every filter field).
+/// Every text field is built by the one key policy, which hands the window's chords and held
+/// modifiers to the window and keeps its own keys from the views around it. A field built
+/// anywhere else — Freya's `Input` named, or its key handler swapped — would claim every key
+/// again, hiding F5 and the held ⌘ or Ctrl from the window, as a filter field built on `Input`
+/// alone does (`docs/research/staging-and-commit/freya-ui-apis.md`, §2).
 /// What the one key policy must be seen naming, so a blind matcher fails: the field it builds
 /// and the handler it installs.
 const TEXT_FIELD_POLICY_NAMES: &[&str] = &["Input", "on_pre_key_down"];
@@ -6054,13 +6041,12 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 
 /// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
 /// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
-/// and presses the button that accepts it (staging-and-commit R1.1): the confirmation dialog —
-/// an amend that must be confirmed among what it confirms (R10.6, C1) — and the Create Branch
-/// dialog, whose Create and Checkout (or Return) with Discard chosen is the acknowledgement
-/// (the user's decision of 2026-10-10, B2): the radio chosen plus the press, as in Fork, the
-/// token built from the `Consequence` the engine computed for it. The commit box left the roster
-/// in phase 18: an amend git logs and no remote has takes no token, and any other is confirmed
-/// in the dialog. A row whose file no longer names the constructor fails.
+/// and presses the button that accepts it: the confirmation dialog — an amend that must be
+/// confirmed among what it confirms — and the Create Branch dialog, whose Create and Checkout
+/// (or Return) with Discard chosen is the acknowledgement: the radio chosen plus the press, as
+/// in Fork, the token built from the `Consequence` the engine computed for it. The commit box
+/// is not a surface: an amend git logs and no remote has takes no token, and any other is
+/// confirmed in the dialog. A row whose file no longer names the constructor fails.
 const CONFIRMATION_SURFACES: &[&str] = &[
     "crates/cairn-ui/src/dialogs/confirm.rs",
     "crates/cairn-ui/src/dialogs/create_branch.rs",
@@ -6068,24 +6054,21 @@ const CONFIRMATION_SURFACES: &[&str] = &[
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
-/// [`CONFIRMED_RECORD`]. Discarding lines (R3.3) and discarding files — a tracked file's
-/// unstaged change restored, an untracked file deleted (R3.5) — replaced the placeholder
-/// `describe_destructive` in staging-and-commit phase 03; amend (R6.4), which replaces `HEAD`,
-/// joined in phase 05; phase 11 adds removing `index.lock`. The roster is never empty (the user's decision, 2026-10-08): an
-/// empty one would check every token-taking function against nothing, so the guard asserts
-/// a row.
+/// [`CONFIRMED_RECORD`]: discarding lines, discarding files — a tracked file's unstaged change
+/// restored, an untracked file deleted — amend, which replaces `HEAD`, removing `index.lock`,
+/// and Create Branch's Discard. The roster is never empty: an empty one would check every
+/// token-taking function against nothing, so the guard asserts a row.
 const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
     ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
     ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
     ("crates/cairn-git/src/ops/commit.rs", "amend"),
-    // `Remove index.lock…`: the one file Cairn deletes without git (staging-and-commit R12.4).
+    // `Remove index.lock…`: the one file Cairn deletes without git.
     (
         "crates/cairn-git/src/ops/remove_lock.rs",
         "remove_index_lock",
     ),
     // Create Branch's Discard: Fork's forced checkout, which discards staged and unstaged
-    // changes and untracked files in the way (the user's decisions 3, 2026-10-09, and B1,
-    // 2026-10-10).
+    // changes and untracked files in the way.
     (
         "crates/cairn-git/src/ops/checkout.rs",
         "create_branch_discarding",
@@ -6093,7 +6076,7 @@ const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
 ];
 
 /// The one function naming `Confirmed` that is not an operation: the record that spends the
-/// token, quoting its prompt (`Performed::destructive`, R1.6) — by file, the type whose inherent
+/// token, quoting its prompt (`Performed::destructive`) — by file, the type whose inherent
 /// impl declares it, and its name, so no other function of that name is excused. It takes the
 /// token by value too.
 const CONFIRMED_RECORD: (&str, &str, &str) =
@@ -6106,18 +6089,16 @@ const CONFIRMED_RECORD: (&str, &str, &str) =
 /// excuses that one declaration alone: a second type in the same file that holds a token
 /// fails, and so does a row whose type no longer exists or no longer holds one. The rows: the
 /// local write lane's `LocalWrite`, which carries a destructive write's token from the
-/// confirmation surface to the lane that spends it by value on the operation
-/// (staging-and-commit R4), and is neither `Clone` (but for a test-only impl that refuses a
-/// destructive write) nor kept once run; and the engine's `Error`, whose `AmendNotMade` hands
-/// a confirmed amend's token back unspent when git failed with `HEAD` unmoved, so the skip
-/// amends without asking again (R1.1, option (a) of 2026-10-10) — the one variant, and the one
-/// field, allowed to (`ENGINE_ERROR_TOKEN`, held by
-/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`); and, added by phase 18, the two
-/// that carry that token on to the skip (R10.5, the user's answer of 2026-10-10): the local
-/// lane's `Unspent`, on the write's ending to the window — whose `Clone` carries none, so one
-/// token is never two — and the window's Git Error state, `GitError`, which keeps it until the
-/// skip spends it or Close lets it go, each in one field alone (`WINDOW_TOKEN_FIELDS`, held by
-/// `the_window_holds_a_token_only_for_the_git_errors_skip`).
+/// confirmation surface to the lane that spends it by value on the operation, and is neither
+/// `Clone` (but for a test-only impl that refuses a destructive write) nor kept once run; the
+/// engine's `Error`, whose `AmendNotMade` hands a confirmed amend's token back unspent when git
+/// failed with `HEAD` unmoved, so the skip amends without asking again — the one variant, and the
+/// one field, allowed to (`ENGINE_ERROR_TOKEN`, held by
+/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`); and the two that carry that token on
+/// to the skip: the local lane's `Unspent`, on the write's ending to the window — whose `Clone`
+/// carries none, so one token is never two — and the window's Git Error state, `GitError`, which
+/// keeps it until the skip spends it or Close lets it go, each in one field alone
+/// (`WINDOW_TOKEN_FIELDS`, held by `the_window_holds_a_token_only_for_the_git_errors_skip`).
 const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
     ("crates/cairn-app/src/worker/local/lane.rs", "LocalWrite"),
     ("crates/cairn-app/src/worker/local/lane.rs", "Unspent"),
@@ -6126,8 +6107,7 @@ const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
 ];
 
 /// The window's holders of a confirmed amend's unspent token, each by its file, its type and the
-/// one field it may hold the token in (staging-and-commit R1.1, R10.5): the lane's carrier and
-/// the Git Error state.
+/// one field it may hold the token in: the lane's carrier and the Git Error state.
 const WINDOW_TOKEN_FIELDS: &[(&str, &str, &str)] = &[
     (
         "crates/cairn-app/src/worker/local/lane.rs",
@@ -6166,8 +6146,8 @@ fn holder_field_violations(code: &str, ty: &str, field: &str) -> Vec<String> {
 
 /// The window keeps a confirmed amend's unspent token in two places and nowhere else, one field
 /// each: the lane's `Unspent`, which carries it on the write's ending, and the Git Error state,
-/// which keeps it for the skip (R1.1's option (a), the user's answer of 2026-10-10). Their
-/// `CONFIRMED_HOLDERS` rows excuse the types; this pins the one field in each.
+/// which keeps it for the skip. Their `CONFIRMED_HOLDERS` rows excuse the types; this pins the
+/// one field in each.
 #[test]
 fn the_window_holds_a_token_only_for_the_git_errors_skip() {
     for (file, ty, field) in WINDOW_TOKEN_FIELDS {
@@ -6277,9 +6257,9 @@ fn engine_error_token_violations(code: &str) -> Vec<String> {
 }
 
 /// The engine's `Error` holds a token in exactly one place — `AmendNotMade`'s `unspent`, the
-/// confirmed amend's token handed back when git failed with `HEAD` unmoved (R1.1, option (a)) —
-/// so no other failure can carry a confirmation out of an operation. Its `CONFIRMED_HOLDERS`
-/// row excuses the type; this pins where in it.
+/// confirmed amend's token handed back when git failed with `HEAD` unmoved — so no other
+/// failure can carry a confirmation out of an operation. Its `CONFIRMED_HOLDERS` row excuses
+/// the type; this pins where in it.
 #[test]
 fn the_engine_error_holds_a_token_only_as_an_unspent_amend() {
     let (file, _, _) = ENGINE_ERROR_TOKEN;
@@ -6908,7 +6888,7 @@ fn seal_route_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The confirmation seal (staging-and-commit R1, C1): `Confirmed` is neither `Clone` nor
+/// The confirmation seal: `Confirmed` is neither `Clone` nor
 /// `Copy`, carries a `Consequence` and the prompt rendered from it, and is built only by the
 /// confirmation surfaces on [`CONFIRMATION_SURFACES`]; every destructive operation is on
 /// [`DESTRUCTIVE_OPERATIONS`] and takes it by value; and a `Consequence` is spelled only by the
@@ -7526,7 +7506,7 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
         found.len() == 1 && found[0].contains("`Parked`"),
         "a second holder in the rostered file was not refused: {found:?}"
     );
-    // A row whose type stopped holding a token, or is gone, is a dead row.
+    // A row whose type holds no token, or does not exist, is a dead row.
     let emptied = "pub enum LocalWrite {\n    StageFiles(Vec<String>),\n}";
     let found = confirmed_holder_violations(&[(Path::new(lane), emptied)], &row);
     assert!(
@@ -8442,7 +8422,7 @@ fn ci_runs_every_merge_bar_gate_step() {
 
 /// The partial-clone pin of `GIT_NO_LAZY_FETCH` skips on a git older than 2.44, which ignores
 /// the variable, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_NO_LAZY_FETCH` is
-/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it in the
+/// what turns that skip into a failure in CI. Pinned here: CI sets it in the
 /// `gate` job's own `env:`, which every step of that job sees — not in another job, and not
 /// on one step, where `test-full` would not see it — and the test still reads it in its
 /// skip branch (without that, setting it would change nothing).
@@ -8547,9 +8527,9 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     }
 }
 
-/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs`) skips where
-/// git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr
-/// is hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
+/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs`) skips
+/// where git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr is
+/// hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
 /// Pinned here: the test's skip branch fails when the variable is set; `scripts/gate.sh`'s
 /// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
 /// `git version --build-options`; and `scripts/git-floor.sh` clears it on every run of the
@@ -8623,7 +8603,7 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     }
 }
 
-/// The reftable tests (`crates/cairn-git/tests/refs.rs`, PRD C2) skip where the git on
+/// The reftable tests (`crates/cairn-git/tests/refs.rs`) skip where the git on
 /// `PATH` cannot make a reftable repository — before git 2.45 — wholly
 /// (`a_reftable_repository_is_refused_at_open_and_a_files_one_opens`) or for git's half
 /// (`the_ref_storage_setting_is_read_as_git_reads_it`), and a passing test's stderr is
@@ -8779,13 +8759,13 @@ fn the_required_skip_matcher_catches_the_shapes_it_claims() {
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns
 /// (`crates/cairn-git/tests/fetch/main.rs`) and git's search across a filesystem boundary
-/// (`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`) — skip where their namespace cannot be
-/// made, and a passing test's stderr is hidden, so a variable of each one's own turns its
+/// (`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`) — skip where their namespace
+/// cannot be made, and a passing test's stderr is hidden, so a variable of each one's own turns its
 /// skip into a failure: `CAIRN_REQUIRE_SECOND_OWNER` and `CAIRN_REQUIRE_MOUNT_NAMESPACE`.
 /// They need different things — a second uid that the namespace's root may give a file to
 /// (`chown 1:1`, which AppArmor's `unprivileged_userns` profile refuses on Ubuntu 24.04),
-/// and a mount namespace — so the gate probes each exactly as its test does (the user's
-/// decision, 2026-10-04), and a host that serves one requires that one. Pinned here: each
+/// and a mount namespace — so the gate probes each exactly as its test does, and a host that
+/// serves one requires that one. Pinned here: each
 /// test's skip branch fails when its variable is set and makes its availability check with
 /// the arguments its probe in `scripts/gate.sh` runs; `test-full` calls the probe
 /// (`gate_function_calls`), whose body runs both `unshare`s, exports both variables, sets
@@ -8976,11 +8956,11 @@ fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
 /// is the day loop's subset of `test-full`, which the full gate runs instead.
 const LOCAL_FULL_GATE_EXEMPT: &[&str] = &["test-fast"];
 
-/// `scripts/gate.sh` with no arguments is the merge bar a contributor runs, so every step
-/// it can run by name is in it — `deps` and `git-floor`, which reach the network, included
-/// — but for the explicit exemptions above. Without this a step added to the dispatch
-/// arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of the
-/// local merge bar, and a contributor's green gate would not be CI's.
+/// `scripts/gate.sh` with no arguments is the full gate a contributor runs before a merge, so
+/// every step it can run by name is in it — `deps` and `git-floor`, which reach the network,
+/// included — but for the explicit exemptions above. Without this a step added to the
+/// dispatch arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of
+/// the local full gate, and a contributor's green gate would not be CI's.
 #[test]
 fn the_local_full_gate_runs_every_step_but_the_day_loops() {
     let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
@@ -9014,7 +8994,7 @@ fn the_local_full_gate_runs_every_step_but_the_day_loops() {
     }
 }
 
-/// `scripts/gate.sh` with no arguments is the merge bar only while two things hold that the
+/// `scripts/gate.sh` with no arguments is the full gate only while two things hold that the
 /// sequence reading cannot see: the default is the full run (`FAST=0`, set once at the top
 /// and changed only by `--fast`), and no merge-bar step's command is the literal `skip`,
 /// which passes it without running anything. Every dispatch arm but the day loop's names
@@ -9465,8 +9445,8 @@ fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
 const FONTS_DIR: &str = "crates/cairn-app/assets/fonts";
 
 /// Every font embedded in the application, with the licence file it ships under. A row is a
-/// user decision (the font's download is one, packet decision L16): IBM Plex Mono Regular,
-/// SIL Open Font License 1.1, approved 2026-10-03.
+/// decision to surface to the user, as a dependency is: IBM Plex Mono Regular, under the SIL
+/// Open Font License 1.1.
 const EMBEDDED_FONTS: &[(&str, &str)] = &[("IBMPlexMono-Regular.ttf", "IBMPlexMono-LICENSE.txt")];
 
 /// A font file is a dependency `cargo deny` cannot see: the embedded fonts directory holds

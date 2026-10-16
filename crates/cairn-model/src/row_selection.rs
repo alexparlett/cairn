@@ -1,20 +1,19 @@
-//! What the diff's staging gesture selects of the rows a view draws (staging-and-commit R9.1-
-//! R9.3): a hovered chunk's changed lines, and the changed lines a drag across rows covers.
+//! What the diff's staging gesture selects of the rows a view draws: a hovered chunk's changed
+//! lines, and the changed lines a drag across rows covers.
 //!
 //! **A chunk is a drawn hunk.** At any context a hunk groups every exact change whose context
 //! touches the next one's, so at context ten one outlined chunk can hold several of git's
 //! changes; its actions take every changed line drawn inside the outline and nothing outside
 //! it — exactly what the person sees selected ([`UnifiedLayout::hunk_selection`]). Only rows of
 //! the exact changes are selected from: rows drawn ignoring whitespace group ranges that are
-//! not git's lines, so they select nothing (L6: Local Changes always draws the exact diff).
+//! not git's lines, so they select nothing (Local Changes always draws the exact diff).
 //!
 //! **A drag selects whole lines** (Fork: a partial selection acts on whole lines). The rows it
-//! spans are read as the view reads them — row by row through the layout — so a selection is
-//! the lines drawn in those rows and no others; a context row, a hunk's header and git's
-//! end-of-file marker select nothing. Only the changes the rows overlap are read, so the cost
-//! is the changed lines selected, never the rows spanned. In side by side a drag stays in the
-//! column it began in ([`SideColumn`], R9.3): the old column selects removed lines, the new
-//! one added lines.
+//! spans are read as the view reads them — row by row through the layout — so a selection is the
+//! lines drawn in those rows and no others; a context row, a hunk's header and git's end-of-file
+//! marker select nothing. Only the changes the rows overlap are read, so the cost is the changed
+//! lines selected, never the rows spanned. In side by side a drag stays in the column it began in
+//! ([`SideColumn`]): the old column selects removed lines, the new one added lines.
 
 use std::ops::Range;
 
@@ -23,7 +22,7 @@ use crate::{
     UnifiedRow,
 };
 
-/// The column of a side-by-side view a drag began in, and stays in (R9.3).
+/// The column of a side-by-side view a drag began in, and stays in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SideColumn {
     /// The left column: the old side, its removed lines.
@@ -117,9 +116,9 @@ impl SideBySideLayout {
         Some(selection)
     }
 
-    /// The changed lines drawn in `rows` of `column` alone (R9.3): the old column's removed
-    /// lines, or the new column's added ones — a replaced row's other half is left out. `None`
-    /// for rows drawn ignoring whitespace.
+    /// The changed lines drawn in `rows` of `column` alone: the old column's removed lines, or the
+    /// new column's added ones — a replaced row's other half is left out. `None` for rows drawn
+    /// ignoring whitespace.
     pub fn selection_in(
         &self,
         text: &TextDiff,
@@ -192,11 +191,11 @@ mod tests {
         )
     }
 
-    /// The QA brief's first risk: at context ten one drawn chunk groups the first two edits,
-    /// and its actions take exactly their lines — every changed line inside the outline, none
-    /// outside it — and the same chunk read as rows says the same. At context one the two
-    /// are chunks of their own. Every row of a hunk names that hunk, and no row names another.
-    /// Caught by: a chunk mapped to its first change alone, or to every change of the file.
+    /// At context ten one drawn chunk groups the first two edits, and its actions take exactly
+    /// their lines — every changed line inside the outline, none outside it — and the same chunk
+    /// read as rows says the same. At context one the two are chunks of their own. Every row of a
+    /// hunk names that hunk, and no row names another. Caught by: a chunk mapped to its first
+    /// change alone, or to every change of the file.
     #[test]
     fn a_chunk_at_context_ten_takes_every_change_it_draws_and_no_other() {
         let text = three_edits();
@@ -285,9 +284,9 @@ mod tests {
         );
     }
 
-    /// R9.3: side by side, a drag stays in its column — the old column selects the removed
-    /// lines of the rows it spans, the new column the added ones, a replaced row giving each
-    /// column its own half. Caught by: a column ignored (both halves selected).
+    /// Side by side, a drag stays in its column — the old column selects the removed lines of the
+    /// rows it spans, the new column the added ones, a replaced row giving each column its own
+    /// half. Caught by: a column ignored (both halves selected).
     #[test]
     fn side_by_side_a_drag_selects_its_own_column() {
         let text = three_edits();
@@ -320,7 +319,7 @@ mod tests {
         );
     }
 
-    /// L6: rows drawn ignoring whitespace select nothing, chunk or drag. Caught by: a
+    /// Rows drawn ignoring whitespace select nothing, chunk or drag. Caught by: a
     /// whitespace-ignoring range read as git's lines (staging lines the person never saw).
     #[test]
     fn rows_drawn_ignoring_whitespace_select_nothing() {

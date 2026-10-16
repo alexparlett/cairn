@@ -1,7 +1,5 @@
-//! Whether a name can be a new branch's, as Create Branch asks before git runs
-//! (`docs/prd/staging-and-commit.md` R11.3; the user's decision, 2026-10-09; the refusal typed
-//! by the review's M3, 2026-10-10). The engine answers what is true of the name; the view
-//! words it.
+//! Whether a name can be a new branch's, as Create Branch asks before git runs. The engine
+//! answers what is true of the name; the view words it.
 
 /// What the engine answered of a name typed for a new branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,8 +13,8 @@ pub enum BranchName {
 /// Why a name cannot be a new branch's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NameRefusal {
-    /// It holds `@{`, which git reads as the start of a reflog selector (the user's decision F,
-    /// 2026-10-09): refused before git is asked.
+    /// It holds `@{`, which git reads as the start of a reflog selector: refused before git is
+    /// asked.
     AtBrace,
     /// git does not take it as a branch's name (`git check-ref-format --branch`): git's reason,
     /// its first line, `fatal: ` left off.

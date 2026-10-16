@@ -150,7 +150,7 @@ impl LaneAssigner {
         self.lay_out(id, &parents, ParentLines::Join)
     }
 
-    /// A stash's row (PRD R4.2, R4.4): `id` is the stash commit, which no commit the walk
+    /// A stash's row: `id` is the stash commit, which no commit the walk
     /// reaches names as a parent, and `base` the commit it was made on — its first parent,
     /// and the only one laid out: its index and untracked commits are never awaited. Its
     /// line descends in a lane of its own to `base`, even where another line already awaits
@@ -722,7 +722,7 @@ mod tests {
         }
     }
 
-    /// The QA brief's two stashes on one commit, which a branch's line already awaits: two
+    /// Two stashes on one commit, which a branch's line already awaits: two
     /// rows, each in a lane of its own — never joining the branch's line, as a commit's
     /// line would — and all three lines end at that commit. Caught by: a stash's line laid
     /// as a commit's (`push`), which joins lane 0 at once and puts both stashes in lane 1.

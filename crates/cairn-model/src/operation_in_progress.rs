@@ -1,6 +1,6 @@
 //! An operation git has begun in a repository and not finished — a merge, a single cherry-pick
 //! or revert, a sequence of them, a rebase or `git am` — as git records it in the git directory
-//! (`docs/prd/staging-and-commit.md` R6.9, L25). The engine reads it; the commit box draws it.
+//! The engine reads it; the commit box draws it.
 //! A commit concludes a merge, a single cherry-pick and a single revert, as `git commit` does;
 //! a rebase, `git am` and a sequence refuse a commit and an amend, since continuing one is that
 //! operation's own, and are named with git's command to continue or abort it. An amend is
@@ -46,8 +46,7 @@ impl OperationInProgress {
     }
 
     /// Whether an amend is refused while it runs: every one — git refuses to amend in the middle
-    /// of a merge, a cherry-pick or a revert, and an amend is no way to continue a sequence
-    /// (R6.3).
+    /// of a merge, a cherry-pick or a revert, and an amend is no way to continue a sequence.
     pub fn refuses_amend(&self) -> bool {
         match self {
             Self::Merge
@@ -107,10 +106,10 @@ mod tests {
         ]
     }
 
-    /// L25 as the redesign narrowed it (C3): a merge, a single cherry-pick and a single revert
-    /// are concluded by a commit; a sequence, a rebase and `git am` refuse it; nothing lets an
-    /// amend through. Caught by: a single pick refused (Fork and git conclude it), a sequence
-    /// concluded (its next picks would be left to the terminal unsaid), or an amend let through.
+    /// A merge, a single cherry-pick and a single revert are concluded by a commit; a sequence,
+    /// a rebase and `git am` refuse it; nothing lets an amend through. Caught by: a single pick
+    /// refused (Fork and git conclude it), a sequence concluded (its next picks would be left to
+    /// the terminal unsaid), or an amend let through.
     #[test]
     fn a_commit_concludes_a_merge_or_a_single_pick_and_nothing_lets_an_amend() {
         let concluded: Vec<bool> = every().iter().map(|op| op.concluded_by_commit()).collect();

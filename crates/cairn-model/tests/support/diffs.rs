@@ -248,14 +248,13 @@ pub fn expected_lines(text: &TextDiff, selection: &Selection) -> Vec<DiffLine> {
     out
 }
 
-/// What undoing a selection leaves of the NEW side, computed without inverting anything:
-/// git's mirrored rule (`patch-mechanics-spike.md` E1b) — a patch of the original diff in
-/// which an unselected addition is context and an unselected removal is dropped, applied in
-/// reverse — read straight off the changed ranges. A selected removal comes back, an
-/// unselected addition stays, a selected addition goes, and within one change what comes
-/// back stands ahead of what stays, as the removed lines stand ahead of the added ones in
-/// the diff. It shares no code with `TextDiff::inverted` or the emitter, which is the point:
-/// unstage and discard are judged against it.
+/// What undoing a selection leaves of the NEW side, computed without inverting anything: git's
+/// mirrored rule — a patch of the original diff in which an unselected addition is context and an
+/// unselected removal is dropped, applied in reverse — read straight off the changed ranges. A
+/// selected removal comes back, an unselected addition stays, a selected addition goes, and within
+/// one change what comes back stands ahead of what stays, as the removed lines stand ahead of the
+/// added ones in the diff. It shares no code with `TextDiff::inverted` or the emitter, which is the
+/// point: unstage and discard are judged against it.
 pub fn mirrored_lines(text: &TextDiff, selection: &Selection) -> Vec<DiffLine> {
     let mut out: Vec<DiffLine> = Vec::new();
     let mut cursor = 0u32;
@@ -312,7 +311,7 @@ pub fn is_a_well_formed_file(lines: &[DiffLine]) -> bool {
         .all(cairn_model::DiffLine::ends_with_newline)
 }
 
-/// Every changed line of a diff, each named the way R1.3 names it.
+/// Every changed line of a diff, each named by its side and its own line number.
 pub fn every_identity(text: &TextDiff) -> Vec<(bool, u32)> {
     let mut identities = Vec::new();
     for change in text.changes() {

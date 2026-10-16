@@ -1,5 +1,4 @@
-//! What staging, unstaging or discarding a selection of one file's diff emits (R2.2,
-//! R2.3, L17).
+//! What staging, unstaging or discarding a selection of one file's diff emits.
 //!
 //! One rule writes every patch — [`crate::emit_patch`], forward — and what differs between
 //! the three actions is only which diff it is given:
@@ -10,24 +9,23 @@
 //!   `git apply --cached`;
 //! - **discard**: the unstaged diff inverted, applied with `git apply` to the working tree.
 //!
-//! So no patch is ever applied with `-R` (L17a). The inversion is [`TextDiff::inverted`],
+//! So no patch is ever applied with `-R`. The inversion is [`TextDiff::inverted`],
 //! [`Selection::inverted`] and [`ChangedFile::inverted`]; that what it emits is what git's
-//! own mirrored patch applied in reverse gives is `cairn-git`'s C3, against real git.
+//! own mirrored patch applied in reverse gives is pinned in `cairn-git`, against real git.
 //!
-//! What is whole-file only gets no patch for part of it — the empty patch, which is also
-//! what a selection of nothing makes (R2.3, L17c): a deletion on either side (a staged
-//! deletion, or a file gone from the working tree), a type change, and every state that is
-//! not text — binary, an LFS pointer, past the size limits, a submodule, a conflicted path,
-//! a state Cairn cannot read. Each is staged, unstaged or discarded whole by its file verb,
-//! never by a patch (and a submodule or a conflicted path is never discarded at all). Part
-//! of a file ADDED is not whole-file only: an untracked or newly added file's lines are
-//! staged as a `new file mode` patch of the lines selected, and discarded or unstaged as a
-//! partial deletion, which the forward rule writes as a modification (L17b).
+//! What is whole-file only gets no patch for part of it — the empty patch, which is also what a
+//! selection of nothing makes: a deletion on either side (a staged deletion, or a file gone from
+//! the working tree), a type change, and every state that is not text — binary, an LFS pointer,
+//! past the size limits, a submodule, a conflicted path, a state Cairn cannot read. Each is staged,
+//! unstaged or discarded whole by its file verb, never by a patch (and a submodule or a conflicted
+//! path is never discarded at all). Part of a file ADDED is not whole-file only: an untracked or
+//! newly added file's lines are staged as a `new file mode` patch of the lines selected, and
+//! discarded or unstaged as a partial deletion, which the forward rule writes as a modification.
 //!
-//! Unstaging or discarding lines of a rename or a copy changes content only, at the path it
-//! now has (R2.6, L17c): the patch names the new path on both sides and carries no `rename
-//! from`, so the index keeps the rename and the lines go back. Undoing the rename itself is
-//! `git reset -q -- <old> <new>`, a file verb.
+//! Unstaging or discarding lines of a rename or a copy changes content only, at the path it now
+//! has: the patch names the new path on both sides and carries no `rename from`, so the index keeps
+//! the rename and the lines go back. Undoing the rename itself is `git reset -q -- <old> <new>`, a
+//! file verb.
 
 use crate::{ChangeStatus, ChangedFile, DiffContent, FileDiff, Patch, Selection, TextDiff};
 
@@ -39,7 +37,7 @@ pub enum PatchAction {
     /// Out of the index, from the staged diff.
     Unstage,
     /// Out of the working tree, from the unstaged or untracked diff. Destructive: the
-    /// operation that applies it is sealed behind a confirmation (R1.5).
+    /// operation that applies it is sealed behind a confirmation.
     Discard,
 }
 
@@ -47,9 +45,10 @@ pub enum PatchAction {
 /// staged diff for [`PatchAction::Unstage`], the unstaged or untracked one otherwise — and
 /// `selection`, its lines named on their own sides and the mode change apart.
 ///
-/// Empty when there is nothing to do: nothing selected — not a line, not the mode — even
-/// for a change with no lines (an empty file added or deleted, which its file verb takes),
-/// or part of a change that is whole only (module docs). Pure; costs what the file has lines, since an inversion copies them.
+/// Empty when there is nothing to do: nothing selected — not a line, not the mode — even for a
+/// change with no lines (an empty file added or deleted, which its file verb takes), or part of a
+/// change that is whole only (module docs). Pure; costs what the file has lines, since an inversion
+/// copies them.
 pub fn action_patch(action: PatchAction, diff: &FileDiff, selection: &Selection) -> Patch {
     // Nothing selected is nothing to do, whatever the change: an empty file added or a
     // type change with no lines would otherwise be held whole by a selection of none of
@@ -231,7 +230,7 @@ mod tests {
         }
     }
 
-    /// R2.3: part of a deletion or of a type change makes no patch, on either side, by any
+    /// Part of a deletion or of a type change makes no patch, on either side, by any
     /// action; the whole of one does. Caught by: a partial deletion staged as a smaller file
     /// (`git add -p`'s rule is the deletion whole), or the check made on the inverted file,
     /// which would refuse part of an untracked file's discard instead.
@@ -268,7 +267,7 @@ mod tests {
         }
     }
 
-    /// R2.3, L17b: part of an added file is staged as a new file of the lines selected, and
+    /// Part of an added file is staged as a new file of the lines selected, and
     /// discarded (or unstaged) as a partial deletion written as a modification — the file
     /// stays. Caught by: the whole-file rule applied to the inverted file, which is a
     /// deletion.
@@ -313,7 +312,7 @@ mod tests {
         );
     }
 
-    /// R2.6, L17c: lines of a staged rename or copy are unstaged as content at the path the
+    /// Lines of a staged rename or copy are unstaged as content at the path the
     /// file has now. Caught by: the inverted rename emitted as a rename back, which would
     /// move the file when only lines were asked for. (The restored line is written ahead of
     /// the one it replaces: an inverted replacement is its insertion, then its removal —
@@ -353,7 +352,8 @@ mod tests {
         }
     }
 
-    /// R2.4 through an action: the mode alone undoes the mode alone, and the lines leave it.
+    /// The mode change apart from the lines, through an action: the mode alone undoes the mode
+    /// alone, and the lines leave it.
     #[test]
     fn the_mode_change_is_unstaged_apart_from_the_lines() {
         let mut drawn = diff(
@@ -385,7 +385,7 @@ mod tests {
         assert!(action_patch(PatchAction::Stage, &only_mode, &Selection::empty()).is_empty());
     }
 
-    /// R2.3, L17c: a selection of nothing makes no patch, by any action, even where the
+    /// A selection of nothing makes no patch, by any action, even where the
     /// change has no lines to select — an empty file added (whose inversion is a whole
     /// deletion, since nothing selected holds every one of its no lines) or a type change
     /// whose content did not move. Caught by: leaving the empty case to `emit_patch`, which

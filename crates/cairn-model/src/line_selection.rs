@@ -4,18 +4,17 @@ use std::collections::BTreeSet;
 
 use crate::{ChangedRange, LineNumber, TextDiff};
 
-/// A set of changed lines, each named by its line number on its own side (R1.3), and
-/// whether the file's mode change is selected (R2.4).
+/// A set of changed lines, each named by its line number on its own side, and whether the file's
+/// mode change is selected.
 ///
-/// A removed line is named by its old number and an added line by its new one, so a
-/// selection says nothing about hunks, context or which view was on screen when it was
-/// made. That is why it survives every projection of the same diff unchanged (C4), and
-/// why the patch built from it does too.
+/// A removed line is named by its old number and an added line by its new one, so a selection says
+/// nothing about hunks, context or which view was on screen when it was made. That is why it
+/// survives every projection of the same diff unchanged, and why the patch built from it does too.
 ///
-/// The mode change is an item of its own, apart from the lines, as `git add -p` asks it
-/// apart (L17d): a selection of lines alone carries no `old mode`/`new mode`, and a
-/// selection of the mode alone carries nothing else. Nothing selects it but
-/// [`Self::select_mode`] — not [`Self::with_every_change`], not [`Self::select_change`].
+/// The mode change is an item of its own, apart from the lines, as `git add -p` asks it apart: a
+/// selection of lines alone carries no `old mode`/`new mode`, and a selection of the mode alone
+/// carries nothing else. Nothing selects it but [`Self::select_mode`] — not
+/// [`Self::with_every_change`], not [`Self::select_change`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selection {
     removed: BTreeSet<LineNumber>,
@@ -29,9 +28,9 @@ impl Selection {
         Self::default()
     }
 
-    /// Every changed line of a diff — what staging every line of a file selects; the mode
-    /// change, which is not a line, is left out (R2.4). Costs what the file has changed
-    /// lines; see [`Self::holds_every_change`].
+    /// Every changed line of a diff — what staging every line of a file selects; the mode change,
+    /// which is not a line, is left out. Costs what the file has changed lines; see
+    /// [`Self::holds_every_change`].
     pub fn with_every_change(text: &TextDiff) -> Self {
         let mut selection = Self::empty();
         for change in text.changes() {
@@ -95,9 +94,9 @@ impl Selection {
         self.removed.len() + self.added.len()
     }
 
-    /// The same selection of the inverted diff (R2.1): a removed line of the original is an
-    /// added line of [`TextDiff::inverted`], by the same number, and an added line a removed
-    /// one. The mode change stays selected or not, since undoing it is still the mode.
+    /// The same selection of the inverted diff: a removed line of the original is an added line of
+    /// [`TextDiff::inverted`], by the same number, and an added line a removed one. The mode change
+    /// stays selected or not, since undoing it is still the mode.
     pub fn inverted(&self) -> Selection {
         Selection {
             removed: self.added.clone(),
@@ -226,8 +225,8 @@ mod tests {
         );
     }
 
-    /// R2.4: the mode change is selected by itself and by nothing else. Caught by: selecting
-    /// every change, or one change, also selecting the mode — a line selection carrying it.
+    /// The mode change is selected by itself and by nothing else. Caught by: selecting every
+    /// change, or one change, also selecting the mode — a line selection carrying it.
     #[test]
     fn the_mode_change_is_an_item_of_its_own() {
         let text = diff();
@@ -256,9 +255,9 @@ mod tests {
         assert!(mode.is_empty());
     }
 
-    /// R2.1: the inverted selection names the same lines of the inverted diff — a removed
-    /// line is an added one by the same number, and the reverse — and keeps the mode.
-    /// Caught by: a set left on its side, or the mode dropped on the way.
+    /// The inverted selection names the same lines of the inverted diff — a removed line is an
+    /// added one by the same number, and the reverse — and keeps the mode. Caught by: a set left on
+    /// its side, or the mode dropped on the way.
     #[test]
     fn inverting_a_selection_swaps_its_sides_and_keeps_the_mode() {
         let mut selection = Selection::empty();

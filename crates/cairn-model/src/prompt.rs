@@ -6,7 +6,7 @@
 //! something an operation's outcome depends on. The dialog must show the whole
 //! text as well: the URL in it is the one actually being authenticated
 //! against, and a rendering that substituted a stored nickname could disagree
-//! with where the request is going (PRD product rule).
+//! with where the request is going.
 
 /// What kind of answer a prompt wants, which decides how it is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

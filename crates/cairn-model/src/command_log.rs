@@ -13,7 +13,7 @@ use crate::ScrubbedLines;
 /// none that could hold a [`crate::Secret`]. Its arguments are what Cairn
 /// passed: remote names, refs, paths and options, never a credential and never
 /// a URL Cairn read from configuration — and each is scrubbed of a URL's
-/// userinfo as the record is booked all the same (R12.2), as git's output is.
+/// userinfo as the record is booked all the same, as git's output is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRecord {
     /// The arguments after the program, in order, each lossily decoded.
@@ -33,8 +33,8 @@ pub struct CommandRecord {
     pub cancelled: bool,
     /// The end of what it wrote to stderr — and, for a commit, to stdout too, in the order the
     /// lines arrived — as the runner's whole lines, each scrubbed of a URL's userinfo as it was
-    /// split (staging-and-commit R4.10, R12.2): at most 256 KiB, the oldest whole lines let go
-    /// of first, trailing whitespace trimmed. Empty when it never started.
+    /// split: at most 256 KiB, the oldest whole lines let go of first, trailing whitespace
+    /// trimmed. Empty when it never started.
     pub stderr: ScrubbedLines,
 }
 
@@ -95,10 +95,10 @@ mod tests {
         assert_eq!(nowhere.held_bytes(), 11);
     }
 
-    /// R8.1 and R8.2, at the compiler: the record is exactly these fields, so a
-    /// field added to it — an environment, a token — stops this compiling and
-    /// is a decision made here, in sight of the rule that the log never holds
-    /// the environment or a secret.
+    /// At the compiler: the record is exactly these fields, so a field added to
+    /// it — an environment, a token — stops this compiling and has to be added
+    /// here, in sight of the rule that the log never holds the environment or a
+    /// secret.
     #[test]
     fn the_record_holds_exactly_what_r8_1_lists() {
         let CommandRecord {

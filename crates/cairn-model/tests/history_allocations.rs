@@ -1,8 +1,7 @@
-//! C16's third half, counted: no kept row owns a heap allocation. A row is `Copy` (the
-//! compile-time half, in `history.rs`); here the allocator says so too — appending ten
-//! thousand rows, labelled and stashes among them, allocates per chunk of the history's
-//! stores, never per row, and reading a row's identity, lane, lane changes and labels
-//! allocates nothing at all.
+//! Counted: no kept row owns a heap allocation. A row is `Copy` (the compile-time half, in
+//! `history.rs`); here the allocator says so too — appending ten thousand rows, labelled and
+//! stashes among them, allocates per chunk of the history's stores, never per row, and reading a
+//! row's identity, lane, lane changes and labels allocates nothing at all.
 
 use cairn_model::{
     GraphRow, History, Label, LaneAssigner, Oid, PagedCommit, PagedStash, RefKind, RowsPage,

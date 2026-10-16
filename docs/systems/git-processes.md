@@ -189,11 +189,11 @@ environment built around that channel's socket, with no second search and no
 second probe. The program stays the one found, by its absolute path.
 
 Pinned: `git_is_found_once_per_application_not_once_per_repository`
-(`worker/lifecycle_tests.rs`: three repositories opened on one discovery,
+(`worker/tests.rs`: three repositories opened on one discovery,
 started as `main` starts it and raced by the first open, probe the stub once;
 two opened with a discovery each probe it twice, so the count moves),
 `a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`
-(`worker/lifecycle_tests.rs`),
+(`worker/tests.rs`),
 `a_missing_git_is_refused_naming_the_version_and_nothing_is_served`
 (`worker/pool.rs`), and
 `a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again`
@@ -1087,7 +1087,7 @@ whoever asks: `Request::CommandLog` is answered on the repository thread by
 since the activity popover ("The activity popover", below) is handed each operation's own
 records as the operation ends instead. Pinned, G17's worker half:
 `the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`
-(`worker/lifecycle_tests.rs`: empty before anything has run; after a fetch
+(`worker/tests.rs`: empty before anything has run; after a fetch
 through the boundary, one record with fetch's arguments, the repository's
 directory, exit code 0, not cancelled, and the stub's stderr — the probe,
 run in no repository, is not in it).
@@ -1741,7 +1741,7 @@ stranded `index.lock` is the next open's stat's to find (above, "The registry";
 issue #44).
 
 Pinned, G14: `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound`
-(`worker/lifecycle_tests.rs`: a stub fetch leading its group with a
+(`worker/tests.rs`: a stub fetch leading its group with a
 grandchild holding its pipes; after `Request::Close` the stream ends inside
 `CLOSE_BOUND`, nothing in the group is alive, the leader is reaped, and the
 askpass socket is gone — deleting the `end_invocations` call fails it) and

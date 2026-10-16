@@ -26,7 +26,6 @@ use cairn_model::{
 
 use crate::worker::Reply;
 use crate::worker::discovery::Discovery;
-use crate::worker::lifecycle_tests::StubGit;
 use crate::worker::local::lane::{
     LOCK_RETRIES, LOCK_RETRY_AFTER, LocalWrite, OperationId, ReadAgain, WriteEnding,
 };
@@ -36,6 +35,7 @@ use crate::worker::network::tests::{
 use crate::worker::pool::{Replier, RepositoryHandle, Updates, open};
 use crate::worker::request::{CheckoutRefused, RanBy, Request, Update};
 use crate::worker::startup::Startup;
+use crate::worker::tests::StubGit;
 
 /// The real `git` on this process's `PATH`, which a stub hands every other verb to.
 fn real_git() -> PathBuf {
@@ -930,7 +930,7 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
     );
     #[cfg(target_os = "linux")]
     assert!(
-        crate::worker::lifecycle_tests::alive_in_group(group).len() >= 2,
+        crate::worker::tests::alive_in_group(group).len() >= 2,
         "the commit's git or its hook is gone"
     );
     release(&stub, pid);

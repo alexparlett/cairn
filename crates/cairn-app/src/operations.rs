@@ -4,15 +4,13 @@
 //! draws it.
 
 pub(crate) mod activity;
-#[cfg(test)]
-mod activity_tests;
 pub(crate) mod confirming;
 pub(crate) mod create_branch;
-#[cfg(test)]
-mod create_branch_tests;
 pub(crate) mod ending_dialog;
 pub(crate) mod fetch;
 pub(crate) mod leftover_lock;
 pub(crate) mod local_writes;
 pub(crate) mod output_tail;
 pub(crate) mod shown_output;
+#[cfg(test)]
+mod tests;

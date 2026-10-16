@@ -6,8 +6,6 @@ mod discovery;
 mod ending_words;
 mod epoch;
 mod history;
-#[cfg(test)]
-mod lifecycle_tests;
 mod local;
 mod network;
 mod output_tap;
@@ -16,6 +14,8 @@ mod refresh;
 mod request;
 mod routing;
 mod startup;
+#[cfg(test)]
+mod tests;
 mod wake;
 #[cfg(test)]
 mod window_check_updates;

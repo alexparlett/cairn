@@ -529,3 +529,6 @@ impl Component for CreateBranchPane {
         .into_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

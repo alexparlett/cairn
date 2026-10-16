@@ -15,13 +15,13 @@ use cairn_git::{CancelSignal, HistoryRequest, Repository};
 use cairn_model::{Oid, WorkingTreeStatus};
 
 use crate::worker::discovery::Discovery;
-use crate::worker::lifecycle_tests::StubGit;
 use crate::worker::network::tests::{
     BorrowedRepository, Home, RuntimeDir, WAIT, collect_until, next_by,
 };
 use crate::worker::pool::{RepositoryHandle, Updates, open_with};
 use crate::worker::request::{Comparison, Request, Update};
 use crate::worker::startup::Startup;
+use crate::worker::tests::StubGit;
 
 /// A repository of this checkout's objects whose refs a test moves: `main` at the newest
 /// commit of this checkout's `HEAD`, `topic` at the next, `other` beside `main`, `HEAD` on
@@ -475,7 +475,7 @@ fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
     );
     #[cfg(target_os = "linux")]
     assert!(
-        !crate::worker::lifecycle_tests::alive_in_group(first).is_empty(),
+        !crate::worker::tests::alive_in_group(first).is_empty(),
         "a refresh ended the status that was running"
     );
     assert_eq!(
@@ -560,7 +560,7 @@ fn a_close_ends_a_running_status() {
     );
     #[cfg(target_os = "linux")]
     assert_eq!(
-        crate::worker::lifecycle_tests::alive_in_group(running),
+        crate::worker::tests::alive_in_group(running),
         Vec::<i32>::new(),
         "the status git outlived the close"
     );

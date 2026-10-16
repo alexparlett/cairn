@@ -17,9 +17,6 @@ use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, O
 
 use crate::worker::diff::freshness::SETTLING;
 use crate::worker::discovery::Discovery;
-use crate::worker::lifecycle_tests::StubGit;
-#[cfg(target_os = "linux")]
-use crate::worker::lifecycle_tests::alive_in_group;
 use crate::worker::network::tests::{
     BorrowedRepository, Home, RuntimeDir, WAIT, collect_until, next_by,
 };
@@ -29,6 +26,9 @@ use crate::worker::request::{
     OpenedFile, Request, Update, WorkingSide,
 };
 use crate::worker::startup::Startup;
+use crate::worker::tests::StubGit;
+#[cfg(target_os = "linux")]
+use crate::worker::tests::alive_in_group;
 
 /// The boundary over `repository`, with this process's `git`.
 pub(crate) fn opened(repository: &Path) -> (RepositoryHandle, Updates) {

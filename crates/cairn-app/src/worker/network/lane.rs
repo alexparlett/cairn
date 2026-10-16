@@ -401,7 +401,7 @@ mod tests {
             "a refusal outlived its fetch"
         );
         // Once git is running the reason says so; through a real fetch in
-        // `lifecycle_tests::a_second_fetch_while_one_runs_is_refused_with_a_reason`.
+        // `worker::tests::a_second_fetch_while_one_runs_is_refused_with_a_reason`.
         assert_eq!(
             Refusal {
                 in_flight: "upstream".to_owned(),

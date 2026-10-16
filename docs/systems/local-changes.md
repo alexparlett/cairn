@@ -632,7 +632,7 @@ typed, the arrows are the editor's.
   content itself, `a_diffs_content_is_its_question_and_every_byte_of_its_answer` in
   `cairn-model`), and the viewport twin
   `the_gesture_builds_one_viewport_over_a_10000_line_diff`, named in the root `CLAUDE.md`'s
-  virtualization invariant; in the window (`crates/cairn-app/src/local_changes/gesture_tests.rs`):
+  virtualization invariant; in the window (`crates/cairn-app/src/local_changes/actions/tests/gesture.rs`):
   `a_hovered_chunk_stages_and_unstages_exactly_its_lines`,
   `the_chords_act_on_the_selection_and_on_the_whole_file_without_one`,
   `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file`,
@@ -656,7 +656,7 @@ typed, the arrows are the editor's.
   `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted` and
   `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`
   (`crates/cairn-model/src/consequence.rs`).
-- Acting, in the window (`crates/cairn-app/src/local_changes/actions_tests.rs`):
+- Acting, in the window (`crates/cairn-app/src/local_changes/actions/tests/files.rs`):
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
   `a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list`,

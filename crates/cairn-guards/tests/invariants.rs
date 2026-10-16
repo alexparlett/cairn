@@ -9441,6 +9441,211 @@ fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
     }
 }
 
+/// Words that tie a comment to how the code was planned or reviewed rather than to what it
+/// does, matched case-insensitively.
+const PROCESS_HISTORY_PHRASES: &[&str] = &[
+    "packet",
+    "merge bar",
+    "redesign",
+    "brainstorm",
+    "adjudicat",
+    "state.md",
+    "progress.md",
+    "docs/work/",
+    "review-code",
+    "qa item",
+    "the user's decision",
+    "the user's answer",
+    "the user's ratification",
+    "the user's choice",
+    "the user's words",
+    "decided here",
+    "accepted by the user",
+    "ratified",
+    "as amended",
+    "user-approved",
+];
+
+/// The crate whose comments describe these words as what its guards refuse.
+const PROCESS_HISTORY_EXEMPT_CRATE: &str = "crates/cairn-guards";
+
+/// The text a line gives a person to read as a comment: what follows its `//`, or the
+/// value of a `reason = "..."` attribute. `None` for a line with neither.
+fn comment_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("//") {
+        return Some(rest);
+    }
+    if let Some(at) = trimmed.find("reason = \"") {
+        return Some(&trimmed[at..]);
+    }
+    trimmed.find(" // ").map(|at| &trimmed[at + 4..])
+}
+
+/// Why a comment's `text` reads as the project's history, or `None` if it describes code.
+/// Spans in backticks are code and stepped over, and so is a path (a word holding `/` or
+/// ending `.md`). A bare date is not matched: code about dates names them.
+fn process_history(text: &str) -> Option<String> {
+    let mut prose = String::new();
+    for (index, span) in text.split('`').enumerate() {
+        if index % 2 == 0 {
+            prose.push_str(span);
+            prose.push(' ');
+        }
+    }
+    let lower = prose.to_lowercase().replace('’', "'");
+    let starts_a_word = |at: usize| {
+        lower[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric())
+    };
+    if let Some(phrase) = PROCESS_HISTORY_PHRASES
+        .iter()
+        .find(|p| lower.match_indices(*p).any(|(at, _)| starts_a_word(at)))
+    {
+        return Some(format!("the phrase {phrase:?}"));
+    }
+    let words: Vec<&str> = prose
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | ':' | '"'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (at, word) in words.iter().enumerate() {
+        if word.contains('/') || word.ends_with(".md") {
+            continue;
+        }
+        let bare = word.trim_end_matches(['.', '\'', 's']);
+        if bare == "QA" {
+            return Some("a QA reference".to_owned());
+        }
+        if word.eq_ignore_ascii_case("phase")
+            && words
+                .get(at + 1)
+                .is_some_and(|next| next.starts_with(|c: char| c.is_ascii_digit()))
+        {
+            return Some(format!("a phase reference ({word} {})", words[at + 1]));
+        }
+        if let Some(number) = word.to_lowercase().strip_prefix("phase-")
+            && number.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some(format!("a phase reference ({word})"));
+        }
+        if let Some(rest) = bare.strip_prefix('R')
+            && let Some((major, minor)) = rest.split_once('.')
+            && !major.is_empty()
+            && !minor.is_empty()
+            && major.chars().all(|c| c.is_ascii_digit())
+            && minor.chars().all(|c| c.is_ascii_digit())
+        {
+            return Some(format!("a requirement id ({bare})"));
+        }
+    }
+    None
+}
+
+/// A comment says what the code does and why, as true today: never the phase, packet,
+/// review item or decision it came from, nor a requirement's id — those rot, and mean
+/// nothing to a reader who never saw the planning. They belong in commit messages,
+/// `docs/prd/` and `docs/research/`. Residual review obligation, `qa-checklist`'s: the
+/// phrase list is finite, so history told in other words ("used to", "no longer") or a bare
+/// date is the review's, and so are this crate's own comments, which name what its guards
+/// refuse.
+#[test]
+fn comments_describe_the_code_not_its_history() {
+    let mut scanned = 0;
+    let mut findings = Vec::new();
+    for (path, source) in rust_sources("crates") {
+        if path.starts_with(PROCESS_HISTORY_EXEMPT_CRATE) {
+            continue;
+        }
+        scanned += 1;
+        for (number, line) in source.lines().enumerate() {
+            if let Some(text) = comment_text(line)
+                && let Some(why) = process_history(text)
+            {
+                findings.push(format!("{}:{}: {why}", path.display(), number + 1));
+            }
+        }
+    }
+    assert!(
+        scanned > 0,
+        "found no Rust source outside the guards, so this checked nothing"
+    );
+    assert!(
+        findings.is_empty(),
+        "a comment describes the code, not how it came to be (CLAUDE.md, Conventions). Say \
+         what the code does and why, and keep the history in the commit message:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_process_history_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        " Phase 13's QA item 2: an amend reported unconfirmed.",
+        " (phase-07) the drag ends here",
+        " as the packet records",
+        " the merge bar's responsiveness 3",
+        " rule 3 of the redesign",
+        " the brainstorm's L8",
+        " adjudicated as item 4",
+        " see state.md",
+        " carried in progress.md",
+        " docs/work/staging-and-commit/state.md",
+        " review-code-app-ui.md H3",
+        " QA's finding",
+        " The user's decision: counts files",
+        " the user’s answer B",
+        " decided here, not there",
+        " ratified on 2026-10-10",
+        " accepted by the user",
+        " R4.10 as amended",
+        " (PRD R4.7) the message goes on stdin",
+        " R13.3's numbers",
+        "reason = \"no view asks for it in this packet\"",
+    ];
+    for text in caught {
+        assert!(
+            process_history(text).is_some(),
+            "the process-history matcher missed {text:?}"
+        );
+    }
+
+    let ignored = [
+        " the user's own `git status` lists it",
+        " as Fork does, a double press stages the file",
+        " F5 refreshes, as in Fork",
+        " C1 control characters are escaped",
+        " (`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`)",
+        " docs/research/staging-and-commit/fork-observed-2026-10-10.md shows it",
+        " 2024-03-09 16:05:00 UTC.",
+        " 1970-01-01 is day zero",
+        " `Phase` is one measured stretch of frames",
+        " a phase of the measurement",
+        " the `packet_size` field",
+        " open issue #87",
+        " design decision D1",
+        " git 2.30.9 and 2.32.7",
+        " reads after the reap that it was amended",
+        " Decided on the calling thread",
+    ];
+    for text in ignored {
+        assert_eq!(
+            process_history(text),
+            None,
+            "the process-history matcher fired on {text:?}"
+        );
+    }
+
+    assert_eq!(comment_text("    /// what it does"), Some("/ what it does"));
+    assert_eq!(comment_text("let x = 1; // why"), Some("why"));
+    assert_eq!(
+        comment_text("            reason = \"no view asks\""),
+        Some("reason = \"no view asks\"")
+    );
+    assert_eq!(comment_text("let url = \"https://example.com\";"), None);
+}
+
 /// Where the application's embedded fonts live.
 const FONTS_DIR: &str = "crates/cairn-app/assets/fonts";
 

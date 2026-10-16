@@ -1436,6 +1436,18 @@ Project invariants:
   reachable (decision D5), and an invariant with a guard (above).
 - Docs follow the anchor rule: cite stable paths, exported symbols, and pinned
   tests; never literal counts or line numbers that rot.
+- **A code comment says what the code does and why, as true today** — the git or Fork
+  behaviour it matches, the invariant it upholds by its guard's name, an open issue it
+  waits on — never how it came to be: no phase, packet, QA or review item, design-pass id,
+  work doc, commit, date of a decision, who decided, PRD requirement id, or account of
+  what the code used to do. That history goes in the commit message, `docs/prd/` and
+  `docs/research/`; test names follow the same rule. Twin:
+  `comments_describe_the_code_not_its_history` (self-test
+  `the_process_history_matcher_catches_the_shapes_it_claims`), over every crate's `src/`
+  and `tests/` comments and `reason = "..."` attributes but `cairn-guards`', whose
+  comments name what its guards refuse. Residual review obligation, `qa-checklist`'s: its
+  phrase list is finite, so history told in other words, a bare date, a test name and the
+  guards' own comments are the review's.
 
 ## Modularity
 

@@ -15,12 +15,12 @@ use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
 
 use crate::accelerators;
-use crate::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
-use crate::date_text;
-use crate::diff_palette::DIFF_FONT_FAMILY;
-use crate::file_filter::ShownFiles;
+use crate::detail::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
+use crate::detail::file_filter::ShownFiles;
+use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::diff::toggle_glyphs::Glyph;
+use crate::history::date_text;
 use crate::text_field::text_field;
-use crate::toggle_glyphs::Glyph;
 
 /// The filter field's placeholder.
 pub const FILTER_PLACEHOLDER: &str = "Filter";
@@ -35,14 +35,14 @@ pub const FILTERING: &str = "Filtering…";
 pub fn filter_count(shown: usize, total: usize) -> String {
     format!(
         "Showing {} of {} file{}",
-        crate::diff_notice::grouped(shown as u64),
-        crate::diff_notice::grouped(total as u64),
+        crate::diff::notice::grouped(shown as u64),
+        crate::diff::notice::grouped(total as u64),
         if total == 1 { "" } else { "s" }
     )
 }
 /// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up (the
 /// user's decision, 2026-10-03).
-pub const SUMMARY_HEIGHT: f32 = crate::diff_header::DIFF_HEADER_HEIGHT;
+pub const SUMMARY_HEIGHT: f32 = crate::diff::header::DIFF_HEADER_HEIGHT;
 
 const FONT_SIZE: f32 = 13.0;
 

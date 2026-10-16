@@ -7,7 +7,7 @@
 //!
 //! - a tab moves to the next multiple of [`TAB_WIDTH`] columns, as `git diff` in a terminal
 //!   and `git log`'s message lines (`message_lines`) show it, the columns before it counted
-//!   as a terminal counts them (`crate::columns`: two for a wide character, none for a
+//!   as a terminal counts them (`crate::diff::columns`: two for a wide character, none for a
 //!   combining mark);
 //! - a carriage return ending the line — a CRLF file's — is not drawn, as a terminal shows
 //!   nothing for it;
@@ -32,7 +32,7 @@
 
 use cairn_model::{ByteRange, TAB_STOP, drawn_bytes};
 
-use crate::columns::columns;
+use crate::diff::columns::columns;
 
 /// The column a tab moves to a multiple of: `git diff` in a terminal.
 pub const TAB_WIDTH: usize = TAB_STOP;
@@ -42,7 +42,7 @@ pub const TAB_WIDTH: usize = TAB_STOP;
 pub fn cut_marker(bytes_not_drawn: usize) -> String {
     format!(
         " … {} more bytes",
-        crate::diff_notice::grouped(bytes_not_drawn as u64)
+        crate::diff::notice::grouped(bytes_not_drawn as u64)
     )
 }
 

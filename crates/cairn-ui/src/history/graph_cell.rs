@@ -4,10 +4,10 @@ use cairn_model::RowEdges;
 use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor};
 use freya::prelude::*;
 
-use crate::graph_geometry::{
+use crate::history::graph_geometry::{
     self, NODE_RADIUS, Node, ROW_HEIGHT, RowGeometry, STROKE_WIDTH, Stroke,
 };
-use crate::lane_palette::lane_colour;
+use crate::history::lane_palette::lane_colour;
 
 /// Painted length and gap of an out-of-order line.
 const DASH: [f32; 2] = [4.0, 3.0];

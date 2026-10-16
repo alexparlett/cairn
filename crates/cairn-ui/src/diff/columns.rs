@@ -1,5 +1,5 @@
 //! How many columns a character takes where `git diff` and `git log` are read: a terminal.
-//! Both the diff's rows (`diff_line_text`) and a commit message's lines (`message_lines`)
+//! Both the diff's rows (`diff::line_text`) and a commit message's lines (`detail::message_lines`)
 //! expand a tab to the next multiple of eight columns counted this way, so the text after
 //! it lines up as it does in the user's terminal (the user's decision, 2026-10-03).
 //!

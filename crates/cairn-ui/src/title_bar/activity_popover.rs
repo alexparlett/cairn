@@ -25,7 +25,7 @@ use std::sync::Arc;
 use cairn_model::Oid;
 use freya::prelude::*;
 
-use crate::diff_palette::DIFF_FONT_FAMILY;
+use crate::diff::palette::DIFF_FONT_FAMILY;
 
 /// The popover's title, Fork's word for its log.
 pub const ACTIVITY_TITLE: &str = "Activity";

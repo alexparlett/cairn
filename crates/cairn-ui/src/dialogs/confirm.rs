@@ -35,9 +35,9 @@ use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::answer_button::{AnswerColours, answer, greyed_answer};
-use crate::button_order::ordered;
-use crate::git_error_dialog::CLOSE_CAPTION;
+use crate::dialogs::answer_button::{AnswerColours, answer, greyed_answer};
+use crate::dialogs::button_order::ordered;
+use crate::dialogs::git_error::CLOSE_CAPTION;
 
 /// Width of the dialog: room for a prompt naming a long path.
 const DIALOG_WIDTH: f32 = 520.;

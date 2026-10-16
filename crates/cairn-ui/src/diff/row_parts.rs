@@ -18,8 +18,8 @@
 use cairn_model::{ByteRange, LineNumber};
 use freya::prelude::*;
 
-use crate::diff_line_text::{cut_marker, shown_line};
-use crate::diff_palette::{
+use crate::diff::line_text::{cut_marker, shown_line};
+use crate::diff::palette::{
     ADDED_EMPHASIS, ADDED_TINT, CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED,
     DIFF_TEXT, GROUND, GUTTER_SEPARATOR, MONO_ADVANCE_EM, REMOVED_EMPHASIS, REMOVED_TINT,
 };

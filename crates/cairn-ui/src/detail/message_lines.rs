@@ -10,11 +10,11 @@
 //! - blank lines before the first line with text are not printed, and neither are blank
 //!   lines after the last (a line of whitespace alone is blank); blank lines between are;
 //! - a tab becomes spaces to the next multiple of eight columns, counted from the start
-//!   of the message's line in terminal columns (`crate::columns`): a wide character — CJK,
+//!   of the message's line in terminal columns (`crate::diff::columns`): a wide character — CJK,
 //!   an emoji — counting two and a combining mark none (`--expand-tabs`, on by default for
 //!   these formats).
 
-use crate::columns::columns;
+use crate::diff::columns::columns;
 
 /// The columns git expands a tab to.
 const TAB_WIDTH: usize = 8;

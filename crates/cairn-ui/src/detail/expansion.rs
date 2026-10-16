@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use cairn_model::ShownDiff;
 
-use crate::diff_notice::{DiffNotice, notice_rows};
+use crate::diff::notice::{DiffNotice, notice_rows};
 
 /// What one file opened in place draws under its row.
 #[derive(Debug, Clone, PartialEq, Eq)]

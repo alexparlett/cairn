@@ -27,8 +27,8 @@ use cairn_model::{
 };
 use freya::prelude::*;
 
-use crate::lane_palette::lane_colour;
-use crate::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+use crate::history::lane_palette::lane_colour;
+use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 
 /// A chip's height, inside a row's.
 pub const CHIP_HEIGHT: f32 = 18.0;

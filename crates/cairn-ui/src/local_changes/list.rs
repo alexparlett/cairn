@@ -22,7 +22,7 @@
 //! (`Scope::LocalChanges`), a drag from one list dropped on the other (`ListDrag`, one drop
 //! zone per list, the target list scrolling at its edges), each list's Stage or Unstage
 //! button — greyed while the selection is in the other list — and the context menu
-//! (`local_changes_menu`); Stage All and Unstage All by the heading's button with the table's
+//! (`local_changes::menu`); Stage All and Unstage All by the heading's button with the table's
 //! heading press held (Shift on Linux, ⌥ on macOS: both buttons read Stage All and Unstage All
 //! while it is, enabled whatever is selected) and by the small double chevrons always drawn, ⇊
 //! in Unstaged and ⇈ in Staged (the redesign's L2); and the discard chord and menu item, on the
@@ -33,19 +33,19 @@ use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys, Scope};
-use crate::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
-use crate::commit_tab::DETAIL_ROW_HEIGHT;
-use crate::diff_palette::DIFF_FONT_FAMILY;
-use crate::file_filter::ShownFiles;
-use crate::list_selection::LocalSelection;
-use crate::local_changes_drag::ListDrag;
-use crate::local_changes_menu::{
+use crate::detail::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
+use crate::detail::commit_tab::DETAIL_ROW_HEIGHT;
+use crate::detail::file_filter::ShownFiles;
+use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::diff::toggle_glyphs::Glyph;
+use crate::history::ref_glyphs::RefGlyph;
+use crate::local_changes::drag::ListDrag;
+use crate::local_changes::menu::{
     MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
     no_discard,
 };
-use crate::ref_glyphs::RefGlyph;
+use crate::local_changes::selection::LocalSelection;
 use crate::text_field::text_field;
-use crate::toggle_glyphs::Glyph;
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
 /// caller decides what each does to its selection and what it asks.

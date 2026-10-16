@@ -6,9 +6,9 @@ use cairn_model::{History, HistoryRow, Oid, RefsSnapshot, RowContent, RowEdges, 
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys, Scope};
-use crate::commit_row::label_room;
-use crate::graph_geometry::ROW_HEIGHT;
-use crate::ref_chips::{Chip, chips_of_row};
+use crate::history::commit_row::label_room;
+use crate::history::graph_geometry::ROW_HEIGHT;
+use crate::history::ref_chips::{Chip, chips_of_row};
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -685,8 +685,8 @@ mod tests {
     /// in the row's own render, or a list that rebuilds its rows every frame.
     #[test]
     fn a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame() {
-        use crate::graph_geometry::ROW_HEIGHT;
-        use crate::ref_chips::LAYOUTS;
+        use crate::history::graph_geometry::ROW_HEIGHT;
+        use crate::history::ref_chips::LAYOUTS;
         use cairn_model::{Label, RefKind};
         use freya_testing::TestingRunner;
 
@@ -728,7 +728,7 @@ mod tests {
                     .child(
                         HistoryList::new(rows, |render: RowRender| {
                             crate::CommitRow::new(
-                                crate::history_list::tests::summary(&render),
+                                crate::history::list::tests::summary(&render),
                                 render.graph,
                                 render.lanes,
                             )

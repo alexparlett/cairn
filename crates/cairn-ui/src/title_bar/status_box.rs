@@ -18,8 +18,8 @@ use async_io::Timer;
 use cairn_model::{AheadBehind, HeadState, RefName};
 use freya::prelude::*;
 
-use crate::diff_palette::DIFF_FONT_FAMILY;
-use crate::ref_glyphs::RefGlyph;
+use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::history::ref_glyphs::RefGlyph;
 
 /// Said after an unborn branch's name: `git status`'s "No commits yet".
 pub const NO_COMMITS_YET: &str = "no commits yet";

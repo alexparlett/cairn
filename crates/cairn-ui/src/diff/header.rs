@@ -19,9 +19,9 @@
 use cairn_model::{ChangeStatus, ChangedFile};
 use freya::prelude::*;
 
-use crate::diff_palette::{DIFF_FONT_FAMILY, DIFF_FONT_SIZE, HEADER_BAR};
-use crate::diff_settings::DiffSettings;
-use crate::toggle_glyphs::Glyph;
+use crate::diff::palette::{DIFF_FONT_FAMILY, DIFF_FONT_SIZE, HEADER_BAR};
+use crate::diff::settings::DiffSettings;
+use crate::diff::toggle_glyphs::Glyph;
 
 /// The bar's height: the detail pane strip's. Fork's own bar height is not established by
 /// the research; Cairn's is chosen to line up with the strip above it.

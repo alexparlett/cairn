@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use async_io::Timer;
 use freya::prelude::*;
 
-use crate::git_error_dialog::REMOVE_LOCK_CAPTION;
+use crate::dialogs::git_error::REMOVE_LOCK_CAPTION;
 
 /// What the banner says (R12.4 as amended 2026-10-10).
 pub const LOCK_BANNER_TEXT: &str = "index.lock is in this repository, so git can't change the \

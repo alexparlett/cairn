@@ -31,16 +31,18 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Lane, Oid, Signature};
 use freya::prelude::*;
 
-use crate::diff_header::HIDDEN_CHANGES_NOTICE;
-use crate::diff_notice::{DiffNotice, NoticeRow, NoticeTone, grouped, notice_rows};
-use crate::diff_palette::{
+use crate::accelerators;
+use crate::detail::expansion::{Expansion, Item, Opened};
+use crate::detail::message_lines;
+use crate::diff::header::HIDDEN_CHANGES_NOTICE;
+use crate::diff::notice::{DiffNotice, NoticeRow, NoticeTone, grouped, notice_rows};
+use crate::diff::palette::{
     ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, REMOVED_EMPHASIS,
 };
-use crate::diff_view::{RowGeometry, draw_row};
-use crate::expansion::{Expansion, Item, Opened};
-use crate::ref_chips::{Chip, chips_row};
-use crate::toggle_glyphs::Glyph;
-use crate::{accelerators, date_text, message_lines};
+use crate::diff::toggle_glyphs::Glyph;
+use crate::diff::view::{RowGeometry, draw_row};
+use crate::history::date_text;
+use crate::history::ref_chips::{Chip, chips_row};
 
 /// Every row of the tab is this tall — a file opened in place's rows too, its diff's among
 /// them: a fixed size is what keeps the list O(viewport), and the virtualising view lays
@@ -657,7 +659,7 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
                                 Button::new()
                                     .compact()
                                     .on_press(move |_| on_load.call(file))
-                                    .child(crate::diff_notice::LOAD_DIFF_CAPTION),
+                                    .child(crate::diff::notice::LOAD_DIFF_CAPTION),
                             )
                             .into()
                     }
@@ -714,7 +716,7 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
             text: words,
             tone: line,
         } => text(words.clone(), DIFF_FONT_SIZE, tone(line)).font_family(DIFF_FONT_FAMILY),
-        NoticeRow::LoadDiff => text(crate::diff_notice::LOAD_DIFF_CAPTION, FONT_SIZE, DIFF_TEXT),
+        NoticeRow::LoadDiff => text(crate::diff::notice::LOAD_DIFF_CAPTION, FONT_SIZE, DIFF_TEXT),
     }
 }
 
@@ -1026,7 +1028,7 @@ mod tests {
             chips: names
                 .iter()
                 .map(|name| Chip {
-                    kind: crate::ref_chips::ChipKind::Tag,
+                    kind: crate::history::ref_chips::ChipKind::Tag,
                     text: (*name).to_owned(),
                 })
                 .collect(),

@@ -9,7 +9,7 @@
 //! the files behind Show files. The footer, in the platform's order, holds Close and, where they
 //! are offered, `Skip pre-commit hooks and commit` (a failed commit or amend) and `Remove
 //! index.lock…` (a write git refused for the lock, R12.4, observed `lk2`), one button component
-//! for all ([`crate::answer_button`]), focus on Close so a Return pressed by habit never skips
+//! for all ([`crate::dialogs::answer_button`]), focus on Close so a Return pressed by habit never skips
 //! the hooks or removes a lock. Each answers once; what it runs is the window's. No prompt text
 //! is drawn here, and no token is built. Escape and a press outside close it, as in Fork (Tracker
 //! #2173).
@@ -23,11 +23,11 @@ use std::rc::Rc;
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::answer_button::{AnswerColours, answer};
-use crate::button_order::ordered;
+use crate::dialogs::answer_button::{AnswerColours, answer};
+use crate::dialogs::button_order::ordered;
 
 use crate::commit_box::SKIP_HOOKS_CAPTION;
-use crate::diff_palette::DIFF_FONT_FAMILY;
+use crate::diff::palette::DIFF_FONT_FAMILY;
 
 /// Fork's words.
 pub const GIT_ERROR_TITLE: &str = "Git Error";
@@ -280,7 +280,7 @@ impl Component for GitErrorDialog {
                             let now = *showing_files.peek();
                             showing_files.set(!now);
                         })
-                        .child(crate::confirm_dialog::SHOW_FILES_CAPTION),
+                        .child(crate::dialogs::confirm::SHOW_FILES_CAPTION),
                 )
                 .maybe_child(list.map(|list| {
                     rect()

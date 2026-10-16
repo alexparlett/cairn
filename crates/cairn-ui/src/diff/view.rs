@@ -25,16 +25,16 @@ use cairn_model::{ChangeStops, DisplayOverlay, HunkHeader, ShownDiff};
 use freya::prelude::*;
 
 use crate::accelerators;
-use crate::diff_line_text::cut_marker;
-use crate::diff_palette::GROUND;
-use crate::diff_row_parts::{
+use crate::diff::line_text::cut_marker;
+use crate::diff::palette::GROUND;
+use crate::diff::row_parts::{
     ADVANCE, SEPARATOR_WIDTH, TEXT_END_PADDING, TEXT_PADDING, number_width,
 };
-use crate::side_by_side_rows::Columns;
-use crate::staging_gesture::{
+use crate::diff::side_by_side_rows::Columns;
+use crate::diff::staging_gesture::{
     Gesture, GestureLayer, Host, use_drag_ends_on_focus_lost, use_pointer,
 };
-use crate::{side_by_side_rows, unified_rows};
+use crate::diff::{side_by_side_rows, unified_rows};
 
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
 /// on the Mac (Finding 24, a vendor screenshot at 2×, May 2026), the hunk header the same.

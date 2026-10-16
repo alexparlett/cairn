@@ -4944,7 +4944,7 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
         !virtualizes_the_history.is_empty(),
         "no file under {RENDER_SOURCE_DIRS:?} uses `{VIRTUALIZING_VIEW}` over `HistoryRow`s. \
          The history list is the one unbounded list Cairn renders and it is virtualized \
-         (`crates/cairn-ui/src/history_list.rs`); restore that call site, or — if the list \
+         (`crates/cairn-ui/src/history/list.rs`); restore that call site, or — if the list \
          genuinely moved — move this guard with it."
     );
 
@@ -5133,7 +5133,7 @@ fn the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim() {
         "crates/cairn-ui/src/accelerators/chord_names.rs.orig",
         "crates/cairn-ui/src/accelerators/chord_names_copy.rs",
         "crates/cairn-ui/src/accelerators",
-        "crates/cairn-ui/src/history_list.rs",
+        "crates/cairn-ui/src/history/list.rs",
     ] {
         assert!(
             !spells_chords_for_people(Path::new(other)),
@@ -5903,8 +5903,8 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 /// in phase 18: an amend git logs and no remote has takes no token, and any other is confirmed
 /// in the dialog. A row whose file no longer names the constructor fails.
 const CONFIRMATION_SURFACES: &[&str] = &[
-    "crates/cairn-ui/src/confirm_dialog.rs",
-    "crates/cairn-ui/src/create_branch_dialog.rs",
+    "crates/cairn-ui/src/dialogs/confirm.rs",
+    "crates/cairn-ui/src/dialogs/create_branch.rs",
 ];
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and

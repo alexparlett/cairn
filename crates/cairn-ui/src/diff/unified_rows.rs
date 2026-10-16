@@ -11,9 +11,9 @@
 use cairn_model::{ByteRange, LineNumber, ShownDiff, UnifiedRow};
 use freya::prelude::*;
 
-use crate::diff_palette::DIFF_MUTED;
-use crate::diff_row_parts::{LineKind, TEXT_PADDING, line_text, number, separator, words};
-use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
+use crate::diff::palette::DIFF_MUTED;
+use crate::diff::row_parts::{LineKind, TEXT_PADDING, line_text, number, separator, words};
+use crate::diff::view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
 /// Row `index` of `shown`'s unified rows, `size` tall, keyed by `key`.
 pub(crate) fn build(

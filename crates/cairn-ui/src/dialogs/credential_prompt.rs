@@ -17,8 +17,8 @@ use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::answer_button::{AnswerColours, answer};
-use crate::button_order::ordered;
+use crate::dialogs::answer_button::{AnswerColours, answer};
+use crate::dialogs::button_order::ordered;
 
 use crate::text_field::text_field;
 

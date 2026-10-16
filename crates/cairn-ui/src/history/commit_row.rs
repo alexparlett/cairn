@@ -5,10 +5,10 @@
 use cairn_model::{CommitSummary, RowEdges};
 use freya::prelude::*;
 
-use crate::date_text;
-use crate::graph_cell::graph_cell;
-use crate::graph_geometry::{ROW_HEIGHT, graph_width};
-use crate::ref_chips::{CHIP_GAP, Chip, chips_row};
+use crate::history::date_text;
+use crate::history::graph_cell::graph_cell;
+use crate::history::graph_geometry::{ROW_HEIGHT, graph_width};
+use crate::history::ref_chips::{CHIP_GAP, Chip, chips_row};
 
 pub const AUTHOR_WIDTH: f32 = 150.0;
 pub const ID_WIDTH: f32 = 72.0;
@@ -21,7 +21,7 @@ pub const ROW_FONT_SIZE: f32 = 13.0;
 
 /// The room a row's chips and subject share in a list `list_width` wide whose graph column
 /// is `lanes` wide: what is left of the row past its padding, the graph and the fixed
-/// columns. What [`crate::ref_chips::row_chips`] lays chips out in.
+/// columns. What [`crate::history::ref_chips::row_chips`] lays chips out in.
 pub fn label_room(list_width: f32, lanes: usize) -> f32 {
     list_width
         - 2. * ROW_PADDING
@@ -67,7 +67,7 @@ impl CommitRow {
     }
 
     /// The chips drawn between the graph and the subject, laid out already
-    /// ([`crate::ref_chips::row_chips`]): the row only draws them.
+    /// ([`crate::history::ref_chips::row_chips`]): the row only draws them.
     pub fn chips(mut self, chips: Vec<Chip>) -> Self {
         self.chips = chips;
         self

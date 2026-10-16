@@ -31,10 +31,10 @@ use cairn_model::{Confirmed, Consequence, NameRefusal, Oid, OperationInProgress}
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::button_order::ordered;
+use crate::dialogs::button_order::ordered;
 
 use crate::check_box::check_box;
-use crate::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::text_field::text_field;
 
 /// The dialog's title, Fork's.

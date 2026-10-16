@@ -23,11 +23,11 @@
 use cairn_model::{ByteRange, LineNumber, ShownDiff, SideBySideRow};
 use freya::prelude::*;
 
-use crate::diff_palette::{DIFF_MUTED, FILLER, GUTTER_SEPARATOR};
-use crate::diff_row_parts::{
+use crate::diff::palette::{DIFF_MUTED, FILLER, GUTTER_SEPARATOR};
+use crate::diff::row_parts::{
     LineKind, SEPARATOR_WIDTH, TEXT_PADDING, line_text, number, separator, words,
 };
-use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
+use crate::diff::view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
 /// The rule between the two columns.
 pub(crate) const MIDDLE_WIDTH: f32 = SEPARATOR_WIDTH;

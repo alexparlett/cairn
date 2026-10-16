@@ -13,7 +13,7 @@
 
 use freya::prelude::*;
 
-use crate::diff_palette::DIFF_FONT_FAMILY;
+use crate::diff::palette::DIFF_FONT_FAMILY;
 
 /// The box every glyph is drawn in.
 pub(crate) const GLYPH_WIDTH: f32 = 16.0;

@@ -42,13 +42,13 @@ use std::ops::Range;
 use cairn_model::{FileMode, Selection, ShownDiff, SideColumn};
 use freya::prelude::*;
 
-use crate::diff_notice::header_lines;
-use crate::diff_palette::{CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, GROUND};
-use crate::diff_view::{DIFF_ROW_HEIGHT, number_column_width, text_width};
+use crate::diff::notice::header_lines;
+use crate::diff::palette::{CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, GROUND};
+use crate::diff::side_by_side_rows::{Columns, MIDDLE_WIDTH};
+use crate::diff::view::{DIFF_ROW_HEIGHT, number_column_width, text_width};
 use crate::edge_scroll::EdgeScroll;
 use crate::end_room::SCROLLBAR_THICKNESS;
-use crate::local_changes_drag::DRAG_THRESHOLD;
-use crate::side_by_side_rows::{Columns, MIDDLE_WIDTH};
+use crate::local_changes::drag::DRAG_THRESHOLD;
 
 /// A hovered chunk's action over the unstaged diff (Fork's).
 pub const STAGE_CHUNK_CAPTION: &str = "Stage";

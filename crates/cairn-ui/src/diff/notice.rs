@@ -15,7 +15,7 @@
 use cairn_model::{ChangeStatus, DiffContent, DiffLimits, FileMode, Oid, ShownDiff, SizeLimit};
 use freya::prelude::*;
 
-use crate::diff_palette::{
+use crate::diff::palette::{
     ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, GROUND,
     REMOVED_EMPHASIS,
 };

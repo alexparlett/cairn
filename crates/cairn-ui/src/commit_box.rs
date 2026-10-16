@@ -40,7 +40,7 @@ use cairn_model::OperationInProgress;
 use freya::prelude::*;
 
 use crate::accelerators::{Action, FieldScope, RecallStep};
-use crate::diff_palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
+use crate::diff::palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
 use crate::text_field::{text_field_in, text_field_recalling};
 
 /// The subject field's placeholder, as Fork's reads.

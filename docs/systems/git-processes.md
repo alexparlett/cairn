@@ -148,8 +148,8 @@ On the application's side, in `crates/cairn-app/src/`:
 ```
   worker/discovery.rs     Discovery — git found once per application, on cairn-discovery
   worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
-  worker/network_lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
-  worker/local_lane.rs    the local write lane's loop: LocalWrite, OperationId, WriteEnding,
+  worker/network/lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
+  worker/local/lane.rs    the local write lane's loop: LocalWrite, OperationId, WriteEnding,
                           ReadAgain, LaneState — the write clock, a commit's quiet, a cancel by
                           id, a commit's cancel installed as git starts
   worker/pool.rs          the repository thread: serves the history lane, Request::Close and
@@ -158,7 +158,7 @@ On the application's side, in `crates/cairn-app/src/`:
   worker/routing.rs       the routing table: which thread serves each request, applied as it
                           is submitted
   worker/epoch.rs         epochs numbered per query lane, each a read's Cancel
-  worker/diff_lane.rs     the diff thread's loop: the changes and file-diff lanes, whose reads
+  worker/diff/lane.rs     the diff thread's loop: the changes and file-diff lanes, whose reads
                           a superseding query ends (docs/systems/diff.md, "In the application")
   worker/request.rs       Request and Update, the boundary's messages
   closing.rs              Closing — the window's close hook, which asks and never waits
@@ -1183,7 +1183,7 @@ The user's decisions on it, as built:
   only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
   arrow (a square turned 45°, half hidden under the panel) pointing up at the box, the whole
   kept inside the window's width (`Platform::root_size`), the panel narrowed to a window
-  narrower than it (`cairn_ui::activity_popover::hung`;
+  narrower than it (`cairn_ui::title_bar::activity_popover::hung`;
   `the_panel_hangs_under_the_box_inside_the_window`,
   `the_popover_hangs_from_the_status_box_inside_the_window`,
   `the_popover_hangs_under_the_status_box`).
@@ -1286,7 +1286,7 @@ whose oldest whole reads are popped, never moved; and it wakes the window with o
 way. Applying it, the window drains everything waiting (`OutputTap::drain`, on the UI thread:
 a swap under the tap's mutex, which the lane holds only to push a read it copied before taking
 it and, past the bound, to pop whole oldest reads), latest kept, and hands it to the commit box's
-output (`commit_box_state::StreamedOutput`, a state of its own that no render reads, so a commit's
+output (`commit_box::state::StreamedOutput`, a state of its own that no render reads, so a commit's
 streamed line draws nothing again — `a_streamed_line_never_draws_the_window_again`), the activity
 entry and the status box's progress line. However far
 behind the window falls, at most one wake per tap waits in the outbox; a read after a drain wakes
@@ -1322,7 +1322,7 @@ The sentence is worded on the worker from the engine's typed error (`worker::end
 `Failure { said, command, output, locks, index_lock }` on `WriteEnding::Failed`,
 `Update::FetchFailed` and a partly done discard), every path C-quoted where it could reshape the
 sentence; the engine's own text appears only where an error has no sentence of its own. The
-window keeps the commit box's Git Error with its skip and token (`commit_box_state::GitError`)
+window keeps the commit box's Git Error with its skip and token (`commit_box::state::GitError`)
 and every other ending's dialog in `crate::ending_dialog::Endings`, the oldest first.
 
 **One modal state** decides which dialog is drawn (`crate::modal`): a credential prompt, then a
@@ -1352,7 +1352,7 @@ the banner waits out a younger lock on the toolkit's executor — saying "index.
 repository, so git can't change the index. If no other git program is running, it was left
 behind."; the next stat that finds it gone takes it down, whoever removed it.
 
-**A write git refuses for the lock is run again** (`local_lane::run`): when the attempt failed
+**A write git refuses for the lock is run again** (`local::lane::run`): when the attempt failed
 because git could not create `<gitdir>/index.lock` and that file stood, the same, from before
 the attempt began until after it failed — so no git, Cairn's included, could have changed the
 index meanwhile and the attempt wrote nothing — the lane waits `LOCK_RETRY_AFTER` (a second, a
@@ -1393,7 +1393,7 @@ gone), `a_write_refused_for_a_lock_let_go_of_runs_again_and_writes_once`,
 
 A `git` operation runs in a write lane (PRD R7, `docs/design/concurrency.md`,
 "Operations"); one lane exists, the network lane, on the `cairn-network`
-thread (its loop in `worker/network_lane.rs`, spawned by `Threads::start` in
+thread (its loop in `worker/network/lane.rs`, spawned by `Threads::start` in
 `worker/pool.rs`), where fetch runs — what was the operations thread. The lane is chosen per operation: `Operation::lane` names one for each
 operation by an exhaustive match, and the repository thread's
 `Threads::perform` routes by it, so the local lane lands beside this one with
@@ -1424,14 +1424,14 @@ start, and the next fetch, whenever it is asked for, starts cancelled (issue
 Pinned, G15:
 `a_second_fetch_while_one_runs_is_refused_with_a_reason` (through the
 boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_fetch_in_flight`
-(`network_lane.rs`), `the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing`
+(`worker/network/lane.rs`), `the_lock_stat_is_kept_and_a_refused_fetch_changes_nothing`
 (`session.rs`) and
 `fetch_is_greyed_while_a_fetch_is_in_flight` (`window.rs`, headless).
 
 ## The local write lane
 
 Every write to the index, the working tree and a local ref runs on the
-`cairn-local` thread (`worker/local_lane.rs`, spawned by `Threads::start`;
+`cairn-local` thread (`worker/local/lane.rs`, spawned by `Threads::start`;
 staging-and-commit R4, `docs/design/concurrency.md`, "Operations"): the verbs of
 `docs/systems/staging.md` — `stage_lines`, `unstage_lines`, `stage_files`,
 `unstage_files`, `discard_lines`, `discard_files`, `commit`, `amend`, `create_branch`,
@@ -1462,13 +1462,13 @@ which is a length of time, is waited out.
   takes as it asks (`OperationId::next`, an atomic increment;
   `local_writes::ask`), keeps it queued until `Update::WriteStarted { id }` and
   running until `Update::WriteEnded { id, ending, read_again }`
-  (`crates/cairn-app/src/local_writes.rs`, `LocalWrites`). Pinned by
+  (`crates/cairn-app/src/operations/local_writes.rs`, `LocalWrites`). Pinned by
   `writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending`
-  (`worker/local_lane_tests.rs`: five stages asked while the first's `git add` is
+  (`worker/local/tests.rs`: five stages asked while the first's `git add` is
   still held — each ask returning before it finishes — start and end in order, the
   stale one dropped)
   and `writes_are_queued_in_order_until_each_starts`
-  (`local_writes.rs`).
+  (`operations/local_writes.rs`).
 - **What a discard would lose, in the lane's order** (staging-and-commit R8.4).
   `Request::DiscardConsequence { asked, paths }` — what Local Changes asks before it
   opens a discard's confirmation — is routed straight to the lane too, as a job of its
@@ -1484,7 +1484,7 @@ which is a length of time, is waited out.
   `a_discards_consequence_is_counted_after_the_writes_asked_before_it`,
   `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection` and
   `a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read`
-  (`worker/local_lane_tests.rs`), and in the engine by
+  (`worker/local/tests.rs`), and in the engine by
   `a_cancelled_count_stops_between_paths_and_runs_no_further_read`. Stage All and Unstage All are writes of their own,
   `LocalWrite::StageAll` and `LocalWrite::UnstageAll`, carrying the lists the window
   draws, shared, from which the lane gathers every path (`LocalChanges::whole_file_paths`)
@@ -1603,7 +1603,7 @@ which is a length of time, is waited out.
   answer superseded is never drawn (`unticking_amend_supersedes_the_amend_read_and_nothing_else`).
   Pinned by
   `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
-  (`worker/local_lane_tests.rs`).
+  (`worker/local/tests.rs`).
 - **Prompts during a write** (R5.1). Every write begins a channel operation
   of its own, under the write's one name (`Channel::begin_for`, `LocalWrite::name`:
   "Commit 2 files", "Stage 1 File"; a fetch's under its remote), and runs with its
@@ -1733,7 +1733,7 @@ Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
 commit's `git` and its hook alive, until the test releases it; then its ending,
 the queued write `NotRun`, and the stream's end), `the_window_is_told_once_as_the_first_close_is_asked`
 (`closing.rs`), `the_window_names_the_write_it_waits_on_and_its_prompt` (`window.rs`,
-headless) and `the_closing_line_names_the_write_by_its_one_name` (`status_text.rs`).
+headless) and `the_closing_line_names_the_write_by_its_one_name` (`history/status_text.rs`).
 
 What a close costs is the registry's: a write that outlasts the grace is
 `SIGKILL`ed and may strand its lock files; a cancel opens nothing, so a
@@ -1766,7 +1766,7 @@ count, and each has a matcher self-test:
 | Twin | What it decides |
 | --- | --- |
 | `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries each of `READ_ONLY_PINS` — `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` — and is applied. The askpass names are set. |
-| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row in `PROCESS_CALL_EXCEPTIONS`, `.status()` in `cairn-app` (`history_state::Progress::status`, the history view's load state), fails once it is no longer needed; the row was accepted by the user on 2026-10-02. |
+| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row in `PROCESS_CALL_EXCEPTIONS`, `.status()` in `cairn-app` (`history::state::Progress::status`, the history view's load state), fails once it is no longer needed; the row was accepted by the user on 2026-10-02. |
 | `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names (`GitCommand`, `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`) are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
 | `the_retired_runner_is_gone` | Nowhere in `crates/cairn-git/src`, `process/` and test modules included, is `Running` or `ProcessKill` named, `run` or `stream` declared in an `impl` block of `GitCommand`, or `.stream(..)`, `GitCommand::run(..)` or `GitCommand::stream(..)` called (PRD R3.7, G18). Production `process/` calls `.spawn()` on exactly one line (today in `GitCommand::start_with`), and never `.output()`, `.status()` or `.exec()`, so a second runner that starts its own process by those method calls fails whatever it is called; a path call (`Command::spawn(&mut c)`) or a `nix` start (`fork`, `exec*`, `posix_spawn*`) is not counted, a residual stated in the root `CLAUDE.md`. Proven to read real code by finding `GitCommand`'s impl declaring `start`; self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
 | `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. It includes method calls — `.write(`, `.write_to(` and `.write_stream(` (`GITOXIDE_MUTATION_METHODS`) and `.notes(` (in `GITOXIDE_MUTATION_CALLS`) — the only shapes that catch an index's or a tree editor's `.write()` and a note write. The cost: engine code outside `ops/` cannot call `io::Write::write` or `RwLock::write` (`write_all` is fine), and a notes read would have to live in `ops/`. Accepted by the user on 2026-10-02. |

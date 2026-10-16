@@ -263,7 +263,7 @@ until stashing exists.
 `git-processes.md`): the local write lane; the seal — a drop is a new `Consequence`
 variant and a row of the destructive-operation roster (`DESTRUCTIVE_OPERATIONS`), its
 token built by the confirmation dialog alone; the file context menu
-(`crates/cairn-ui/src/local_changes_menu.rs`) the stash and ignore entries join; Create Branch's
+(`crates/cairn-ui/src/local_changes/menu.rs`) the stash and ignore entries join; Create Branch's
 "Local changes:" radios, where "Stash and reapply" is the third; one home for each
 message (a refusal "Couldn't <name>", git's failure the Git Error dialog); and the
 Activity Manager a drop's prompt is quoted in. For the intent-to-add bullet above:

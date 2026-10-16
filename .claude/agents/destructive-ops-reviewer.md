@@ -69,7 +69,7 @@ CRITICAL, each one a finding on its own:
    shows: the answer keyed by the name it was asked for, the press's handler
    re-checking that Discard is still chosen and that the token's consequence is
    the one for the name shown, and nothing asked while a Git Error is up
-   (`crates/cairn-app/src/create_branch.rs`'s `discard_confirmed`). A token built
+   (`crates/cairn-app/src/operations/create_branch.rs`'s `discard_confirmed`). A token built
    for another name, a previous choice, or a consequence the engine did not
    answer for that name is a finding.
 4. **Counts and names computed after the prompt.** If the prompt says "3 commits"
@@ -192,7 +192,7 @@ WARNING tier:
    spends it by value. Evidence: quote the closure.
 
 12. **A type that holds a `LocalWrite`.** `CONFIRMED_HOLDERS` excuses one type,
-   `LocalWrite` in `crates/cairn-app/src/worker/local_lane.rs`, which carries a
+   `LocalWrite` in `crates/cairn-app/src/worker/local/lane.rs`, which carries a
    destructive write's token to the lane that spends it; the guard does not
    follow a type that holds a `LocalWrite` — `Request::Write`, the lane's
    `LocalJob::Write` — or one that holds those in turn. Each such holder must

@@ -19,14 +19,14 @@ which the commit box asks.
 
 Pressing **Local Changes** in the sidebar (`sidebar.md`) puts the view in the main region in
 place of the history and its detail pane (`window::window`, `MainView::LocalChanges`,
-`crates/cairn-app/src/local_changes_pane.rs`), as Fork lays it out:
+`crates/cairn-app/src/local_changes/pane.rs`), as Fork lays it out:
 
 - **Left**, behind a draggable splitter (its share kept for the session,
   `LocalChangesView::list_width`): a filter field — the only control above the lists — then
   **Unstaged** above **Staged**, each under its heading — its name, its Stage or Unstage
   button, and a small double chevron, ⇊ Stage All over Unstaged (Fork's) and ⇈ Unstage All over
   Staged — and each one flat, virtualised list
-  (`cairn_ui::LocalChangesList`, `crates/cairn-ui/src/local_changes.rs`), with a draggable
+  (`cairn_ui::LocalChangesList`, `crates/cairn-ui/src/local_changes/list.rs`), with a draggable
   splitter between the two (the user's decision, 2026-10-07; its share kept for the session and
   never beyond it, `LocalChangesView::lists_split`, `LocalChangesList::split`). A row is a badge
   and a path, a rename's or a copy's source before it (`old → new`, `cairn_ui::change_text`).
@@ -47,7 +47,7 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   or side by side; or the notice of a state that is not text, with Load Diff for a file past the
   limits; or, for a conflicted path, the conflict's notice in place of a diff (R9.4,
   `DiffNotice::Conflicted`). Previous and next change are heard from inside the view and move
-  its own diff (`diff_actions::step`), whose scroll and change cursor are the view's
+  its own diff (`diff::actions::step`), whose scroll and change cursor are the view's
   (`LocalChangesView::scroll`, `cursor`), not the Changes tab's.
 - **Instead of the lists**: "Reading the working tree's status…" before the first status;
   the read's failure when no status has been read (`RefreshState::failure(Refreshed::Status)`,
@@ -56,14 +56,14 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   "No local changes."
 
 The count beside the sidebar's entry is the number of distinct paths the status lists
-(R9.2, `sidebar_pane::local_changes_count`, `LocalChanges::paths`): a path in both lists once,
+(R9.2, `sidebar::pane::local_changes_count`, `LocalChanges::paths`): a path in both lists once,
 and a staged deletion with an untracked file of the same name — two entries git lists apart —
 once; none is shown with no change.
 
 ## Which list, in what order (`cairn_model::LocalChanges`)
 
 A status arrives laid out already: `LocalChanges::new` runs on the refresh thread when the
-status is read (`worker/refresh_lane.rs`), and `Update::Status` carries it, so the window only
+status is read (`worker/refresh/lane.rs`), and `Update::Status` carries it, so the window only
 keeps it. A tracked path is in Staged when it has a staged change and in Unstaged when it has
 an unstaged one — in both when it has both (R9.1) — or when git listed it for a submodule's
 state alone; a conflicted path and an untracked one are in Unstaged, where Fork puts them.
@@ -88,27 +88,27 @@ superseded mid-way stops within a few thousand paths and sends nothing. Its answ
 the text as it is (`LocalChangesState::filtered`). With a filter on, a new status is not drawn
 until its rows come: the lists before it stay drawn with their own rows meanwhile, so a row of
 one status is never read by an index into another, and a refresh never empties the view while
-a filter is typed (`crates/cairn-app/src/local_changes_state.rs`). Until the first answer for a
+a filter is typed (`crates/cairn-app/src/local_changes/state.rs`). Until the first answer for a
 text, the lists say "Filtering…" rather than counting every row as matched; then "Showing N of
 M files", both counts in distinct paths, as the sidebar's count is (the user's decision,
 2026-10-07): M is the status's (`LocalChanges::paths`) and N the rows the filter left, counted
 by the same pass that left them (`MatchedRows::paths`, a merge of the two lists' rows on the
 worker), so a path left in both lists is one file; the window keeps N with the rows
-(`local_changes_state::shown_paths`) and hands it to the list (`LocalChangesList::shown_paths`).
+(`local_changes::state::shown_paths`) and hands it to the list (`LocalChangesList::shown_paths`).
 "No path matches the filter." when it leaves none.
 
 ## Choosing a path, and asking its diff
 
 The diff shown is the selection's primary's (staging-and-commit R8.1, rule 8; "The selection",
 below): never chosen on its own, but derived from the primary and the lists drawn and asked by
-one function (`diff_actions::show_primary`) whenever the selection or the lists move. It is
-asked through the working-tree query as its list says (R9.3, `diff_actions::working_query`), and
+one function (`diff::actions::show_primary`) whenever the selection or the lists move. It is
+asked through the working-tree query as its list says (R9.3, `diff::actions::working_query`), and
 it is the one diff drawn however many paths are selected (R8.1 as amended 2026-10-10, the redesign's L1;
 observed in Fork for Windows, `lc2`): the primary's — the file clicked first — with everything
 one file's diff has, Load Diff, the mode row, previous and next change and the gesture, under its
 own bar, which counts nothing (the user's answer of 2026-10-10: the lists' highlighted rows show
 the selection); no other file's diff is asked or kept. With nothing selected the diff says "No
-file selected" (`local_changes_pane::NO_FILE_SELECTED`). Its staged diff (`WorkingSide::Staged`) from
+file selected" (`local_changes::pane::NO_FILE_SELECTED`). Its staged diff (`WorkingSide::Staged`) from
 Staged, its unstaged diff (`WorkingSide::Unstaged`) from Unstaged, its untracked diff
 (`WorkingSide::Untracked`) for a path git does not track; a conflicted path asks nothing. It is
 asked at the Changes tab's options — the shared context and whitespace setting, and the entire
@@ -119,7 +119,7 @@ while Local Changes is shown, and as the view is shown otherwise, so a status ar
 the history is shown never takes the file-diff lane from the commit's file.
 
 The primary's diff lives in the diff selection beside the commit's
-(`crates/cairn-app/src/diff_state/working.rs`, `DiffState::choose_working`), keyed by what it was
+(`crates/cairn-app/src/diff/state/working.rs`, `DiffState::choose_working`), keyed by what it was
 asked for (`WorkingChoice`: the primary's list and path and the lists it was asked in, written
 by `show_primary` alone), because the three —
 the Changes tab's file, the files opened in place in the Commit tab, and this path — share the
@@ -153,7 +153,7 @@ status took away, or the filter hides (the redesign's L3, superseding the Change
 keeping a hidden path chosen), gives its place to the row that took it, so no diff is drawn for
 a path the lists do not show; with nothing selected, the diff is let go of. Another primary's
 diff starts at its top, with no change moved to and no lines selected, silently, as does the
-primary asked at other options (`diff_actions::reset_local_view`, `ask_again`).
+primary asked at other options (`diff::actions::reset_local_view`, `ask_again`).
 
 Every status, diff and set of lists the window lets go of is handed to a worker to free
 (`Request::Retire`): the refresh's answers and the lists drawn each hand their own hold over,
@@ -162,7 +162,7 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
 ## Acting on files
 
 What a person does to the lists is reported by the component as a choice or a
-`cairn_ui::ListIntent`, and decided by `crates/cairn-app/src/local_changes_actions.rs`; the
+`cairn_ui::ListIntent`, and decided by `crates/cairn-app/src/local_changes/actions.rs`; the
 component decides nothing about what is staged.
 
 **The selection** (R8.1, the redesign's rule 8 and L1; `cairn_ui::LocalSelection`, owned by
@@ -220,7 +220,7 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   the lists' own key handler (`Scope::LocalChanges`, and the bare Enter from
   `Scope::LocalChangesLists`, the lists' alone) and, but for Enter, the diff's, so nowhere else,
   and never from a text field, which keeps Enter and Backspace;
-- a drag from one list released over the other (`cairn_ui`'s `local_changes_drag`): tracked
+- a drag from one list released over the other (`cairn_ui`'s `local_changes::drag`): tracked
   by the two lists together, never a row, with the path it began on, so it survives its row
   unmounting or a status replacing the lists; a release over the same list, outside both, or
   after Escape drops nothing; a press heard while a drag is on (its release made where the
@@ -240,7 +240,7 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   Staged's (a deviation: Fork for Windows shows Unstage All only while Shift is held). The
   heading press is told apart from a row's: Shift on a row is still the range press, and a held
   Alt does nothing on Linux;
-- the context menu (`local_changes_menu`): Stage or Unstage, Discard Changes… (greyed on the
+- the context menu (`local_changes::menu`): Stage or Unstage, Discard Changes… (greyed on the
   staged side, its reason beneath it), Stage All or Unstage All, Copy Path; a right-press on a
   row outside the selection chooses it first; each item closes the menu as it is chosen.
 
@@ -285,7 +285,7 @@ diff-files` read for each tracked file) and holds the local lane while it runs, 
 numbered in a lane of its own: a newer discard asked, Cancel while it counts
 (`Confirming::on_let_go`, which asks `Request::StopCounting`), the view being let go of and a
 close each end it, between paths or by ending its read, and it then answers nothing. The answer
-for the discard asked last fills the same dialog (`local_changes_actions::consequence_arrived`,
+for the discard asked last fills the same dialog (`local_changes::actions::consequence_arrived`,
 by the confirmation's serial): the prompt, the line of what is left, "Show files" for a discard
 of several — its caption kept, its glyph turning ▸ to ▾, a virtualized list of each path and
 what happens to it (`Consequence::listed_file`: "14 lines", "Binary", "Restored", "Deleted",
@@ -294,7 +294,7 @@ token asks `LocalWrite::DiscardFiles` or `LocalWrite::DiscardLines`. An answer f
 ask, or for a confirmation let go of, is dropped. A refusal the engine makes while counting —
 a file that changed while it was read, a path that is not a file — makes the same dialog the
 refusal (rule 4): "Couldn't Discard Changes", the engine's one sentence
-(`worker::local_lane::refused_while_counting`, worded as every ending is, its path C-quoted by
+(`worker::local::lane::refused_while_counting`, worded as every ending is, its path C-quoted by
 `cairn_model::shown_path`) and "Nothing was changed.", Close alone. No modifier, setting or route reaches a discard without the dialog.
 
 **A conflicted row** (R8.7, C24) stages whole by every route — `git add`, which marks it
@@ -312,7 +312,7 @@ unanswered and undrawn, and drawn again once the prompt is answered or refused.
 **The diff hears the same chords but Return** (`Scope::LocalChanges`; R7.3 as amended
 2026-10-10, C25): on the lines a drag across it selected ("The diff's staging gesture", below),
 or with none on the selection, whole — the paths of it the lists show, as the chord on a list
-takes them (`local_changes_actions::on_the_diff`, `selected_rows`): Ctrl+S (⌘S) from the diff
+takes them (`local_changes::actions::on_the_diff`, `selected_rows`): Ctrl+S (⌘S) from the diff
 stages every selected file and the selection moves to the row in the first acted row's place
 (observed `lc4`), while a bare Return there does nothing (`lc3`), the lists alone hearing it
 (`accelerators::chord_heard_in`). Hovering is not selecting (Fork, Tracker #103): a chunk under
@@ -321,11 +321,11 @@ the pointer changes nothing the chords do.
 ## The diff's staging gesture
 
 In Local Changes' diff alone (R9), Fork's gesture (`fork-detail-and-diff-ui.md`, Finding 23),
-built in `crates/cairn-ui/src/staging_gesture.rs` and handed to the primary's `DiffView` as a
+built in `crates/cairn-ui/src/diff/staging_gesture.rs` and handed to the primary's `DiffView` as a
 `cairn_ui::Gesture`: the side it is over (`GestureSide`, from the list the path was chosen in),
 the content of the diff drawn (`ShownDiff::content`), the drag the window keeps
 (`LocalChangesView::lines`, a `cairn_ui::LineDrag`) and where its actions go
-(`local_changes_actions::on_gesture`). The Commit and Changes tabs hand their diff view none,
+(`local_changes::actions::on_gesture`). The Commit and Changes tabs hand their diff view none,
 so they draw no action (R9.5); a conflicted path's diff (R8.7) and a submodule's, binary,
 LFS-pointer and too-large changes are notices with no rows, so they draw none either.
 
@@ -358,7 +358,7 @@ the chords act on it too.
 **A selection belongs to the text it was made over** (R9.6, the redesign's L4, C26 — a deviation from Fork,
 which drops it on every refresh, observed `ln2`). Every working-tree answer is keyed on the diff
 thread with the question it answers (`ShownDiff::keyed` with the `FileQuery` — the path, the side
-and the options — in `worker/diff_lane.rs`): its content (`ShownDiff::content`) is a hash of that
+and the options — in `worker/diff/lane.rs`): its content (`ShownDiff::content`) is a hash of that
 question, the context and the whole answer — the paths, modes and ids, every line of both sides
 and the ranges that differ — so two answers with the same content draw the same rows over the
 same text. A selection records the content it was made over (`LineDrag`), the view is handed the
@@ -368,10 +368,10 @@ a re-read of the same content and keeps the selection, its tint and its actions,
 drawn meanwhile; one whose text differs by a byte, anywhere in the file, leaves it nothing, and
 the window lets it go as the answer arrives, the diff's bar saying "The file changed — line
 selection cleared." (`cairn_ui::SELECTION_CLEARED`, `session::apply`'s `lines_follow`) until the
-next key or press anywhere in the view (`local_changes_pane`'s global listeners). Another path,
+next key or press anywhere in the view (`local_changes::pane`'s global listeners). Another path,
 or the same at other options, lets a selection go silently. A drag still in progress is
 cancelled when the window loses focus, as before. Every act carries the content it was made
-over (`GestureAct::content`), and `local_changes_actions::on_gesture` refuses one whose content
+over (`GestureAct::content`), and `local_changes::actions::on_gesture` refuses one whose content
 is no longer drawn, so an action built before a redraw never sends old rows' lines against a
 new diff (`an_act_made_under_an_answer_no_longer_drawn_asks_nothing`); the engine's stale check
 backs it. The diff handed to a write is the answer drawn, shared (`ShownDiff::shared_diff`),
@@ -381,7 +381,7 @@ never copied on the UI thread.
 second press cannot act twice on rows the first already took (Fork, Tracker #480); then they
 follow whatever the new rows put under the pointer, or none.
 
-**What each action asks** (`local_changes_actions::on_gesture`): the diff drawn, copied, with
+**What each action asks** (`local_changes::actions::on_gesture`): the diff drawn, copied, with
 the selection — `LocalWrite::StageLines` from the unstaged or untracked diff, `UnstageLines` from
 the staged one, applied by the engine's patch (`staging.md`); the selection then goes. A
 discard is refused in the view for a submodule or a conflict (`cairn_ui::no_discard`); every
@@ -403,7 +403,7 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
 
 Under the diff, the width of the diff's side (R10.1), Fork's box (`fork-staging-and-commit.md`
 §5), drawn by `cairn_ui::CommitBox` (`crates/cairn-ui/src/commit_box.rs`) from the window's
-state (`crates/cairn-app/src/commit_box_state.rs`) by `commit_box_pane::CommitBoxPane`, which
+state (`crates/cairn-app/src/commit_box/state.rs`) by `commit_box::pane::CommitBoxPane`, which
 also holds what each press does: a one-line subject with Fork's counter — the characters left
 before 50, negative past it, red past 70 (`subject_count`) — and the `≡` that opens Recent
 Commit Messages; a description in IBM Plex Mono with a ruler at column 72; `Amend` at the left;
@@ -423,7 +423,7 @@ commit chord (⌘Return, Ctrl+Enter) presses the button without a new line, the 
 reach the window, and no list or staging chord fires (R7.3 as amended). Tab moves from the
 subject to the description. A key that changes either field's text is the person's edit
 (`CommitBox::on_edit`, heard through the field's validator), and so is a recalled message: the
-draft is then theirs (`commit_box_state::CommitBox::touch`). **One rule fills it** (the redesign's C7, Fork's
+draft is then theirs (`commit_box::state::CommitBox::touch`). **One rule fills it** (the redesign's C7, Fork's
 developer's rule, Tracker #61): `HEAD`'s message as Amend is ticked, and a merge's, single
 cherry-pick's or revert's message, go only into an empty draft the person has not touched — so a
 fill the person cleared stays cleared. A commit made clears the draft it took, untouched again;
@@ -497,7 +497,7 @@ While amending, a path chosen in Staged asks its diff against `HEAD`'s parent
 unstage of whole files from Staged — each route, Unstage All among them — puts the entries back
 to the parent's (`UnstageTarget::Commit`, `git reset -q <parent> --`) or, for a root commit's
 amend, removes them (`UnstageTarget::Nothing`, `git rm --cached -f -q --`): the file leaves the
-amended commit (`local_changes_actions::unstage_target`). Lines unstaged by the gesture are
+amended commit (`local_changes::actions::unstage_target`). Lines unstaged by the gesture are
 applied against the index as from any staged diff. Where amend's staged list cannot be read —
 a partial clone's missing blob on git 2.44 and later — the box's one line says so and why
 ("Amend's staged list couldn't be read, so the lists show what is staged against HEAD: …"; on a
@@ -550,7 +550,7 @@ typed, the arrows are the editor's.
   `the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close`, and in
   `src/commit_box.rs` `one_line_names_the_operation_or_a_detached_head` and
   `the_elapsed_time_reads_as_the_button_says_it`; in the window
-  (`crates/cairn-app/src/commit_box_tests.rs`):
+  (`crates/cairn-app/src/commit_box/tests.rs`):
   `a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly`,
   `amend_last_commit_asks_the_amend_at_the_press_by_button_and_chord`,
   `an_amend_that_must_be_confirmed_opens_the_dialog_and_cancel_returns_unchanged`,
@@ -567,12 +567,12 @@ typed, the arrows are the editor's.
   `amends_staged_list_is_drawn_diffed_against_heads_parent_and_unstaged_to_it`,
   `amends_staged_list_unread_is_said_and_the_status_lists_stay`,
   `recent_messages_fill_both_fields_from_the_menu_and_the_arrows`; the window's state
-  (`commit_box_state.rs`): `a_message_split_into_the_fields_composes_back_unchanged`,
+  (`commit_box/state.rs`): `a_message_split_into_the_fields_composes_back_unchanged`,
   `the_output_kept_is_its_latest_bounded_tail`,
   `amend_sets_the_draft_aside_and_fills_only_an_empty_untouched_one`,
   `a_merge_fills_an_empty_untouched_draft`,
   `a_failure_offers_the_skip_unless_it_was_skipped`; through the real boundary
-  (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
+  (`worker/local/tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
   (no cost read for amend's lists, C14),
   `amend_pressed_runs_a_recoverable_amend_and_answers_any_other_for_the_dialog` (the replaced
   commit and the cost read after the reap on the ending),
@@ -632,7 +632,7 @@ typed, the arrows are the editor's.
   content itself, `a_diffs_content_is_its_question_and_every_byte_of_its_answer` in
   `cairn-model`), and the viewport twin
   `the_gesture_builds_one_viewport_over_a_10000_line_diff`, named in the root `CLAUDE.md`'s
-  virtualization invariant; in the window (`crates/cairn-app/src/local_changes_gesture_tests.rs`):
+  virtualization invariant; in the window (`crates/cairn-app/src/local_changes/gesture_tests.rs`):
   `a_hovered_chunk_stages_and_unstages_exactly_its_lines`,
   `the_chords_act_on_the_selection_and_on_the_whole_file_without_one`,
   `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file`,
@@ -650,13 +650,13 @@ typed, the arrows are the editor's.
   `Request::Refresh` of the same text keeps the selection, one after an edit clears it with one
   notice, each answer keyed by the diff thread itself),
   `a_renames_source_row_unstages_its_lines_at_the_new_path`; through the real boundary
-  (`worker/local_lane_tests.rs`), `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the
+  (`worker/local/tests.rs`), `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the
   prompt's one sentence
   frame, `a_discard_of_files_asks_in_the_one_sentence_frame`,
   `the_worst_loss_is_said_whenever_an_untracked_file_is_deleted` and
   `a_discard_of_lines_names_the_lines_the_chunk_or_the_mode`
   (`crates/cairn-model/src/consequence.rs`).
-- Acting, in the window (`crates/cairn-app/src/local_changes_actions_tests.rs`):
+- Acting, in the window (`crates/cairn-app/src/local_changes/actions_tests.rs`):
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
   `a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list`,
@@ -686,7 +686,7 @@ typed, the arrows are the editor's.
   `nothing_is_acted_on_while_the_filters_rows_are_on_their_way`; the table's held key
   (`crates/cairn-ui/src/accelerators.rs`): `a_press_resolves_against_the_keys_the_window_heard`
   and `the_table_is_forks_chords_and_no_others`; through the real
-  boundary (`worker/local_lane_tests.rs`):
+  boundary (`worker/local/tests.rs`):
   `a_discards_consequence_is_counted_after_the_writes_asked_before_it`,
   `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection` and
   `a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read`, with the lane's
@@ -701,31 +701,31 @@ typed, the arrows are the editor's.
   `the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once`,
   `every_kind_of_change_draws_its_badges_shape` (each painted badge's cell read pixel for pixel
   against its glyph), `the_splitter_between_the_lists_drags`, the badge rule
-  `each_kind_of_change_has_forks_badge` (a unit test in `crates/cairn-ui/src/local_changes.rs`)
-  and `every_glyph_paints_a_shape_no_other_glyph_paints` (`ref_glyphs.rs`), and the viewport twin
+  `each_kind_of_change_has_forks_badge` (a unit test in `crates/cairn-ui/src/local_changes/list.rs`)
+  and `every_glyph_paints_a_shape_no_other_glyph_paints` (`history/ref_glyphs.rs`), and the viewport twin
   `a_status_of_50000_paths_builds_one_viewport_filtered_or_not` (top, deep and end, filtered and
   not), named in the root `CLAUDE.md`'s virtualization invariant.
-- The selection (`crates/cairn-app/src/diff_state/working.rs`):
+- The selection (`crates/cairn-app/src/diff/state/working.rs`):
   `a_path_in_both_lists_keeps_only_the_answer_for_the_list_chosen`,
   `a_refresh_asks_the_path_again_and_draws_its_last_diff_meanwhile`,
   `a_conflicted_path_asks_nothing_and_draws_its_notice`,
   `the_working_path_and_the_commits_file_take_the_lane_from_each_other`,
   `a_setting_asks_the_working_path_when_local_changes_is_shown`; the lists as kept
-  (`crates/cairn-app/src/local_changes_state.rs`):
+  (`crates/cairn-app/src/local_changes/state.rs`):
   `with_no_filter_a_status_is_drawn_as_it_arrives`,
   `with_a_filter_a_status_is_drawn_once_its_rows_arrive`,
   `clearing_the_filter_draws_the_newest_lists_whole`; where the selection goes
-  (`crates/cairn-app/src/next_selection.rs`, C25):
+  (`crates/cairn-app/src/local_changes/next_selection.rs`, C25):
   `after_an_action_the_row_in_the_first_acted_rows_place_is_selected`,
   `after_a_refresh_the_paths_still_listed_stay_with_their_primary_and_anchor`,
   `a_vanished_selection_gives_its_place_to_the_row_that_took_it`,
   `a_filter_prunes_the_selection_to_the_rows_it_shows`,
   `nothing_selected_becomes_the_first_row_only_as_files_appear`,
-  `a_status_that_keeps_the_selection_leaves_it_uncopied` (`local_changes_state.rs`), with a
+  `a_status_that_keeps_the_selection_leaves_it_uncopied` (`local_changes/state.rs`), with a
   path's place in a list
   `a_path_is_given_its_place_in_a_list_listed_or_not` (`cairn-model`); the count
-  (`the_count_beside_local_changes_is_of_distinct_paths`, `sidebar_pane.rs`).
-- The window (`crates/cairn-app/src/local_changes_tests.rs`, headless, updates applied through
+  (`the_count_beside_local_changes_is_of_distinct_paths`, `sidebar/pane.rs`).
+- The window (`crates/cairn-app/src/local_changes/tests.rs`, headless, updates applied through
   `session::apply`):
   `local_changes_draws_its_lists_and_the_first_paths_diff_from_the_working_tree_query`,
   `a_conflicted_path_draws_its_notice_and_asks_nothing`,
@@ -736,12 +736,12 @@ typed, the arrows are the editor's.
   `next_change_moves_local_changes_own_diff`, `a_status_that_could_not_be_read_is_said`,
   `a_filter_hiding_the_primary_selects_the_row_shown_in_its_place`,
   `a_refresh_moves_the_selection_and_asks_its_diff_without_a_render`; and
-  `local_changes_and_all_commits_switch_the_main_region` (`sidebar_tests.rs`).
-- The worker, through the real boundary (`crates/cairn-app/src/worker/refresh_tests.rs`):
+  `local_changes_and_all_commits_switch_the_main_region` (`sidebar/tests.rs`).
+- The worker, through the real boundary (`crates/cairn-app/src/worker/refresh/tests.rs`):
   `untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted`,
   `local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists` and
   `a_local_changes_filter_superseded_mid_pass_stops_and_sends_nothing`; the working-tree
-  query itself, `a_working_tree_diff_answers_through_the_boundary` (`diff_tests.rs`).
+  query itself, `a_working_tree_diff_answers_through_the_boundary` (`worker/diff/tests.rs`).
 - Measured: `window_check` (`#[ignore]`d, `crates/cairn-app/src/window_check.rs`) lands the
   view over a scratch clone of the bench repository with a status of thousands of paths
   (`CAIRN_SCRATCH_REPO`): the lists drawn and the first path's diff, Unstaged scrolled, a

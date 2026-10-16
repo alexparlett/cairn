@@ -57,7 +57,7 @@ One commit crosses four crates and changes shape three times.
 4. **The worker hands a page across, and the window appends it.**
    `crates/cairn-app/src/worker/` sends `Update::Rows { rows, complete }` to the
    window, which appends it to its `History` (`session::apply`, where pages were
-   applied before); `crates/cairn-ui/src/history_list.rs` draws the rows the
+   applied before); `crates/cairn-ui/src/history/list.rs` draws the rows the
    viewport shows, reading each through the history and deriving its edges as it
    builds it.
 
@@ -505,7 +505,7 @@ FILE, and it is a guard, not a convention — see below.
   one ("Refresh", below). So a scroll never cancels a diff, a selection
   never cancels a scroll, and an operation, numbered in no lane, supersedes
   nothing (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`;
-  through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`). The
+  through the real boundary, `crates/cairn-app/src/worker/diff/tests.rs`). The
   history has two: its query lane, which an open, a scroll's page, a find in the
   sidebar and its stop are numbered in, and its walk lane, which only an open
   moves and every page of rows is answered under — so a page a superseded find had
@@ -553,16 +553,16 @@ FILE, and it is a guard, not a convention — see below.
   is `Clone` and `Outbox`'s fields are visible throughout `pool.rs`, so a bare
   sender copied out by hand compiles, and one held past every `Outbox` keeps
   the stream open with nothing coming. Every wait in the worker's tests is
-  bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
+  bounded (`network::tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
 - **An explicit routing table names the thread for each lane**
   (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
   refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
   thread's handle across turns and is not `Send`, so it never moves
-  (`worker/history_lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
+  (`worker/history/lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
   changes and file-diff lanes, commits, comparisons and the working tree alike, on
-  `cairn-diff` (`worker/diff_lane.rs`); and status and ahead/behind on
-  `cairn-refresh` (`worker/refresh_lane.rs`), so neither a page nor a diff queues
+  `cairn-diff` (`worker/diff/lane.rs`); and status and ahead/behind on
+  `cairn-refresh` (`worker/refresh/lane.rs`), so neither a page nor a diff queues
   behind a slow status. `route` applies it to every request as it is
   submitted and hands each thread its own job type, so neither thread forwards
   the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
@@ -577,7 +577,7 @@ FILE, and it is a guard, not a convention — see below.
   own reply channel and blocks on it; and workers are pinned to a purpose rather
   than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
   R4) is the second consumer, and landed as exactly that: its own thread, now
-  the network lane (`worker/network_lane.rs`, `cairn-network`), its own
+  the network lane (`worker/network/lane.rs`, `cairn-network`), its own
   `Update` variants, and requests that carry no epoch so a scroll and a fetch
   cannot supersede each other; the credential
   dialog is a third thread (`worker/askpass.rs`) blocking on the window's
@@ -624,7 +624,7 @@ the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while on
 pays once more after it, not once per switch.
 
 It is asked for on three occasions, and the UI thread only submits on each: the window
-gaining focus (`crates/cairn-app/src/refresh.rs`, a side effect on the toolkit's
+gaining focus (`crates/cairn-app/src/refresh/focus.rs`, a side effect on the toolkit's
 `Platform::is_app_focused` that submits on a false-to-true change and on nothing else —
 `gaining_focus_asks_for_a_refresh_and_nothing_else`); any fetch ending, finished,
 cancelled or failed (`session::apply`;
@@ -639,7 +639,7 @@ file system (R10.2).
 read. A refresh compares the refs it reads with the first by
 `RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
 the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
-the snapshot (`refresh_state.rs`, which the history's chips, the title bar, the sidebar
+the snapshot (`refresh/state.rs`, which the history's chips, the title bar, the sidebar
 and the Commit tab's REFS row read) and, on `reopen`,
 reopens: the old `History` is moved out, a new one is built with
 `History::with_author_capacity` of the old one's author count, the history is asked
@@ -682,7 +682,7 @@ read is the history's failure too, since it has nothing to walk from.
 Every `submit` of a QUERY supersedes the queries before it in its lane (an
 operation carries no epoch), and a superseded page delivers nothing — so the
 caller must debounce. `Progress::wants_more()`
-(`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
+(`crates/cairn-app/src/history/state.rs`) is that debounce: it is false while a
 page is in flight, while the history is complete, and once the update stream has
 ended (no worker is left to answer).
 
@@ -731,7 +731,7 @@ import — are rejected outside `cairn-model` by
   a kept row holds the author time's seconds and not its offset, and
   converting to the reader's local time needs a timezone database, which is a
   dependency decision nobody has taken. `utc_minutes`
-  (`crates/cairn-ui/src/date_text.rs`, a private module) is Hinnant's
+  (`crates/cairn-ui/src/history/date_text.rs`, a private module) is Hinnant's
   `civil_from_days`, total over every `i64`.
 
   The column is also **not monotonic**, and that is not a defect: the walk is
@@ -760,7 +760,7 @@ import — are rejected outside `cairn-model` by
   already linked through `freya`'s `engine` feature; no test-only dependency was
   added.
 - **Loading, empty and failed are three different sentences.** `placeholder`
-  (`crates/cairn-app/src/status_text.rs` — `cairn-app` is a binary, so its
+  (`crates/cairn-app/src/history/status_text.rs` — `cairn-app` is a binary, so its
   modules are cited by file, not by a `cairn_app::` path) decides which, so the
   reader never sees a blank area that could mean any of the three. A failure
   that arrives after rows are drawn is a banner under them, not a replacement
@@ -769,7 +769,7 @@ import — are rejected outside `cairn-model` by
   to a failure — a repository with no commits is empty, not broken.
 - **Keyboard**: arrow keys, `PageUp`/`PageDown`, `Home` and `End`, as a pure
   `moved_to(key, current, last)` (private, in
-  `crates/cairn-ui/src/history_list.rs`). The list is auto-focused, so a reader with no
+  `crates/cairn-ui/src/history/list.rs`). The list is auto-focused, so a reader with no
   mouse can select at all. `PREFETCH_ROWS` is 24: every row within that many of
   the end asks for the next page when it becomes visible — every one of them,
   because a single trigger row is a list that quietly stops loading on a tall
@@ -778,13 +778,13 @@ import — are rejected outside `cairn-model` by
 ### Chips on a row
 
 A row draws the refs pointing at its commit as Fork's chips between the graph and the
-subject (refs-and-status R5; `crates/cairn-ui/src/ref_chips.rs`): outlined, filled with a
+subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): outlined, filled with a
 tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
 glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
 before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud
 (whatever the forge) and a tag — in a cap of their own at the chip's left; a
 stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
-(`crates/cairn-ui/src/ref_glyphs.rs`), no font involved, every one in the chip's text
+(`crates/cairn-ui/src/history/ref_glyphs.rs`), no font involved, every one in the chip's text
 colour, so what tells two kinds apart is the shape alone
 (`every_glyph_paints_a_shape_no_other_glyph_paints`, over the pixels); a chip is keyed by
 its kind and name, since a canvas is repainted only when its layout changes. `HEAD`'s
@@ -842,7 +842,7 @@ refs), and, through the window, by
 
 ### The title bar
 
-The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/status_box.rs`;
+The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/title_bar/status_box.rs`;
 R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
 component of its working tree (of its git directory when it is bare), which the worker
 sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a
@@ -862,7 +862,7 @@ one refresh behind (R10.3 as amended). An unreadable index or no working tree dr
 `*`. Pinned by `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream`
 (`crates/cairn-app/src/window.rs`: a dirty branch with counts, a gone upstream, a detached
 and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
-(`crates/cairn-app/src/refresh_state.rs`) and the status box's own tests.
+(`crates/cairn-app/src/refresh/state.rs`) and the status box's own tests.
 
 ### Show Lost Commits
 
@@ -959,7 +959,7 @@ that gains a ref is reached at the reopen that follows and drawn as any other.
 ### Create Branch
 
 The way back to a lost commit — or to any — is Fork's Create Branch dialog
-(`crates/cairn-ui/src/create_branch_dialog.rs`, `crates/cairn-app/src/create_branch.rs`; evidence
+(`crates/cairn-ui/src/dialogs/create_branch.rs`, `crates/cairn-app/src/operations/create_branch.rs`; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md` and
 `fork-observed-2026-10-10.md`), opened by `New Branch…` in
 any commit row's context menu, a lost row's too, a stash's row offering none
@@ -1044,14 +1044,14 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 | ... and with labelled rows, each laying out a column's worth of chips | `only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips` |
-| A row's chips are laid out once per row built, never per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` (`crates/cairn-ui/src/history_list.rs`) |
+| A row's chips are laid out once per row built, never per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` (`crates/cairn-ui/src/history/list.rs`) |
 | Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
 | Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` and `the_windows_table_agrees_with_the_engines_table_captured_before` (`crates/cairn-app/src/window.rs`) |
 | No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 | What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
 | Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it` (`crates/cairn-model/src/history.rs`) |
-| A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history_state.rs`) |
+| A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history/state.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
 headless component test in `crates/cairn-ui/tests/history_list.rs`; the rest are

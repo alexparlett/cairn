@@ -13,7 +13,7 @@ Left of the main region, behind a draggable splitter (`window::beside`, Freya's
 
 - **Local Changes**, with the count of distinct paths the last status listed — `Local
   Changes (N)`, the count left out when there is none or no status has been read
-  (`sidebar_pane::local_changes_count`, `LocalChanges::paths`, `cairn_ui::local_changes_text`)
+  (`sidebar::pane::local_changes_count`, `LocalChanges::paths`, `cairn_ui::local_changes_text`)
   — and **All Commits**. They choose what the main region shows (`cairn_ui::MainView`,
   `SidebarView::main`): the history with its detail pane, or the Local Changes view
   (`local-changes.md`). Pressing a ref returns the main region to the history.
@@ -65,7 +65,7 @@ text, disclosure }` is answered by `Update::FilteredRefs { refs, text, rows }`, 
 snapshot handed back with the rows so the window keeps them together
 (`cairn_ui::SidebarRefs`). The window asks whenever what they are laid out from changes —
 a refresh's snapshot arrives (`session::apply`, `SidebarState::refs_arrived`), the filter's
-text changes (a side effect in `sidebar_pane::SidebarPane`, `SidebarState::filter`), a
+text changes (a side effect in `sidebar::pane::SidebarPane`, `SidebarState::filter`), a
 section or folder is pressed (`SidebarState::toggle`) — and each ask supersedes the one
 before it, so the answer drawn is the latest asked; until it arrives the rows before it
 stay drawn. The rows an answer replaces, and the snapshot they may be the last hold on, go
@@ -82,7 +82,7 @@ The list is a `VirtualScrollView` over the rows, so it builds one viewport whate
 snapshot holds: 50,000 refs with every folder open, or one folder of 10,000 branches
 opened, build only the rows on screen (twins below).
 
-## Pressing an entry (`crates/cairn-app/src/ref_find.rs`)
+## Pressing an entry (`crates/cairn-app/src/sidebar/ref_find.rs`)
 
 A section's or folder's row opens or closes it and asks the rows again. A ref, a detached
 `HEAD` or a stash selects its row and brings it into view (`selection::choose`,
@@ -167,7 +167,7 @@ page asked.
   `a_sidebar_of_50000_refs_builds_one_viewport` and
   `a_folder_of_10000_branches_open_builds_one_viewport`, named in the root `CLAUDE.md`'s
   virtualization invariant.
-- The worker (`crates/cairn-app/src/worker/find_tests.rs`, through the real boundary):
+- The worker (`crates/cairn-app/src/worker/history/tests.rs`, through the real boundary):
   `a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further`,
   `a_second_find_supersedes_the_first_and_no_page_is_lost`,
   `a_stopped_find_leaves_the_walk_for_the_next_page`,
@@ -179,10 +179,10 @@ page asked.
   shares with a scroll, over lines of commits written object by object for the test
   (`worker/written_repository.rs`, not this checkout's history):
   `a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up`
-  (`worker/history_lane.rs`, deterministic) and
+  (`worker/history/lane.rs`, deterministic) and
   `superseding_a_request_stops_the_walk_that_is_serving_it` (`worker/pool.rs`, one queued
   page of a long line superseded mid-walk).
-- The window (`crates/cairn-app/src/sidebar_tests.rs`, headless, updates applied through
+- The window (`crates/cairn-app/src/sidebar/tests.rs`, headless, updates applied through
   `session::apply`): `pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view`,
   `pressing_a_ref_past_the_loaded_rows_finds_it_by_paging`,
   `two_quick_presses_draw_only_the_second`, `a_scroll_of_the_list_supersedes_a_find`,

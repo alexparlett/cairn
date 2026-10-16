@@ -508,7 +508,7 @@ and amend's staged list, which a status does read while Amend is ticked, 2.6 ms)
   one. The engine trusts its caller here, and the caller owns it: Local Changes asks only
   for paths of rows `git status` listed in the lists it draws, each found again there by a
   search, so a selection naming a path a refresh took away asks nothing for it
-  (`local_changes_actions`; `a_discard_names_only_paths_the_lists_drawn_still_list` in
+  (`local_changes::actions`; `a_discard_names_only_paths_the_lists_drawn_still_list` in
   `cairn-app`, and the engine's arm by `a_file_git_clean_leaves_is_named_as_kept`).
 - A discard of files counts each tracked file's lines by reading its unstaged diff
   as the diff view does, one read per file: exact, and proportional to the files

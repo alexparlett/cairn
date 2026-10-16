@@ -209,7 +209,7 @@ never enters `cairn-git` and never enters application state.
   Cancel, in the activity popover as in Fork, puts the view in `FetchStatus::Cancelling`,
   and a `FetchStarted` that lands after the press does not undo it
   (`a_cancel_is_said_at_once_and_survives_a_late_start` in
-  `crates/cairn-app/src/fetch_state.rs`). Removing a lock another process may still hold is
+  `crates/cairn-app/src/operations/fetch.rs`). Removing a lock another process may still hold is
   `Remove index.lock…`'s, confirmed, for `<gitdir>/index.lock` alone; the other locks a
   cancel can strand under the git directory are git's to report on the next write that
   meets them.
@@ -342,7 +342,7 @@ never enters `cairn-git` and never enters application state.
   `a_refs_read_follows_the_refs_git_writes` in `tests/fetch.rs`, over a
   fixture, since a CI checkout is detached with no local branch and its own
   refs decide nothing.
-- **The dialog** (`crates/cairn-ui/src/credential_prompt.rs`,
+- **The dialog** (`crates/cairn-ui/src/dialogs/credential_prompt.rs`,
   `CredentialPrompt`). Names the remote the running operation was asked for,
   states what is wanted from where, and shows the prompt exactly as git or ssh
   gave it — the URL in it is the one being authenticated against. A username
@@ -376,7 +376,7 @@ never enters `cairn-git` and never enters application state.
   and waits on the window's `Reply` — `Provide { prompt, secret }` or
   `Refuse { prompt }` — over a channel of its own (never a `Request`, which
   derives `Debug`), handing the secret to `Prompt::answer` by reference and
-  dropping it. `network_lane.rs`: the network lane runs the fetch with a
+  dropping it. `worker/network/lane.rs`: the network lane runs the fetch with a
   token from `Channel::begin`, forwards every progress line as
   `Update::FetchProgress`, and ends with `FetchFinished`, `FetchCancelled` or
   `FetchFailed`; on every one the window asks for a refresh, since a fetch that
@@ -410,7 +410,7 @@ never enters `cairn-git` and never enters application state.
   injected: when the acceptor thread cannot be started, `Threads::start`
   acknowledges the stop itself, so a shutdown does not wait the deadline on
   a loop nobody entered — a review obligation for whoever touches that arm.
-  Pinned by `crates/cairn-app/src/worker/fetch_tests.rs`
+  Pinned by `crates/cairn-app/src/worker/network/tests.rs`
   against real git and the built helper, with a loopback remote that answers
   `401` to everything:
   `a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs`
@@ -424,7 +424,7 @@ never enters `cairn-git` and never enters application state.
   `letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket` and
   `a_prompt_waiting_at_shutdown_is_refused`.
 - **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
-  `fetch_state.rs`). A "Fetch <remote>" button for the default remote, greyed from the press
+  `operations/fetch.rs`). A "Fetch <remote>" button for the default remote, greyed from the press
   (`FetchStatus::Starting`) until the fetch ends (`fetch_is_greyed_while_a_fetch_is_in_flight`);
   its progress in the title bar's status box — "Fetch 'origin'" and git's latest progress line,
   once it has run 250 ms (`the_status_box_is_handed_what_runs_by_its_one_name`,

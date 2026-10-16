@@ -190,7 +190,7 @@ model-level pins and each has a hole a mutation walks through:
 - *Building the projection costs what the file has changes.* Closed in phase 06, and
   moved off the UI thread in phase 07: both layouts own their indexes, and
   `cairn_model::ShownDiff::new` builds them once per answer on the diff thread that
-  answered it (`worker/diff_lane.rs`), never per row, per frame or per toggle; the window
+  answered it (`worker/diff/lane.rs`), never per row, per frame or per toggle; the window
   only keeps the value (`DiffState::file_arrived` takes a `ShownDiff`).
 - *A change maps to its rows* (phase 06): `UnifiedLayout::change_rows` and the searches
   beside it, pinned by `changes_are_found_by_the_row_they_start_on`.
@@ -1353,7 +1353,7 @@ superseded by the next keystroke stops and sends nothing
 the changes lane and a file diff or Expand All in the file-diff lane; a changes
 query supersedes both, a file diff only the file-diff lane, and neither a page
 nor a fetch (`docs/systems/history-graph.md`, "The worker boundary"). Both lanes
-are served on `cairn-diff` (`worker/diff_lane.rs`), started beside the repository
+are served on `cairn-diff` (`worker/diff/lane.rs`), started beside the repository
 thread with a thread-local handle of its own and the `GitBinary` the application
 found, and reached directly from `RepositoryHandle::submit` by the routing table
 (`worker/routing.rs`). Each lane holds only its newest waiting request; a waiting
@@ -1374,7 +1374,7 @@ grandchild; `a_click_through_files_answers_the_last_file_only`). Files opened in
 place are read a page at a time (`Served::expand`): first the files opened by name — those
 read past the limits apart, since a page is read at one set of options — then Expand All
 from where it stands, each page under the line budget `EXPAND_ALL_LINES`
-(`worker/expand_all.rs`), each sent as soon as it is prepared, until the budget is spent or
+(`worker/diff/expand_all.rs`), each sent as soon as it is prepared, until the budget is spent or
 every file is open; nothing of it is kept. The engine checks the epoch before each file it
 reads, before each file it asks git about on its own, between files as it assembles a
 page, and while each read runs, so a newer request in the lane — another expansion, a
@@ -1395,7 +1395,7 @@ fails for a single file, or a failure no file is to blame for in an expansion, i
 **What the thread keeps** (PRD R4.5, amended). The `DiffSession` — gix's blob
 resource cache — is opened on first use and kept across commits, and answers already
 given for commits and comparisons are kept, bounded by count and by size
-(`crates/cairn-app/src/worker/diff_answers.rs`;
+(`crates/cairn-app/src/worker/diff/answers.rs`;
 `what_is_kept_is_bounded_by_count_and_by_size`): a change set keyed by its
 `Comparison`, a file's diff by its whole `FileQuery` — the comparison, both paths,
 modes and blob ids, and the options
@@ -1409,7 +1409,7 @@ engine reads the index and the attributes afresh for every working-tree query.
 
 A kept answer is kept only while everything git and gix read to give it is as it
 was. Before each query the thread stamps those files
-(`crates/cairn-app/src/worker/diff_freshness.rs`, over `cairn_git::DiffInputs`) —
+(`crates/cairn-app/src/worker/diff/freshness.rs`, over `cairn_git::DiffInputs`) —
 each file's modification and change times to the nanosecond, its length, inode and
 device, or that it is missing — in three tiers
 (`each_tier_lets_go_of_what_its_move_makes_stale`):
@@ -1475,7 +1475,7 @@ sizing helper: the trees are compared by `git diff-tree`, so gix walks no tree h
 for that cache to pay for.
 
 **The window keeps an answer only for its selection**
-(`crates/cairn-app/src/diff_state.rs`). `DiffState` holds the comparison
+(`crates/cairn-app/src/diff/state/mod.rs`). `DiffState` holds the comparison
 selected and the file selected, each with its `Answer` — waiting, ready or failed — and
 the files opened in place for that comparison (below), and `session::apply` stores an
 answer only when `DiffState` says it names what is selected now. Selecting a comparison
@@ -1484,7 +1484,7 @@ what they drew to a worker to free. That is a second filter
 behind the epoch: it refuses an answer whose epoch is still current but whose
 selection has gone, such as one that arrives after the selection was cleared
 (`an_answer_naming_another_selection_is_never_drawn`, through the real worker).
-Choosing a row of the history (`crates/cairn-app/src/selection.rs`, `choose`) sets
+Choosing a row of the history (`crates/cairn-app/src/history/selection.rs`, `choose`) sets
 the selection and asks `DiffState::select_changes` for its comparison, submitting the
 `Request::Changes` it returns; choosing the row already chosen asks nothing new unless
 its answer failed. The row's comparison is `selection::comparison_of`, a match naming
@@ -1495,7 +1495,7 @@ what it compares. Two commits compared (phase 08, R7) are chosen there too
 **The file-diff lane is shared** (phase 08). The Changes tab's file and the Commit tab's
 files opened in place are both asked in the file-diff lane — R4.3 puts Expand All there,
 and a newer request in it supersedes it — so each asking takes the lane from the other. So
-is the path chosen in Local Changes (`diff_state/working.rs`):
+is the path chosen in Local Changes (`diff/state/working.rs`):
 it takes the lane from both and they from it, it is asked again as its view is shown
 (`working_needs_asking`, `reask_working`), a setting moved with its view shown asks it at
 once (`Asking::Working`), and a changes query supersedes it with the rest
@@ -1538,7 +1538,7 @@ chord; it opens at the height it was last dragged to
 (`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
 involved: the exceptions roster stays empty.
 
-**The Changes tab** (`crates/cairn-app/src/changes_tab.rs`, phase 07, R5.4), Fork's
+**The Changes tab** (`crates/cairn-app/src/detail/changes_tab.rs`, phase 07, R5.4), Fork's
 (Findings 5 and 19): a one-line summary — the author's name, the short id, the author
 date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
 `summary_parts`; no avatar), on a strip as tall as the diff bar's 30 px
@@ -1554,7 +1554,7 @@ the session's `View::filter_text`; an effect hands the text to `DiffState::filte
 asks a worker (above) and keeps the answer only for the change set and text asked last —
 the last answer standing until the next arrives; for another change set, or the first
 text typed, the list waits (`ShownFiles::Waiting`, "Filtering…") rather than show any
-file as matched, so nothing of another change set's is ever read (`file_filter.rs`,
+file as matched, so nothing of another change set's is ever read (`crates/cairn-app/src/detail/file_filter.rs`,
 `the_filter_shows_the_answer_for_the_change_set_and_text_asked_last`; through the window,
 `typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer`). While a filter is
 active the list says "Showing N of M files" — the answer's length and the change set's,
@@ -1572,27 +1572,27 @@ file the list shows is chosen, as Fork selects the first file by default
 (`the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff`). A file pressed,
 or reached with ↑ or ↓ while the list has focus — through the files it SHOWS, stopping at
 either end (`the_arrows_move_through_the_files_the_list_shows`) — is chosen through
-`diff_actions::choose_file`, which asks its diff in the file-diff lane: the last file's
+`diff::actions::choose_file`, which asks its diff in the file-diff lane: the last file's
 query is superseded, its `git` killed by the epoch and its answer never drawn
 (`a_file_chosen_in_the_list_supersedes_the_last_ones_diff`). The list highlights the file
 chosen by the index `DiffState` records as it is chosen (`DiffState::file_index`), never
 by searching the change set.
 
-**The tabs** (`cairn_ui::DetailTabs`, `crates/cairn-ui/src/detail_tabs.rs`). Commit,
+**The tabs** (`cairn_ui::DetailTabs`, `crates/cairn-ui/src/detail/tabs.rs`). Commit,
 the default, and Changes, as text tabs with no count, the shown one underlined. The
 tab chosen is the window's `View::detail_tab`, created once per window, so it is kept
 across every selection and every collapse for the session
 (`the_tab_chosen_is_kept_across_selections_and_a_collapse`). While two commits are
 selected the Changes tab is shown and the Commit tab is drawn disabled and pressed for
 nothing (`DetailTabs::unavailable`; R7.3, Fork's Windows build, Finding 7); the tab chosen
-for the session is kept for when one commit is selected again (`detail_pane::shown_tab`).
+for the session is kept for when one commit is selected again (`detail::pane::shown_tab`).
 A file pressed in the Commit tab opens in place (below) and the Commit tab stays shown —
 Fork's Commit tab "does not switch to Changes" (Finding 4). The Changes tab keeps a file of
 its own, chosen from its own list (the first by default): the single-file view is reached
 by its tab, as in Fork; Fork's Mac 1.0.71 added buttons on the Commit tab that reveal a
 file in the Changes tab, whose look is not recorded (Finding 4), so none is drawn.
 
-**What the Commit tab draws, and when** (`crates/cairn-app/src/detail_pane.rs`). The
+**What the Commit tab draws, and when** (`crates/cairn-app/src/detail/pane.rs`). The
 pane is a component of its own, so an answer arriving redraws it and not the window.
 With nothing selected it says so; otherwise it draws the change set only when
 `DiffState` holds the answer for the comparison of the row selected NOW — whatever it
@@ -1602,7 +1602,7 @@ answer is on its way it says it is reading; a failure is drawn in the error colo
 a change set with no details (a comparison of two commits) is not described by this tab,
 which is unavailable while two are selected anyway.
 
-**The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/commit_tab.rs`), in
+**The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/detail/commit_tab.rs`), in
 Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
 timestamp at its own offset as Fork's Windows build shows it — `14 Nov 2023 21:43:20
 -00:30`: a two-digit day, the English month's abbreviation, a 24-hour time to the
@@ -1640,10 +1640,10 @@ branch's upstream at the same commit folded into its chip, a tag's and a remote'
 caps, a stash's `stash@{n}`), in its row's lane colour, cut at the pane's edge and never
 wrapped or counted, as Fork's Mac pane cuts them; a commit no ref points at has no REFS
 row. The window finds the selected row once per history and selection
-(`crates/cairn-app/src/row_finder.rs`: a place found stays valid while rows only append,
+(`crates/cairn-app/src/detail/row_finder.rs`: a place found stays valid while rows only append,
 a row not yet loaded is looked for only among the rows appended since the last look, and
 `History::serial` tells a reopened history from the one looked in) and lays its chips out
-for the window's width, the most the pane can show (`detail_pane::refs_of`); the tab gets
+for the window's width, the most the pane can show (`detail::pane::refs_of`); the tab gets
 them as `CommitTab::refs` and caches the header built from them, so the header is built
 once per commit and refs, never per frame — the chips themselves are laid out on every
 render of the Commit tab's body (a page arriving, a frame of a resize), bounded by the
@@ -1673,7 +1673,7 @@ no file current.
 builds one viewport of rows at the top, scrolled deep and at its very end, where the
 last file is built and visible
 (`only_a_viewport_of_files_is_built_however_many_the_commit_touched`). The tab is
-handed a `Readable` over the window's `DiffState` (`diff_state::answered_changes`),
+handed a `Readable` over the window's `DiffState` (`diff::state::answered_changes`),
 not a copy of the change set: each file row reads its file by index, and the header —
 proportional to the message, never to the files — is built once per commit and cached
 on the commit's id, the cut-short limit and whether there are files, so a write to the
@@ -1697,7 +1697,7 @@ words in the same order as the Changes tab's notice,
 `every_notice_says_the_same_words_in_place_as_in_the_changes_tab`), with Load Diff under a
 file past the limits, which asks that file again past them (`DiffState::load_in_place`);
 or its diff, unified or side by side as the shared setting says, drawn by the same row
-builders the diff view uses (`diff_view::draw_row`), at the shared context and whitespace
+builders the diff view uses (`diff::view::draw_row`), at the shared context and whitespace
 setting — with a row of its own above it, the bar's "Whitespace changes are hidden", when
 ignoring whitespace hides a change, since an opened file has no bar to say it in
 (`an_opened_file_says_it_is_being_read_or_failed_or_why_it_has_no_rows`). There is no bar
@@ -1734,7 +1734,7 @@ the bar says "Expand All stopped at its line budget: N files left collapsed.", N
 not open (`expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed`;
 `expand_all_opens_each_pages_files_and_moves_on_until_its_budget`;
 `expand_all_stops_at_its_budget_and_says_how_many_files_stay_collapsed`, through the
-window). Why fifty thousand: `crates/cairn-app/src/worker/expand_all.rs` and
+window). Why fifty thousand: `crates/cairn-app/src/worker/diff/expand_all.rs` and
 `docs/research/diff-engine/c14-measured.md` section 4. Collapse All closes every file, stops Expand All, hands
 what was drawn to a worker to free, and supersedes what is in flight with an expansion
 that names nothing (`collapse_all_ends_what_is_in_flight_and_frees_what_was_drawn`). A page
@@ -1793,7 +1793,7 @@ sends it, and any such answer naming another selection, straight on as a
 (`a_superseded_answer_comes_back_to_be_freed_on_a_worker`,
 `an_answer_the_window_will_not_keep_is_handed_to_a_worker_to_free`).
 
-**Parent links** (`detail_pane::follow_parent`). A parent loaded in the history is
+**Parent links** (`detail::pane::follow_parent`). A parent loaded in the history is
 selected — its changes asked for through `selection::choose` — and its row brought
 into view through the list's shared `ScrollController` (`cairn_ui::reveal_row`); a
 parent not loaded does nothing visible, since reaching it is issue #3
@@ -1812,7 +1812,7 @@ over its rows (staging-and-commit R9), one layer laid over the recycled rows; wi
 the Changes tab draws it, it draws no action. The gesture is `local-changes.md`'s, "The diff's
 staging gesture".
 
-**Where it is drawn, and for what** (`crates/cairn-app/src/changes_tab.rs`, `diff_side`).
+**Where it is drawn, and for what** (`crates/cairn-app/src/detail/changes_tab.rs`, `diff_side`).
 A file chosen in the Changes tab — pressed or reached with ↑ or ↓ in its list, or chosen
 there by default (phase 08: a press in the Commit tab opens the file in place instead) — is
 asked through
@@ -1826,7 +1826,7 @@ repository thread to free, as a change set is
 (`choosing_another_file_hands_the_last_diff_to_a_worker`).
 
 **Built once per answer, on the worker** (`cairn_model::ShownDiff`, built in
-`worker/diff_lane.rs`). As the diff thread answers, it prepares the answer at the context
+`worker/diff/lane.rs`). As the diff thread answers, it prepares the answer at the context
 it was asked at: both row projections (`UnifiedLayout::shown`, `SideBySideLayout::shown`,
 each proportional to the changes), whether ignoring whitespace hides a change
 (`DisplayOverlay::hides_a_change`, asked once, as its own doc requires), the gutter's
@@ -1837,11 +1837,11 @@ side-by-side builds nothing. Measured in a release build on F1's Load Diff (1.9 
 5.2 MB, 334,688 unified rows), preparation took 2.4 ms on the diff thread; on a 52 MiB
 file of a million changed lines, 20 ms — work the UI thread no longer does (phase 06's
 obligation; it was about 39 ms at 64 MiB on the UI thread). The view is handed a
-`Readable` over the window's `DiffState` (`diff_state::answered_file`), never a copy.
+`Readable` over the window's `DiffState` (`diff::state::answered_file`), never a copy.
 
-**A row** (`cairn_ui::DiffView`, `crates/cairn-ui/src/diff_view.rs`, drawing
-`unified_rows.rs` or `side_by_side_rows.rs` as the shared setting says, each from the
-pieces in `diff_row_parts.rs`). Every row is `DIFF_ROW_HEIGHT` tall, through one
+**A row** (`cairn_ui::DiffView`, `crates/cairn-ui/src/diff/view.rs`, drawing
+`diff/unified_rows.rs` or `diff/side_by_side_rows.rs` as the shared setting says, each from the
+pieces in `diff/row_parts.rs`). Every row is `DIFF_ROW_HEIGHT` tall, through one
 `VirtualScrollView` with a fixed item size, so the view builds one viewport of rows at the
 top, scrolled deep and at the end of a 1,000-line and a 100,000-line file — the same
 number at each place for both — and the end is the projection's last row, so the view's
@@ -1879,7 +1879,7 @@ the line's side, carried from the engine's byte ranges into UTF-16 units of the 
 text — Skia's paragraph indexes UTF-16, measured: a range splitting a surrogate pair
 draws nothing (`intra_line_ranges_are_drawn_in_the_stronger_tint`,
 `a_range_after_a_wide_character_lands_in_utf16_units`). What a row draws of a line's
-bytes (`diff_line_text::shown_line`): a tab to the next multiple of eight columns, as a
+bytes (`diff::line_text::shown_line`): a tab to the next multiple of eight columns, as a
 terminal shows `git diff` (Skia draws a tab as a box, measured), the columns before it
 counted as a terminal counts them — two for an emoji or a CJK ideograph, none for a
 combining mark, a control's picture one — by `unicode-width` (`cairn_ui`'s `columns`, the
@@ -1888,7 +1888,7 @@ rule; `a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops`);
 `\r` not drawn; another C0 control or DEL as its Unicode control picture, which IBM Plex
 Mono 2.5 carries; invalid UTF-8 as one `U+FFFD` per invalid sequence.
 
-**Side by side** (`side_by_side_rows.rs`, R6.1, Fork's Finding 11). Two columns of equal
+**Side by side** (`diff/side_by_side_rows.rs`, R6.1, Fork's Finding 11). Two columns of equal
 width inside the ONE virtualising view — never two scroll views, so the exceptions roster
 of plain `ScrollView`s stays empty — the old side on the left and the new on the right,
 each a line-number gutter, a separator and a text area: a context line in both columns,
@@ -1909,7 +1909,7 @@ line, counted from the file), and the last line at the end in both columns
 (`only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file`).
 
 **What stands in place of rows** (`cairn_ui::DiffNotice`, `DiffNoticeView`,
-`crates/cairn-ui/src/diff_notice.rs`; R6.8, C11). `DiffNotice::of` reads a prepared diff by
+`crates/cairn-ui/src/diff/notice.rs`; R6.8, C11). `DiffNotice::of` reads a prepared diff by
 naming every state; each draws words that cannot be taken for another state's, git's
 own where git has them (`every_state_that_is_not_text_draws_its_notice`, each state built
 and looked at from a real fixture repository as well). Their parity with git is pinned end
@@ -1934,7 +1934,7 @@ it, the blob sizes. What each state draws:
 | Conflicted, unsupported | "Unmerged path — conflicts must be resolved before a diff can be shown"; the engine's reason |
 | Text with no row | "No changes to show.", or the whitespace sentence when ignoring whitespace hides every change |
 
-**Load Diff** (`diff_actions::load_anyway`) asks the file shown again with `load_anyway`,
+**Load Diff** (`diff::actions::load_anyway`) asks the file shown again with `load_anyway`,
 which the engine honours up to the 64 MiB ceiling; while it is shown a setting changed
 keeps it loaded, and another file starts unloaded
 (`load_diff_asks_the_file_again_past_the_limits`). Measured on F1 (`6a6e8446b97`,
@@ -1973,7 +1973,7 @@ lines scroll sideways, never wrap (issue #34). The gutter scrolls sideways with 
 text; Fork's own behaviour there was not established. A glyph the font lacks, drawn by a
 wider fallback, can run a line past the extent.
 
-**The bar** (`cairn_ui::DiffHeader`, `crates/cairn-ui/src/diff_header.rs`), Fork's layout
+**The bar** (`cairn_ui::DiffHeader`, `crates/cairn-ui/src/diff/header.rs`), Fork's layout
 (Finding 10): ↑ and ↓ for previous and next change on the left; the path in IBM Plex
 Mono, the directory muted and the file name in the text colour, a rename's or a copy's
 old path in a tooltip; on the right, Ignore whitespace, Fewer lines, More lines, Entire
@@ -2003,7 +2003,7 @@ which also shows the setting kept across another file and another commit). Every
 shares all four but the entire file, which is the Changes tab's and Local Changes' — each a
 view of one file under the bar — and never a file opened in place: a file opened in place in
 the Commit tab, which has no bar to turn it off, is asked at the lines of context
-whatever it says (`DiffSettings::line_context`, `diff_actions::in_place_options`; the
+whatever it says (`DiffSettings::line_context`, `diff::actions::in_place_options`; the
 user's decision, 2026-10-04, departing from Fork). Context moves a line per click, never
 below one (`context_moves_a_line_at_a_time_and_never_below_one`); the entire file is a
 toggle that gives back the lines it left. It starts at the user's `diff.context`, raised
@@ -2024,7 +2024,7 @@ the answer kept is the one naming the new options
 (`the_bar_moves_the_context_a_line_at_a_time_and_asks_again_never_below_one`). The view
 keeps its scroll across a setting changed, and opens at the top for another file.
 
-**Previous and next change** (`cairn_ui::step_change`, `diff_actions::step`). The bar's
+**Previous and next change** (`cairn_ui::step_change`, `diff::actions::step`). The bar's
 chevrons, and Fork's chords — Ctrl+↑/↓, ⌘↑/↓ on macOS — heard in `Scope::Detail`, so only
 while focus is inside the detail pane: the diff (focused by a press), the files, the bar.
 One step goes from the change last moved to while the view is still where that step left
@@ -2091,7 +2091,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
 | File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 | A file pressed in the Commit tab | opens its diff under its row, pressed again closes it; files start collapsed; the Commit tab stays shown | Fork-measured: Finding 4 (vendor GIF; "it does not switch to Changes"; collapsed by default, by the vendor's choice). Phase 06's press, which showed the file in the Changes tab, is replaced. |
-| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's and Local Changes', never a file opened in place (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
+| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's and Local Changes', never a file opened in place (`diff::actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
 | Expand All | right-aligned above the files; Collapse All while a file is open | Fork-measured: Finding 4 (Expand All turns into Collapse All). That it reads Collapse All while ANY file is open — one opened by a press as well — is the user's decision, 2026-10-04, kept as built: Fork's label after a single press is not recorded. |
 | Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `docs/research/diff-engine/c14-measured.md`, section 4. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |
@@ -2317,7 +2317,7 @@ default — Escape and a press outside it cancel, and once answered it ignores e
 later press, so one acknowledgement builds one token
 (`crates/cairn-ui/tests/confirm_dialog.rs`). Its buttons, and every dialog's — the Git Error
 dialog's, Create Branch's, the credential prompt's — sit in the platform's order
-(`cairn_ui::button_order::ordered`, the user's decision): on Linux the primary
+(`cairn_ui::dialogs::button_order::ordered`, the user's decision): on Linux the primary
 first and Cancel or Close last, as Fork for Windows; on macOS Cancel first and the primary
 last, as Fork for macOS; each dialog draws in this build's platform unless a test names
 another (`.platform(Os)`), and a confirmation's focus is on Cancel on both
@@ -2336,7 +2336,7 @@ Cancel and one token afresh — and its words are rendered once, as it mounts, t
 shared rather than copied on every frame
 (`a_confirmation_replaced_in_place_hands_its_own_token_to_its_own_continuation`,
 `a_confirmation_opened_by_the_last_ones_answer_answers_afresh`). The window keeps the confirmation open
-(`View::confirming`, `crates/cairn-app/src/confirming.rs`: the consequence and where the
+(`View::confirming`, `crates/cairn-app/src/operations/confirming.rs`: the consequence and where the
 token goes, never a token), draws the dialog over everything, makes its own chords inert
 while it is open — its key listener runs before any dialog's, so the dialog could not — and
 lets go of it on either answer

@@ -45,7 +45,7 @@ Kept, and why:
 - **Dialog buttons in the platform's order** (the user's decision E): on Linux
   Fork for Windows' — the primary button first, Cancel (or Close) last; on macOS Fork for
   macOS' — Cancel first, the primary last. Every Cairn dialog follows it: the confirmation,
-  the Git Error dialog, Create Branch and the credential prompt (`cairn_ui::button_order`).
+  the Git Error dialog, Create Branch and the credential prompt (`cairn_ui::dialogs::button_order`).
   Which button holds focus is not the order's: a destructive confirmation starts on Cancel on
   both platforms (below).
 - **A right-click selects the row it lands on** (the user's decision C; Fork for Windows), so

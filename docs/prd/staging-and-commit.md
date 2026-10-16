@@ -529,9 +529,9 @@ literally.
   (Amended 2026-10-10, the user's answers, 6 — the merge bar's F7: Escape, which backs out of
   whatever is open, is matched as the literal `NamedKey::Escape` where it is heard rather than
   as an action of the table — an allowed convention, not a modifier the twin guards. Its sites
-  in production code: `cairn_ui`'s `diff_view.rs` (a line selection let go; `stacked_diff.rs`,
-  the same, went with phase 17), `local_changes_drag.rs` (a drag cancelled) and
-  `activity_popover.rs` (the popover closed); the dialogs hear it through Freya's `Popup`, and
+  in production code: `cairn_ui`'s `diff/view.rs` (a line selection let go; `stacked_diff.rs`,
+  the same, went with phase 17), `local_changes/drag.rs` (a drag cancelled) and
+  `title_bar/activity_popover.rs` (the popover closed); the dialogs hear it through Freya's `Popup`, and
   the table's `chord_names.rs` names it for a tooltip. A new site is named here.)
 - R7.3 New actions, each with Fork's chords per platform (Linux as Fork for
   Windows) and heard in its own scope only, so no list or staging chord fires while

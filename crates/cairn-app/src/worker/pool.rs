@@ -1,21 +1,25 @@
 //! The repository worker pool: the threads that touch the repository, and the
 //! values that cross back to the window.
 //!
-//! Five threads per open repository, started by the first, each with its own
+//! Six threads per open repository, started by the first, each with its own
 //! [`Outbox`] so the update stream ends only when every one of them has gone:
 //!
 //! - `cairn-repository` (this file): takes the `git` the application found as
 //!   it started ([`Discovery`]), opens the repository and its askpass channel,
-//!   serves the history lane and a refresh's refs (`history_lane.rs`), the
+//!   serves the history lane and a refresh's refs (`history/lane.rs`), the
 //!   filters and the command log, forwards each operation to its write lane,
 //!   and on its way out closes the repository — every `git` in it ended and
-//!   reaped, up to `CLOSE_BOUND` — and stops the other four.
-//! - `cairn-diff` (`diff_lane.rs`): the changes and file-diff lanes, so a
+//!   reaped, up to `CLOSE_BOUND`, once the write the local lane is running has
+//!   ended — and stops the other five.
+//! - `cairn-diff` (`diff/lane.rs`): the changes and file-diff lanes, so a
 //!   page and a diff never queue behind each other.
-//! - `cairn-refresh` (`refresh_lane.rs`): status and ahead/behind, so neither
+//! - `cairn-refresh` (`refresh/lane.rs`): status and ahead/behind, so neither
 //!   a page nor a diff queues behind a slow status.
-//! - `cairn-network` (`network_lane.rs`): the network lane, where fetch runs,
+//! - `cairn-network` (`network/lane.rs`): the network lane, where fetch runs,
 //!   so it blocks neither the walk nor the window.
+//! - `cairn-local` (`local/lane.rs`): the local write lane, where every write
+//!   to the index, the working tree and a local ref runs, one at a time, in the
+//!   order asked; reached directly, so a write never waits behind a page.
 //! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
 //!   on the window for each answer.
 //!
@@ -29,18 +33,20 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cairn_git::{CLOSE_BOUND, SharedRepository};
 use cairn_model::{Disclosure, RefsSnapshot};
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
-use super::diff_lane::{DiffJob, Serving, serve_diffs};
+use super::diff::lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
-use super::history_lane::{Answering, Finding, HistoryLane};
-use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
-use super::refresh_lane::{RefreshJob, Refreshing, serve_refreshes};
+use super::history::lane::{Answering, Finding, HistoryLane};
+use super::local::lane::{LaneState, Local, LocalJob, serve_local_lane};
+use super::network::lane::{FetchControl, Lane, Operation, serve_network_lane};
+use super::refresh::lane::{RefreshJob, Refreshing, serve_refreshes};
 use super::request::{MOST_LANES, Request, Update};
 use super::routing::{Page, RepositoryJob, Routed, route};
 use super::startup::{Backend, Startup};
@@ -55,7 +61,11 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// request closes it anyway: past the longest an honest close takes —
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
-/// always be closed.
+/// always be closed. The one close that may honestly take longer is one that
+/// waits on a local write — a commit in its hooks —
+/// which the window says it is finishing; a second request past this closes
+/// the window then too, leaving the write to finish or not, and a lock it
+/// strands is named the next time the repository opens.
 pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
 const _: () = assert!(
@@ -80,6 +90,9 @@ pub fn open(
     let (diff_jobs, diff_incoming) = channel::<DiffJob>();
     // Likewise the refresh thread's: a status is asked of it directly.
     let (refresh_jobs, refresh_incoming) = channel::<RefreshJob>();
+    // And the local lane's: a write is sent to it directly.
+    let (local_jobs, local_incoming) = channel::<LocalJob>();
+    let lane = LaneState::default();
     let (outgoing, inbox) = channel::<Envelope>();
     let (answers, answered) = channel::<Reply>();
     let wake = Wake::new();
@@ -114,10 +127,20 @@ pub fn open(
         jobs: refresh_incoming,
         queue: refresh_jobs.clone(),
         outbox: Outbox {
-            updates: Some(outgoing),
+            updates: Some(outgoing.clone()),
             wake: Arc::clone(&wake),
         },
         epochs: epochs.clone(),
+        lane: lane.clone(),
+    };
+    let local = LocalThread {
+        jobs: local_incoming,
+        stop: local_jobs.clone(),
+        outbox: Outbox {
+            updates: Some(outgoing),
+            wake: Arc::clone(&wake),
+        },
+        lane: lane.clone(),
     };
     let worker_epochs = epochs.clone();
     let worker_wake = Arc::clone(&wake);
@@ -184,7 +207,7 @@ pub fn open(
                 Arc::clone(&shared),
                 answered,
                 (network_outbox, acceptor_outbox),
-                (diff, refresh),
+                (diff, refresh, local),
                 &worker_wake,
                 worker_control,
             );
@@ -204,6 +227,8 @@ pub fn open(
             jobs,
             diff: diff_jobs,
             refresh: refresh_jobs,
+            local: local_jobs,
+            lane,
             epochs: epochs.clone(),
             control,
         },
@@ -262,9 +287,22 @@ struct RefreshThread {
     queue: Sender<RefreshJob>,
     outbox: Outbox,
     epochs: Epochs,
+    /// The local lane's state: a status read while a write runs is dropped, and none starts
+    /// while a commit runs.
+    lane: LaneState,
 }
 
-/// The four threads the repository thread starts, how it reaches them, and
+/// What the local lane is started with: its queue, which `open` made so the handle reaches it
+/// directly, a sender of the repository thread's own to stop it with, its outbox and the state
+/// it shares with the handle and the refresh thread.
+struct LocalThread {
+    jobs: Receiver<LocalJob>,
+    stop: Sender<LocalJob>,
+    outbox: Outbox,
+    lane: LaneState,
+}
+
+/// The five threads the repository thread starts, how it reaches them, and
 /// the repository they run `git` in, which stopping them closes.
 struct Threads {
     /// The network lane's queue; one lane per [`Lane`], one lane so far.
@@ -276,6 +314,12 @@ struct Threads {
     /// thread is told to stop as the repository closes, as the diff thread is.
     refresh: Sender<RefreshJob>,
     control: FetchControl,
+    /// The local lane's queue, to stop it with as the repository closes.
+    local: Option<Sender<LocalJob>>,
+    /// The local lane, waited for as the repository closes: the write it runs is never ended
+    /// by a close.
+    local_thread: Option<JoinHandle<()>>,
+    lane: LaneState,
     acceptor: Option<AcceptorStop>,
     shared: Arc<SharedRepository>,
 }
@@ -286,7 +330,7 @@ impl Threads {
         shared: Arc<SharedRepository>,
         answered: Receiver<Reply>,
         (network_outbox, acceptor_outbox): (Outbox, Outbox),
-        (diff, refresh): (DiffThread, RefreshThread),
+        (diff, refresh, local): (DiffThread, RefreshThread, LocalThread),
         wake: &Arc<Wake>,
         control: FetchControl,
     ) -> Self {
@@ -360,6 +404,7 @@ impl Threads {
             queue: refresh_queue,
             outbox: refresh_outbox,
             epochs: refresh_epochs,
+            lane: refresh_lane,
         } = refresh;
         let refresh_exit = WorkerExit {
             outbox: Some(refresh_outbox),
@@ -376,6 +421,7 @@ impl Threads {
                     let serving = Refreshing {
                         git: &refresh_git,
                         epochs: &refresh_epochs,
+                        lane: &refresh_lane,
                         jobs: &refresh_jobs,
                         outbox,
                     };
@@ -383,6 +429,43 @@ impl Threads {
                 }
                 drop(refresh_exit);
             });
+
+        let LocalThread {
+            jobs: local_jobs,
+            stop: local_stop,
+            outbox: local_outbox,
+            lane,
+        } = local;
+        let local_exit = WorkerExit {
+            outbox: Some(local_outbox),
+            wake: Arc::clone(wake),
+        };
+        let local_shared = Arc::clone(&shared);
+        let local_git = git.clone();
+        let local_channel = channel.clone();
+        let local_prompting = prompting.clone();
+        let local_lane = lane.clone();
+        // As the diff thread: one that cannot be started ends its part of the stream, and a
+        // write asked of it is never answered.
+        let local_thread = std::thread::Builder::new()
+            .name("cairn-local".to_owned())
+            .spawn(move || {
+                if let Some(outbox) = local_exit.outbox.as_ref() {
+                    let serving = Local {
+                        git: &local_git,
+                        channel: local_channel.as_ref(),
+                        prompting: &local_prompting,
+                        lane: &local_lane,
+                        jobs: &local_jobs,
+                        outbox,
+                    };
+                    serve_local_lane(&local_shared, &serving);
+                }
+                // This thread may hold the last reference to the channel: let it go first.
+                drop(local_channel);
+                drop(local_exit);
+            })
+            .ok();
 
         let running = control.clone();
         let exit = WorkerExit {
@@ -414,6 +497,9 @@ impl Threads {
             diff: diff_stop,
             refresh: refresh_queue,
             control,
+            local: Some(local_stop),
+            local_thread,
+            lane,
             acceptor,
             shared,
         }
@@ -421,7 +507,7 @@ impl Threads {
 
     /// Forwards an operation to its lane. A second copy of one already
     /// running or waiting there is refused, with the reason sent to the
-    /// window, never dropped in silence (PRD R7.2).
+    /// window, never dropped in silence.
     fn perform(&self, operation: Operation, outbox: &Outbox) {
         match operation.lane() {
             Lane::Network => {
@@ -451,27 +537,45 @@ impl Threads {
 }
 
 impl Drop for Threads {
-    /// Closes the repository (PRD R6.3): the diff thread is told to stop and
-    /// the network lane's queue is closed;
-    /// then every `git` running in the repository — a fetch in flight, one
-    /// mid-spawn, one dropped to a reaper — is ended the way a cancel ends
-    /// it, and this waits up to `CLOSE_BOUND` for their reaps, here on the
-    /// repository thread. One that enters the registry afterwards — a fetch
-    /// already forwarded to the lane's queue when the close came, which the
-    /// lane takes up after it — is ended as it enters. (A fetch still on this
-    /// thread's own queue is never forwarded: `serve` stopped with the
-    /// epochs.) The registry is the one authority here: a fetch
-    /// is ended by it, not by its cancel, so nothing it misses is ended by
-    /// accident. Last, the acceptor is woken to see it should stop. Runs once
-    /// the window has asked to close or let go (the acceptor's answering end
-    /// may still be held then: a prompt still waiting is withdrawn by the
-    /// window when its fetch's outcome arrives) and on unwinding alike.
+    /// Closes the repository: the diff thread is told to stop and
+    /// the network lane's queue is closed; the fetch in flight, if any, is
+    /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the
+    /// local lane is waited for next and a fetch must not run on for as long
+    /// as a commit's hooks do; then the local lane is marked closing and
+    /// joined, so the write it is running finishes and is never ended by a
+    /// close; then every `git` still running in the
+    /// repository — a fetch mid-spawn, one dropped to a reaper, a read — is
+    /// ended the way a cancel ends it, and this waits up to `CLOSE_BOUND` for
+    /// their reaps, here on the repository thread. One that enters the
+    /// registry afterwards — a fetch already forwarded to the lane's queue when
+    /// the close came, which the lane takes up after it — is ended as it
+    /// enters. (A fetch still on this thread's own queue is never forwarded:
+    /// `serve` stopped with the epochs.) Past the fetch's cancel, the registry
+    /// is the one authority: what the cancel misses is ended by it. Last, the
+    /// acceptor is woken to see it should stop. Runs once the window has asked
+    /// to close or let go (the acceptor's answering end may still be held then:
+    /// a prompt still waiting is withdrawn by the window when its fetch's or
+    /// write's outcome arrives) and on unwinding alike.
     fn drop(&mut self) {
         // First, so the diff thread takes up nothing more; what it is running is
         // ended with the rest below, or by its epoch if the close stopped them.
         let _ = self.diff.send(DiffJob::Stop);
         let _ = self.refresh.send(RefreshJob::Stop);
         self.network = None;
+        // Ended now, not after the local lane is waited for below: a fetch is ended by a
+        // close as soon as it is asked, whatever write is still running.
+        self.control.cancel();
+        // The local lane starts nothing more, and the write it is running — a commit in its
+        // hooks, say — is waited for, never ended: the window says
+        // which, and a second close after its patience closes it anyway. Waited for here, on
+        // the repository thread; the acceptor still answers a prompt the write is waiting on.
+        self.lane.close();
+        if let Some(local) = self.local.take() {
+            let _ = local.send(LocalJob::Stop);
+        }
+        if let Some(local) = self.local_thread.take() {
+            let _ = local.join();
+        }
         // How many outlived the bound is told to nobody: the window is closing, and
         // each has had `SIGKILL`, which waiting longer cannot improve on.
         let _ = self.shared.end_invocations(CLOSE_BOUND);
@@ -489,6 +593,11 @@ pub struct RepositoryHandle {
     diff: Sender<DiffJob>,
     /// The refresh thread's queue: a refresh's status.
     refresh: Sender<RefreshJob>,
+    /// The local lane's queue: a write.
+    local: Sender<LocalJob>,
+    /// What the local lane shares: a refresh asked while a commit runs is kept back, and a
+    /// cancel reaches the write it names.
+    lane: LaneState,
     epochs: Epochs,
     control: FetchControl,
 }
@@ -504,13 +613,20 @@ impl RepositoryHandle {
     /// for the child's — a review obligation, since this runs on the UI
     /// thread. A close stops the epochs first, an atomic store, so the page
     /// being walked and the diff being read are abandoned at their next poll
-    /// and the close behind them is reached at once; the waiting it starts is
-    /// the repository thread's. A refresh is numbered in its two lanes and
+    /// and the close behind them is reached at once, and marks the local lane
+    /// closing, one bounded lock, so no write asked after it starts; the waiting
+    /// it starts is the repository thread's. A refresh is numbered in its two lanes and
     /// sent to two threads — its refs to the repository thread, its status to
     /// the refresh thread under the status lane's number, which no refresh moves
-    /// (a running status is never superseded, R10.3 as amended) — and returns its
+    /// (a running status is never superseded) — and returns its
     /// refs' epoch.
     pub fn submit(&self, request: Request) -> Option<Epoch> {
+        // Kept back while a commit runs, and so numbered nowhere: the commit's ending says to
+        // read everything again.
+        if matches!(request, Request::Refresh | Request::RefreshStatus) && self.lane.defer_refresh()
+        {
+            return None;
+        }
         // Numbered before it is routed, so what it supersedes is cancelled now,
         // not when a thread gets to it.
         let lanes = request.lanes();
@@ -538,18 +654,100 @@ impl RepositoryHandle {
                     let _ = self.refresh.send(RefreshJob::Status { epoch: status });
                 }
             }
-            Routed::OpenHistory { rows } => {
+            Routed::OpenHistory { rows, lost } => {
                 if let (Some(epoch), Some(walk)) = (epoch, epoch_of(QueryLane::Walk)) {
                     let _ = self.jobs.send((
                         Some(epoch),
-                        RepositoryJob::History(Page::Open { rows, walk }),
+                        RepositoryJob::History(Page::Open { rows, walk, lost }),
                     ));
                 }
             }
             Routed::CancelFetch => self.control.cancel(),
+            Routed::Write { id, write } => {
+                let _ = self.local.send(LocalJob::Write {
+                    id,
+                    write: Box::new(write),
+                });
+            }
+            Routed::DiscardConsequence { asked, paths } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::Consequence {
+                        asked,
+                        paths,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::DiscardLinesConsequence {
+                asked,
+                diff,
+                selection,
+                chunk,
+            } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::LinesConsequence {
+                        asked,
+                        diff,
+                        selection,
+                        chunk,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::LockConsequence { asked } => {
+                let _ = self.local.send(LocalJob::LockConsequence { asked });
+            }
+            // Numbered above: the count in flight is superseded, and nothing is sent.
+            Routed::StopCounting => {}
+            Routed::CommitReads => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::CommitReads {
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            // Numbered above: amend's read in flight is superseded, and nothing is sent.
+            Routed::StopAmending => {}
+            Routed::Amending { status } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::Amending {
+                        status,
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::CheckBranchName { name } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::BranchName {
+                        name,
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::CheckoutConsequence { asked, name, at } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::CheckoutConsequence {
+                        asked,
+                        name,
+                        at,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::CancelWrite(id) => self.lane.cancel(id),
+            Routed::RefreshStatus => {
+                let status = self.epochs.current(QueryLane::Status);
+                let _ = self.refresh.send(RefreshJob::Status { epoch: status });
+            }
             Routed::Repository(job) => {
                 if matches!(job, RepositoryJob::Close) {
                     self.epochs.stop();
+                    // No write asked from now on is started, whatever the repository thread
+                    // is still busy with: one bounded lock.
+                    self.lane.close();
                 }
                 let _ = self.jobs.send((epoch, job));
             }
@@ -585,12 +783,16 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
 
     let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
     let (diff, diff_incoming) = channel::<DiffJob>();
-    // A refresh's status is not read back: the refresh is, from the repository thread's queue.
-    let (refresh, _) = channel::<RefreshJob>();
+    // A refresh's status is read back as a status alone: a refresh's own is read back, from
+    // the repository thread's queue.
+    let (refresh, refresh_incoming) = channel::<RefreshJob>();
+    let (local, local_incoming) = channel::<LocalJob>();
     let handle = RepositoryHandle {
         jobs,
         diff,
         refresh,
+        local,
+        lane: LaneState::default(),
         epochs: Epochs::new(),
         control: FetchControl::default(),
     };
@@ -603,7 +805,42 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             DiffJob::ConfiguredContext => Some(unroute(Routed::ConfiguredContext)),
             DiffJob::Stop => None,
         });
-        repository.chain(diffs).collect()
+        let asked: Vec<Request> = repository.chain(diffs).collect();
+        // Only a status asked alone: a refresh's own was read back from its refs above.
+        let statuses = refresh_incoming.try_iter().count();
+        let refreshes = asked
+            .iter()
+            .filter(|request| matches!(request, Request::Refresh))
+            .count();
+        let alone = std::iter::repeat_with(|| Request::RefreshStatus)
+            .take(statuses.saturating_sub(refreshes));
+        let writes = local_incoming.try_iter().filter_map(|job| match job {
+            LocalJob::Write { id, write } => Some(unroute(Routed::Write { id, write: *write })),
+            LocalJob::Consequence { asked, paths, .. } => {
+                Some(unroute(Routed::DiscardConsequence { asked, paths }))
+            }
+            LocalJob::LinesConsequence {
+                asked,
+                diff,
+                selection,
+                chunk,
+                ..
+            } => Some(unroute(Routed::DiscardLinesConsequence {
+                asked,
+                diff,
+                selection,
+                chunk,
+            })),
+            LocalJob::CommitReads { .. } => Some(unroute(Routed::CommitReads)),
+            LocalJob::Amending { status, .. } => Some(unroute(Routed::Amending { status })),
+            LocalJob::BranchName { name, .. } => Some(unroute(Routed::CheckBranchName { name })),
+            LocalJob::CheckoutConsequence {
+                asked, name, at, ..
+            } => Some(unroute(Routed::CheckoutConsequence { asked, name, at })),
+            LocalJob::LockConsequence { asked } => Some(unroute(Routed::LockConsequence { asked })),
+            LocalJob::Stop => None,
+        });
+        asked.into_iter().chain(alone).chain(writes).collect()
     })
 }
 
@@ -774,7 +1011,7 @@ fn serve(
         outbox,
     };
 
-    // A find in progress (R8.5): one page of it is walked whenever no other job is waiting, so
+    // A find in progress: one page of it is walked whenever no other job is waiting, so
     // a filter, a refresh or a free asked meanwhile is served between its pages, and the
     // next page or find — whose number supersedes it — ends it.
     let mut finding: Option<(Epoch, Finding)> = None;
@@ -813,10 +1050,10 @@ fn serve(
             // An open whose walk is still the window's, superseded in the history lane by a
             // find or a stop asked straight after it: the walk it replaces is let go of all
             // the same, so what is asked next pages the new walk, never the old one.
-            RepositoryJob::History(Page::Open { walk, .. })
+            RepositoryJob::History(Page::Open { walk, lost, .. })
                 if epochs.is_current(walk) && !epoch.is_some_and(|e| epochs.is_current(e)) =>
             {
-                history.replace_walk(walk);
+                history.replace_walk(walk, lost);
             }
             RepositoryJob::History(page) => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
@@ -826,6 +1063,8 @@ fn serve(
                 // numbered: `submit` numbers what is in a lane.)
                 _ => {}
             },
+            // Kept back while a commit runs: its ending reads everything again.
+            RepositoryJob::Refs { .. } if threads.lane.defer_refresh() => {}
             RepositoryJob::Refs { ahead_behind } => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
                     history.refresh(&repo, epoch, ahead_behind, &threads.refresh, &answering);
@@ -875,7 +1114,7 @@ fn serve(
     }
 }
 
-/// The sidebar's rows for `refs` (R8.1-R8.3), answered while `epoch` is current: one
+/// The sidebar's rows for `refs`, answered while `epoch` is current: one
 /// superseded before it started, or by the next ask while it runs, stops within a few
 /// thousand refs and sends nothing. The snapshot is the window's own, shared, and handed back
 /// with the rows so the window keeps them together.
@@ -895,7 +1134,7 @@ pub(super) fn sidebar_rows(
     }
 }
 
-/// Which of `files`' files hold `text` (the Changes tab's filter, R5.4), answered while
+/// Which of `files`' files hold `text` (the Changes tab's filter), answered while
 /// `epoch` is current: one superseded before it started, or by a keystroke while it runs,
 /// stops at the next few thousand files and sends nothing. The change set is the window's
 /// own, shared; if the window let go of it meanwhile, it is freed here, off the UI thread.
@@ -922,7 +1161,7 @@ fn filter_files(
     }
 }
 
-/// Which rows of Local Changes' two lists hold `text` (refs-and-status R9), answered while
+/// Which rows of Local Changes' two lists hold `text`, answered while
 /// `epoch` is current: one superseded before it started, or by a keystroke or a newer status
 /// while it runs, stops within a few thousand paths and sends nothing. The lists are the
 /// window's own, shared, and handed back with the rows so the window keeps the rows only for
@@ -960,7 +1199,7 @@ mod tests {
 
     use cairn_git::{CancelSignal, HistoryRequest, Repository};
 
-    use crate::worker::fetch_tests::{BorrowedRepository, UnbornRepository, block_on, woken_by};
+    use crate::worker::network::tests::{BorrowedRepository, UnbornRepository, block_on, woken_by};
     use crate::worker::routing::Page;
 
     /// The next update but an open's own refs, which come before its first page.
@@ -977,14 +1216,14 @@ mod tests {
     fn cairn() -> (RepositoryHandle, Updates) {
         match open_with(env!("CARGO_MANIFEST_DIR"), Startup::of_this_process()) {
             Ok((handle, mut updates, _)) => {
-                crate::worker::fetch_tests::opened_as(&mut updates);
+                crate::worker::network::tests::opened_as(&mut updates);
                 (handle, updates)
             }
             Err(error) => panic!("opening the Cairn checkout: {error}"),
         }
     }
 
-    /// QC1, R7.1: the title bar names the repository's own folder whatever path it was opened
+    /// The title bar names the repository's own folder whatever path it was opened
     /// at — its working tree, `<it>/.`, `<it>/sub/..`, a subdirectory, its `.git` — as Fork
     /// names a repository by its folder. Caught by: naming the path as given (`.`, `..`,
     /// `sub`, `.git`), unresolved.
@@ -1007,7 +1246,7 @@ mod tests {
                 Err(error) => panic!("starting the worker: {error}"),
             };
             assert_eq!(
-                crate::worker::fetch_tests::opened_as(&mut updates),
+                crate::worker::network::tests::opened_as(&mut updates),
                 "cairn-named-by-its-folder",
                 "opened at {}",
                 at.display()
@@ -1032,7 +1271,7 @@ mod tests {
                 Err(error) => panic!("starting the worker: {error}"),
             };
             assert_eq!(
-                crate::worker::fetch_tests::opened_as(&mut updates),
+                crate::worker::network::tests::opened_as(&mut updates),
                 folder,
                 "opened at {at}"
             );
@@ -1161,8 +1400,11 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        crate::worker::fetch_tests::opened_as(&mut updates);
-        handle.submit(Request::OpenHistory { rows: 8 });
+        crate::worker::network::tests::opened_as(&mut updates);
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("without the setting the repository opens, got {other:?}"),
@@ -1242,8 +1484,11 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        crate::worker::fetch_tests::opened_as(&mut updates);
-        handle.submit(Request::OpenHistory { rows: 8 });
+        crate::worker::network::tests::opened_as(&mut updates);
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("with safe.directory = * the repository opens, got {other:?}"),
@@ -1261,11 +1506,10 @@ mod tests {
         );
     }
 
-    /// Phase 05's hand-off: a repository with no ref and an unborn `HEAD` has a snapshot
-    /// that seeds nothing, and its walk answers the empty, complete page the window draws as
-    /// an empty history — what `from_head`'s unborn arm answered before the window walked
-    /// from every ref. Caught by: an empty seed set failing the open, or a page that says
-    /// more is coming.
+    /// A repository with no ref and an unborn `HEAD` has a snapshot that seeds nothing, and
+    /// its walk answers the empty, complete page the window draws as an empty history — what
+    /// `from_head`'s unborn arm answers. Caught by: an empty seed set failing the open, or a
+    /// page that says more is coming.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
@@ -1274,10 +1518,13 @@ mod tests {
             Err(error) => panic!("starting the worker: {error}"),
         };
         assert_eq!(
-            crate::worker::fetch_tests::opened_as(&mut updates),
+            crate::worker::network::tests::opened_as(&mut updates),
             "cairn-unborn-head"
         );
-        handle.submit(Request::OpenHistory { rows: 8 });
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
 
         match block_on(updates.next()) {
             Some(Update::Refs { snapshot, reopen }) => {
@@ -1305,7 +1552,10 @@ mod tests {
         let (handle, mut updates) = cairn();
         let before = updates.epochs.current(QueryLane::History);
         let submit = handle.into_submitter();
-        submit(Request::OpenHistory { rows: 2 });
+        submit(Request::OpenHistory {
+            rows: 2,
+            lost: false,
+        });
         // Checked first: waiting for rows that were never asked for would hang.
         assert!(
             updates.epochs.current(QueryLane::History) > before,
@@ -1321,7 +1571,10 @@ mod tests {
     #[test]
     fn a_request_is_answered_with_rows() {
         let (handle, mut updates) = cairn();
-        handle.submit(Request::OpenHistory { rows: 3 });
+        handle.submit(Request::OpenHistory {
+            rows: 3,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => assert_eq!(rows.len(), 3),
             other => panic!("expected rows, got {other:?}"),
@@ -1335,7 +1588,10 @@ mod tests {
     #[test]
     fn a_failed_request_is_answered_when_it_is_asked_again() {
         let (checkout, mut checkout_updates) = cairn();
-        checkout.submit(Request::OpenHistory { rows: 1 });
+        checkout.submit(Request::OpenHistory {
+            rows: 1,
+            lost: false,
+        });
         let tip = match after_refs(&mut checkout_updates) {
             Some(Update::Rows { rows, .. }) if rows.len() == 1 => rows.ids().next(),
             other => panic!("expected a row of this checkout, got {other:?}"),
@@ -1364,9 +1620,12 @@ mod tests {
                 Ok(opened) => opened,
                 Err(error) => panic!("starting the worker: {error}"),
             };
-        crate::worker::fetch_tests::opened_as(&mut updates);
+        crate::worker::network::tests::opened_as(&mut updates);
 
-        handle.submit(Request::OpenHistory { rows: 3 });
+        handle.submit(Request::OpenHistory {
+            rows: 3,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Failed { .. }) => {}
             other => panic!("expected a walk that cannot open to fail, got {other:?}"),
@@ -1389,7 +1648,10 @@ mod tests {
     #[test]
     fn paging_continues_the_same_walk_rather_than_replaying_it() {
         let (handle, mut updates) = cairn();
-        handle.submit(Request::OpenHistory { rows: 4 });
+        handle.submit(Request::OpenHistory {
+            rows: 4,
+            lost: false,
+        });
         let first = match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => rows,
             other => panic!("expected rows, got {other:?}"),
@@ -1424,7 +1686,7 @@ mod tests {
         );
         let (handle, mut updates) = match open_with(line.path(), Startup::of_this_process()) {
             Ok((handle, mut updates, _)) => {
-                crate::worker::fetch_tests::opened_as(&mut updates);
+                crate::worker::network::tests::opened_as(&mut updates);
                 (handle, updates)
             }
             Err(error) => panic!("opening the line: {error}"),
@@ -1445,7 +1707,10 @@ mod tests {
         };
 
         // Unsuperseded, for how long walking the rest takes on this machine.
-        handle.submit(Request::OpenHistory { rows: 2 });
+        handle.submit(Request::OpenHistory {
+            rows: 2,
+            lost: false,
+        });
         assert_eq!(first_page(&mut updates), line.commits[..2]);
         let started = Instant::now();
         queue_the_rest(&handle);
@@ -1461,7 +1726,10 @@ mod tests {
 
         let mut ran_on = 0usize;
         for _ in 0..20 {
-            handle.submit(Request::OpenHistory { rows: 2 });
+            handle.submit(Request::OpenHistory {
+                rows: 2,
+                lost: false,
+            });
             assert_eq!(first_page(&mut updates), line.commits[..2]);
             queue_the_rest(&handle);
             std::thread::sleep(wait);
@@ -1553,7 +1821,7 @@ mod tests {
         }
     }
 
-    /// C8, "a superseded answer is never drawn", per lane: an answer that finished after
+    /// "A superseded answer is never drawn", per lane: an answer that finished after
     /// its query was superseded is dropped on arrival — a file diff's by a newer file diff
     /// or by a changes query — while an answer in a lane nothing superseded arrives, though
     /// other lanes moved on after it. Posted by hand under real epochs, so the answer has
@@ -1604,7 +1872,7 @@ mod tests {
         );
     }
 
-    /// R1 (phase 07 QA): a superseded answer that holds something large — a file's
+    /// A superseded answer that holds something large — a file's
     /// prepared diff, a change set, Expand All's batch — is not dropped here, on the task
     /// the UI thread drives, but handed back as `Update::Superseded` for the window to send
     /// to a worker to free; one holding nothing worth a worker is still dropped, and the
@@ -1716,7 +1984,7 @@ mod tests {
         }
     }
 
-    /// R11.3: a refresh's superseded answers — a refs snapshot, ahead/behind, a status — come
+    /// A refresh's superseded answers — a refs snapshot, ahead/behind, a status — come
     /// back to be freed on a worker, never dropped on the task the UI thread drives; the
     /// current refresh's arrive as they are. Posted by hand under real epochs. Caught by:
     /// `Update::into_retired` dropping any of the three.
@@ -1930,7 +2198,10 @@ mod tests {
                         break Err(format!("{asked} answers arrived without ever waking"));
                     }
                     asked += 1;
-                    asking.submit(Request::OpenHistory { rows: 1 });
+                    asking.submit(Request::OpenHistory {
+                        rows: 1,
+                        lost: false,
+                    });
                 }
                 match woken_by(&waker, updates.next()) {
                     Some(Update::Rows { .. } | Update::Refs { .. }) => {}
@@ -2034,11 +2305,11 @@ mod tests {
     }
 
     /// Issue #21, the mechanism: on the worker's early exits (`git` missing, no repository)
-    /// two outboxes were dropped as closure captures AFTER the `WorkerExit` had signalled,
-    /// so a task parked between the two never woke. The outbox itself must wake on drop,
-    /// with no `WorkerExit` around it. Single-threaded on purpose: the task is parked
-    /// (one poll, `Pending`) BEFORE the drop, so the old code fails on the wake count
-    /// every time rather than only when the scheduler let the driver park first.
+    /// two outboxes are dropped as closure captures AFTER the `WorkerExit` has signalled,
+    /// so a task parked between the two would never wake. The outbox itself must wake on
+    /// drop, with no `WorkerExit` around it. Single-threaded on purpose: the task is parked
+    /// (one poll, `Pending`) BEFORE the drop, so an outbox that does not wake fails on the
+    /// wake count every time rather than only when the scheduler let the driver park first.
     #[test]
     fn an_outbox_dropped_anywhere_ends_the_stream() {
         struct Woke(std::sync::atomic::AtomicUsize);
@@ -2087,22 +2358,81 @@ mod tests {
         assert_eq!(asked(), vec![Request::Close], "the close was not queued");
     }
 
+    /// Unticking Amend ends amend's read in flight or queued
+    /// (`Request::StopAmending`, numbering the amending lane and sending nothing), so a commit
+    /// pressed straight after never waits behind an answer that would be thrown away; nothing
+    /// else is superseded by it, and a write asked supersedes no read. Caught by: an untick that
+    /// leaves the read current, or a stop or a write that supersedes the box's reads.
+    #[test]
+    fn unticking_amend_supersedes_the_amend_read_and_nothing_else() {
+        let (handle, _asked) = idle_handle();
+        let status = Arc::new(cairn_model::LocalChanges::new(
+            cairn_model::WorkingTreeStatus::Listed(Vec::new()),
+        ));
+        let amending = handle.submit(Request::Amending { status });
+        let reads = handle.submit(Request::CommitReads);
+        let (Some(amending), Some(reads)) = (amending, reads) else {
+            panic!("the reads were numbered in no lane");
+        };
+        handle.submit(Request::Write {
+            id: crate::worker::OperationId::next(),
+            write: crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        });
+        assert!(
+            handle.epochs.is_current(amending),
+            "a write superseded the amend read"
+        );
+        handle.submit(Request::StopAmending);
+        assert!(
+            !handle.epochs.is_current(amending),
+            "unticking left the amend read current"
+        );
+        assert!(
+            handle.epochs.is_current(reads),
+            "unticking superseded the box's reads"
+        );
+    }
+
+    /// A close marks the local lane closing as it is submitted, so a
+    /// write asked after it is never started — even while the repository thread, which marks
+    /// it again as it closes, is still busy with what was queued before. Caught by: marking
+    /// the lane only in `Threads::drop`, which leaves an idle lane to start a write asked
+    /// between the close and the repository thread reaching it.
+    #[test]
+    fn a_close_marks_the_local_lane_closing_as_it_is_submitted() {
+        let (handle, _asked) = idle_handle();
+        assert!(!handle.lane.is_closing());
+        handle.submit(Request::Close);
+        assert!(
+            handle.lane.is_closing(),
+            "a write asked after the close could still start"
+        );
+    }
+
     #[test]
     fn submitting_returns_immediately_even_with_nobody_serving() {
         let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
         let (diff, diff_incoming) = channel::<DiffJob>();
         let (refresh, refresh_incoming) = channel::<RefreshJob>();
-        drop((incoming, diff_incoming, refresh_incoming));
+        let (local, local_incoming) = channel::<LocalJob>();
+        drop((incoming, diff_incoming, refresh_incoming, local_incoming));
         let epochs = Epochs::new();
         let handle = RepositoryHandle {
             jobs,
             diff,
             refresh,
+            local,
+            lane: LaneState::default(),
             epochs: epochs.clone(),
             control: FetchControl::default(),
         };
         let started = Instant::now();
-        let epoch = handle.submit(Request::OpenHistory { rows: 1_000_000 });
+        let epoch = handle.submit(Request::OpenHistory {
+            rows: 1_000_000,
+            lost: false,
+        });
         let changes = handle.submit(Request::Changes {
             of: crate::worker::Comparison::Commit(cairn_model::Oid::from_bytes(&[3; 20]).unwrap()),
         });

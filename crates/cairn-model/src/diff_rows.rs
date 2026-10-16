@@ -1,23 +1,22 @@
 //! Rows a view draws, reached one at a time.
 //!
-//! Both projections of R1.4 live here, over one addressing scheme. Neither builds a row
-//! until it is asked for one (R1.5): what is built up front is an index of the diff's
-//! *changes*, which is as long as the file has separate changes and never as long as the
-//! file has lines. A row borrows its line from the diff — the row types are `Copy`, so
-//! they cannot own one — which is what makes asking for a row cost nothing to allocate.
+//! Both projections — unified and side by side — live here, over one addressing scheme. Neither
+//! builds a row until it is asked for one: what is built up front is an index of the diff's
+//! *changes*, which is as long as the file has separate changes and never as long as the file has
+//! lines. A row borrows its line from the diff — the row types are `Copy`, so they cannot own one —
+//! which is what makes asking for a row cost nothing to allocate.
 //!
-//! The unified rows are what `git diff` prints (phase 06's parity rule): a hunk's header,
-//! its lines with a context line read from the NEW side — the side git prints it from,
-//! which differs from the old one under `-w` — and git's `\ No newline at end of file`
-//! after a line that did not end. A view drawing them with whitespace ignored groups the
-//! whitespace-ignoring ranges ([`UnifiedLayout::shown`]), as `git diff -w` does.
+//! The unified rows are what `git diff` prints: a hunk's header, its lines with a context line read
+//! from the NEW side — the side git prints it from, which differs from the old one under `-w` — and
+//! git's `\ No newline at end of file` after a line that did not end. A view drawing them with
+//! whitespace ignored groups the whitespace-ignoring ranges ([`UnifiedLayout::shown`]), as `git
+//! diff -w` does.
 //!
-//! The side-by-side rows (phase 07) are the same lines rearranged, under the same parity
-//! rule: the same hunks, the same headers, a context line from the new side drawn in both
-//! columns, the i-th removed line of a change beside its i-th added line, and git's
-//! end-of-file marker in the column of the side whose last line did not end. Read a
-//! side-by-side view's left column then its right one, change by change, and the result is
-//! `git diff`'s output line for line ([`SideBySideLayout::shown`]).
+//! The side-by-side rows are the same lines rearranged, under the same parity rule: the same hunks,
+//! the same headers, a context line from the new side drawn in both columns, the i-th removed line
+//! of a change beside its i-th added line, and git's end-of-file marker in the column of the side
+//! whose last line did not end. Read a side-by-side view's left column then its right one, change
+//! by change, and the result is `git diff`'s output line for line ([`SideBySideLayout::shown`]).
 
 use std::ops::Range;
 
@@ -69,6 +68,9 @@ struct RowIndex {
     /// The rows of each change drawn, in order: what previous and next change move between,
     /// found by search.
     stops: ChangeStops,
+    /// The first row of each hunk, its header's, in order: which hunk a row falls in, found by
+    /// search.
+    hunk_starts: Vec<usize>,
 }
 
 impl RowIndex {
@@ -77,6 +79,7 @@ impl RowIndex {
             pieces: Vec::new(),
             rows: 0,
             stops: ChangeStops(Vec::new()),
+            hunk_starts: Vec::with_capacity(hunks.len()),
         };
         let new_len = u32::try_from(text.new_lines().len()).unwrap_or(u32::MAX);
 
@@ -85,6 +88,7 @@ impl RowIndex {
                 // Unreachable: `hunk_index` is below the length just read.
                 break;
             };
+            index.hunk_starts.push(index.rows);
             index.push(
                 Piece::Header {
                     hunk: u32::try_from(hunk_index).unwrap_or(u32::MAX),
@@ -176,6 +180,23 @@ impl RowIndex {
     fn piece_count(&self) -> usize {
         self.pieces.len()
     }
+
+    /// The hunk row `row` falls in — its header, its context or its changes — by search.
+    fn hunk_at(&self, row: usize) -> Option<usize> {
+        if row >= self.rows {
+            return None;
+        }
+        self.hunk_starts
+            .partition_point(|start| *start <= row)
+            .checked_sub(1)
+    }
+
+    /// The rows hunk `hunk` takes, its header first.
+    fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        let start = *self.hunk_starts.get(hunk)?;
+        let end = self.hunk_starts.get(hunk + 1).copied().unwrap_or(self.rows);
+        Some(start..end)
+    }
 }
 
 /// Whether a side's last line did not end in a newline, which git marks.
@@ -250,7 +271,7 @@ impl ChangeStops {
     }
 }
 
-/// One row of a unified diff (R6.4): a line of `git diff`'s output. `Copy`, so it owns no
+/// One row of a unified diff: a line of `git diff`'s output. `Copy`, so it owns no
 /// line: it borrows the diff's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnifiedRow<'a> {
@@ -274,7 +295,7 @@ pub enum UnifiedRow<'a> {
     NoNewlineAtEnd,
 }
 
-/// One row of a side-by-side diff (R1.4, R6.4). `Removed` leaves the right side filler and
+/// One row of a side-by-side diff. `Removed` leaves the right side filler and
 /// `Added` leaves the left side filler, which is how the shorter side is padded. Read every
 /// variant by name: a view that skipped one would draw nothing for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +428,17 @@ impl UnifiedLayout {
         self.index.stops.rows(change)
     }
 
+    /// The hunk row `row` falls in — its header, its context or its changes. A search, never a
+    /// scan.
+    pub fn hunk_at(&self, row: usize) -> Option<usize> {
+        self.index.hunk_at(row)
+    }
+
+    /// The rows hunk `hunk` takes, from its header to its last row.
+    pub fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        self.index.hunk_rows(hunk)
+    }
+
     /// The first change that starts at `row` or below it. A search, never a scan.
     pub fn first_change_from(&self, row: usize) -> Option<usize> {
         self.index.stops.first_from(row)
@@ -434,7 +466,7 @@ impl UnifiedLayout {
         self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
     }
 
-    fn row_over<'a>(
+    pub(crate) fn row_over<'a>(
         &self,
         text: &'a TextDiff,
         changes: &[ChangedRange],
@@ -639,6 +671,16 @@ impl SideBySideLayout {
         &self.index.stops
     }
 
+    /// The hunk row `row` falls in; see [`UnifiedLayout::hunk_at`].
+    pub fn hunk_at(&self, row: usize) -> Option<usize> {
+        self.index.hunk_at(row)
+    }
+
+    /// The rows hunk `hunk` takes, from its header to its last row.
+    pub fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        self.index.hunk_rows(hunk)
+    }
+
     /// Row `row`, its lines borrowed from `text` — the diff this layout was built from, with
     /// `overlay` its overlay. Another diff answers rows of no meaning, or none; it never
     /// panics.
@@ -651,7 +693,7 @@ impl SideBySideLayout {
         self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
     }
 
-    fn row_over<'a>(
+    pub(crate) fn row_over<'a>(
         &self,
         text: &'a TextDiff,
         changes: &[ChangedRange],
@@ -996,7 +1038,7 @@ mod tests {
         );
     }
 
-    /// Phase 07, git parity: a side-by-side view draws `git diff`'s lines and no others —
+    /// Git parity: a side-by-side view draws `git diff`'s lines and no others —
     /// read column by column, change by change, it is the unified view's rows, at every
     /// context, with whitespace ignored or not, with lines that did not end on either side,
     /// grouped with the inter-hunk context. Caught by: a context line read from the old side
@@ -1084,7 +1126,7 @@ mod tests {
         }
     }
 
-    /// Phase 07: git's end-of-file marker sits in the column of the side whose last line did
+    /// Git's end-of-file marker sits in the column of the side whose last line did
     /// not end, on the row after the change's lines, with filler in the other column; after
     /// a context line that ends the file it is in both. Every marker is a row the count holds,
     /// and a change's marker row belongs to the change previous and next change stop at.
@@ -1126,7 +1168,7 @@ mod tests {
         );
     }
 
-    /// Phase 07, git parity under `-w`: a context line is the new side's in both columns, as
+    /// Git parity under `-w`: a context line is the new side's in both columns, as
     /// git prints it. Caught by: the old side's line on the left.
     #[test]
     fn a_side_by_side_context_line_is_the_new_sides_in_both_columns() {
@@ -1316,7 +1358,7 @@ mod tests {
     }
 
     /// Git parity: `git diff -U<as long as the file>` prints nothing for a file with no
-    /// change, so the entire file of one is no row (phase 06; phase 01 drew it whole).
+    /// change, so the entire file of one is no row. Caught by: drawing such a file whole.
     #[test]
     fn entire_file_draws_nothing_for_a_file_nothing_changed_in() {
         let text = TextDiff::new(split_lines(b"a\nb\n"), split_lines(b"a\nb\n"), Vec::new());
@@ -1454,12 +1496,11 @@ mod tests {
         assert_eq!(rows.layout().ranges(), DrawnRanges::Exact);
     }
 
-    /// The `-w` twin of the test above (phase 06 QA, T6): the whitespace-ignoring ranges are
-    /// grouped with the inter-hunk context too — `git diff -w` reads
-    /// `diff.interHunkContext` as plain `git diff` does. The exact ranges hold a third,
-    /// whitespace-only change between the two real ones, which `-w` hides; so the two
-    /// shown hunks merge across the gap only by the inter-hunk context. Caught by: grouping
-    /// the whitespace-ignoring ranges without it.
+    /// The `-w` twin of the test above: the whitespace-ignoring ranges are grouped with the
+    /// inter-hunk context too — `git diff -w` reads `diff.interHunkContext` as plain `git diff`
+    /// does. The exact ranges hold a third, whitespace-only change between the two real ones, which
+    /// `-w` hides; so the two shown hunks merge across the gap only by the inter-hunk context.
+    /// Caught by: grouping the whitespace-ignoring ranges without it.
     #[test]
     fn the_whitespace_ignoring_ranges_are_grouped_with_the_inter_hunk_context_too() {
         let text = TextDiff::new(

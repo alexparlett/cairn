@@ -1,5 +1,5 @@
-//! Headless tests for Local Changes' lists (refs-and-status R9.1, R9.5; criterion C9's "draws
-//! both lists with their badges" and "50,000 paths build one viewport").
+//! Headless tests for Local Changes' lists: both lists drawn with their badges, and a status
+//! of 50,000 paths building one viewport.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,8 +8,9 @@ use cairn_model::{
     ChangeList, ChangedEntry, ConflictKind, ConflictedEntry, LocalChanges, RepoPath, Similarity,
     StagedChange, StatusEntry, SubmoduleState, UnstagedChange, WorkingTreeStatus,
 };
+use cairn_ui::accelerators::HeldKeys;
 use cairn_ui::{
-    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList,
+    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList, LocalSelection,
     NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
 use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
@@ -18,7 +19,7 @@ use freya_testing::TestingRunner;
 
 const WIDTH: f32 = 400.;
 const HEIGHT: f32 = 600.;
-/// C9's size.
+/// How many paths the large status holds.
 const PATHS: usize = 50_000;
 
 #[derive(Clone, Copy)]
@@ -28,8 +29,9 @@ struct Fixture {
     staged: State<ShownFiles>,
     filter: State<String>,
     shown_paths: State<Option<usize>>,
-    chosen: State<Option<(ChangeList, usize)>>,
     split: State<f32>,
+    selection: State<Option<LocalSelection>>,
+    held: State<HeldKeys>,
 }
 
 type Heard = Rc<RefCell<Vec<(ChangeList, usize)>>>;
@@ -41,7 +43,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
         move || {
             let fixture = use_consume::<Fixture>();
             let hearing = hearing.clone();
-            let mut chosen = fixture.chosen;
+            let mut selection = fixture.selection;
+            let changes = fixture.changes;
             rect()
                 .expanded()
                 .child(
@@ -53,10 +56,14 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                     )
                     .shown_paths(*fixture.shown_paths.read())
                     .split(fixture.split)
-                    .chosen(*fixture.chosen.read())
+                    .selection(fixture.selection)
+                    .held(fixture.held)
                     .on_choose(move |pressed: (ChangeList, usize)| {
                         hearing.borrow_mut().push(pressed);
-                        chosen.set(Some(pressed));
+                        // A press selects its row alone, as the window does.
+                        let (list, row) = pressed;
+                        let path = changes.peek().get(list, row).map(|c| c.path.clone());
+                        selection.set(path.map(|path| LocalSelection::of(list, path)));
                     }),
                 )
                 .into_element()
@@ -69,8 +76,9 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                 staged: State::create(ShownFiles::All),
                 filter: State::create(String::new()),
                 shown_paths: State::create(None),
-                chosen: State::create(None),
                 split: State::create(cairn_ui::LISTS_SPLIT),
+                selection: State::create(None),
+                held: State::create(HeldKeys::default()),
             })
         },
         1.,
@@ -146,11 +154,11 @@ fn badge_of(test: &TestingRunner, y: f32, text_x: f32) -> Option<String> {
         .next()
 }
 
-/// R9.1: Unstaged above Staged, each under its heading; a path with a staged and an unstaged
-/// change in both; each row its badge and its path, a rename its source before it; a conflict
-/// Fork's triangle rather than a letter; untracked files under a new directory one row each.
-/// Caught by: the lists in the other order, a path in one list only, a badge another kind's,
-/// a rename's source dropped, or a new directory drawn as one row.
+/// Unstaged above Staged, each under its heading; a path with a staged and an unstaged change
+/// in both; each row its badge and its path, a rename its source before it; a conflict Fork's
+/// triangle rather than a letter; untracked files under a new directory one row each. Caught
+/// by: the lists in the other order, a path in one list only, a badge another kind's, a
+/// rename's source dropped, or a new directory drawn as one row.
 #[test]
 fn both_lists_draw_their_paths_with_their_badges() {
     let (test, _, _) = launch(every_kind());
@@ -254,12 +262,11 @@ fn glyph_on(test: &TestingRunner, y: f32) -> Option<Vec<bool>> {
         .map(|(_, canvas)| painted(&canvas.on_render))
 }
 
-/// The user's decision (2026-10-07), TC3 and TC4: every kind of change is drawn with Fork's
-/// badge, told by its shape — `M` for a modification and a type change, `+` for an added and an
-/// untracked path, `D`, `R`, `C`, and, painted, the submodule's box and the conflict's triangle,
-/// each badge cell holding exactly the glyph's shape. Caught by: a kind given another's badge,
-/// the Commit tab's letters (`A`, `T`, `S`), or a glyph's cell drawing anything but the glyph
-/// (an empty rect, the other glyph).
+/// Every kind of change is drawn with Fork's badge, told by its shape — `M` for a modification
+/// and a type change, `+` for an added and an untracked path, `D`, `R`, `C`, and, painted, the
+/// submodule's box and the conflict's triangle, each badge cell holding exactly the glyph's
+/// shape. Caught by: a kind given another's badge, the Commit tab's letters (`A`, `T`, `S`), or
+/// a glyph's cell drawing anything but the glyph (an empty rect, the other glyph).
 #[test]
 fn every_kind_of_change_draws_its_badges_shape() {
     let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
@@ -339,8 +346,8 @@ fn every_kind_of_change_draws_its_badges_shape() {
     }
 }
 
-/// R9.1's order: each list in its paths' order, Unstaged's rows under its heading in that order.
-/// Caught by: git's order kept (untracked after tracked).
+/// Each list in its paths' order, Unstaged's rows under its heading in that order. Caught by:
+/// git's order kept (untracked after tracked).
 #[test]
 fn each_list_is_in_its_paths_order() {
     let (test, _, _) = launch(every_kind());
@@ -446,11 +453,11 @@ fn the_filter_says_what_it_leaves() {
     assert!(!y_of(&test, NO_PATH_MATCHES).is_empty());
 }
 
-/// The user's decision (2026-10-07): "Showing N of M files" counts distinct paths, as the
-/// sidebar's Local Changes (N) does — a path with a staged and an unstaged change is in both
-/// lists and is one file of the status's six — on both sides of the count, with the filter's
-/// rows and their count as the filter's own pass answers them. Caught by: counting rows ("2 of
-/// 7"), or counting paths on one side only ("1 of 7", "2 of 6").
+/// "Showing N of M files" counts distinct paths, as the sidebar's Local Changes (N) does — a
+/// path with a staged and an unstaged change is in both lists and is one file of the status's
+/// six — on both sides of the count, with the filter's rows and their count as the filter's own
+/// pass answers them. Caught by: counting rows ("2 of 7"), or counting paths on one side only
+/// ("1 of 7", "2 of 6").
 #[test]
 fn the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once() {
     let changes = every_kind();
@@ -525,10 +532,10 @@ fn built(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// C9, R9.5: a status of 50,000 paths — 50,000 rows in Unstaged and 25,000 in Staged — builds
-/// one viewport of each list at the top, deep and at the end, and so does a filter's answer of
-/// every other row, to the last row it leaves. Caught by: a list that builds a row per path,
-/// or one that rebuilds every row when the filter's answer changes.
+/// A status of 50,000 paths — 50,000 rows in Unstaged and 25,000 in Staged — builds one
+/// viewport of each list at the top, deep and at the end, and so does a filter's answer of
+/// every other row, to the last row it leaves. Caught by: a list that builds a row per path, or
+/// one that rebuilds every row when the filter's answer changes.
 #[test]
 fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
     let changes = many(PATHS);
@@ -592,10 +599,59 @@ fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
     );
 }
 
-/// The user's report (2026-10-07): scrolled to the end, each list's last row sits above the
-/// horizontal scrollbar Freya draws over the bottom of that list, never under it — Unstaged's
-/// above the Staged heading, Staged's above the view's bottom edge. Caught by: a list exactly
-/// as long as its rows (its last row flush with the bottom of the list).
+/// With every one of Unstaged's 50,000 paths selected — each row drawn selected by a search as
+/// it is built — and the window's held keys handed in, each list still builds one viewport, at
+/// the top and deep. Caught by: a selection drawn by walking it per row or per frame into
+/// building every row, or a held key that rebuilds the list whole.
+#[test]
+fn a_status_of_50000_paths_all_selected_builds_one_viewport() {
+    let changes = many(PATHS);
+    let every: Vec<RepoPath> = (0..PATHS)
+        .filter_map(|row| changes.get(ChangeList::Unstaged, row))
+        .map(|change| change.path.clone())
+        .collect();
+    let (mut test, fixture, _) = launch(changes);
+    let mut selection = fixture.selection;
+    let anchor = every[0].clone();
+    test.run_in(|| {
+        selection.set(Some(LocalSelection::spanning(
+            ChangeList::Unstaged,
+            anchor.clone(),
+            anchor,
+            every.iter().cloned(),
+        )))
+    });
+    test.sync_and_update();
+    assert_eq!(
+        fixture
+            .selection
+            .read()
+            .as_ref()
+            .map(|selection| selection.paths().len()),
+        Some(PATHS)
+    );
+    let viewport = ((HEIGHT - 40. - 2. * LIST_HEADER_HEIGHT) / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let within = |test: &TestingRunner, place: &str| {
+        let built = built(test).len();
+        assert!(
+            built >= viewport / 2 && built <= viewport + 6,
+            "{built} rows built, all selected, for a viewport of about {viewport} {place}"
+        );
+    };
+    within(&test, "at the top");
+    test.scroll((100., 120.), (0., -(PATHS as f64) * 12.));
+    test.sync_and_update();
+    within(&test, "deep");
+    let mut held = fixture.held;
+    test.run_in(|| held.set(HeldKeys::default()));
+    test.sync_and_update();
+    within(&test, "deep, the held keys written");
+}
+
+/// Scrolled to the end, each list's last row sits above the horizontal scrollbar Freya draws
+/// over the bottom of that list, never under it — Unstaged's above the Staged heading, Staged's
+/// above the view's bottom edge. Caught by: a list exactly as long as its rows (its last row
+/// flush with the bottom of the list).
 #[test]
 fn scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar() {
     let changes = many(400);
@@ -636,9 +692,9 @@ fn scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar(
     );
 }
 
-/// The user's decision (2026-10-07): a draggable splitter between Unstaged and Staged, the
-/// share dragged to written where the caller keeps it. Caught by: two fixed halves (the Staged
-/// heading does not move), or a drag that keeps nothing.
+/// A draggable splitter between Unstaged and Staged, the share dragged to written where the
+/// caller keeps it. Caught by: two fixed halves (the Staged heading does not move), or a drag
+/// that keeps nothing.
 #[test]
 fn the_splitter_between_the_lists_drags() {
     let (mut test, fixture, _) = launch(every_kind());

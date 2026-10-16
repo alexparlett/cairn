@@ -177,7 +177,7 @@ What a group kill does not reach, stated rather than implied:
   user a question on `/dev/tty` among them, which stops the commit until it is
   cancelled. Starting `git` in a session of its own (`setsid`) would make the
   open fail instead, but it needs an `unsafe` `pre_exec`, which the workspace
-  forbids, so this stays a stated residual.
+  forbids, so this stays a stated residual (#86).
 - **A crash.** A child cannot be told to die with its parent without `unsafe`, so
   if Cairn itself dies, its children run on. Each one's next write to a closed
   pipe ends it.
@@ -198,10 +198,13 @@ shows its elapsed time and the local lane waits for it.
 ## Failure
 
 A failed invocation reports its arguments, its exit status and the retained tail
-of its stderr, so "git failed" is never the whole message. A cancelled read is not
-a cancelled write: a read reports that it was cancelled and nothing more, while a
-cancelled or unwatched write reports that it may have taken effect — the refresh
-after it shows what did — and which lock files it left. Every local write's
+of its stderr, so "git failed" is never the whole message. A cancelled read reports
+that it was cancelled and nothing more. A cancelled write is the user's cancel, never
+a guess at what it did: a commit or an amend — the writes that can be cancelled —
+reads `HEAD` once its `git` is reaped, so one git had already made is reported made
+and one it had not is cancelled; and a write whose `git` Cairn lost hold of is a
+failure, saying the lists and history show anything it had already done. Each names
+the lock files it left. Every local write's
 outcome carries the lock files present before it and stranded after it. When a
 write fails and a lock file it needs is present, Cairn names the file — another
 git process, or a stale lock — rather than retrying: git never waits on
@@ -215,10 +218,15 @@ runs `git` holds a copy of that answer. Each open repository keeps a registry of
 its running invocations. Closing a repository, or the window, ends every read and
 network operation the way a cancel does and waits a bounded time for their reaps.
 A local write is let finish instead, since ending one mid-write is what strands a
-lock: the first close waits for it and says which ("Finishing commit…"); a second
-close after the window's patience ends it as a cancel would, and a lock that
-leaves behind is named the next time the repository opens (`concurrency.md`,
-"Operations").
+lock: the first close waits for it and says which ("Finishing commit…"), and that
+closing again leaves it unfinished. A second close after the window's patience
+closes the window anyway and still never ends the write: its `git` runs on,
+orphaned, with nobody reading its pipes. So every local write is run quietly — a
+verb that would print as it works, `git clean` listing each file it removes, is
+given `-q` — and an orphan finishes its work rather than dying of `SIGPIPE` at
+its next line of output; what it cannot help printing, an error or a hook's
+output, can still end it there, and a lock that leaves behind is named the next
+time the repository opens (`concurrency.md`, "Operations").
 
 ## The command log
 

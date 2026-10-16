@@ -5,12 +5,15 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use crate::ScrubbedLines;
+
 /// One `git` invocation that is over, however it ended. Plain data, and only
 /// what the invocation was given and what it said: there is no field for the
 /// environment it ran with — which is where an askpass token travels — and
 /// none that could hold a [`crate::Secret`]. Its arguments are what Cairn
 /// passed: remote names, refs, paths and options, never a credential and never
-/// a URL Cairn read from configuration.
+/// a URL Cairn read from configuration — and each is scrubbed of a URL's
+/// userinfo as the record is booked all the same, as git's output is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRecord {
     /// The arguments after the program, in order, each lossily decoded.
@@ -28,9 +31,11 @@ pub struct CommandRecord {
     /// It was asked to end — cancelled, superseded or dropped — and the end
     /// was that, not a clean exit that beat the request.
     pub cancelled: bool,
-    /// The end of what it wrote to stderr: the tail the runner retains, at
-    /// most 256 KiB, trailing whitespace trimmed. Empty when it never started.
-    pub stderr: String,
+    /// The end of what it wrote to stderr — and, for a commit, to stdout too, in the order the
+    /// lines arrived — as the runner's whole lines, each scrubbed of a URL's userinfo as it was
+    /// split: at most 256 KiB, the oldest whole lines let go of first, trailing whitespace
+    /// trimmed. Empty when it never started.
+    pub stderr: ScrubbedLines,
 }
 
 /// How a recorded invocation ended.
@@ -56,7 +61,7 @@ impl CommandRecord {
                 .directory
                 .as_ref()
                 .map_or(0, |directory| directory.as_os_str().len())
-            + self.stderr.len()
+            + self.stderr.bytes()
     }
 }
 
@@ -72,7 +77,7 @@ mod tests {
             duration: Duration::from_millis(1500),
             exit: CommandExit::Code(0),
             cancelled: false,
-            stderr: "From x".to_owned(),
+            stderr: ScrubbedLines::scrubbing("From x"),
         }
     }
 
@@ -84,16 +89,16 @@ mod tests {
         assert_eq!(record.held_bytes(), "fetch".len() + "origin".len() + 10 + 6);
         let nowhere = CommandRecord {
             directory: None,
-            stderr: String::new(),
+            stderr: ScrubbedLines::new(),
             ..record
         };
         assert_eq!(nowhere.held_bytes(), 11);
     }
 
-    /// R8.1 and R8.2, at the compiler: the record is exactly these fields, so a
-    /// field added to it — an environment, a token — stops this compiling and
-    /// is a decision made here, in sight of the rule that the log never holds
-    /// the environment or a secret.
+    /// At the compiler: the record is exactly these fields, so a field added to
+    /// it — an environment, a token — stops this compiling and has to be added
+    /// here, in sight of the rule that the log never holds the environment or a
+    /// secret.
     #[test]
     fn the_record_holds_exactly_what_r8_1_lists() {
         let CommandRecord {
@@ -111,7 +116,7 @@ mod tests {
         assert_eq!(duration, Duration::from_millis(1500));
         assert_eq!(exit, CommandExit::Code(0));
         assert!(!cancelled);
-        assert_eq!(stderr, "From x");
+        assert_eq!(stderr.text(), "From x");
     }
 
     /// Plain data: a record compares by every field and survives a clone, so a

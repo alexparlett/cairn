@@ -554,15 +554,14 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
-/// Every spelling of a keyboard modifier the toolkit offers a render file (D5, PRD R8.3),
-/// read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and Freya's
-/// `ModifiersExt`: the held-keys type and its helper trait, the event field that carries
-/// them, the type's constants (`Modifiers::CONTROL`), the modifier keys themselves
-/// (`NamedKey::Control`, `Code::ControlLeft`), the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`,
-/// `Code::ScrollLock`: a component reading one is reading the held keys) and the platform
-/// helpers that pick one. Whole identifiers, so an alias is caught on its import line and a
-/// qualified path on its last segment. `Fn`, the function key, is matched only after `::`:
-/// bare, it is Rust's closure trait.
+/// Every spelling of a keyboard modifier the toolkit offers a render file, read from the vendored
+/// `keyboard-types` (the version `Cargo.lock` pins) and Freya's `ModifiersExt`: the held-keys type
+/// and its helper trait, the event field that carries them, the type's constants
+/// (`Modifiers::CONTROL`), the modifier keys themselves (`NamedKey::Control`, `Code::ControlLeft`),
+/// the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`, `Code::ScrollLock`: a component reading one is
+/// reading the held keys) and the platform helpers that pick one. Whole identifiers, so an alias is
+/// caught on its import line and a qualified path on its last segment. `Fn`, the function key, is
+/// matched only after `::`: bare, it is Rust's closure trait.
 pub const MODIFIER_IDENTS: &[&str] = &[
     // The type, its OS-aware helper trait and what it offers, and the event's field.
     "Modifiers",
@@ -628,6 +627,16 @@ pub const MODIFIER_TEXT: &[&str] = &[
 /// keyboard modifier: an identifier of [`MODIFIER_IDENTS`], `::Fn`, a nullary call of one of
 /// [`MODIFIER_METHODS`], or a literal spelling a chord ([`spells_a_chord`]).
 pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
+    let mut lines: BTreeSet<usize> = names_a_modifier_in_code(source).into_iter().collect();
+    lines.extend(spells_a_chord(source));
+    lines.into_iter().collect()
+}
+
+/// [`names_a_literal_modifier`] without its literals: 1-based lines where the production code
+/// of `source` names a modifier by an identifier of [`MODIFIER_IDENTS`], `::Fn` or a nullary
+/// call of one of [`MODIFIER_METHODS`] — what the one chord-name module is held to once its
+/// table constants are blanked ([`modifier_constants_blanked`]).
+pub fn names_a_modifier_in_code(source: &str) -> Vec<usize> {
     let code = code_without_test_modules(&code_without_strings(source));
     let mut lines = BTreeSet::new();
     for ident in MODIFIER_IDENTS {
@@ -649,12 +658,49 @@ pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
             }
         }
     }
-    lines.extend(spells_a_chord(source));
     lines.into_iter().collect()
 }
 
+/// The held keys the chord-name module may name, by the table's own constants and only as
+/// `Modifiers::<CONSTANT>` written out.
+pub const CHORD_NAME_CONSTANTS: &[&str] = &["CONTROL", "ALT", "SHIFT", "META"];
+
+/// `source` with every `Modifiers::<CONSTANT>` of [`CHORD_NAME_CONSTANTS`] — and a
+/// `freya::prelude::` path in front of it — blanked to spaces, lines kept: what is left must
+/// name no modifier at all ([`names_a_modifier_in_code`]), so the event's `modifiers` field, a
+/// predicate, a modifier key of `Code` or `NamedKey`, the type imported or named alone, and
+/// every other constant still fail there.
+pub fn modifier_constants_blanked(source: &str) -> String {
+    let mut out = source.to_owned();
+    for constant in CHORD_NAME_CONSTANTS {
+        for prefix in ["freya::prelude::Modifiers::", "Modifiers::"] {
+            let spelled = format!("{prefix}{constant}");
+            let mut from = 0;
+            while let Some(found) = out[from..].find(&spelled) {
+                let at = from + found;
+                let end = at + spelled.len();
+                let follows = out[end..].chars().next();
+                if follows.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    from = end;
+                    continue;
+                }
+                out.replace_range(at..end, &" ".repeat(spelled.len()));
+                from = end;
+            }
+        }
+    }
+    out
+}
+
+/// A held key's name that a literal is a chord's when it is all the literal holds: `"Alt"`
+/// alone is a person's key name where `"Alternative"` is not. These are the spellings
+/// [`MODIFIER_TEXT`] matches only beside a `+` or a `-`.
+pub const MODIFIER_WORDS: &[&str] = &[
+    "Alt", "Shift", "Super", "Meta", "Option", "Opt", "Control", "Command", "Cmd", "Ctrl",
+];
+
 /// 1-based lines where a production string or char literal of `source` holds one of
-/// [`MODIFIER_TEXT`] once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
+/// [`MODIFIER_TEXT`], or is exactly one of [`MODIFIER_WORDS`], once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
 /// spell a chord as surely as `"⌘1"` does.
 pub fn spells_a_chord(source: &str) -> Vec<usize> {
     let mut lines = BTreeSet::new();
@@ -665,7 +711,33 @@ pub fn spells_a_chord(source: &str) -> Vec<usize> {
         .chain(production_char_literals(source));
     for (line, text) in literals {
         let text = unescaped(&text);
-        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling)) {
+        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling))
+            || MODIFIER_WORDS.contains(&text.trim())
+        {
+            lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// The held keys a chord is spelled with for a person, each alone: the only literal the one
+/// rostered chord-name module may hold that spells a chord, so a name there is put together from
+/// the table's data and never typed out whole.
+pub const MODIFIER_NAMES: &[&str] = &["Ctrl", "Alt", "Shift", "Super", "⌘", "⌥", "⇧", "⌃"];
+
+/// 1-based lines where a production literal of `source` spells a chord ([`spells_a_chord`])
+/// and is not exactly one held key's name ([`MODIFIER_NAMES`]): a chord typed out whole —
+/// `"Ctrl+Shift+."`, `"⌘⇧"`, `"Shift+"` — rather than rendered from the accelerator table.
+pub fn hand_typed_chords(source: &str) -> Vec<usize> {
+    let mut lines = BTreeSet::new();
+    let literals = production_string_literals(source)
+        .into_iter()
+        .map(|(line, text)| (line, narrowed(&text)))
+        .chain(production_char_literals(source));
+    for (line, text) in literals {
+        let text = unescaped(&text);
+        let spells = MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling));
+        if spells && !MODIFIER_NAMES.contains(&text.as_str()) {
             lines.insert(line);
         }
     }
@@ -819,6 +891,38 @@ pub fn names_an_element(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
+/// What builds a text field, or replaces the key handler a field was built with: Freya's `Input` —
+/// however it is reached, by its constructor, an import, an alias or its default key handler — the
+/// builder method that swaps the handler, and every other way the toolkit offers to edit text: the
+/// editor hook and its handle and configuration (`use_editable`, `UseEditable`, `EditableConfig`,
+/// reached through `freya::text_edit`, the module re-exporting the editor), the selectable text
+/// that runs the same editor, and the code editor. Every render file but the one key policy's
+/// (`cairn_ui::text_field`) leaves them alone, so a field that claims the window's chords cannot be
+/// written by accident.
+pub const TEXT_FIELD_IDENTS: &[&str] = &[
+    "Input",
+    "on_pre_key_down",
+    "use_editable",
+    "UseEditable",
+    "EditableConfig",
+    "text_edit",
+    "SelectableText",
+    "CodeEditor",
+];
+
+/// The 1-based lines where the production code of `source` (strings, comments and test modules
+/// blanked) names one of [`TEXT_FIELD_IDENTS`], each with the name it read.
+pub fn builds_a_text_field(source: &str) -> Vec<(usize, &'static str)> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in TEXT_FIELD_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert((line_at(&code, offset), *ident));
+        }
+    }
+    lines.into_iter().collect()
+}
+
 const ROW_CONTENT: &str = "RowContent";
 
 /// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or
@@ -830,7 +934,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
 }
 
 /// [`reads_row_content_partially`] for any enum a view must read by naming every variant —
-/// `RowContent`, and `DiffContent`, whose every state is something a view draws (R6.8).
+/// `RowContent`, and `DiffContent`, whose every state is something a view draws.
 pub fn reads_enum_partially(source: &str, name: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
@@ -1634,7 +1738,9 @@ pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
             continue;
         }
         // `type X = ..Name..;` — the statement starts with `type` and has `=` before this name.
-        let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+        // A statement starts after the `;` of the one before it, or after a brace: the `}` that
+        // ends an item (`struct A {}` then `type T = Name;`) or the `{` that opens a block.
+        let start = code[..offset].rfind([';', '}', '{']).map_or(0, |at| at + 1);
         let statement = &code[start..offset];
         let is_type_item = ident_offsets(statement, "type").first().is_some_and(|at| {
             statement[..*at].trim().is_empty()
@@ -1646,6 +1752,212 @@ pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
         }
     }
     lines.into_iter().collect()
+}
+
+/// A function's signature as written: from `fn` to the brace or semicolon that ends it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub name: String,
+    /// The 1-based line of its `fn`.
+    pub line: usize,
+    /// Declared with a bare `pub` (qualifiers such as `const` allowed between), so another
+    /// crate can call it; `pub(crate)` and the other restricted forms are not.
+    pub public: bool,
+    /// From `fn` to the end of the signature: generics, parameters, return type and `where`
+    /// clause, with comments and the contents of strings blanked.
+    pub text: String,
+    /// Each parameter as written, split at its top-level commas and trimmed; `self` and
+    /// `&self` included.
+    pub parameters: Vec<String>,
+}
+
+/// Every function `source` declares or defines — free functions, methods, trait items —
+/// read from code with comments and strings blanked. A function pointer type (`fn(&str)`)
+/// declares nothing and is skipped.
+pub fn function_signatures(source: &str) -> Vec<FunctionSignature> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    for offset in ident_offsets(&code, "fn") {
+        let name_start = skip_whitespace(bytes, offset + "fn".len());
+        let name_end = (name_start..bytes.len())
+            .find(|&i| !is_ident_byte(bytes[i]))
+            .unwrap_or(bytes.len());
+        if name_end == name_start {
+            continue;
+        }
+        // The signature ends at the first `{` or `;` outside parentheses and brackets: a body,
+        // or a declaration with none (`[u8; 4]` holds a `;` of its own).
+        let mut depth = 0usize;
+        let mut end = name_end;
+        while let Some(&byte) = bytes.get(end) {
+            match byte {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth = depth.saturating_sub(1),
+                b'{' | b';' if depth == 0 => break,
+                _ => {}
+            }
+            end += 1;
+        }
+        let mut open = skip_whitespace(bytes, name_end);
+        if bytes.get(open) == Some(&b'<') {
+            open = skip_whitespace(bytes, angle_end_past_arrows(bytes, open));
+        }
+        let parameters = if bytes.get(open) == Some(&b'(') {
+            let close = balanced_end(bytes, open);
+            split_at_top_level_commas(&code[open + 1..close.saturating_sub(1).max(open + 1)])
+        } else {
+            Vec::new()
+        };
+        found.push(FunctionSignature {
+            name: code[name_start..name_end].to_owned(),
+            line: line_at(&code, offset),
+            public: unrestricted_pub_before(&code[..offset]),
+            text: code[offset..end].to_owned(),
+            parameters,
+        });
+    }
+    found
+}
+
+/// Whether `signature` takes the type `name` by value, and in no other way: exactly one
+/// parameter whose whole type is a path ending in `name` (`c: Confirmed`,
+/// `mut c: cairn_model::Confirmed`), and `name` spelled nowhere else in the signature — not
+/// behind a reference, in an `Option`, a `Box` or an `impl Into<..>`, in a generic bound, in
+/// a second parameter or in the return type.
+pub fn takes_by_value(signature: &FunctionSignature, name: &str) -> bool {
+    let by_value = signature
+        .parameters
+        .iter()
+        .filter(|parameter| {
+            parameter_type(parameter).is_some_and(|ty| {
+                let ty = ty.trim().trim_start_matches("::");
+                ty.rsplit("::").next() == Some(name)
+                    && ty
+                        .split("::")
+                        .all(|segment| !segment.is_empty() && segment.bytes().all(is_ident_byte))
+            })
+        })
+        .count();
+    by_value == 1 && ident_offsets(&signature.text, name).len() == 1
+}
+
+/// The type of a parameter (`pattern: Type`): what follows its first lone `:`.
+fn parameter_type(parameter: &str) -> Option<&str> {
+    let bytes = parameter.as_bytes();
+    (0..bytes.len())
+        .find(|&i| {
+            bytes[i] == b':' && bytes.get(i + 1) != Some(&b':') && (i == 0 || bytes[i - 1] != b':')
+        })
+        .map(|colon| &parameter[colon + 1..])
+}
+
+/// `text` split at the commas outside every bracket, each piece trimmed, empty pieces (a
+/// trailing comma's) dropped.
+fn split_at_top_level_commas(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut pieces = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            // The `>` of a `->` closes nothing.
+            b'>' if i > 0 && bytes[i - 1] == b'-' => {}
+            b')' | b']' | b'}' | b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                pieces.push(text[start..i].trim().to_owned());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    pieces.push(text[start..].trim().to_owned());
+    pieces.retain(|piece| !piece.is_empty());
+    pieces
+}
+
+/// [`balanced_angle_end`], with the `>` of a `->` (an `Fn() -> T` bound) closing nothing.
+fn angle_end_past_arrows(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, &byte) in bytes.iter().enumerate().skip(open) {
+        match byte {
+            b'<' => depth += 1,
+            b'>' if i > 0 && bytes[i - 1] == b'-' => {}
+            b'>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// 1-based lines where `source` spells a path into the type `name` — `Name::Variant`,
+/// `module::Name::new`, `use module::Name::*`, `<Name>::Variant` — in code. Holding a value
+/// of the type, or calling a method on one, spells no such path.
+pub fn names_a_path_into(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let mut after = skip_whitespace(bytes, offset + name.len());
+        if bytes.get(after) == Some(&b'>') && code[..offset].trim_end().ends_with('<') {
+            after = skip_whitespace(bytes, after + 1);
+        }
+        if code[after..].starts_with("::") {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// 1-based lines where `source` opens an `impl` block — a line that starts with `impl ` or
+/// `impl<` — whose header, up to its `{`, names `name`: `impl Name {`, `impl Trait for Name`,
+/// `impl From<Name> for T`, a bound on it. An `impl Trait` in a parameter's or a return
+/// type's position opens no block and is not read.
+pub fn opens_an_impl_naming(source: &str, name: &str) -> Vec<usize> {
+    impl_headers(source)
+        .into_iter()
+        .filter(|(_, header)| !ident_offsets(header, name).is_empty())
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// Every `impl` block `source` opens, as (1-based line, header from `impl` up to its `{`, with
+/// its whitespace collapsed): a line that starts with `impl ` or `impl<` once any attributes
+/// written ahead of it on the same line (`#[allow(x)] impl ..`) are stepped over. An `impl
+/// Trait` in a parameter's or a return type's position opens no block and is not read.
+pub fn impl_headers(source: &str) -> Vec<(usize, String)> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut headers = Vec::new();
+    let mut offset = 0usize;
+    for line in code.split_inclusive('\n') {
+        // Indentation only: a blank line's newline is not stepped over into the next line.
+        let mut at = offset + (line.len() - line.trim_start_matches([' ', '\t']).len());
+        while bytes.get(at) == Some(&b'#') {
+            let open = skip_whitespace(bytes, at + 1);
+            if bytes.get(open) != Some(&b'[') {
+                break;
+            }
+            at = balanced_end(bytes, open);
+            while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+                at += 1;
+            }
+        }
+        let rest = &code[at.min(code.len())..];
+        if rest.starts_with("impl ") || rest.starts_with("impl<") {
+            let end = rest.find('{').map_or(rest.len(), |brace| brace);
+            let header = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+            headers.push((line_at(&code, at), header));
+        }
+        offset += line.len();
+    }
+    headers
 }
 
 /// One past the `>` closing the `<` at `open`.
@@ -1951,6 +2263,152 @@ fn path_offsets(code: &str, segments: &[&str]) -> Vec<(usize, usize)> {
         found.push((start, at));
     }
     found
+}
+
+/// What changes a file or directory on disk, by the names `std` gives it, matched wherever they
+/// appear as an identifier, since nothing that only reads has their name: removing
+/// (`fs::remove_file`, `remove_dir`, `remove_dir_all`), creating (`create_dir`, `create_dir_all`,
+/// `File::create_new`, and `OpenOptions` and `DirBuilder`, the builders that open or make one for
+/// writing), linking (`hard_link`, `soft_link`, unix's `symlink`), changing permissions, ownership,
+/// length or times (`set_permissions`, `chown`, `fchown`, `lchown`, `set_len`, `set_modified`,
+/// `set_times`), and binding a socket, which creates its file (`UnixListener`, `UnixDatagram`). An
+/// alias is caught on its import line.
+pub const FILESYSTEM_MUTATION_IDENTS: &[&str] = &[
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "create_dir",
+    "create_dir_all",
+    "create_new",
+    "OpenOptions",
+    "DirBuilder",
+    "hard_link",
+    "soft_link",
+    "symlink",
+    "set_permissions",
+    "chown",
+    "fchown",
+    "lchown",
+    "set_len",
+    "set_modified",
+    "set_times",
+    "UnixListener",
+    "UnixDatagram",
+];
+
+/// `std::fs`'s mutating functions whose names are too common to match alone (`write` is
+/// `io::Write`'s too): matched as the end of a path through `fs` — `fs::write(..)`,
+/// `std::fs::rename(..)` — and as a name a `use` of `fs` imports, aliased or not.
+pub const FILESYSTEM_MUTATION_FS_FUNCTIONS: &[&str] = &["write", "rename", "copy"];
+
+/// `File`'s associated functions that open a file for writing, matched as `File::<name>`:
+/// `create`, `create_buffered` and `options` (the `OpenOptions` builder by another door).
+/// `File::create_new` is on [`FILESYSTEM_MUTATION_IDENTS`] already.
+pub const FILESYSTEM_MUTATION_FILE_FUNCTIONS: &[&str] = &["create", "create_buffered", "options"];
+
+/// 1-based lines where `source` mutates the filesystem, as `line: what`, over its code with
+/// comments and strings blanked: every identifier of [`FILESYSTEM_MUTATION_IDENTS`]; a path
+/// through `fs` to one of [`FILESYSTEM_MUTATION_FS_FUNCTIONS`]; `File::` and one of
+/// [`FILESYSTEM_MUTATION_FILE_FUNCTIONS`]; and the ways a `use` or a `type` hides those
+/// spellings — importing one of those functions from `fs`, a glob of `fs` (`fs::*`, or a `*` in
+/// a braced list after `fs::`), `fs` renamed (`fs as f`, or `{self as f}` after `fs::`), and
+/// `File` renamed (`File as F` in a `use`, or a `type` alias naming `File`).
+pub fn mutates_the_filesystem(source: &str) -> Vec<String> {
+    let code = code_without_strings(source);
+    let mut found = BTreeSet::new();
+    for ident in FILESYSTEM_MUTATION_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            found.insert((line_at(&code, offset), (*ident).to_owned()));
+        }
+    }
+    for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
+        for (start, _) in path_offsets(&code, &["fs", function]) {
+            found.insert((line_at(&code, start), format!("fs::{function}")));
+        }
+    }
+    for function in FILESYSTEM_MUTATION_FILE_FUNCTIONS {
+        for line in calls_associated_function(&code, "File", function) {
+            found.insert((line, format!("File::{function}")));
+        }
+    }
+    let is_word = |text: &str, word: &str| {
+        text.starts_with(word) && !text[word.len()..].starts_with(|c: char| is_ident_char(c))
+    };
+    // Imports and aliases: each `use` or `type` statement, to its `;`.
+    for keyword in ["use", "type"] {
+        for start in ident_offsets(&code, keyword) {
+            let end = code[start..].find(';').map_or(code.len(), |at| start + at);
+            let statement = &code[start..end];
+            let line = line_at(&code, start);
+            if keyword == "type" {
+                if !ident_offsets(statement, "File").is_empty() {
+                    found.insert((line, "type .. = File".to_owned()));
+                }
+                continue;
+            }
+            for at in ident_offsets(statement, "File") {
+                if is_word(statement[at + 4..].trim_start(), "as") {
+                    found.insert((line, "use File as ..".to_owned()));
+                }
+            }
+            for at in ident_offsets(statement, "fs") {
+                let rest = statement[at + 2..].trim_start();
+                if is_word(rest, "as") {
+                    found.insert((line, "use fs as ..".to_owned()));
+                    continue;
+                }
+                let Some(after) = rest.strip_prefix("::") else {
+                    continue;
+                };
+                let after = after.trim_start();
+                if after.starts_with('*') {
+                    found.insert((line, "use fs::*".to_owned()));
+                } else if let Some(inner) = after.strip_prefix('{') {
+                    // The braced list after `fs::`, to its matching brace.
+                    let mut depth = 1usize;
+                    let close = inner
+                        .char_indices()
+                        .find(|(_, c)| {
+                            match c {
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                            depth == 0
+                        })
+                        .map_or(inner.len(), |(at, _)| at);
+                    let list = &inner[..close];
+                    if list.contains('*') {
+                        found.insert((line, "use fs::{*}".to_owned()));
+                    }
+                    for at in ident_offsets(list, "self") {
+                        if is_word(list[at + 4..].trim_start(), "as") {
+                            found.insert((line, "use fs::{self as ..}".to_owned()));
+                        }
+                    }
+                }
+            }
+            for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
+                if !ident_offsets(statement, "fs").is_empty()
+                    && !ident_offsets(statement, function).is_empty()
+                {
+                    found.insert((line, format!("use fs::{function}")));
+                }
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(line, what)| format!("{line}: {what}"))
+        .collect()
+}
+
+/// What [`mutates_the_filesystem`] found, by kind alone (the part after `line: `), each once.
+pub fn filesystem_mutation_kinds(source: &str) -> BTreeSet<String> {
+    mutates_the_filesystem(source)
+        .into_iter()
+        .filter_map(|hit| hit.split_once(": ").map(|(_, what)| what.to_owned()))
+        .collect()
 }
 
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
@@ -2286,12 +2744,12 @@ pub fn gate_dispatch_arms(gate: &str) -> Result<Vec<(String, String)>, String> {
     Err("the dispatch never reaches `esac`".to_owned())
 }
 
-/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full
-/// gate, the merge bar. Read from the script's tail — everything after the `--step`
-/// block's closing `fi`, up to `finish` — counting a call at the top level or in the
-/// full branch of the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`),
-/// and not in its `else`, which is the day loop's. Any other line there is an `Err`
-/// rather than a guess, so a new conditional cannot hide a step from this reading.
+/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full gate, which a
+/// change passes before it merges. Read from the script's tail — everything after the `--step`
+/// block's closing `fi`, up to `finish` — counting a call at the top level or in the full branch of
+/// the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`), and not in its `else`,
+/// which is the day loop's. Any other line there is an `Err` rather than a guess, so a new
+/// conditional cannot hide a step from this reading.
 pub fn gate_full_sequence(gate: &str) -> Result<BTreeSet<String>, String> {
     let mut lines = gate
         .lines()

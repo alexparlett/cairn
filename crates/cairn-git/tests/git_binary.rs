@@ -5,7 +5,11 @@
 //! whole `PATH`, so "absent" is an empty directory and "too old" is a script.
 //! The runner itself is `pub(crate)`, so what a found `git` is then handed is
 //! tested inside the crate (`process/cli.rs`), with a copy of this stub helper.
+
 #![cfg(unix)]
+
+#[path = "support/write_executable.rs"]
+mod write_executable;
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -42,10 +46,7 @@ impl StubPath {
     fn with_git(script: &str) -> Self {
         let stub = Self::empty();
         let git = stub.git_path();
-        std::fs::write(&git, format!("#!/bin/sh\n{script}\n"))
-            .unwrap_or_else(|e| panic!("could not write {}: {e}", git.display()));
-        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("could not chmod {}: {e}", git.display()));
+        write_executable::write_executable(&git, &format!("#!/bin/sh\n{script}\n"), 0o755);
         stub
     }
 
@@ -121,7 +122,7 @@ fn failure(result: Result<GitBinary, Error>, case: &str) -> Error {
     }
 }
 
-/// PRD B2: a missing git is refused, and the message names the required version.
+/// A missing git is refused, and the message names the required version.
 #[test]
 fn a_missing_git_is_refused_naming_the_required_version() {
     let stub = StubPath::empty();
@@ -156,7 +157,7 @@ fn an_unset_path_is_reported_rather_than_searched_nowhere_silently() {
     assert!(message.contains("2.30.0"), "{message}");
 }
 
-/// PRD B2: one minor version under the floor is refused, and the message names both versions.
+/// One minor version under the floor is refused, and the message names both versions.
 #[test]
 fn a_git_older_than_the_floor_is_refused_naming_both_versions() {
     let stub = StubPath::printing_version("git version 2.29.2");
@@ -298,8 +299,7 @@ fn the_installed_git_is_discovered_from_the_process_environment() {
 fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
     let stub = StubPath::empty();
     let git = stub.git_path();
-    std::fs::write(&git, "#!/nonexistent/interpreter\n").unwrap();
-    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable::write_executable(&git, "#!/nonexistent/interpreter\n", 0o755);
     let error = failure(stub.discover(), "unstartable git");
     match &error {
         Error::GitNotStarted { program, source } => {
@@ -315,10 +315,10 @@ fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
     );
 }
 
-/// PRD R6.1: the application finds git once, as it starts, and later points
-/// each repository's invocations at that repository's askpass channel. Caught
-/// by: `with_environment` searching or probing again (the count moves), or
-/// keeping the environment git was found with.
+/// The application finds git once, as it starts, and later points each
+/// repository's invocations at that repository's askpass channel. Caught by:
+/// `with_environment` searching or probing again (the count moves), or keeping
+/// the environment git was found with.
 #[test]
 fn a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again() {
     static NEXT: AtomicUsize = AtomicUsize::new(0);

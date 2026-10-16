@@ -1,10 +1,10 @@
 //! What a view draws over a text diff, and a patch must never see.
 //!
-//! Three display-only things live here: by decision L4, the second set of changed ranges
-//! that comparing lines with their whitespace removed produces, and the byte ranges inside
-//! a pair of lines that differ; and git's function context, the text a hunk header shows
-//! after its closing `@@`. None is part of [`crate::TextDiff`], so none is reachable from
-//! the patch emitter, which takes a `TextDiff` and nothing else (R1.7).
+//! Three display-only things live here: the second set of changed ranges that comparing lines with
+//! their whitespace removed produces, and the byte ranges inside a pair of lines that differ; and
+//! git's function context, the text a hunk header shows after its closing `@@`. None is part of
+//! [`crate::TextDiff`], so none is reachable from the patch emitter, which takes a `TextDiff` and
+//! nothing else.
 
 use crate::{ChangedRange, FunctionContext, LineNumber, LineSpan, TextDiff};
 
@@ -29,9 +29,9 @@ impl ByteRange {
     }
 }
 
-/// Where a removed line and the added line it was paired with differ inside themselves
-/// (R2.7). The engine pairs the i-th removed line of a change with its i-th added line,
-/// which is the same pairing a side-by-side view draws.
+/// Where a removed line and the added line it was paired with differ inside themselves. The engine
+/// pairs the i-th removed line of a change with its i-th added line, which is the same pairing a
+/// side-by-side view draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntraLineHighlight {
     pub removed_line: LineNumber,
@@ -112,7 +112,7 @@ impl DisplayOverlay {
     }
 
     /// Whether ignoring whitespace hides a change that is really there — which is what a
-    /// view has to say out loud (R6.7). False when no whitespace-ignoring ranges exist.
+    /// view has to say out loud. False when no whitespace-ignoring ranges exist.
     ///
     /// Reads both sets of ranges and allocates while doing it, so it costs what the file has
     /// changes rather than what a frame shows. Ask it once when the overlay arrives and keep

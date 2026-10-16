@@ -81,7 +81,7 @@ run_typecheck() { run_cmd "typecheck" "$TYPECHECK_CMD"; }
 run_guards()    { run_cmd "guards"    "$GUARDS_CMD"; }
 run_deps()      { run_cmd "deps"      "$DEPS_CMD"; }
 run_test_fast() { run_cmd "test-fast" "$TEST_FAST_CMD"; }
-# The SSH acceptance criteria (crates/cairn-git/tests/fetch.rs) run against an
+# The SSH acceptance criteria (crates/cairn-git/tests/fetch/main.rs) run against an
 # unprivileged sshd the fixture starts; where none can be found they skip, and
 # cargo hides a passing test's stderr, so the skip would read `ok`. Where the
 # server is here it is REQUIRED, so a broken fixture is red; where it is not,
@@ -95,13 +95,13 @@ require_ssh_fixture_where_possible() {
   if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -x /usr/local/sbin/sshd ]; then
     export CAIRN_REQUIRE_SSH_FIXTURE=1
   else
-    SSH_FIXTURE_NOTE="the ssh acceptance criteria in crates/cairn-git/tests/fetch.rs SKIPPED here: no sshd (install openssh-server to run them; CI requires them)"
+    SSH_FIXTURE_NOTE="the ssh acceptance criteria in crates/cairn-git/tests/fetch/main.rs SKIPPED here: no sshd (install openssh-server to run them; CI requires them)"
     echo "gate: $SSH_FIXTURE_NOTE"
   fi
 }
 
 # a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files
-# (crates/cairn-git/tests/diff/fsmonitor.rs) skips where git has no builtin
+# (crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs) skips where git has no builtin
 # fsmonitor daemon (Linux has one from git 2.55), and the skip would read `ok`.
 # Where the git on PATH reports the daemon it is REQUIRED, so a daemon that will
 # not start is red; where it does not, the gate says so once. scripts/git-floor.sh
@@ -112,7 +112,7 @@ require_fsmonitor_daemon_where_possible() {
   if git version --build-options 2>/dev/null | grep -qx 'feature: fsmonitor--daemon'; then
     export CAIRN_REQUIRE_FSMONITOR_DAEMON=1
   else
-    FSMONITOR_NOTE="the builtin-fsmonitor read test in crates/cairn-git/tests/diff/fsmonitor.rs SKIPPED here: the git on PATH has no fsmonitor--daemon"
+    FSMONITOR_NOTE="the builtin-fsmonitor read test in crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs SKIPPED here: the git on PATH has no fsmonitor--daemon"
     echo "gate: $FSMONITOR_NOTE"
   fi
 }
@@ -120,10 +120,10 @@ require_fsmonitor_daemon_where_possible() {
 # Two tests need a user namespace, each for something different, and skip where they
 # cannot have it, which would read `ok`:
 #   - the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it
-#     (crates/cairn-git/tests/diff/bare_discovery.rs) needs a second filesystem: a user
+#     (crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs) needs a second filesystem: a user
 #     and mount namespace, to mount a tmpfs in. CAIRN_REQUIRE_MOUNT_NAMESPACE.
 #   - the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git
-#     (crates/cairn-git/tests/fetch.rs) needs a second owner: a namespace with a second
+#     (crates/cairn-git/tests/fetch/main.rs) needs a second owner: a namespace with a second
 #     uid mapped (--map-auto, from /etc/subuid) whose root may give a file to it. Ubuntu
 #     24.04's AppArmor (GitHub's runners) confines an unprivileged namespace in its
 #     unprivileged_userns profile, which maps the uid and then refuses root the chown, so
@@ -141,7 +141,7 @@ require_user_namespaces_where_possible() {
   if unshare --map-root-user --mount true >/dev/null 2>&1; then
     export CAIRN_REQUIRE_MOUNT_NAMESPACE=1
   else
-    MOUNTNS_NOTE="the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it (crates/cairn-git/tests/diff/bare_discovery.rs) SKIPPED here: 'unshare --map-root-user --mount' fails, so no mount namespace and no second filesystem"
+    MOUNTNS_NOTE="the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it (crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs) SKIPPED here: 'unshare --map-root-user --mount' fails, so no mount namespace and no second filesystem"
     echo "gate: $MOUNTNS_NOTE"
   fi
   local probe=""
@@ -149,7 +149,7 @@ require_user_namespaces_where_possible() {
     && unshare --map-root-user --map-auto chown 1:1 "$probe/owned" >/dev/null 2>&1; then
     export CAIRN_REQUIRE_SECOND_OWNER=1
   else
-    OWNER_NOTE="the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git (crates/cairn-git/tests/fetch.rs) SKIPPED here: 'unshare --map-root-user --map-auto chown 1:1' fails, so no second owner (no unprivileged user namespaces, no /etc/subuid range, or a namespace whose root may not chown to the second uid, as AppArmor's unprivileged_userns profile refuses on Ubuntu 24.04)"
+    OWNER_NOTE="the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git (crates/cairn-git/tests/fetch/main.rs) SKIPPED here: 'unshare --map-root-user --map-auto chown 1:1' fails, so no second owner (no unprivileged user namespaces, no /etc/subuid range, or a namespace whose root may not chown to the second uid, as AppArmor's unprivileged_userns profile refuses on Ubuntu 24.04)"
     echo "gate: $OWNER_NOTE"
   fi
   if [ -n "$probe" ]; then rm -rf "$probe"; fi

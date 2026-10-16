@@ -1,5 +1,5 @@
 //! The changes query: which commits to compare, read by gix; what changed between them,
-//! answered by `git diff-tree` (decision E); and the answer put in a total order.
+//! answered by `git diff-tree`; and the answer put in a total order.
 //!
 //! A root commit is shown as the user's own `git log` and `git show` show it: with its
 //! whole content when `log.showRoot` is true, which is git's default, and with no diff at
@@ -119,7 +119,7 @@ pub(super) fn subject(
         Subject::Commit(id) | Subject::Stash(id) => {
             let commit = find_commit(inner, id)?;
             let details = crate::commit::details_of(&commit, id)?;
-            // A root commit is compared with the empty tree (L5), which makes its diff the
+            // A root commit is compared with the empty tree, which makes its diff the
             // whole of its content rather than nothing at all — and so is a shallow
             // clone's boundary commit, whose parents the clone does not have and which
             // its details list none of, as git's own `git log` shows it (`details_of`).

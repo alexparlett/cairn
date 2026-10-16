@@ -1,16 +1,22 @@
-//! One path's working-tree diffs (R3): what is staged, what is not, and an untracked file.
+//! One path's working-tree diffs: what is staged, what is not, and an untracked file.
 //!
 //! git answers all three (`crate::reads::working_tree`), and the side git reads from the
 //! working tree is never read by Cairn: its lines are rebuilt from git's own patch over the
 //! old side, so they are the content in git's form — after the clean filter driver the
 //! path's attributes name, line-ending conversion, `ident` and a working-tree encoding —
-//! exactly what the user's `git diff` compares (L6, D1 as amended in
-//! `docs/design/engine.md`). gix reads the index, fresh for every query (R3.3), to say what
-//! git's answer does not say alone, or what plumbing says otherwise than porcelain: a
-//! conflicted path (answered as conflicted, never diffed against one stage), a sparse index
-//! (unsupported, and said so), an intent-to-add entry (which `git diff --cached` does not
-//! list), and the sizes of the blobs on each side, so a file too large to draw is refused
-//! before git diffs it. gix also reads every blob git names, by the id git names it with.
+//! exactly what the user's `git diff` compares (`docs/design/engine.md`, "Reads see git's
+//! form"). gix reads the index, fresh for every query, to say what git's answer does not
+//! say alone, or what plumbing says otherwise than porcelain: a conflicted path (answered as
+//! conflicted, never diffed against one stage), a sparse index (unsupported, and said so),
+//! an intent-to-add entry (which `git diff --cached` does not list), and the sizes of the
+//! blobs on each side, so a file too large to draw is refused before git diffs it. gix also
+//! reads every blob git names, by the id git names it with.
+//!
+//! The staged side pairs a rename or a copy as the user's `git diff --cached` pairs it, under
+//! their `diff.renames` and `diff.renameLimit`: which pair the path belongs to is asked of
+//! the whole index first (`crate::reads::staged_pairing`), and that pair's diff is then read
+//! across both its paths, so a staged rename is drawn as git draws it and not as an addition
+//! beside a deletion (`crate::reads`' working-tree module, "Renames").
 //!
 //! The stale-read guard is three checks. Every line git prints is checked against the side
 //! it belongs to (`PatchText::new_side`, `PatchText::read_against`). The rebuilt working-tree
@@ -30,14 +36,15 @@ use gix::bstr::ByteSlice as _;
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::reads::{
-    PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative,
-    working_tree_patch,
+    Detection, Paired, PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery,
+    staged_pairing, work_tree_relative, working_tree_patch,
 };
 use crate::{Cancel, Error, Repository};
 
 use super::algorithm::{Algorithms, PathAlgorithm};
 use super::content::{crossed_line_limit, git_context, lfs_pointer, text_content};
 use super::hunk_grouping::Grouping;
+use super::renames::Configured;
 use super::submodules::working_tree_ignore;
 use super::{ContentOptions, WorkingTreeDiff};
 
@@ -78,12 +85,13 @@ pub(super) fn working_tree_diff(
     // What the index says first: it decides some answers outright, and names the blob a
     // staged or an unstaged diff has on one side.
     let mut staged_commit: Option<Oid> = None;
+    let mut pair: Option<(Detection, ChangedFile)> = None;
     let sizes = match which {
         WorkingTreeDiff::Untracked => Sizes {
             old: Some(0),
             new: None,
         },
-        WorkingTreeDiff::Staged | WorkingTreeDiff::Unstaged => {
+        WorkingTreeDiff::Staged | WorkingTreeDiff::Amending | WorkingTreeDiff::Unstaged => {
             let index = fresh_index(inner)?;
             if index.is_sparse() {
                 return Ok(Some(stand_in(
@@ -116,20 +124,46 @@ pub(super) fn working_tree_diff(
                 }
                 Some(_) | None => 0,
             };
-            if which == WorkingTreeDiff::Staged {
+            if which != WorkingTreeDiff::Unstaged {
                 // `git diff --cached` lists no intent-to-add entry, where `diff-index
                 // --cached` lists it as an empty file added (`crate::reads::working_tree`).
                 if intent_to_add {
                     return Ok(None);
                 }
-                let (commit, head_blob) = head_side(inner, path)?;
+                let (commit, head_blob) = if which == WorkingTreeDiff::Amending {
+                    parent_side(repo, path)?
+                } else {
+                    head_side(inner, path)?
+                };
                 staged_commit = Some(commit);
-                Sizes {
-                    old: Some(match head_blob {
-                        Some(id) => size_of(inner, id, path)?,
-                        None => 0,
-                    }),
-                    new: Some(index_size),
+                // The pair `git diff --cached` puts the path in, if any; its sides are
+                // the pair's two blobs, at two paths. Only a path missing from one side can
+                // be in one — a destination is absent from `HEAD`, a rename's source from the
+                // index — since without `-B` git pairs no modified path as a destination,
+                // and a copy's source keeps its own record; a path on both sides is asked
+                // alone, and the whole index is not searched for it.
+                let pairable = head_blob.is_none() || entry.is_none();
+                let detection = Configured::read(inner)?.search(git.version()).detection();
+                let paired = if pairable {
+                    staged_pairing(git, repo, &commit, detection, path, cancel)?
+                } else {
+                    None
+                };
+                if let Some(paired) = paired {
+                    let sizes = Sizes {
+                        old: Some(side_size(inner, &paired.old_id, path)?),
+                        new: Some(side_size(inner, &paired.new_id, path)?),
+                    };
+                    pair = Some((detection, paired));
+                    sizes
+                } else {
+                    Sizes {
+                        old: Some(match head_blob {
+                            Some(id) => size_of(inner, id, path)?,
+                            None => 0,
+                        }),
+                        new: Some(index_size),
+                    }
                 }
             } else {
                 Sizes {
@@ -140,10 +174,16 @@ pub(super) fn working_tree_diff(
         }
     };
     let side = match (which, &staged_commit) {
-        (WorkingTreeDiff::Staged, Some(commit)) => Side::Staged { commit },
+        (WorkingTreeDiff::Staged | WorkingTreeDiff::Amending, Some(commit)) => {
+            Side::Staged { commit }
+        }
         (WorkingTreeDiff::Untracked, _) => Side::Untracked,
-        (WorkingTreeDiff::Staged | WorkingTreeDiff::Unstaged, _) => Side::Unstaged,
+        (WorkingTreeDiff::Staged | WorkingTreeDiff::Amending | WorkingTreeDiff::Unstaged, _) => {
+            Side::Unstaged
+        }
     };
+    // A pair's diff driver is its source's, as git reads it for the old side.
+    let old_path = pair.as_ref().map_or(path, |(_, paired)| &paired.old_path);
     let (algorithm, ignore_submodules) = if side == Side::Untracked {
         // Every line of an untracked file is added whatever the algorithm, and it has no
         // submodule to ignore.
@@ -151,7 +191,7 @@ pub(super) fn working_tree_diff(
     } else {
         (
             Algorithms::read(inner, git.version())?
-                .for_old_paths(git, repo, &[path], cancel)?
+                .for_old_paths(git, repo, &[old_path], cancel)?
                 .pop()
                 .and_then(PathAlgorithm::flag),
             working_tree_ignore(inner, path)?,
@@ -161,6 +201,16 @@ pub(super) fn working_tree_diff(
         repo,
         git,
         path,
+        pair: pair.as_ref().map(|(detection, paired)| {
+            (
+                Paired {
+                    detection: *detection,
+                    old: &paired.old_path,
+                    new: &paired.new_path,
+                },
+                paired,
+            )
+        }),
         options,
         cancel,
         side,
@@ -195,6 +245,9 @@ struct Asker<'a, C: Cancel> {
     repo: &'a Repository,
     git: &'a GitBinary,
     path: &'a RepoPath,
+    /// The staged side's rename or copy, and the record the whole-index read found for it,
+    /// which the paired read must answer again.
+    pair: Option<(Paired<'a>, &'a ChangedFile)>,
     options: &'a ContentOptions,
     cancel: &'a C,
     side: Side<'a>,
@@ -202,7 +255,7 @@ struct Asker<'a, C: Cancel> {
     ignore_submodules: Option<&'static str>,
     /// The user's `diff.interHunkContext`, read once for the query.
     inter_hunk_context: u32,
-    /// R2.6's byte ceiling, or the load-anyway one.
+    /// The diff's byte ceiling, or the load-anyway one.
     ceiling: u64,
 }
 
@@ -216,6 +269,7 @@ impl<C: Cancel> Asker<'_, C> {
         let query = WorkingTreeQuery {
             side: self.side,
             path: self.path,
+            paired: self.pair.map(|(paired, _)| paired),
             context: git_context(self.options.context),
             algorithm: self.algorithm,
             ignore_whitespace,
@@ -223,7 +277,29 @@ impl<C: Cancel> Asker<'_, C> {
             raw_only,
             ceiling: usize::try_from(output).unwrap_or(usize::MAX),
         };
-        working_tree_patch(self.git, self.repo, &query, self.cancel)
+        let answer = working_tree_patch(self.git, self.repo, &query, self.cancel)?;
+        self.same_pair(answer)
+    }
+
+    /// The paired read's record is the pair the whole-index read found, or the index moved
+    /// between the two reads and the answer is asked again (`ContentReadsDisagree`).
+    fn same_pair(&self, answer: WorkingTreeAnswer) -> Result<WorkingTreeAnswer, Error> {
+        let Some((_, expected)) = self.pair else {
+            return Ok(answer);
+        };
+        let found = match &answer {
+            WorkingTreeAnswer::Unlisted => None,
+            WorkingTreeAnswer::Listed { file, .. } => Some(file),
+            WorkingTreeAnswer::PastCeiling { file } => file.as_ref(),
+        };
+        match found {
+            Some(file) if file == expected => Ok(answer),
+            // Git ended before its record arrived whole: nothing to compare.
+            None if matches!(answer, WorkingTreeAnswer::PastCeiling { .. }) => Ok(answer),
+            Some(_) | None => Err(self.disagree(
+                "the index changed between git's two reads of a staged rename or copy".to_owned(),
+            )),
+        }
     }
 
     fn working_tree(&self) -> bool {
@@ -239,7 +315,7 @@ impl<C: Cancel> Asker<'_, C> {
             .saturating_add(within(sizes.new))
             .saturating_mul(2)
             .saturating_add(HEADER_ROOM);
-        // R2.6: a blob too large to draw is refused before git diffs it, git asked only
+        // A blob too large to draw is refused before git diffs it, git asked only
         // whether the path changed and how. Only a working-tree modification needs the
         // patch after all, since its record cannot tell an edit from a stat or a mode
         // that alone moved — and `git diff` shows those as nothing and a mode change. A
@@ -430,10 +506,16 @@ impl<C: Cancel> Asker<'_, C> {
         }
 
         // A file added, deleted or changed in type is one change of every line, as git
-        // prints it, and so is its whitespace-ignoring reading; a modification is asked
-        // again with `-w` when the view wants that reading.
+        // prints it, and so is its whitespace-ignoring reading; a modification — and a
+        // staged rename or copy, whose two blobs git diffed line by line — is asked again
+        // with `-w` when the view wants that reading.
         let readings = match exact {
-            Some(exact) if file.status == ChangeStatus::Modified => {
+            Some(exact)
+                if matches!(
+                    file.status,
+                    ChangeStatus::Modified | ChangeStatus::Renamed(_) | ChangeStatus::Copied(_)
+                ) =>
+            {
                 let ignoring = if self.options.ignore_whitespace {
                     Some(self.ignoring(&old, &new, named, output)?)
                 } else {
@@ -684,6 +766,40 @@ fn head_side(
         .filter(|entry| entry.mode().is_blob_or_symlink())
         .map(|entry| entry.object_id());
     Ok((model_id(&head)?, blob))
+}
+
+/// The tree-ish amend's staged list compares the index with — `HEAD`'s parent, or the empty
+/// tree for a root commit (`Repository::amend_parent`) — and the blob it has at `path`.
+fn parent_side(
+    repo: &Repository,
+    path: &RepoPath,
+) -> Result<(Oid, Option<gix::hash::ObjectId>), Error> {
+    let inner = repo.inner();
+    let Some(parent) = repo.amend_parent()? else {
+        let empty = gix::hash::ObjectId::empty_tree(inner.object_hash());
+        return Ok((model_id(&empty)?, None));
+    };
+    let setup = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffSetup { source };
+    let tree = inner
+        .find_object(object_id(&parent)?)
+        .map_err(|e| setup(Box::new(e)))?
+        .peel_to_tree()
+        .map_err(|e| setup(Box::new(e)))?;
+    let entry = tree
+        .lookup_entry(path.as_bytes().split_str("/"))
+        .map_err(|e| setup(Box::new(e)))?;
+    let blob = entry
+        .filter(|entry| entry.mode().is_blob_or_symlink())
+        .map(|entry| entry.object_id());
+    Ok((parent, blob))
+}
+
+/// The size of one side of a pair, from the id git named for it: zero for an absent side.
+fn side_size(repo: &gix::Repository, id: &Option<Oid>, path: &RepoPath) -> Result<u64, Error> {
+    match not_null(*id) {
+        Some(id) => size_of(repo, object_id(&id)?, path),
+        None => Ok(0),
+    }
 }
 
 fn size_of(repo: &gix::Repository, id: gix::hash::ObjectId, path: &RepoPath) -> Result<u64, Error> {

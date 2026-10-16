@@ -1,6 +1,6 @@
 //! The working tree's status as `git status` reports it: per path, what is staged, what
 //! is not, a submodule's state, a conflict's kind, or that git does not track it — and the
-//! states in which git gives no list at all (PRD R3.2, R3.7).
+//! states in which git gives no list at all.
 //!
 //! Plain data, read from `git status --porcelain=v2 -z` by the engine. Every path is the
 //! bytes git printed, so a name with a newline, a leading space or bytes that are not
@@ -14,11 +14,27 @@ pub enum WorkingTreeStatus {
     /// What git listed, in the order it listed it: changed tracked paths, then conflicts,
     /// then untracked paths. Empty for a clean working tree.
     Listed(Vec<StatusEntry>),
-    /// git could not read the index, so it listed nothing — not "nothing changed" (R3.7).
+    /// git could not read the index, so it listed nothing — not "nothing changed".
     IndexUnreadable(UnreadableIndex),
     /// The repository is bare: there is no working tree to have a status, and no `git`
     /// was asked.
     NoWorkingTree,
+}
+
+impl WorkingTreeStatus {
+    /// Whether a tracked path has a staged or an unstaged change, or a path is conflicted: what a
+    /// checkout could carry over or discard, which untracked files alone are not (Create Branch's
+    /// "Local changes:"). Searched among every entry, never read from where git lists them. `false`
+    /// where git listed nothing.
+    pub fn has_tracked_changes(&self) -> bool {
+        match self {
+            Self::Listed(entries) => entries.iter().any(|entry| match entry {
+                StatusEntry::Changed(_) | StatusEntry::Conflicted(_) => true,
+                StatusEntry::Untracked(_) => false,
+            }),
+            Self::IndexUnreadable(_) | Self::NoWorkingTree => false,
+        }
+    }
 }
 
 /// Why the git in use could not read the index.
@@ -66,7 +82,7 @@ pub struct ChangedEntry {
 }
 
 /// What changed between `HEAD` and the index: `git diff --cached`, with the rename and
-/// copy detection the user's configuration gives `git status` (R3.3).
+/// copy detection the user's configuration gives `git status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagedChange {
     Added,
@@ -108,9 +124,8 @@ pub enum UnstagedChange {
     },
 }
 
-/// A submodule's state, as git's status reports it under the user's
-/// `submodule.<name>.ignore` and `diff.ignoreSubmodules` (R3.6): each is `false` where the
-/// setting has git not look.
+/// A submodule's state, as git's status reports it under the user's `submodule.<name>.ignore` and
+/// `diff.ignoreSubmodules`: each is `false` where the setting has git not look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SubmoduleState {
     /// Its checked-out commit differs from the one the index records.
@@ -130,7 +145,7 @@ pub struct ConflictedEntry {
     pub submodule: Option<SubmoduleState>,
 }
 
-/// Which of git's seven unmerged states a path is in, decided by which of the three index
+/// Which of git's seven unmerged states a path is in, given by which of the three index
 /// stages — 1 the common ancestor, 2 ours, 3 theirs — it has entries in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConflictKind {
@@ -195,6 +210,31 @@ impl ConflictKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Caught by: untracked files alone counted as changes, a change found only where git
+    /// lists it first, or an unreadable index read as changed.
+    #[test]
+    fn tracked_changes_are_found_among_every_entry_and_never_in_untracked_files_alone() {
+        let changed = StatusEntry::Changed(ChangedEntry {
+            path: RepoPath::from("z.rs"),
+            staged: None,
+            unstaged: Some(UnstagedChange::Modified),
+            submodule: None,
+        });
+        let conflicted = StatusEntry::Conflicted(ConflictedEntry {
+            path: RepoPath::from("c.rs"),
+            kind: ConflictKind::BothModified,
+            submodule: None,
+        });
+        let untracked = StatusEntry::Untracked(RepoPath::from("a.txt"));
+        let listed = |entries: Vec<StatusEntry>| WorkingTreeStatus::Listed(entries);
+        assert!(!listed(Vec::new()).has_tracked_changes());
+        assert!(!listed(vec![untracked.clone()]).has_tracked_changes());
+        assert!(listed(vec![untracked.clone(), changed]).has_tracked_changes());
+        assert!(listed(vec![untracked, conflicted]).has_tracked_changes());
+        assert!(!WorkingTreeStatus::IndexUnreadable(UnreadableIndex::Sparse).has_tracked_changes());
+        assert!(!WorkingTreeStatus::NoWorkingTree.has_tracked_changes());
+    }
 
     /// Caught by: two kinds swapped in the table (`UD` read as deleted by us), a code
     /// that two kinds share, or a code outside the seven accepted.

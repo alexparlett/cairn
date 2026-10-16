@@ -8,9 +8,8 @@
 //! method, [`Secret::expose_secret`], named so a call site is easy to find and
 //! hard to write by accident, and they are zeroed when the value is dropped:
 //! `zeroize` does the writes volatilely, which is what stops the compiler
-//! from removing a write to memory nothing reads afterwards (decision L11 of
-//! the credential-prompts packet — hand-rolled zeroing would claim a
-//! protection it might not provide).
+//! from removing a write to memory nothing reads afterwards (hand-rolled
+//! zeroing would claim a protection it might not provide).
 //!
 //! The invariant this type carries, and its twin: CLAUDE.md, Invariants —
 //! "no credential value is logged, Debug-printed, serialised or stored in
@@ -130,8 +129,8 @@ mod tests {
         )
     }
 
-    /// PRD B7, the drop half — as much of it as safe code can observe. This
-    /// pins that the type declares `ZeroizeOnDrop` (a marker, not a proof),
+    /// That a secret is zeroed on drop, as much of it as safe code can observe.
+    /// This pins that the type declares `ZeroizeOnDrop` (a marker, not a proof),
     /// that `zeroize()` empties the buffer, and that construction copies
     /// nothing, so the buffer that is zeroed is the only one that ever held the
     /// value. That the field is a `Zeroizing`, which is what makes the drop

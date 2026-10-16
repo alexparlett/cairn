@@ -79,7 +79,7 @@ pub(super) struct Leader {
     /// `try_wait` itself failed: the leader is gone from this process's view.
     lost: Option<io::Error>,
     /// A signal went out while the leader had not exited: anything it reports
-    /// afterwards may be the signal's doing (R4.5).
+    /// afterwards may be the signal's doing.
     signalled_while_running: bool,
     terminated_at: Option<Instant>,
     killed_at: Option<Instant>,

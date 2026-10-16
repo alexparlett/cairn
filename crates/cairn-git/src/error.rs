@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
+use cairn_model::{Confirmed, ScrubbedLines};
+
 use crate::ops::GitVersion;
 
 #[derive(Debug, thiserror::Error)]
@@ -115,6 +117,13 @@ pub enum Error {
     #[error("the changes query was cancelled after {changed} files")]
     ChangesCancelled { changed: usize },
 
+    /// Counting what a discard of files would lose was cancelled — a newer ask superseded
+    /// it, the view that asked moved on, or the repository is closing — between paths or
+    /// while a path's `git` read ran, which is then ended. No prompt is offered for it, and
+    /// it is not a failure to report: the caller asked for this.
+    #[error("counting what the discard would lose was cancelled")]
+    ConsequenceCancelled,
+
     /// A content query was cancelled — superseded before or while its `git` read ran, which
     /// is then ended. Not a failure to report as one: the caller asked for this by
     /// superseding it.
@@ -212,13 +221,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the
-    /// user: the last 256 KiB of it, whatever it said before that dropped.
-    /// `present_locks` is every `*.lock` under the git directory once a WRITE
-    /// had failed — the file another git holds, or a stale one from a crash,
-    /// which is what a write fails on and git does not wait for. Never retried
-    /// and never removed. Filled for a write run in a repository (fetch among
-    /// them); empty for a read, the version probe included, and for a write
+    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the user: the last 256
+    /// KiB of it as whole lines, each scrubbed of a URL's userinfo as the runner split it, older
+    /// lines let go of whole — and, for a commit, its stdout's lines too, in the order they
+    /// arrived. `present_locks` is every `*.lock` under the git directory once a WRITE had failed —
+    /// the file another git holds, or a stale one from a crash, which is what a write fails on and
+    /// git does not wait for. Never retried and never removed. Filled for a write run in a
+    /// repository (fetch among them); empty for a read, the version probe included, and for a write
     /// given no repository to look in.
     #[error(
         "git {arguments} failed ({status}): {stderr}{}",
@@ -227,7 +236,7 @@ pub enum Error {
     GitFailed {
         arguments: String,
         status: ExitStatus,
-        stderr: String,
+        stderr: ScrubbedLines,
         present_locks: Vec<PathBuf>,
     },
 
@@ -239,19 +248,14 @@ pub enum Error {
 
     /// git wrote more to stdout than the caller said it would take, so the
     /// process was ended and nothing it wrote is returned: an answer cut short
-    /// would look like a whole one. For a write, `stranded_locks` lists the lock
-    /// files present once it was reaped, as for a cancelled one; empty for a
-    /// read.
+    /// would look like a whole one. Only a read is given a ceiling (the
+    /// bounded-output helpers exist on a read alone), so it leaves no lock
+    /// behind to list.
     #[error(
         "git {arguments} wrote more than {ceiling} bytes; the answer was refused, not cut \
-         short{}",
-        StrandedLocks(stranded_locks)
+         short"
     )]
-    GitOutputTooLarge {
-        arguments: String,
-        ceiling: usize,
-        stranded_locks: Vec<PathBuf>,
-    },
+    GitOutputTooLarge { arguments: String, ceiling: usize },
 
     /// Cairn lost hold of a running git. A thread to read or feed one of its
     /// pipes could not start, or writing its input failed: the process was
@@ -337,6 +341,153 @@ pub enum Error {
         write: RefusedWrite,
     },
 
+    /// The index file could not be read, so what a write is checked against is unknown and
+    /// nothing was written.
+    #[error("failed to read the index: {source}")]
+    ReadIndex {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A working-tree file could not be read to be hashed, so what a write is checked
+    /// against is unknown and nothing was written.
+    #[error("failed to read {path} in the working tree: {source}")]
+    ReadWorkingTree {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A write verb was refused before any `git` ran, because what it was asked to do is not
+    /// something it does: `why` says what, for the caller to show. Nothing was written.
+    #[error("{path}: {why}")]
+    Refused { path: String, why: Refusal },
+
+    /// A verb of files was given no path at all. Nothing was written, and for a discard no
+    /// confirmation can be made: a prompt that counts nothing is refused before one is
+    /// offered.
+    #[error("no path was given")]
+    NoPaths,
+
+    /// What a patch was built from moved after it was read: the index entry, or for a discard the
+    /// working-tree file, is no longer the side the drawn diff names. The patch was not applied —
+    /// `git apply` could otherwise land it at an offset, on lines the user never saw — and nothing
+    /// was written; the remedy is to read the diff again.
+    #[error("{path} changed after its diff was read")]
+    ChangedSinceRead { path: String },
+
+    /// What a destructive operation's `Consequence` names moved between the confirmation and the
+    /// run: a file edited, replaced or removed, an entry restaged. The operation refused, writing
+    /// nothing — an outcome of its own, never git's failure.
+    #[error("{path} changed since you confirmed")]
+    ChangedSinceConfirmed { path: String },
+
+    /// A discard of files ran but did not discard every file it was confirmed for: a `git`
+    /// failed part way — `git clean` deletes what it can and exits non-zero on the rest,
+    /// after `git restore` has run — or git left a file it does not touch (an ignored file,
+    /// under `git clean -f`). Not a bare failure, since something was destroyed:
+    /// `performed` is the record of the operation, quoting the prompt the user accepted;
+    /// `kept` is every confirmed path still exactly as it was confirmed, found by reading
+    /// each again after the run, never by parsing git's prose; `failure` is git's error,
+    /// when one failed. The refresh after it shows the rest.
+    #[error(
+        "the discard did not take every file: {} kept as {} were{}",
+        Paths(kept),
+        if kept.len() == 1 { "it" } else { "they" },
+        Failure(failure.as_deref())
+    )]
+    DiscardIncomplete {
+        performed: Box<crate::ops::Performed>,
+        kept: Vec<String>,
+        failure: Option<Box<Error>>,
+    },
+
+    /// Create Branch's discard before its checkout was refused before any confirmation or any `git`
+    /// ran: `why` says what, for the caller to show. Nothing was written.
+    #[error("{why}")]
+    CheckoutRefused { why: CheckoutRefusal },
+
+    /// What Create Branch's Discard was confirmed for moved between the press and the run — `HEAD`,
+    /// the commit or the name; nothing else is compared. The checkout refused, writing nothing — an
+    /// outcome of its own, never git's failure.
+    #[error("{what}")]
+    CheckoutChangedSinceConfirmed { what: CheckoutMoved },
+
+    /// A commit or an amend was refused before any `git` ran: `why` says what, for the caller to
+    /// show. Nothing was written.
+    #[error("{why}")]
+    CommitRefused { why: CommitRefusal },
+
+    /// What an amend's `Consequence` names moved between the confirmation and the run — `HEAD` is
+    /// another commit, a remote has it now, or the reflog setting changed. The amend refused,
+    /// writing nothing — an outcome of its own, never git's failure.
+    #[error("HEAD changed since you confirmed the amend")]
+    AmendChangedSinceConfirmed,
+
+    /// A confirmed amend git ran and failed before amending — a hook refused it, say — so `HEAD` is
+    /// still the commit the confirmation names: `failure` is git's, and `unspent` the confirmation
+    /// handed back, for the skip to amend with without asking again; the skip's run re-checks it. A
+    /// token comes back only on git's failure with `HEAD` read unmoved after the reap — never for a
+    /// refusal before git ran, a cancel, or a run that moved `HEAD`. What git writes before a hook
+    /// runs — the index's refreshed stat data and cache tree, unreferenced tree objects — is git's
+    /// own bookkeeping, outside what the `Consequence` names. Its text is `failure`'s.
+    #[error("{failure}")]
+    AmendNotMade {
+        failure: Box<Error>,
+        unspent: Box<Confirmed>,
+    },
+
+    /// git made the commit or the amend — `HEAD` read after the reap is the commit it made — and
+    /// then exited non-zero: a `die` after the ref update, such as "repository has been updated,
+    /// but unable to write new_index file". It was made, the refresh after it draws it, and
+    /// `failure` is git's, for the window to show its words. A confirmed amend's token is spent:
+    /// nothing is handed back.
+    #[error("git {verb}, but then failed: {failure}")]
+    MadeButGitFailed {
+        verb: &'static str,
+        failure: Box<Error>,
+    },
+
+    /// git exited 0 from a commit or an amend, but `HEAD` is not the commit it made — not a commit
+    /// whose parent is the `HEAD` it ran on, or for an amend, whose parents are the replaced
+    /// commit's. Something else moved `HEAD` while it ran — for an amend, git may have amended
+    /// whatever `HEAD` had become (the token-free amend's window, `crate::ops::amend_unconfirmed`);
+    /// what is there now is what the refresh after it draws.
+    #[error(
+        "git said it {verb}, but HEAD is not the commit it made: something else moved HEAD \
+         while it ran{}",
+        if *verb == "amended" {
+            ", and git may have amended what HEAD had become"
+        } else {
+            ""
+        }
+    )]
+    CommitUnconfirmed { verb: &'static str },
+
+    /// `Remove index.lock…` refused before touching anything: no lock to remove, one that is not a
+    /// plain file, a `git` Cairn runs in the repository, or a confirmation of another operation.
+    #[error("index.lock was not removed: {why}")]
+    LockRefused { why: LockRefusal },
+
+    /// The lock a removal was confirmed for was removed, replaced or written since the confirmation
+    /// — its size, its time or the file itself differs. Nothing was removed: the lock now there may
+    /// be a running git's.
+    #[error("{path} changed since you confirmed")]
+    LockChangedSinceConfirmed { path: String },
+
+    /// The lock could not be removed: the filesystem refused.
+    #[error("could not remove {path}: {source}")]
+    LockNotRemoved {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A commit or an amend was cancelled before its `git` started — while what it checks
+    /// first was still being read. Nothing was written.
+    #[error("the commit was cancelled before git ran")]
+    CommitCancelledBeforeRunning,
+
     /// The remote's configuration could not be read — `git config` failed, was
     /// cancelled or answered what it never prints, or a configured refspec does
     /// not parse — so the fetch could not be checked and did not run.
@@ -346,6 +497,16 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+}
+
+impl Error {
+    /// This error as a person reads it, scrubbed of every URL's userinfo: git's own words in it
+    /// were scrubbed as the runner split them, and what else it quotes — a setting's value, a
+    /// record git printed — is scrubbed here, once, so the application draws an error's text
+    /// through this and never scrubs it itself.
+    pub fn shown(&self) -> ScrubbedLines {
+        ScrubbedLines::scrubbing(&self.to_string())
+    }
 }
 
 /// Why a fetch was refused; see [`Error::FetchRefused`].
@@ -362,7 +523,7 @@ pub enum RefusedWrite {
     /// the setting itself writes nothing on a fetch; it is refused on sight
     /// because it is what `git clone --mirror` leaves beside the
     /// `+refs/*:refs/*` refspec, and a mirror is a repository whose every
-    /// ref is the remote's to overwrite (decided on issue #17).
+    /// ref is the remote's to overwrite (issue #17).
     Mirror,
     /// The remote is defined by a file git reads in place of configuration,
     /// `$GIT_DIR/remotes/<name>` or `$GIT_DIR/branches/<name>`, which no query
@@ -388,6 +549,195 @@ impl std::fmt::Display for RefusedWrite {
                  remote add` and remove the file)"
             }
         })
+    }
+}
+
+/// Why a write verb refused before any `git` ran; see [`Error::Refused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A verb of lines was given a selection of nothing: no line and no mode change.
+    NothingSelected,
+    /// The change is taken whole, by a file verb, never by a patch of part of it — a deletion, a
+    /// type change, a state that is not text — or the selection is every line of a file that is
+    /// new, whose discard deletes it: that is the file verb's, whose prompt says the file is
+    /// deleted.
+    WholeFileOnly,
+    /// The path is conflicted: it is staged whole with `git add`, which marks it resolved, and
+    /// takes no patch and no discard by any verb.
+    Conflicted,
+    /// A submodule's changes are never discarded: `git restore` leaves its commit where it was,
+    /// only `git submodule update` moves it back, and no prompt can count what is dirty inside it.
+    Submodule,
+    /// An untracked directory holding a repository of its own: deleting it would take every commit
+    /// only it has, so it is refused before any confirmation.
+    NestedRepository,
+    /// The path is a directory or a special file, not a file `git status` lists one per
+    /// file: nothing a discard deletes or restores.
+    NotAFile,
+    /// A directory on the path is not a real directory — a file, or a symlink — so the path
+    /// is not in the working tree as git holds it: restoring it would replace what stands
+    /// there (a file no prompt named, or a link), and hashing it would read through a link
+    /// to a file outside the working tree.
+    Obstructed,
+    /// The path has no unstaged change — the working tree matches the index — so there is nothing
+    /// to discard; staged changes are never discarded.
+    NoUnstagedChange,
+    /// A destructive operation was handed a confirmation of another operation: a discard
+    /// of lines given a discard of files' token, or the reverse.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NothingSelected => "nothing is selected",
+            Self::WholeFileOnly => {
+                "this change is staged, unstaged or discarded as a whole file, never in part"
+            }
+            Self::Conflicted => {
+                "the path is conflicted, so it is staged whole and is never patched or discarded"
+            }
+            Self::Submodule => {
+                "a submodule's changes are never discarded: only `git submodule update` moves \
+                 its commit back, and nothing can count what is changed inside it"
+            }
+            Self::NestedRepository => {
+                "a repository nested in the working tree is never deleted: it would take every \
+                 commit only it has"
+            }
+            Self::NotAFile => "the path is not a file: a directory or a special file",
+            Self::Obstructed => {
+                "a directory on the path is a file or a symlink, which restoring the path would \
+                 replace"
+            }
+            Self::NoUnstagedChange => {
+                "the path has no unstaged change to discard, and staged changes are never \
+                 discarded"
+            }
+            Self::NotWhatWasConfirmed => {
+                "what the discard was handed is not what its confirmation names"
+            }
+        })
+    }
+}
+
+/// Why Create Branch's discard refused before any `git` ran; see [`Error::CheckoutRefused`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutRefusal {
+    /// git is in the middle of an operation — a merge, a rebase, `git am`, a cherry-pick or a
+    /// revert — which a forced checkout would abandon without a word.
+    InProgress(cairn_model::OperationInProgress),
+    /// The discard was handed a confirmation of another operation.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for CheckoutRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProgress(operation) => write!(
+                f,
+                "{} is in progress: finish or abort it first",
+                operation.name()
+            ),
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the discard was handed is not what its confirmation names")
+            }
+        }
+    }
+}
+
+/// What moved between Create Branch's Discard being confirmed and its run; see
+/// [`Error::CheckoutChangedSinceConfirmed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutMoved {
+    /// `HEAD` is another commit, or another branch's, than when it was confirmed.
+    Head,
+    /// The commit the branch was to be created at can no longer be read.
+    Commit { at: cairn_model::Oid },
+    /// The name can no longer be created: a branch has it now, or one clashes with it.
+    Name { name: String },
+}
+
+impl std::fmt::Display for CheckoutMoved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Head => f.write_str("HEAD moved since you confirmed"),
+            Self::Commit { at } => write!(f, "commit {} can no longer be read", at.short()),
+            Self::Name { name } => write!(f, "the branch {name} can no longer be created"),
+        }
+    }
+}
+
+/// Why a commit or an amend refused before any `git` ran; see [`Error::CommitRefused`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitRefusal {
+    /// git is in the middle of an operation a commit or an amend is refused during: a rebase, `git
+    /// am` or a sequence of cherry-picks or reverts — or, for an amend, any operation, a merge and
+    /// a single pick included, which git itself refuses to amend in. Its text names git's command
+    /// to continue or abort it.
+    InProgress(cairn_model::OperationInProgress),
+    /// The branch has no commit yet, so there is nothing to amend.
+    NothingToAmend,
+    /// `i18n.commitEncoding` names an encoding other than UTF-8: git stores the message's bytes as
+    /// they are under that encoding's name, so a UTF-8 draft would be read back as other characters
+    /// (git-write-verbs.md §5). The value as configured.
+    CommitEncoding { encoding: String },
+    /// An amend was handed a confirmation of another operation.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for CommitRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProgress(operation) => write!(
+                f,
+                "{} is in progress: continue or abort it with {} --continue or --abort",
+                operation.name(),
+                operation.git_command()
+            ),
+            Self::NothingToAmend => f.write_str("the branch has no commit to amend yet"),
+            Self::CommitEncoding { encoding } => write!(
+                f,
+                "i18n.commitEncoding is {encoding:?}, and Cairn writes a message only as UTF-8"
+            ),
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the amend was handed is not what its confirmation names")
+            }
+        }
+    }
+}
+
+/// Why `Remove index.lock…` refused; see [`Error::LockRefused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockRefusal {
+    /// There is no `index.lock` in the repository's git directory.
+    NoLock,
+    /// `index.lock` is not a plain file (a directory, a symbolic link).
+    NotAFile,
+    /// `index.lock` could not be looked at: permission denied, an I/O error.
+    Unreadable(std::io::ErrorKind),
+    /// Cairn runs this many `git` invocations in the repository now; the lock may be one of
+    /// theirs.
+    GitRunning(usize),
+    /// The removal was handed a confirmation of another operation, or of another repository's
+    /// lock.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for LockRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoLock => f.write_str("there is no index.lock"),
+            Self::NotAFile => f.write_str("index.lock is not a file"),
+            Self::Unreadable(kind) => write!(f, "index.lock could not be read ({kind})"),
+            Self::GitRunning(1) => f.write_str("Cairn is running git in this repository"),
+            Self::GitRunning(n) => {
+                write!(f, "Cairn is running {n} git processes in this repository")
+            }
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the removal was handed is not what its confirmation names")
+            }
+        }
     }
 }
 
@@ -437,6 +787,30 @@ impl std::fmt::Display for PresentLocks<'_> {
     }
 }
 
+/// Paths in a message, comma-separated.
+struct Paths<'a>(&'a [String]);
+
+impl std::fmt::Display for Paths<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("nothing");
+        }
+        f.write_str(&self.0.join(", "))
+    }
+}
+
+/// A failure beside a partial outcome: nothing when there was none.
+struct Failure<'a>(Option<&'a Error>);
+
+impl std::fmt::Display for Failure<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(error) => write!(f, "; {error}"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// A search path in a message: `/usr/local/bin, /usr/bin`, or `nothing` when
 /// `PATH` was unset.
 struct Directories<'a>(&'a [PathBuf]);
@@ -460,8 +834,8 @@ impl std::fmt::Display for Directories<'_> {
 mod tests {
     use super::*;
 
-    /// R5.3: a failed write's message names the lock files present, and a failure
-    /// with none reads as before.
+    /// A failed write's message names the lock files present, and a failure with none names no
+    /// lock.
     #[test]
     fn a_failure_names_the_locks_present_and_is_silent_when_there_are_none() {
         use std::os::unix::process::ExitStatusExt as _;
@@ -469,7 +843,7 @@ mod tests {
         let clean = Error::GitFailed {
             arguments: "add x".to_owned(),
             status,
-            stderr: "fatal: no".to_owned(),
+            stderr: ScrubbedLines::scrubbing("fatal: no"),
             present_locks: Vec::new(),
         };
         assert_eq!(
@@ -479,12 +853,40 @@ mod tests {
         let locked = Error::GitFailed {
             arguments: "add x".to_owned(),
             status,
-            stderr: "fatal: Unable to create index.lock".to_owned(),
+            stderr: ScrubbedLines::scrubbing("fatal: Unable to create index.lock"),
             present_locks: vec![PathBuf::from("/r/.git/index.lock")],
         };
         let text = locked.to_string();
         assert!(text.contains("lock files are present"), "{text}");
         assert!(text.ends_with("/r/.git/index.lock"), "{text}");
+    }
+
+    /// An amend reported unconfirmed says git may have amended what `HEAD` had become, the
+    /// token-free amend's window. Caught by: the commit's words reused.
+    #[test]
+    fn an_unconfirmed_amend_says_git_may_have_amended_what_head_became() {
+        let amended = Error::CommitUnconfirmed { verb: "amended" }.to_string();
+        assert!(
+            amended.ends_with("and git may have amended what HEAD had become"),
+            "{amended}"
+        );
+        let committed = Error::CommitUnconfirmed { verb: "committed" }.to_string();
+        assert!(committed.ends_with("while it ran"), "{committed}");
+    }
+
+    /// An error's text as the application draws it carries no URL's userinfo, whatever part of it
+    /// quoted one — git's words, or a value the engine quotes beside them. Caught by: the
+    /// application handed `to_string`'s text as it is.
+    #[test]
+    fn an_errors_shown_text_carries_no_userinfo() {
+        let quoting = Error::InvalidConfig {
+            key: "remote.origin.url".to_owned(),
+            value: "https://user:SECRET@host/r".to_owned(),
+        };
+        assert!(quoting.to_string().contains("SECRET"), "the case is real");
+        let shown = quoting.shown();
+        assert!(!shown.text().contains("SECRET"), "{shown}");
+        assert!(shown.text().contains("https://host/r"), "{shown}");
     }
 
     /// Issue #19: the message names every stranded lock, and says nothing about locks

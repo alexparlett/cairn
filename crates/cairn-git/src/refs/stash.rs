@@ -1,10 +1,10 @@
-//! The stash list: the `refs/stash` reflog, newest first, as `git stash list` prints it
-//! (R1.5).
+//! The stash list: the `refs/stash` reflog, newest first, as `git stash list` prints it.
 //!
 //! gix has nothing stash-specific; a stash is an entry of an ordinary ref's reflog. Its
 //! newest-first reader (`log_iter().rev()`) reads through a 4 KiB window and stops for
 //! good at the first longer line — a `git stash push -m` with a long message — so the log
-//! is read whole, oldest first, and reversed (parity rule 3).
+//! is read whole, oldest first, and reversed (`docs/systems/refs.md`, "The five parity
+//! rules").
 
 use cairn_model::StashEntry;
 

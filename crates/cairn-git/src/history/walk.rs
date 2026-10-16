@@ -31,7 +31,7 @@ use crate::{Cancel, Error};
 use super::HistoryOrder;
 
 /// gitoxide's traversal over [`Grafted`] reads, yielding detached walk entries.
-pub(super) type CommitWalk<'repo> =
+pub(crate) type CommitWalk<'repo> =
     gix::traverse::commit::Simple<Seeded<'repo>, fn(&gix::oid) -> bool>;
 
 /// A walk from `tips` in `order`, with the repository's commit-graph where git would use one;
@@ -43,10 +43,24 @@ pub(super) type CommitWalk<'repo> =
 /// `cancel` polled before each but the first (a walk from one tip polls as it always did,
 /// once per commit laid out), and gitoxide's own read of each tip is then answered from
 /// the dates read ([`Seeded`]), costing no object read. Graph order reads no tip to open.
-pub(super) fn open<'repo>(
+pub(crate) fn open<'repo>(
     repo: &'repo gix::Repository,
     tips: &[gix::hash::ObjectId],
     order: HistoryOrder,
+    cancel: &impl Cancel,
+) -> Result<Option<CommitWalk<'repo>>, Error> {
+    open_dated(repo, tips, order, HashMap::new(), cancel)
+}
+
+/// [`open`], with the committer dates of some tips known already — read with their ids, as
+/// Show Lost Commits' reflog tips are (`reflogs::reflog_tips`), so no tip is read twice. A
+/// tip whose date is not known is taken from the commit-graph where the graph holds it, as
+/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise.
+pub(crate) fn open_dated<'repo>(
+    repo: &'repo gix::Repository,
+    tips: &[gix::hash::ObjectId],
+    order: HistoryOrder,
+    known: HashMap<gix::hash::ObjectId, i64>,
     cancel: &impl Cancel,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
@@ -66,7 +80,7 @@ pub(super) fn open<'repo>(
         objects: &repo.objects,
         boundary,
     };
-    let mut dates = HashMap::new();
+    let mut dates = known;
     if matches!(order, HistoryOrder::CommitTime) {
         dates.reserve(tips.len());
         let mut buffer = Vec::new();
@@ -75,6 +89,10 @@ pub(super) fn open<'repo>(
                 return Ok(None);
             }
             if dates.contains_key(tip) {
+                continue;
+            }
+            if let Some(date) = graph.as_ref().and_then(|graph| graph_date(graph, tip)) {
+                dates.insert(*tip, date);
                 continue;
             }
             let commit = objects
@@ -97,12 +115,18 @@ pub(super) fn open<'repo>(
     Ok(Some(walk.commit_graph(graph)))
 }
 
+/// `id`'s committer date as the commit-graph holds it, when it holds `id`.
+pub(crate) fn graph_date(graph: &gix::commitgraph::Graph, id: &gix::hash::oid) -> Option<i64> {
+    let commit = graph.commit_by_id(id)?;
+    i64::try_from(commit.committer_timestamp()).ok()
+}
+
 /// [`Grafted`] reads, except that while a walk opens, a tip whose committer date [`open`]
 /// has read is answered with a commit holding that date and nothing else: all gitoxide
 /// reads of a tip to order it (`add_to_queue`). Its every later read — its parents, when
 /// the walk reaches it — is the stored object, the dates being cleared once the walk is
 /// open.
-pub(super) struct Seeded<'repo> {
+pub(crate) struct Seeded<'repo> {
     objects: Grafted<'repo>,
     dates: Rc<RefCell<HashMap<gix::hash::ObjectId, i64>>>,
 }
@@ -143,8 +167,8 @@ impl gix::objs::Find for Seeded<'_> {
     }
 }
 
-/// A walk from `tip` that leaves out every commit `hidden` reaches — `git rev-list
-/// <tip> ^<hidden>` — over the commits git's walk sees ([`Grafted`]). Every read goes
+/// A walk from `tip` that leaves out every commit any of `hidden` reaches — `git rev-list
+/// <tip> ^<hidden>...` — over the commits git's walk sees ([`Grafted`]). Every read goes
 /// through [`Polled`], which fails once `cancel` says so: the frontier gix paints before a
 /// hiding walk's first commit is one long call, and a read that fails is what stops it.
 /// So no commit-graph is used here, though git would use one: a commit read from the
@@ -153,7 +177,7 @@ impl gix::objs::Find for Seeded<'_> {
 pub(crate) fn hiding<'a, C: Cancel>(
     repo: &'a gix::Repository,
     tip: gix::hash::ObjectId,
-    hidden: gix::hash::ObjectId,
+    hidden: impl IntoIterator<Item = gix::hash::ObjectId>,
     cancel: &'a C,
     reads: &'a Cell<usize>,
 ) -> Result<HidingWalk<'a, C>, Error> {
@@ -168,8 +192,71 @@ pub(crate) fn hiding<'a, C: Cancel>(
         reads,
     };
     gix::traverse::commit::Simple::new([tip], objects)
-        .hide([hidden])
+        .hide(hidden)
         .map_err(|e| walk_error(Box::new(e)))
+}
+
+/// Whether any of `hidden` reaches `tip`, answered from the commit-graph alone, as git's
+/// `repo_is_descendant_of` answers it with generation numbers: a walk down from the hidden tips
+/// through the graph's parents that never descends below `tip`'s generation, since a commit of
+/// a lower generation cannot reach it. No object is read, `cancel` is polled before each
+/// commit the walk visits, and what it visited is counted in `visited`. `None` — answer by the
+/// object walk ([`hiding`]) instead — where the repository is shallow, no graph is enabled or
+/// opens, or the graph does not hold `tip` and every hidden tip. `Some(Err(..))` once
+/// cancelled, or on a graph that does not parse.
+pub(crate) fn reaches_through_graph<C: Cancel>(
+    repo: &gix::Repository,
+    tip: gix::hash::ObjectId,
+    hidden: &[gix::hash::ObjectId],
+    cancel: &C,
+    visited: &Cell<usize>,
+) -> Option<Result<bool, Error>> {
+    if repo.is_shallow() {
+        return None;
+    }
+    let graph = repo.commit_graph_if_enabled().ok().flatten()?;
+    let target = graph.lookup(tip)?;
+    let floor = graph.commit_at(target).generation();
+    let starts: Vec<gix::commitgraph::Position> = hidden
+        .iter()
+        .map(|id| graph.lookup(id))
+        .collect::<Option<_>>()?;
+    let mut seen = vec![false; graph.num_commits() as usize];
+    let mut stack = starts;
+    while let Some(at) = stack.pop() {
+        let Some(mark) = seen.get_mut(at.0 as usize) else {
+            continue;
+        };
+        if std::mem::replace(mark, true) {
+            continue;
+        }
+        if cancel.is_cancelled() {
+            return Some(Err(Error::Cancelled {
+                walked: visited.get(),
+            }));
+        }
+        visited.set(visited.get() + 1);
+        if at == target {
+            return Some(Ok(true));
+        }
+        let commit = graph.commit_at(at);
+        // A commit below the tip's generation cannot reach it (generations only fall along a
+        // parent edge), so nothing under it is walked.
+        if commit.generation() < floor {
+            continue;
+        }
+        for parent in commit.iter_parents() {
+            match parent {
+                Ok(parent) => stack.push(parent),
+                Err(source) => {
+                    return Some(Err(Error::Walk {
+                        source: Box::new(source),
+                    }));
+                }
+            }
+        }
+    }
+    Some(Ok(false))
 }
 
 /// See [`hiding`].
@@ -204,7 +291,7 @@ impl<C: Cancel> gix::objs::Find for Polled<'_, C> {
 
 /// The object database as git's walk sees it in a shallow clone: a boundary commit reads
 /// with no parents. Every other object, and every other commit, is the stored bytes.
-pub(super) struct Grafted<'repo> {
+pub(crate) struct Grafted<'repo> {
     objects: &'repo gix::OdbHandle,
     boundary: ShallowBoundary,
 }
@@ -284,5 +371,91 @@ parent 3333333333333333333333333333333333333333\n";
         );
         let root = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@example.com> 1 +0000\n\nmsg";
         assert_eq!(without_parents(root), root.to_vec(), "a root is untouched");
+    }
+
+    /// A repository of its own under the temporary directory, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        // The git Cairn would find, so the fixture is made by the binary it runs.
+        let program = crate::ops::GitBinary::discover(&crate::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        ))
+        .unwrap();
+        let output = std::process::Command::new(program.path())
+            .args(["-c", "user.name=A", "-c", "user.email=a@example.com"])
+            .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    /// The graph answers alone exactly when it holds the tip and every hidden tip — true where
+    /// a hidden tip reaches the tip, false where none does — and steps aside (`None`) when it
+    /// holds the tip but not a hidden tip, or not the tip, so the object walk answers. Caught
+    /// by: hidden tips the graph lacks skipped rather than handing over (a pushed `HEAD` called
+    /// unpublished), or the graph route never taken.
+    #[test]
+    fn the_graph_answers_only_for_commits_it_holds_all_of() {
+        let dir = std::env::temp_dir().join(format!("cairn-graph-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = Scratch(dir);
+        let at = scratch.0.as_path();
+        git(at, &["init", "-q", "-b", "main"]);
+        let mut commits = Vec::new();
+        for n in 0..4 {
+            git(
+                at,
+                &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")],
+            );
+            commits.push(git(at, &["rev-parse", "HEAD"]));
+        }
+        git(at, &["checkout", "-q", "-b", "side", &commits[1]]);
+        git(at, &["commit", "-q", "--allow-empty", "-m", "side"]);
+        let side = git(at, &["rev-parse", "HEAD"]);
+        git(at, &["commit-graph", "write", "--reachable"]);
+        git(
+            at,
+            &["commit", "-q", "--allow-empty", "-m", "outside the graph"],
+        );
+        let outside = git(at, &["rev-parse", "HEAD"]);
+        let repo = crate::SharedRepository::discover(at).unwrap().to_worker();
+        let id = |hex: &str| gix::hash::ObjectId::from_hex(hex.as_bytes()).unwrap();
+        let ask = |tip: &str, hidden: &[&str]| {
+            let hidden: Vec<_> = hidden.iter().map(|hex| id(hex)).collect();
+            reaches_through_graph(
+                repo.inner(),
+                id(tip),
+                &hidden,
+                &crate::CancelSignal::new(),
+                &Cell::new(0),
+            )
+            .map(|answer| answer.unwrap())
+        };
+        assert_eq!(ask(&commits[0], &[&commits[3]]), Some(true));
+        assert_eq!(ask(&commits[3], &[&commits[0]]), Some(false));
+        assert_eq!(ask(&side, &[&commits[3]]), Some(false), "a side branch");
+        assert_eq!(ask(&commits[1], &[&commits[3], &side]), Some(true));
+        assert_eq!(
+            ask(&side, &[&commits[3], &outside]),
+            None,
+            "a hidden tip the graph does not hold"
+        );
+        assert_eq!(
+            ask(&outside, &[&commits[3]]),
+            None,
+            "a tip it does not hold"
+        );
     }
 }

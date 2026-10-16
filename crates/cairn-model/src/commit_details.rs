@@ -1,4 +1,4 @@
-//! Everything the Commit tab shows about one commit (R1.8).
+//! Everything the Commit tab shows about one commit.
 //!
 //! Beside [`crate::CommitSummary`] rather than folded into it: the history list wants a
 //! subject and one name, and paying for a committer, an offset and a whole message per row
@@ -47,7 +47,7 @@ pub struct Signature {
     pub time: Timestamp,
 }
 
-/// One commit, in the detail the Commit tab draws (R5.3).
+/// One commit, in the detail the Commit tab draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitDetails {
     pub id: Oid,

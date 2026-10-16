@@ -1,22 +1,22 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Ten lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
-//! R11.1): the history, the walk its pages come from, the changes query, the file diff, the
-//! Changes tab's filter over a change set's files, the refs snapshot, ahead/behind, the
-//! working tree's status, the sidebar's filter over the refs and Local Changes' filter over
-//! the status. A new query supersedes the
-//! older ones in its own lane only, with one
+//! The lanes: the history, the walk its pages come from, the changes query, the file diff,
+//! the Changes tab's filter over a change set's files, the refs snapshot, ahead/behind, the
+//! working tree's status, the sidebar's filter over the refs, Local Changes' filter over the
+//! status, the count of what a discard would lose, what the commit box reads, what an amend
+//! would replace, whether a name can be a new branch's, and the count of what Create Branch's
+//! Discard would lose. A new query supersedes the older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
 //! diff, a selection never cancels a scroll, and an operation, which is numbered in no
 //! lane, supersedes nothing.
 //!
-//! The history has two numbers (refs-and-status R8.5). Its query lane is what a scroll, a
-//! find in the sidebar and their stop are numbered in, each superseding the walking the last
-//! one asked for. Its walk lane moves only when a walk is opened: every page of rows is
-//! answered under the walk's number, never the query's, because a page a superseded find has
-//! already laid out is still the next page of the same walk — dropping it would leave a hole
-//! in the history the next page is appended after.
+//! The history has two numbers. Its query lane is what a scroll, a find in the sidebar and
+//! their stop are numbered in, each superseding the walking the last one asked for. Its walk
+//! lane moves only when a walk is opened: every page of rows is answered under the walk's
+//! number, never the query's, because a page a superseded find has already laid out is still
+//! the next page of the same walk — dropping it would leave a hole in the history the next page
+//! is appended after.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -36,22 +36,40 @@ pub enum QueryLane {
     Changes,
     /// One file's diff, or every file's (Expand All).
     FileDiff,
-    /// Which of a change set's files a filter's text leaves (phase 07): a list operation,
-    /// numbered so a keystroke supersedes the filter of the one before it, and nothing else.
+    /// Which of a change set's files a filter's text leaves: a list operation, numbered so a
+    /// keystroke supersedes the filter of the one before it, and nothing else.
     FileFilter,
-    /// The refs snapshot a refresh reads, on the history thread (R11.2).
+    /// The refs snapshot a refresh reads, on the history thread.
     Refs,
     /// How far each branch and its upstream have gone apart, for the snapshot a refresh read.
     AheadBehind,
-    /// The working tree's status, as `git status` answers it. No refresh supersedes it (R10.3
-    /// as amended, the user's decision of 2026-10-07): its number moves for nothing, so a
-    /// status is cancelled only by a close, which stops every lane.
+    /// The working tree's status, as `git status` answers it. No refresh supersedes it: its
+    /// number moves for nothing, so a status is cancelled only by a close, which stops every
+    /// lane.
     Status,
-    /// Which refs and stashes the sidebar's filter text leaves (R8.3).
+    /// Which refs and stashes the sidebar's filter text leaves.
     RefFilter,
-    /// Which paths of Local Changes' two lists the view's filter text leaves (R9): numbered so
+    /// Which paths of Local Changes' two lists the view's filter text leaves: numbered so
     /// a keystroke, or the lists of a status that has arrived, supersede the pass before.
     LocalChangesFilter,
+    /// What a discard of files would lose, counted on the local lane before its
+    /// confirmation: numbered so a newer discard asked, or the view letting the count go
+    /// (`Request::StopCounting`), ends the one being counted, its `git` reads with it.
+    DiscardCount,
+    /// What the commit box reads beside a commit — the operation in progress, the hooks git
+    /// would run, the recent messages: numbered so the next ask, made as a refresh's refs
+    /// arrive, supersedes the one before.
+    CommitBox,
+    /// What amending `HEAD` would replace, its message and amend's staged list, read on the
+    /// local lane while Amend is ticked: numbered so each status arriving, or Amend unticked,
+    /// ends the read before — its walk and its `git` read.
+    Amending,
+    /// Whether a name typed in Create Branch can be a new branch's: numbered so each
+    /// keystroke's ask supersedes the one before.
+    BranchName,
+    /// What Create Branch's Discard would lose, counted on the local lane before its
+    /// confirmation: numbered so a newer ask ends the one before.
+    CheckoutCount,
 }
 
 impl QueryLane {
@@ -68,6 +86,11 @@ impl QueryLane {
         Self::Status,
         Self::RefFilter,
         Self::LocalChangesFilter,
+        Self::DiscardCount,
+        Self::CommitBox,
+        Self::Amending,
+        Self::BranchName,
+        Self::CheckoutCount,
     ];
 
     fn index(self) -> usize {
@@ -82,6 +105,11 @@ impl QueryLane {
             Self::Status => 7,
             Self::RefFilter => 8,
             Self::LocalChangesFilter => 9,
+            Self::DiscardCount => 10,
+            Self::CommitBox => 11,
+            Self::Amending => 12,
+            Self::BranchName => 13,
+            Self::CheckoutCount => 14,
         }
     }
 
@@ -99,12 +127,17 @@ impl QueryLane {
             Self::Status => &[Self::Status],
             Self::RefFilter => &[Self::RefFilter],
             Self::LocalChangesFilter => &[Self::LocalChangesFilter],
+            Self::DiscardCount => &[Self::DiscardCount],
+            Self::CommitBox => &[Self::CommitBox],
+            Self::Amending => &[Self::Amending],
+            Self::BranchName => &[Self::BranchName],
+            Self::CheckoutCount => &[Self::CheckoutCount],
         }
     }
 }
 
 /// How many lanes there are: one counter each.
-const LANES: usize = 10;
+const LANES: usize = 15;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -233,7 +266,7 @@ mod tests {
         }
     }
 
-    /// PRD R4.1, the whole table: each lane supersedes itself, a changes query the
+    /// The whole table: each lane supersedes itself, a changes query the
     /// file-diff lane as well, and nothing else crosses. Caught by: one counter for every
     /// lane (a scroll cancels a diff), or a changes query that leaves the file diff of the
     /// previous commit current.
@@ -275,6 +308,11 @@ mod tests {
             QueryLane::Status,
             QueryLane::RefFilter,
             QueryLane::LocalChangesFilter,
+            QueryLane::DiscardCount,
+            QueryLane::CommitBox,
+            QueryLane::Amending,
+            QueryLane::BranchName,
+            QueryLane::CheckoutCount,
         ] {
             assert_eq!(
                 lane.supersedes(),

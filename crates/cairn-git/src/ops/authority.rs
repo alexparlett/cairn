@@ -85,7 +85,7 @@ mod tests {
             .unwrap_or_else(|| panic!("the stub environment has no PATH"))
     }
 
-    /// PRD G3 end to end, for a write: the base with the editor pinned, no
+    /// End to end, for a write: the base with the editor pinned, no
     /// `GIT_OPTIONAL_LOCKS`, no token when none was given — exactly that, and
     /// nothing from this process.
     #[test]
@@ -222,11 +222,11 @@ mod tests {
     /// machine.
     const PROMPTLY: Duration = Duration::from_secs(4);
 
-    /// PRD G5: `git commit` with no message fails promptly instead of waiting on
-    /// an editor — the user's configured `core.editor` is never run, because
+    /// `git commit` with no message fails promptly instead of waiting on an
+    /// editor — the user's configured `core.editor` is never run, because
     /// `GIT_EDITOR=false` outranks it — and nothing is committed. Decisive
-    /// because the configured editor records that it ran and then hangs past
-    /// the deadline, so an environment without the pin fails both assertions.
+    /// because the configured editor records that it ran and then hangs past the
+    /// deadline, so an environment without the pin fails both assertions.
     #[test]
     fn a_commit_without_a_message_fails_promptly_instead_of_opening_an_editor() {
         let scratch = Scratch::new("commit-editor");
@@ -301,12 +301,12 @@ mod tests {
         assert_eq!(scratch.head(), before, "the rebase moved HEAD");
     }
 
-    /// PRD G4: a read of `git status` on a dirty repository whose index is stale
-    /// leaves the index byte for byte as it was, because a read runs with
+    /// A read of `git status` on a dirty repository whose index is stale leaves
+    /// the index byte for byte as it was, because a read runs with
     /// `GIT_OPTIONAL_LOCKS=0`. Decisive because the same `status` as a write —
-    /// the one thing that differs being the read profile — DOES rewrite the
-    /// index of the same repository: without that, an index git had no reason
-    /// to refresh would pass this whatever the environment said.
+    /// the one thing that differs being the read profile — DOES rewrite the index
+    /// of the same repository: without that, an index git had no reason to
+    /// refresh would pass this whatever the environment said.
     #[test]
     fn a_status_read_leaves_a_stale_index_byte_identical() {
         let scratch = Scratch::new("status-read");
@@ -369,10 +369,10 @@ mod tests {
     /// The runner's criteria that are about `git` itself, with real `git`: they
     /// need a write, and only `ops/` can build one.
     ///
-    /// G6, real git: a tree of 100,000 entries made by `mktree` fed on stdin, then
-    /// read back by `ls-tree -z` — over 5 MiB of records — arrives whole and in
-    /// order. Caught by: a record lost or split at a chunk boundary, or stdin
-    /// never closed (`mktree` waits for the end of its input forever).
+    /// A tree of 100,000 entries made by `mktree` fed on stdin, then read back by
+    /// `ls-tree -z` — over 5 MiB of records — arrives whole and in order. Caught
+    /// by: a record lost or split at a chunk boundary, or stdin never closed
+    /// (`mktree` waits for the end of its input forever).
     #[test]
     fn a_real_read_of_over_five_mib_of_records_arrives_whole_and_in_order() {
         const ENTRIES: usize = 100_000;
@@ -388,9 +388,7 @@ mod tests {
             .in_repository(&handle)
             .args(["mktree", "--missing"])
             .input(listing)
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {})
+            .collected()
             .unwrap()
             .stdout_text()
             .trim()
@@ -434,13 +432,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("a hook path has a parent")),
         )
         .unwrap_or_else(|error| panic!("{error}"));
-        std::fs::write(
+        crate::process::stub_git::write_executable(
             &hook,
-            format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
-        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap_or_else(|error| panic!("{error}"));
+            &format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+            0o755,
+        );
         (scratch, marker)
     }
 
@@ -503,11 +499,11 @@ mod tests {
         panic!("the hook stayed 'text file busy' through every retry");
     }
 
-    /// G9, real git: a `commit` cancelled while its `pre-commit` hook sleeps
-    /// leaves no `index.lock` — `SIGTERM` to the group, which git cleans up on and
-    /// which ends the hook too — commits nothing, and reports a cancelled write
-    /// with nothing stranded. Caught by: `SIGKILL` first (the lock stays), or a
-    /// signal to git alone (the hook's `sleep` holds the pipes for 30 s).
+    /// With real git, a `commit` cancelled while its `pre-commit` hook sleeps
+    /// leaves no `index.lock` — `SIGTERM` to the group, which git cleans up on
+    /// and which ends the hook too — commits nothing, and reports a cancelled
+    /// write with nothing stranded. Caught by: `SIGKILL` first (the lock stays),
+    /// or a signal to git alone (the hook's `sleep` holds the pipes for 30 s).
     #[test]
     fn a_commit_cancelled_inside_a_sleeping_hook_leaves_no_index_lock() {
         let (scratch, marker) = committing_into_a_sleeping_hook("cancelled-commit");
@@ -535,11 +531,11 @@ mod tests {
     /// Below the runner's two seconds: a cancel that took the grace was `SIGKILL`.
     const TERMINATION_GRACE_FOR_TESTS: Duration = Duration::from_millis(1500);
 
-    /// G11, a cancelled write lists the lock files present AFTER the reap: a
-    /// stale lock left by an earlier crash is reported, and the `index.lock` git
-    /// held until the signal is not, because git removed it on its way out.
-    /// Caught by: searching before the reap (the index lock is listed too), or
-    /// not searching.
+    /// A cancelled write lists the lock files present AFTER the reap: a stale
+    /// lock left by an earlier crash is reported, and the `index.lock` git held
+    /// until the signal is not, because git removed it on its way out. Caught by:
+    /// searching before the reap (the index lock is listed too), or not
+    /// searching.
     #[test]
     fn a_cancelled_write_lists_the_locks_present_after_the_reap() {
         let (scratch, marker) = committing_into_a_sleeping_hook("cancelled-locks");
@@ -559,7 +555,7 @@ mod tests {
         }
     }
 
-    /// G11, the ordering pinned: a write whose process takes a moment to remove its
+    /// The ordering pinned: a write whose process takes a moment to remove its
     /// lock on `SIGTERM` — as git does, but slowly enough to see — has its locks
     /// listed only after it is reaped, so the lock it removed on its way out is
     /// not reported and the stale one is. A stub `git`, run as a write in a real
@@ -591,9 +587,11 @@ mod tests {
         let outcome = invocation.finish(
             &CancelSignal::new(),
             |_| {},
-            |line| {
-                if line == "hanging" {
-                    killer.kill();
+            |said| {
+                for line in crate::process::spoken(said) {
+                    if line == "hanging" {
+                        killer.kill();
+                    }
                 }
             },
         );
@@ -614,10 +612,12 @@ mod tests {
         assert!(!repo.join(".git/index.lock").exists());
     }
 
-    /// R5.2 for the writes the runner ends itself: a crossed ceiling and a pipe
-    /// thread that could not start each list the lock files present after the
-    /// reap, as a cancel does — here a stale one planted beforehand. Caught by:
-    /// either error built without the write's lock search.
+    /// A write the runner ends itself lists its locks too: a pipe thread that
+    /// could not start lists the lock files present after the reap, as a cancel
+    /// does — here a stale one planted beforehand. Caught by: the error built
+    /// without the write's lock search. (A crossed ceiling, the runner's other
+    /// ending, cannot reach a write: the bounded-output helpers are a read's
+    /// alone.)
     #[test]
     fn a_write_the_runner_ends_lists_the_locks_present() {
         let scratch = Scratch::new("runner-ended-write");
@@ -639,20 +639,6 @@ mod tests {
                 .collect()
         };
 
-        let over = git
-            .write_invocation(WriteAuthority::new())
-            .in_repository(&handle)
-            .arg("commit")
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {});
-        match over {
-            Err(Error::GitOutputTooLarge { stranded_locks, .. }) => {
-                assert_eq!(listed(&stranded_locks), std::slice::from_ref(&stale));
-            }
-            other => panic!("expected the ceiling error, got {other:?}"),
-        }
-
         let unwatched = git
             .write_invocation(WriteAuthority::new())
             .in_repository(&handle)
@@ -666,8 +652,8 @@ mod tests {
         }
     }
 
-    /// G11, a failed write names the `index.lock` it failed on — another git, or
-    /// a stale lock — and nothing removes it. Caught by: a write failure that
+    /// A failed write names the `index.lock` it failed on — another git, or a
+    /// stale lock — and nothing removes it. Caught by: a write failure that
     /// reports no locks.
     #[test]
     fn a_failed_write_names_a_present_index_lock() {
@@ -709,11 +695,11 @@ mod tests {
         );
     }
 
-    /// G11, a read with real git: its failure carries the arguments, the status and
-    /// git's stderr, and no locks; cancelled, it reports a read's cancellation and
-    /// nothing else. The long read is a shell alias, so it runs as long as the test
-    /// needs. Caught by: a read cancelled as a write (lock files searched), or a
-    /// superseded read that runs to its end.
+    /// A read with real git: its failure carries the arguments, the status and
+    /// git's stderr, and no locks; cancelled, it reports a read's cancellation
+    /// and nothing else. The long read is a shell alias, so it runs as long as
+    /// the test needs. Caught by: a read cancelled as a write (lock files
+    /// searched), or a superseded read that runs to its end.
     #[test]
     fn a_real_read_fails_with_its_diagnostic_and_cancels_as_a_read() {
         let scratch = Scratch::new("read-outcomes");
@@ -788,15 +774,15 @@ mod tests {
         names
     }
 
-    /// A read never lazily fetches (decided by the user on 2026-10-02): in a
-    /// partial clone, a read asking for a blob only the promisor remote holds
-    /// is told it is missing, and no pack is written. Decisive because the same
-    /// `cat-file` as a write — whose profile lacks `GIT_NO_LAZY_FETCH` — does
-    /// fetch the blob, into a new pack, from the same clone: without that, a
-    /// clone that already held the blob would pass this whatever the
-    /// environment said. Git older than 2.44 ignores the variable, so there
-    /// the read may fetch, which is the constraint `crate::reads` designs
-    /// around; on such a git this says so and decides nothing.
+    /// A read never lazily fetches: in a partial clone, a read asking for a blob
+    /// only the promisor remote holds is told it is missing, and no pack is
+    /// written. Decisive because the same `cat-file` as a write — whose profile
+    /// lacks `GIT_NO_LAZY_FETCH` — does fetch the blob, into a new pack, from the
+    /// same clone: without that, a clone that already held the blob would pass
+    /// this whatever the environment said. Git older than 2.44 ignores the
+    /// variable, so there the read may fetch, which is the constraint
+    /// `crate::reads` designs around; on such a git this says so and decides
+    /// nothing.
     #[test]
     fn a_read_in_a_partial_clone_does_not_fetch_a_missing_object() {
         let scratch = Scratch::new("partial-clone");
@@ -806,8 +792,8 @@ mod tests {
             patch: 0,
         };
         if scratch.git.version() < honoured {
-            // A passing test's stderr is hidden, so on the merge bar a skip would read
-            // `ok` for ever: CI sets the variable and a git that cannot honour
+            // A passing test's stderr is hidden, so a skip would read `ok` for
+            // ever: CI sets the variable and a git that cannot honour
             // `GIT_NO_LAZY_FETCH` is then a red test, not a silent one.
             assert!(
                 std::env::var_os("CAIRN_REQUIRE_NO_LAZY_FETCH").is_none(),
@@ -877,9 +863,7 @@ mod tests {
             .arg("-C")
             .arg(&clone)
             .args(["cat-file", "-p", &blob])
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {})
+            .collected()
             .unwrap_or_else(|error| panic!("the same cat-file as a write: {error}"));
         assert_eq!(written.stdout_text(), "only the promisor holds this\n");
         assert_ne!(

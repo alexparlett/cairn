@@ -57,7 +57,7 @@ One commit crosses four crates and changes shape three times.
 4. **The worker hands a page across, and the window appends it.**
    `crates/cairn-app/src/worker/` sends `Update::Rows { rows, complete }` to the
    window, which appends it to its `History` (`session::apply`, where pages were
-   applied before); `crates/cairn-ui/src/history_list.rs` draws the rows the
+   applied before); `crates/cairn-ui/src/history/list.rs` draws the rows the
    viewport shows, reading each through the history and deriving its edges as it
    builds it.
 
@@ -236,7 +236,7 @@ assigner's own output and the window's kept rows.
 
 The derived edges are the edges the assigner drew before rows were compacted, row
 for row and in order, repaints included. The oracle is that assigner itself, kept
-verbatim as test code (`crates/cairn-model/tests/layout_before_compaction/mod.rs`,
+verbatim as test code (`crates/cairn-model/tests/support/layout_before_compaction.rs`,
 never edited, its code pinned by a fingerprint in
 `the_reference_assigner_is_the_one_compact_rows_were_checked_against`): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
 (`crates/cairn-model/tests/lane_assignment.rs`) over the crafted fixtures and
@@ -505,7 +505,7 @@ FILE, and it is a guard, not a convention — see below.
   one ("Refresh", below). So a scroll never cancels a diff, a selection
   never cancels a scroll, and an operation, numbered in no lane, supersedes
   nothing (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`;
-  through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`). The
+  through the real boundary, `crates/cairn-app/src/worker/diff/tests.rs`). The
   history has two: its query lane, which an open, a scroll's page, a find in the
   sidebar and its stop are numbered in, and its walk lane, which only an open
   moves and every page of rows is answered under — so a page a superseded find had
@@ -553,16 +553,16 @@ FILE, and it is a guard, not a convention — see below.
   is `Clone` and `Outbox`'s fields are visible throughout `pool.rs`, so a bare
   sender copied out by hand compiles, and one held past every `Outbox` keeps
   the stream open with nothing coming. Every wait in the worker's tests is
-  bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
+  bounded (`network::tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
 - **An explicit routing table names the thread for each lane**
   (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
   refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
   thread's handle across turns and is not `Send`, so it never moves
-  (`worker/history_lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
+  (`worker/history/lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
   changes and file-diff lanes, commits, comparisons and the working tree alike, on
-  `cairn-diff` (`worker/diff_lane.rs`); and status and ahead/behind on
-  `cairn-refresh` (`worker/refresh_lane.rs`), so neither a page nor a diff queues
+  `cairn-diff` (`worker/diff/lane.rs`); and status and ahead/behind on
+  `cairn-refresh` (`worker/refresh/lane.rs`), so neither a page nor a diff queues
   behind a slow status. `route` applies it to every request as it is
   submitted and hands each thread its own job type, so neither thread forwards
   the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
@@ -577,7 +577,7 @@ FILE, and it is a guard, not a convention — see below.
   own reply channel and blocks on it; and workers are pinned to a purpose rather
   than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
   R4) is the second consumer, and landed as exactly that: its own thread, now
-  the network lane (`worker/network_lane.rs`, `cairn-network`), its own
+  the network lane (`worker/network/lane.rs`, `cairn-network`), its own
   `Update` variants, and requests that carry no epoch so a scroll and a fetch
   cannot supersede each other; the credential
   dialog is a third thread (`worker/askpass.rs`) blocking on the window's
@@ -624,7 +624,7 @@ the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while on
 pays once more after it, not once per switch.
 
 It is asked for on three occasions, and the UI thread only submits on each: the window
-gaining focus (`crates/cairn-app/src/refresh.rs`, a side effect on the toolkit's
+gaining focus (`crates/cairn-app/src/refresh/focus.rs`, a side effect on the toolkit's
 `Platform::is_app_focused` that submits on a false-to-true change and on nothing else —
 `gaining_focus_asks_for_a_refresh_and_nothing_else`); any fetch ending, finished,
 cancelled or failed (`session::apply`;
@@ -639,7 +639,7 @@ file system (R10.2).
 read. A refresh compares the refs it reads with the first by
 `RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
 the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
-the snapshot (`refresh_state.rs`, which the history's chips, the title bar, the sidebar
+the snapshot (`refresh/state.rs`, which the history's chips, the title bar, the sidebar
 and the Commit tab's REFS row read) and, on `reopen`,
 reopens: the old `History` is moved out, a new one is built with
 `History::with_author_capacity` of the old one's author count, the history is asked
@@ -682,7 +682,7 @@ read is the history's failure too, since it has nothing to walk from.
 Every `submit` of a QUERY supersedes the queries before it in its lane (an
 operation carries no epoch), and a superseded page delivers nothing — so the
 caller must debounce. `Progress::wants_more()`
-(`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
+(`crates/cairn-app/src/history/state.rs`) is that debounce: it is false while a
 page is in flight, while the history is complete, and once the update stream has
 ended (no worker is left to answer).
 
@@ -731,7 +731,7 @@ import — are rejected outside `cairn-model` by
   a kept row holds the author time's seconds and not its offset, and
   converting to the reader's local time needs a timezone database, which is a
   dependency decision nobody has taken. `utc_minutes`
-  (`crates/cairn-ui/src/date_text.rs`, a private module) is Hinnant's
+  (`crates/cairn-ui/src/history/date_text.rs`, a private module) is Hinnant's
   `civil_from_days`, total over every `i64`.
 
   The column is also **not monotonic**, and that is not a defect: the walk is
@@ -760,7 +760,7 @@ import — are rejected outside `cairn-model` by
   already linked through `freya`'s `engine` feature; no test-only dependency was
   added.
 - **Loading, empty and failed are three different sentences.** `placeholder`
-  (`crates/cairn-app/src/status_text.rs` — `cairn-app` is a binary, so its
+  (`crates/cairn-app/src/history/status_text.rs` — `cairn-app` is a binary, so its
   modules are cited by file, not by a `cairn_app::` path) decides which, so the
   reader never sees a blank area that could mean any of the three. A failure
   that arrives after rows are drawn is a banner under them, not a replacement
@@ -769,7 +769,7 @@ import — are rejected outside `cairn-model` by
   to a failure — a repository with no commits is empty, not broken.
 - **Keyboard**: arrow keys, `PageUp`/`PageDown`, `Home` and `End`, as a pure
   `moved_to(key, current, last)` (private, in
-  `crates/cairn-ui/src/history_list.rs`). The list is auto-focused, so a reader with no
+  `crates/cairn-ui/src/history/list.rs`). The list is auto-focused, so a reader with no
   mouse can select at all. `PREFETCH_ROWS` is 24: every row within that many of
   the end asks for the next page when it becomes visible — every one of them,
   because a single trigger row is a list that quietly stops loading on a tall
@@ -778,13 +778,13 @@ import — are rejected outside `cairn-model` by
 ### Chips on a row
 
 A row draws the refs pointing at its commit as Fork's chips between the graph and the
-subject (refs-and-status R5; `crates/cairn-ui/src/ref_chips.rs`): outlined, filled with a
+subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): outlined, filled with a
 tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
 glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
 before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud
 (whatever the forge) and a tag — in a cap of their own at the chip's left; a
 stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
-(`crates/cairn-ui/src/ref_glyphs.rs`), no font involved, every one in the chip's text
+(`crates/cairn-ui/src/history/ref_glyphs.rs`), no font involved, every one in the chip's text
 colour, so what tells two kinds apart is the shape alone
 (`every_glyph_paints_a_shape_no_other_glyph_paints`, over the pixels); a chip is keyed by
 its kind and name, since a canvas is repainted only when its layout changes. `HEAD`'s
@@ -842,7 +842,7 @@ refs), and, through the window, by
 
 ### The title bar
 
-The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/status_box.rs`;
+The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/title_bar/status_box.rs`;
 R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
 component of its working tree (of its git directory when it is bare), which the worker
 sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a
@@ -862,7 +862,176 @@ one refresh behind (R10.3 as amended). An unreadable index or no working tree dr
 `*`. Pinned by `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream`
 (`crates/cairn-app/src/window.rs`: a dirty branch with counts, a gone upstream, a detached
 and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
-(`crates/cairn-app/src/refresh_state.rs`) and the status box's own tests.
+(`crates/cairn-app/src/refresh/state.rs`) and the status box's own tests.
+
+### Show Lost Commits
+
+`HistoryRequest::with_lost_commits` (staging-and-commit R11) widens a walk from refs: the
+old and the new id of every entry of `HEAD`'s reflog and of each local branch the snapshot
+lists join the tips, as `git rev-list --reflog` and `git fsck` read a reflog — so the commit
+an amend replaced is found even where the only entry naming it is the amend's own, as its
+old id, in a log the amend created. Each log is read whole (`gix`'s store reads the file
+into a buffer) and parsed by git's own rules (`show_one_reflog_ent`):
+`crates/cairn-git/src/history/reflogs.rs` never uses gix's newest-first reader, which stops
+for good at a line over 4 KiB, nor gix's line parser, which refuses lines git reads; a line
+git skips — a zero time, no `>` before the time, a time zone that is not a sign and four
+digits, a last line with no newline — gives no id, and the lines after it are still read
+(`every_line_git_reads_is_an_entry_and_no_other`). The null id names nothing; an id whose
+object is gone or is not a commit is skipped, as git's walk skips it; the rest join the tips
+after the refs' own, each once. The reflogs are read as the walk opens, under the first
+page's cancel (polled before each log and each id's lookup), and a cursor carries the tips
+read and which of them the refs named, so a cold page resumes the same walk.
+
+Which commits no ref reaches is decided as the walk goes, never by a walk of its own before
+the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`): a commit pulled off the
+walk is reached when a ref names it or a reached commit pulled before it names it as a
+parent; otherwise it is lost so far. The walk yields the newest committed first, so a
+commit's children come off before it — except where a child is dated older than its parent.
+There the parent can come off first, through a lost commit, and be taken for lost; when the
+reached child comes off, the parent and every commit lost only through it are reached after
+all. A row reads whether it is lost when it is carried (`RowsPage::push_lost`), so a row laid
+out meanwhile is carried right; a row a page already carried is named reached by the next
+page (`RowsPage::reached`, its number and its commit), and `History::append` clears it
+(`a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`). What is kept is the walk's
+reached frontier and the commits taken for lost; once every reflog tip not known to be
+reached has come off the walk and none is lost, nothing more can be, and the tracking stops.
+A stash's row is never lost: `refs/stash` reaches it.
+
+The expectations are git's (`crates/cairn-git/tests/lost_commits.rs`), over the whole walk,
+held and cold, at pages of 1, 2, 5 and 64 and windows of 1, 3 and 1,024:
+`show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`
+— the rows are `git rev-list --reflog --branches --remotes --tags HEAD`, and the rows drawn
+lost are `git rev-list <every id the log files hold> --not --branches --remotes --tags HEAD`
+(the ids read from the files by the test, and again by git, `--reflog`), on a fixture with an
+amend whose log it created (the replaced commit an old id only), an amend, a reset-away
+commit, a subject past 4 KiB in the middle of the log, a deleted branch's tip, a commit only
+a lost commit reaches and a tagged commit in the log, never lost; and
+`where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` — on a braided history
+every reflog entry of which a ref reaches, every row's identity, lane and edges are the walk's
+without the toggle, so the compact and slim rows' equivalences pinned on that walk hold with
+it on.
+
+**Measured** (`measures_the_first_page_with_show_lost_commits`, `#[ignore]`d; release, warm,
+median of seven, a plain tmpfs clone of rust-lang/rust at `c999cef531e`, no commit-graph):
+with the clone's own reflog and an amend and a reset-away commit made in it, the first page
+of 64 rows from every ref takes 0.2-0.3 ms more with the toggle than without (three rows
+lost; 1,088 commits pulled either way). The open reads one commit per distinct reflog id, as
+git's own `--reflog` does: with 1,000 entries naming commits spread across the history,
+7.95 ms against 2.72 ms without the toggle; with 10,000, 49.8 ms against 2.14 ms, of which
+reading the logs and looking up each id is 8.4 ms and the walk's open, reading each tip's
+date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags HEAD` on
+the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
+with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
+
+Each reflog tip is read once, its date taken with its
+kind (`reflogs::reflog_tips` hands the walk the dates, `walk::open_dated`), and every tip's
+date — a ref's or a reflog's — is the commit-graph's where the graph holds it, as git's own walk
+takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back against a walk that read each tip twice and dated it from its
+object ("before"):
+with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
+pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
+1,000 entries 7.8 ms and 2.8 ms; 200 local branches each with a 50-entry log (10,000 ids),
+50.6 ms with no graph and 8.9 ms with one. Every reopen while the toggle is on — a refresh that
+moves a ref — pays the same again, since each reads every log; in the window the toggle's first
+page is drawn 18.2 ms after the press on the clone's own reflog (`writes_check`).
+
+Turning it on or off is a reopen (`Request::OpenHistory`'s `lost`, the window's
+`View::show_lost`, kept for the session and off as the window opens):
+the history lane opens the walk as the open asked, and a later reopen — a refresh that finds the
+refs moved — asks as the toggle stands
+(`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
+`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). It is turned by its
+chord, heard in the history list's scope alone (`HistoryList::on_action`,
+`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and by a check box, "Show Lost
+Commits", at the right end of the "Graph and subject" heading's cell — laid over the cell, so
+every heading stays over its column and no row loses width — ticked while on, its tooltip the
+chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
+`accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
+`the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
+keeps the keyboard through the reopen: it gives way to the opening sentence until the reopened
+walk's first page arrives, and takes focus again as it is drawn, so the chord is heard again
+with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
+author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
+its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
+`a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
+that gains a ref is reached at the reopen that follows and drawn as any other.
+
+### Create Branch
+
+The way back to a lost commit — or to any — is Fork's Create Branch dialog
+(`crates/cairn-ui/src/dialogs/create_branch.rs`, `crates/cairn-app/src/operations/create_branch.rs`; evidence
+`docs/research/staging-and-commit/fork-create-branch-evidence.md` and
+`fork-observed-2026-10-10.md`), opened by `New Branch…` in
+any commit row's context menu, a lost row's too, a stash's row offering none
+(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
+right-click selecting its row first unless it lands in the selection already made, either of a
+compared pair
+(`a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in`) — or at
+`HEAD` by Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), heard anywhere
+(`Action::NewBranch`, `create_branch::open_at_head`): `HEAD`'s commit as the last refresh read
+it, its subject the row's where `History::labelled_position` finds it loaded, nothing opened
+before the refs are read, on an unborn `HEAD`, or over a dialog already up
+(`the_new_branch_chord_opens_create_branch_at_head`):
+
+- Under the title, Fork's line "Use '/' as a path separator to create folders"; "Create branch
+  at:" the commit's glyph, short id and subject, read only; "Branch name:", empty at each
+  opening; "Check out after create", sticky for the session (issue
+  #89 will keep it across restarts); Cancel and "Create", "Create and Checkout" while ticked
+  (`the_dialog_is_forks_its_button_following_the_box`).
+- Each change of the name asks the engine (`Request::CheckBranchName`, the branch-name lane on
+  the local lane, `Repository::branch_name`): the button is enabled only for an answer of
+  "free" to the text shown, and a refusal is said inside the dialog, in the buttons' row,
+  left of them, behind the warning triangle (`RefGlyph::Gone`), never in the Git Error dialog
+  — the engine's typed answer worded by the dialog
+  (`cairn_ui::name_refusal`, `refusals_are_worded_by_the_view`): "Branch <name> already exists",
+  git's reason for a name it does not take, git's words for a name a branch's directory holds
+  (`'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'`, either way round), or "A
+  branch name can't contain '@{'", said before git is asked
+  (`a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
+  on the local lane, the same place names what it waits for by its one name
+  (`create_branch::waiting`) — "Waiting for Commit 1 file…" — the running write's or else the
+  first queued (`a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
+  `a_name_check_waiting_behind_a_write_says_which_write`)
+  (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`,
+  `a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`,
+  `only_a_ready_name_is_created_and_every_change_is_reported`,
+  `new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`,
+  `create_branchs_reads_are_answered_on_the_lane`).
+- "Local changes:" is drawn while the box is ticked and a tracked path is staged, unstaged or
+  conflicted (`WorkingTreeStatus::has_tracked_changes`, searched among every entry, never read
+  from the first): Fork's three in Fork's order — "Don't change", "Stash and reapply" greyed with
+  "Comes with stashing." beside it, since Cairn does not stash, and "Discard", Fork's ⚠
+  beside it while it is chosen; each opening starts on "Don't change"
+  (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`,
+  `local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`,
+  `local_changes_are_forks_three_in_forks_order_stash_greyed_and_a_chosen_discard_warned`).
+  The button reads "Create and Checkout" whatever is chosen.
+- **The dialog is a confirmation surface** (on the seal guard's `CONFIRMATION_SURFACES`): while Discard is chosen the engine is asked what it would
+  be confirmed as for the name shown (`Request::CheckoutConsequence`, the checkout-count lane,
+  asked again as the name changes, the newest ask's answer alone kept), and the button waits for
+  it; then Create and Checkout — or Return — IS the acknowledgement, the radio chosen plus the
+  press, as in Fork: the dialog builds the `Confirmed` from that `Consequence` and the window asks
+  `LocalWrite::CreateBranchDiscarding` with it, no second dialog opening
+  (`discards_press_builds_the_token_from_the_consequence_it_was_handed`,
+  `discards_press_is_its_confirmation_and_builds_the_token_from_the_engines_consequence`). During
+  an operation in progress the refusal row says "<Operation> is in progress. Finish or abort it
+  first." (`cairn_ui::discard_refusal`), the button disabled while Discard is chosen
+  (`an_operation_in_progress_refuses_discard_in_the_dialog`).
+- The writes are the local lane's: `LocalWrite::CreateBranch`,
+  `LocalWrite::CreateBranchAndCheckout` and `LocalWrite::CreateBranchDiscarding`. The dialog
+  stays open, its button disabled, while its write is asked, and closes when it is done
+  (`new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`). Each reads
+  everything again however it ends, so the new branch's chip is drawn and a commit it is put on
+  is no longer lost
+  (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
+- A failure — git's refusal, or a discard whose `HEAD`, commit or name moved since the press —
+  opens Fork's Git Error dialog with its words over the dialog, which stays beneath it as it was
+  left, so Close returns to it; Escape closes the Git Error alone (it is first in the window's
+  tree, so its Escape is heard first, and one overlay above the dialog;
+  `a_failed_create_opens_the_git_error_over_the_dialog_left_as_it_was`). While either is up the
+  window's keys are inert (`shortcuts::keys_inert`;
+  `the_windows_keys_are_inert_while_create_branch_is_up`). The engine's verbs are
+  `docs/systems/staging.md`'s.
 
 ## What enforces this
 
@@ -875,13 +1044,14 @@ and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 | ... and with labelled rows, each laying out a column's worth of chips | `only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips` |
-| A row's chips are laid out once per row built, never per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` (`crates/cairn-ui/src/history_list.rs`) |
+| A row's chips are laid out once per row built, never per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` (`crates/cairn-ui/src/history/list.rs`) |
 | Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
 | Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` and `the_windows_table_agrees_with_the_engines_table_captured_before` (`crates/cairn-app/src/window.rs`) |
 | No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 | What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
-| A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history_state.rs`) |
+| Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it` (`crates/cairn-model/src/history.rs`) |
+| A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history/state.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
 headless component test in `crates/cairn-ui/tests/history_list.rs`; the rest are
@@ -1008,6 +1178,25 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   only after the stash's row was placed — the stash commit beyond the look-ahead, or
   past a skewed date — would have a stash's row and a commit's. Neither is measured
   on a real repository with stashes.
+- **Show Lost Commits reads the reflogs when the walk opens, and a reopen is what reads
+  them again.** A reflog that changes while no ref the graph draws moves — `git reflog
+  expire`, an entry pruned — leaves the history drawing what it read until the next reopen.
+  git expires an unreachable commit's entry after `gc.reflogExpireUnreachable` (30 days by
+  default), and from then on the walk no longer has it. Only `HEAD`'s and the local
+  branches' logs are read, where Fork's mode reads every reflog (`git log --all --reflog`):
+  a remote-tracking ref's log, a deleted branch's leftover log and another worktree's
+  `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
+  so a press of the chord in that moment is not heard.
+- **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
+  residual): the open reads each distinct reflog id once, its date with it — from a
+  commit-graph where one holds it — and without a commit-graph that read from the pack is the
+  cost, about 5 µs an id on rust-lang/rust. Measured above: a `HEAD` log of 10,000 entries
+  makes the first page 50.8 ms with no commit-graph and 8.8 ms with one, where git's own
+  `rev-list --reflog` takes 57-80 ms; 200 local branches each with a 50-entry log, the same
+  10,000 ids, 50.6 ms and 8.9 ms. The cost is the ids across every log read — `HEAD`'s and each
+  local branch's — and it is paid again on every refresh that moves a ref while the toggle is
+  on, since each reopen reads every log again. Merging the logs' ids with the refs' tips is
+  linear (a hash set, `history::open_stream`).
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

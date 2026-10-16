@@ -373,7 +373,8 @@ mod tests {
         );
     }
 
-    /// Caught by: comparing buffers rather than the text, or the full id equalling its abbreviation.
+    /// Caught by: comparing buffers rather than the text, or the full id equalling its
+    /// abbreviation.
     #[test]
     fn id_text_compares_by_its_digits() {
         let a = Oid::parse(&format!("{}{}", "0123456", "f".repeat(33))).unwrap();

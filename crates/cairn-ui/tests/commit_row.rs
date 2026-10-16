@@ -1,9 +1,14 @@
 //! Headless component tests for `CommitRow` and `HistoryHeader`.
 
 use cairn_model::{CommitSummary, EdgeSegment, Lane, Oid, RowEdges};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{
     AUTHOR_WIDTH, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE, ROW_HEIGHT,
-    graph_width,
+    SHOW_LOST_COMMITS_CAPTION, graph_width,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -47,7 +52,7 @@ fn app() -> impl IntoElement {
     second.summary = format!("selected {SUBJECT}");
     rect()
         .width(Size::fill())
-        .child(HistoryHeader::new())
+        .child(HistoryHeader::new().show_lost_commits(false, |_| {}))
         .child(CommitRow::new(commit, graph.clone(), lanes))
         .child(CommitRow::new(second, graph, lanes).selected(true))
 }
@@ -185,6 +190,136 @@ fn the_date_and_the_short_id_fit_their_columns() {
         assert!(
             needed <= width,
             "the {name} column is {width}px but {text:?} needs {needed}px"
+        );
+    }
+}
+
+const LOST_HEX: &str = "fedcba9876543210fedcba9876543210fedcba98";
+
+/// A lost row beside a reached one: the four texts of each, by the subject they lead.
+fn lost_app() -> impl IntoElement {
+    let (commit, graph) = commit();
+    let mut lost = commit.clone();
+    lost.summary = format!("lost {SUBJECT}");
+    lost.author_name = "Lost Author".to_owned();
+    lost.author_time = WHEN + 86_400;
+    lost.id = Oid::parse(LOST_HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
+    rect()
+        .width(Size::fill())
+        .child(CommitRow::new(commit, graph.clone(), 3))
+        .child(CommitRow::new(lost, graph, 3).lost(true))
+}
+
+/// As Fork draws a lost commit: its subject, author, short id and date in the placeholder grey
+/// — about half — and nothing else dimmed: no element of the row is drawn translucent, so the
+/// graph's lanes, edges and node and its chips keep their own colours; a reached row's subject
+/// is the primary text. Caught by: the whole row drawn at an opacity, a text left undimmed, or
+/// a reached row dimmed.
+#[test]
+fn a_lost_rows_text_alone_is_dimmed() {
+    let (mut test, ()) = TestingRunner::new(lost_app, (WIDTH, 200.).into(), |_| {}, 1.);
+    test.sync_and_update();
+    let colour = |text: &str| {
+        test.find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|label| label.text_style_data.color)
+        })
+        .unwrap_or_else(|| panic!("no label reads {text:?}"))
+    };
+    let placeholder = Some(Fill::from(LIGHT_COLORS.text_placeholder));
+    for text in [
+        &format!("lost {SUBJECT}"),
+        "Lost Author",
+        &LOST_HEX[..7],
+        "2024-03-10 16:05",
+    ] {
+        assert_eq!(colour(text), placeholder, "{text:?} is not dimmed");
+    }
+    assert_eq!(colour(SUBJECT), Some(Fill::from(LIGHT_COLORS.text_primary)));
+    let translucent = test.find_many(|_, element| {
+        Rect::try_downcast(element)
+            .and_then(|rect| rect.effect)
+            .and_then(|effect| effect.opacity)
+    });
+    assert!(translucent.is_empty(), "drawn translucent: {translucent:?}");
+}
+
+/// The check box's toggled state as assistive technology reads it, its area, and what a press
+/// reported.
+type Pressed = Rc<RefCell<Vec<bool>>>;
+
+fn header_with(on: bool, pressed: Pressed) -> impl Fn() -> Element {
+    move || {
+        let pressed = pressed.clone();
+        rect()
+            .width(Size::fill())
+            .child(
+                HistoryHeader::new().show_lost_commits(on, move |to| pressed.borrow_mut().push(to)),
+            )
+            .child(CommitRow::new(commit().0, commit().1, 3))
+            .into()
+    }
+}
+
+/// Show Lost Commits is a check box at the right end of the "Graph and subject" heading's cell,
+/// just left of "Author" — the headings still over their columns — ticked while on, a press
+/// reporting the state it turns to, and its tooltip the chord the accelerator table lists,
+/// spelled for this platform. Caught by: the box placed elsewhere in the strip, a heading
+/// pushed off its column, the state not drawn or not reported, or a tooltip typed rather than
+/// read from the table.
+#[test]
+fn show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell() {
+    for on in [false, true] {
+        let pressed = Pressed::default();
+        let (mut test, ()) = TestingRunner::new(
+            header_with(on, pressed.clone()),
+            (WIDTH, 200.).into(),
+            |_| {},
+            1.,
+        );
+        test.sync_and_update();
+        let (box_left, box_width) = column(&test, SHOW_LOST_COMMITS_CAPTION);
+        let author = column(&test, "Author");
+        let subject = column(&test, SUBJECT);
+        assert!(
+            box_left + box_width <= author.0 && box_left + box_width >= author.0 - 40.,
+            "the box ends at {} and Author starts at {}",
+            box_left + box_width,
+            author.0
+        );
+        assert!(
+            box_left > subject.0,
+            "the box is not at the cell's right end"
+        );
+        assert_eq!(author, column(&test, AUTHOR), "Author left its column");
+        let toggled = test.find(|_, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.role() == AccessibilityRole::CheckBox)
+                .map(|rect| rect.accessibility.builder.toggled())
+        });
+        assert_eq!(toggled, Some(Some(Toggled::from(on))), "its state as drawn");
+
+        let at = (
+            f64::from(box_left + box_width - 4.),
+            f64::from(ROW_HEIGHT / 2.),
+        );
+        test.click_cursor(at);
+        test.sync_and_update();
+        assert_eq!(
+            pressed.borrow().as_slice(),
+            &[!on],
+            "a press reports the state it turns to"
+        );
+
+        test.move_cursor((at.0 - 20., at.1));
+        test.poll(Duration::from_millis(50), Duration::from_millis(900));
+        let chord = accelerators::chord_name(Action::ShowLostCommits, Os::current())
+            .unwrap_or_else(|| panic!("Show Lost Commits has a chord"));
+        assert!(
+            test.find(|_, element| Label::try_downcast(element).filter(|l| l.text == chord))
+                .is_some(),
+            "no tooltip reads {chord:?}"
         );
     }
 }

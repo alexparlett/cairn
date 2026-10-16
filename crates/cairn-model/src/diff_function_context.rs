@@ -9,7 +9,7 @@
 //! each of git's hunks starts at.
 //!
 //! It is display-only. It lives in [`crate::DisplayOverlay`], which the patch emitter never
-//! sees, so a patch is the same bytes whatever git printed here (R1.6, R1.7).
+//! sees, so a patch is the same bytes whatever git printed here.
 
 use crate::{Context, HunkHeader, LineNumber};
 

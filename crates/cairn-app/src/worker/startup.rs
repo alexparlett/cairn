@@ -82,14 +82,14 @@ pub(super) struct Backend {
     /// `Err` names why no prompt can be answered in this session — the helper
     /// is not built beside the executable, or there is no runtime directory
     /// to put a socket in. Fetching still works where a credential helper or
-    /// agent answers (L7); a prompt fails closed, and the failure says this.
+    /// agent answers; a prompt fails closed, and the failure says this.
     pub(super) prompting: Result<(), String>,
 }
 
 impl Backend {
     /// Opens this repository's channel and points `git` — found once, as the
-    /// application started — at it. A missing or too-old `git` was refused
-    /// before this (`super::Discovery`); everything about prompting degrades
+    /// application started — at it. A missing or too-old `git` is refused
+    /// before this, by `super::Discovery`; everything about prompting degrades
     /// to a named reason instead.
     pub(super) fn open(startup: &Startup, git: &GitBinary) -> Self {
         let channel = match (startup.parent)("XDG_RUNTIME_DIR") {
@@ -156,8 +156,8 @@ mod tests {
     /// The channel's socket is what git is told to have the helper connect to.
     #[test]
     fn a_runtime_directory_gives_the_environment_a_socket_and_prompting() {
-        let runtime = crate::worker::fetch_tests::RuntimeDir::new();
-        let helper = crate::worker::fetch_tests::built_helper();
+        let runtime = crate::worker::network::tests::RuntimeDir::new();
+        let helper = crate::worker::network::tests::built_helper();
         let startup = Startup::new(
             {
                 let runtime = runtime.path.clone();
@@ -201,7 +201,7 @@ mod tests {
     fn without_a_runtime_directory_git_is_still_found_and_the_reason_is_named() {
         let startup = Startup::new(
             |name| (name == "PATH").then(|| std::env::var_os("PATH")).flatten(),
-            crate::worker::fetch_tests::built_helper(),
+            crate::worker::network::tests::built_helper(),
         );
         let backend = Backend::open(&startup, &found(&startup));
         assert!(backend.channel.is_none());
@@ -223,7 +223,7 @@ mod tests {
     /// A helper that is not built is named as the reason, with the command that builds it.
     #[test]
     fn a_missing_helper_is_named_with_how_to_build_it() {
-        let runtime = crate::worker::fetch_tests::RuntimeDir::new();
+        let runtime = crate::worker::network::tests::RuntimeDir::new();
         let startup = Startup::new(
             {
                 let runtime = runtime.path.clone();

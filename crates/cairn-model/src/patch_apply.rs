@@ -71,7 +71,7 @@ pub fn apply_patch(content: &[u8], patch: &[u8]) -> Result<Vec<u8>, PatchApplyEr
 }
 
 /// Applies `patch` backwards, taking the result back to what it was made from — which is
-/// what `git apply --reverse` does, and what R1.6's last sentence promises.
+/// what `git apply --reverse` does.
 pub fn apply_patch_in_reverse(content: &[u8], patch: &[u8]) -> Result<Vec<u8>, PatchApplyError> {
     Apply::new(content, patch, Direction::Reverse).run()
 }
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(apply_patch(b"a\nb\nc\n", EDIT), Ok(b"a\nB\nc\n".to_vec()));
     }
 
-    /// The property R1.6 promises: the same patch backwards takes the result back.
+    /// The same patch backwards takes the result back.
     #[test]
     fn the_same_patch_backwards_undoes_it() {
         assert_eq!(

@@ -1,13 +1,17 @@
 //! Commit, ref, graph, lane, diff and status types shared by the engine and the UI, and
 //! the record of a `git` invocation the engine's command log keeps.
 
+mod action_patch;
 mod askpass;
+mod branch_name;
+mod c_quote;
 mod change_set;
 mod changed_file;
 mod chunked_store;
 mod command_log;
 mod commit_details;
 mod confirm;
+mod consequence;
 mod diff_content;
 mod diff_function_context;
 mod diff_hunks;
@@ -22,6 +26,7 @@ mod lane_assignment;
 mod line_selection;
 mod local_changes;
 mod oid;
+mod operation_in_progress;
 mod patch;
 mod patch_apply;
 mod prompt;
@@ -29,18 +34,23 @@ mod refs;
 mod remote;
 mod repo_path;
 mod row_labels;
+mod row_selection;
 mod rows_page;
+mod scrub;
 mod secret;
 mod sidebar_rows;
 mod status;
 mod text_filter;
 
+pub use action_patch::{PatchAction, action_patch};
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
+pub use branch_name::{BranchName, NameRefusal};
 pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
 pub use command_log::{CommandExit, CommandRecord};
 pub use commit_details::{CommitDetails, Signature, Timestamp};
 pub use confirm::Confirmed;
+pub use consequence::{Consequence, DiscardedFile, FileLoss, Publication, Reflog, shown_path};
 pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
 pub use diff_function_context::FunctionContext;
 pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};
@@ -57,9 +67,11 @@ pub use history::{History, HistoryFull, HistoryRow, RetainedBytes, RowContent, R
 pub use lane_assignment::LaneAssigner;
 pub use line_selection::Selection;
 pub use local_changes::{
-    ChangeKind, ChangeList, LocalChange, LocalChanges, MatchedRows, PathState, path_order,
+    ChangeKind, ChangeList, LocalChange, LocalChanges, MatchedRows, PathState, StagedAgainst,
+    path_order,
 };
 pub use oid::{Oid, OidHex, OidParseError};
+pub use operation_in_progress::OperationInProgress;
 pub use patch::{PATCH_CONTEXT, Patch, emit_patch};
 pub use patch_apply::{PatchApplyError, apply_patch, apply_patch_in_reverse};
 pub use prompt::{PromptKind, prompt_subject};
@@ -70,7 +82,9 @@ pub use refs::{
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
+pub use row_selection::SideColumn;
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
+pub use scrub::{ScrubbedLine, ScrubbedLines, Scrubber, strip_ansi};
 pub use secret::Secret;
 pub use sidebar_rows::{
     Disclosure, SidebarRow, SidebarSection, folder_name, folder_path, natural_order,
@@ -95,7 +109,7 @@ pub struct CommitSummary {
     pub author_time: i64,
 }
 
-/// A stash as the history list draws its row (PRD R4.2, R5.4), read out of a [`History`]:
+/// A stash as the history list draws its row, read out of a [`History`]:
 /// the stash commit `stash@{index}` names, the commit it was made on — its first parent, and
 /// the one line its row draws — and the stash list's message, its row's subject. Its index
 /// and untracked commits are not rows, and are the details query's.

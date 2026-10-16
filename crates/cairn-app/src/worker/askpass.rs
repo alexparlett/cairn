@@ -149,6 +149,7 @@ pub(super) fn serve_prompts(
             Update::Prompt {
                 id,
                 text: prompt.text().to_owned(),
+                asking: prompt.operation().map(str::to_owned),
             },
         );
         // Blocks on the user: this thread has nothing else to do until they decide.
@@ -181,7 +182,7 @@ pub(super) fn serve_prompts(
 mod tests {
     use super::*;
 
-    use crate::worker::fetch_tests::RuntimeDir;
+    use crate::worker::network::tests::RuntimeDir;
 
     /// A socket nobody listens on is never acknowledged: the stop gives up at its
     /// deadline, says so through `stopped`, and does not wait beyond it. The stop runs

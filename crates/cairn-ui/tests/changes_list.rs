@@ -1,5 +1,4 @@
-//! Headless tests for the Changes tab's list and summary (PRD R5.4, R5.5; criterion C10's
-//! "the Changes tab shows the list, the filter and one file's diff").
+//! Headless tests for the Changes tab's list and summary.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,6 +7,7 @@ use cairn_model::{
     ChangeSet, ChangeStatus, ChangedFile, CommitDetails, FileMode, Oid, RenameDetection, RepoPath,
     Signature, Timestamp,
 };
+use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{
     ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
     FILTERING, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles, summary_parts,
@@ -17,7 +17,7 @@ use freya_testing::TestingRunner;
 
 const WIDTH: f32 = 400.;
 const HEIGHT: f32 = 500.;
-/// The largest subject's file count: rust-lang/rust's S1, `cf2dff2b1e3`.
+/// The largest subject's file count: rust-lang/rust's `cf2dff2b1e3`.
 const S1_FILES: usize = 55_184;
 
 fn file(n: usize) -> ChangedFile {
@@ -95,9 +95,9 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// The user's report (2026-10-07): scrolled to the end, the last file's row sits above the
-/// horizontal scrollbar Freya draws over the list's bottom, never under it. Caught by: a list
-/// exactly as long as its rows (the last row flush with the bottom edge).
+/// Scrolled to the end, the last file's row sits above the horizontal scrollbar Freya draws
+/// over the list's bottom, never under it. Caught by: a list exactly as long as its rows (the
+/// last row flush with the bottom edge).
 #[test]
 fn scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar() {
     let files = 400;
@@ -122,11 +122,11 @@ fn scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar() {
     );
 }
 
-/// R5.4, R5.5 at the largest subject's size: the list of 55,184 files builds one viewport of
-/// rows at the top, deep and at the end, and a filter's answer — every other file — builds
-/// one viewport too, the files it leaves in their order, to the last of them. The filter's
-/// answer is handed to the list as indices; the list scans nothing. Caught by: a list that
-/// builds a row per file, or one that rebuilds every row when the filter's answer changes.
+/// At the largest subject's size, the list of 55,184 files builds one viewport of rows at the
+/// top, deep and at the end, and a filter's answer — every other file — builds one viewport
+/// too, the files it leaves in their order, to the last of them. The filter's answer is
+/// handed to the list as indices; the list scans nothing. Caught by: a list that builds a row
+/// per file, or one that rebuilds every row when the filter's answer changes.
 #[test]
 fn a_list_of_55184_files_builds_one_viewport_filtered_or_not() {
     let (mut test, fixture, _) = launch(change_set(S1_FILES), ShownFiles::All);
@@ -168,11 +168,11 @@ fn a_list_of_55184_files_builds_one_viewport_filtered_or_not() {
     );
 }
 
-/// R5.4, Fork's model (user decision 6): a pressed file is chosen and gives the list focus;
-/// then ↓ and ↑ move to the next and previous file the list SHOWS — a filter's answer is
-/// stepped over by its rows — reporting each by its index in the change set, and stop at
-/// either end. Caught by: arrows that step through the change set rather than the list, or a
-/// press that reports a row number rather than the file's index.
+/// Fork's model: a pressed file is chosen and gives the list focus; then ↓ and ↑ move to the
+/// next and previous file the list SHOWS — a filter's answer is stepped over by its rows —
+/// reporting each by its index in the change set, and stop at either end. Caught by: arrows
+/// that step through the change set rather than the list, or a press that reports a row
+/// number rather than the file's index.
 #[test]
 fn the_arrows_move_through_the_files_the_list_shows() {
     let (mut test, _, chosen) = launch(change_set(40), ShownFiles::Filtered(vec![3, 7, 20]));
@@ -196,6 +196,34 @@ fn the_arrows_move_through_the_files_the_list_shows() {
         test.sync_and_update();
     }
     assert_eq!(chosen.borrow().as_slice(), [7, 20, 20, 7, 3, 3]);
+}
+
+/// Shift+↓ and Shift+↑ — Local Changes' list extension, a scope this list is not in — move
+/// through the files as ↓ and ↑ do. Caught by: a list that leaves alone every scope's
+/// chords.
+#[test]
+fn another_views_chord_is_the_file_lists_arrow() {
+    let (mut test, _, chosen) = launch(change_set(40), ShownFiles::Filtered(vec![3, 7, 20]));
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == file(7).new_path.display())
+                .map(|_| node.layout().area.center())
+        })
+        .expect("file 7 is shown");
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+    for action in [
+        Action::ExtendSelectionDown,
+        Action::ExtendSelectionUp,
+        Action::ExtendSelectionUp,
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, _, held) = chord.key_press().unwrap();
+        test.press_key_with_modifiers(key, held);
+        test.sync_and_update();
+    }
+    assert_eq!(chosen.borrow().as_slice(), [7, 20, 7, 3]);
 }
 
 /// The filter field is the list's, and what is typed is the filter's text — the caller's to
@@ -237,9 +265,9 @@ fn the_filter_field_takes_the_text_and_an_empty_answer_says_so() {
     assert!(labels.iter().any(|l| l == NO_FILE_MATCHES), "{labels:?}");
 }
 
-/// Fork's summary line (Finding 2): who wrote the commit, its short id, the date at its own
-/// offset in the user's chosen format, and the subject. Caught by: the committer's name or
-/// date in the author's place, a full id, or the message's body.
+/// Fork's summary line: who wrote the commit, its short id, the date at its own offset in
+/// the user's chosen format, and the subject. Caught by: the committer's name or date in the
+/// author's place, a full id, or the message's body.
 #[test]
 fn the_summary_is_author_short_id_date_and_subject() {
     let signature = |name: &str, seconds| Signature {
@@ -266,9 +294,9 @@ fn the_summary_is_author_short_id_date_and_subject() {
     );
 }
 
-/// The summary strip is 30 px, the diff bar's height (the user's decision, 2026-10-03), so
-/// the two strips of the Changes tab line up. Measured as drawn: what follows the summary
-/// starts 30 px down. Caught by: the 28 px strip it replaced, or one sized by its text.
+/// The summary strip is 30 px, the diff bar's height, so the two strips of the Changes tab
+/// line up. Measured as drawn: what follows the summary starts 30 px down. Caught by: a
+/// 28 px strip, or one sized by its text.
 #[test]
 fn the_summary_strip_is_as_tall_as_the_diff_bar() {
     let signature = Signature {
@@ -309,14 +337,14 @@ fn labels(test: &TestingRunner) -> Vec<String> {
     test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
 }
 
-/// The user's decision (2026-10-03): whenever a filter is active the list says how many of
-/// the change set's files it shows — "Showing N of M files" — so a file hidden by a filter
-/// kept from the last commit is never taken for one this commit did not touch; with no
-/// filter it says nothing, and while a new change set's first answer is on its way it says
-/// it is filtering rather than "no file matches". At 55,184 paths the counts are the
-/// answer's length and the change set's, read as they are: nothing on the UI thread walks
-/// the list to count it. Caught by: no line, a line with no filter, counts taken from the
-/// rows built, or "0 of M" and "no file matches" said before any answer.
+/// Whenever a filter is active the list says how many of the change set's files it shows —
+/// "Showing N of M files" — so a file hidden by a filter kept from the last commit is never
+/// taken for one this commit did not touch; with no filter it says nothing, and while a new
+/// change set's first answer is on its way it says it is filtering rather than "no file
+/// matches". At 55,184 paths the counts are the answer's length and the change set's, read
+/// as they are: nothing on the UI thread walks the list to count it. Caught by: no line, a
+/// line with no filter, counts taken from the rows built, or "0 of M" and "no file matches"
+/// said before any answer.
 #[test]
 fn an_active_filter_says_how_many_files_it_shows_of_how_many() {
     let (mut test, fixture, _) = launch(change_set(S1_FILES), ShownFiles::All);
@@ -363,10 +391,10 @@ fn an_active_filter_says_how_many_files_it_shows_of_how_many() {
     assert!(!labels(&test).iter().any(|l| l.starts_with("Showing")));
 }
 
-/// The twin of the Commit tab's `a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom`
-/// (the user's report, 2026-10-04): a file's row in the Changes tab's list starts at its left
-/// padding and is centred top to bottom. Caught by: a row whose alignment centres its content
-/// across the width.
+/// The twin of the Commit tab's
+/// `a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom`: a file's row in
+/// the Changes tab's list starts at its left padding and is centred top to bottom. Caught by:
+/// a row whose alignment centres its content across the width.
 #[test]
 fn a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom() {
     let (test, _, _) = launch(change_set(3), ShownFiles::All);

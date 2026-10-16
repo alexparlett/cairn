@@ -24,7 +24,7 @@ pub struct GitVersion {
 
 impl GitVersion {
     /// The oldest git Cairn runs with. A support policy, not a technical floor:
-    /// raising it is the user's decision.
+    /// raising it drops the long-term-support distributions whose git is older.
     pub const MINIMUM: Self = Self {
         major: 2,
         minor: 30,

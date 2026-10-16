@@ -2,13 +2,14 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: five packets shipped (`history-graph`, `credential-prompts`,
-`process-manager`, `diff-engine`, `refs-and-status`). `refs-and-status` passed its
-merge bar and was torn down on `feature/refs-and-status` (2026-10-07); it reaches
-`main` with its packet pull request, merged by the user. `staging-and-commit` (5) is
-planned (2026-10-07: PRD `docs/prd/staging-and-commit.md`, work directory
-`docs/work/staging-and-commit/`) and next to implement, on the critical path; 5b
-(`stash-and-ignore`) was inserted after it; the other four are briefs.**
+**Status: six packets shipped (`history-graph`, `credential-prompts`,
+`process-manager`, `diff-engine`, `refs-and-status`, `staging-and-commit`).
+`staging-and-commit` passed its merge bar and was torn down on
+`feature/staging-and-commit` (2026-10-14); it reaches `main` with its packet pull
+request, merged by the user. The critical path is built; D7 still needs 6
+(`remote-sync`, its pull and push) and 7 (`branch-ops`, its branch operations), which are
+independent of each other, beside 5b (`stash-and-ignore`, which builds on 5) and 8; all
+four are briefs.**
 
 ## The milestone
 
@@ -28,7 +29,7 @@ L1-L7 in `brainstorm.md`. The three that most constrain implementation:
 - **`credential-prompts` is load-bearing for staging (L3)**, because
   `git apply --cached` runs through its backend. It is not merely early.
 - **The reflog view ships with the first commit-level destructive operation (L4)**,
-  which is packet 5.
+  which is packet 5: Show Lost Commits shipped with amend.
 
 ## Open questions
 
@@ -52,13 +53,13 @@ alone, as in Fork — no backup, no auto-stash.
 | 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
 | 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
 | 4 | `refs-and-status` | **shipped** — PRD frozen, as-built in `docs/systems/refs.md`, `status.md`, `sidebar.md`, `local-changes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/refs-and-status/measured.md`; O2 closed for `git status`; leftovers #62-#82 |
-| 5 | `staging-and-commit` | **planned** — PRD `docs/prd/staging-and-commit.md` (in flight), work dir `docs/work/staging-and-commit/`, evidence `docs/research/staging-and-commit/`; O3 closed; next to implement |
+| 5 | `staging-and-commit` | **shipped** — PRD frozen, as-built in `docs/systems/staging.md`, `local-changes.md`, `git-processes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/staging-and-commit/measured.md`; O3 closed (no backup before a discard); leftovers #90-#133 |
 | 5b | `stash-and-ignore` | brief in `roadmap.md`; depends on 5 |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |
 | 8 | `worktrees` | brief in `roadmap.md` |
 
-Critical path to D7: 1 → 2 → 2a → 3 → 5, with 4 needed before 5.
+Critical path to D7: 1 → 2 → 2a → 3 → 5, with 4 needed before 5 — built; D7 then needs 6 and 7.
 
 ## Environment notes
 

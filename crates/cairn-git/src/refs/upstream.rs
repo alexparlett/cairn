@@ -1,5 +1,5 @@
-//! A local branch's upstream, as git resolves `%(upstream)` (R1.4), read by hand from the
-//! configuration (parity rules 4 and 5).
+//! A local branch's upstream, as git resolves `%(upstream)`, read by hand from the
+//! configuration (`docs/systems/refs.md`, "The five parity rules").
 //!
 //! git's rule (`set_merge` and `query_refspecs` in git's `remote.c`):
 //!
@@ -14,11 +14,11 @@
 //!   upstream; no match, no upstream.
 //!
 //! gix answers differently in four places, each measured against git 2.56.0: no upstream
-//! for `remote = .` (it parses `.` as a URL with no refspecs; rule 4); the LAST `merge`
-//! value; a short `merge` (`main`) expanded to `refs/heads/main` and mapped, where git maps
-//! the literal and finds nothing; and, of two refspecs that both map the merge, not the
-//! first in configuration order (rule 5). So none of gix's upstream API is used; only its
-//! reading of the configuration and of refs.
+//! for `remote = .` (it parses `.` as a URL with no refspecs); the LAST `merge` value; a
+//! short `merge` (`main`) expanded to `refs/heads/main` and mapped, where git maps the
+//! literal and finds nothing; and, of two refspecs that both map the merge, not the first
+//! in configuration order. So none of gix's upstream API is used; only its reading of the
+//! configuration and of refs.
 //!
 //! Whether the upstream exists — git's `[gone]` when it does not — is the ref resolved as
 //! the snapshot resolves every ref: a symbolic upstream followed, one that resolves to

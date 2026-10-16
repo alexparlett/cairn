@@ -5,15 +5,17 @@ use std::path::Path;
 
 use cairn_guards::{
     GITOXIDE_MUTATION_CALLS, GITOXIDE_MUTATION_IDENTS, GITOXIDE_MUTATION_METHODS,
-    GITOXIDE_MUTATION_PATH_ENDS, GITOXIDE_MUTATION_PATHS, calls_associated_function, calls_method,
-    calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
-    configures_process_environment, constructs_named_struct, constructs_process_command,
-    constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    embedded_font_violations, gate_command_assignments, gate_dispatch_arms, gate_full_sequence,
-    gate_function_body, gate_function_calls, gate_function_commands, implements_type,
-    job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
-    names_gitoxide_mutation, production_char_literals, production_string_literals,
-    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    GITOXIDE_MUTATION_PATH_ENDS, GITOXIDE_MUTATION_PATHS, builds_a_text_field,
+    calls_associated_function, calls_method, calls_nullary_method, code_only, code_without_strings,
+    code_without_test_modules, configures_process_environment, constructs_named_struct,
+    constructs_process_command, constructs_struct, declared_dependencies, declares_publicly,
+    derives_or_implements, embedded_font_violations, filesystem_mutation_kinds,
+    gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_body,
+    gate_function_calls, gate_function_commands, hand_typed_chords, implements_type,
+    job_env_entries, mentions_crate, modifier_constants_blanked, mutates_the_filesystem,
+    names_a_literal_modifier, names_a_modifier_in_code, names_an_element, names_gitoxide_mutation,
+    production_char_literals, production_string_literals, reads_enum_partially,
+    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
     required_skip_violations, rust_sources, spawns_git, spells_a_chord,
     structs_with_a_field_naming, types_containing, waits_on_work,
 };
@@ -22,15 +24,19 @@ use cairn_guards::{
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &["zeroize"]),
     // `nix`: SIGTERM on cancel, so git can remove its lock files (issue #19).
-    // `encoding_rs`: a commit in a legacy encoding read as git reads it (user-approved
-    // 2026-10-03).
+    // `encoding_rs`: a commit in a legacy encoding read as git reads it.
     (
         "cairn-git",
         &["cairn-model", "encoding_rs", "gix", "nix", "thiserror"],
     ),
     // `unicode-width`: a tab stops where a terminal stops it, after wide and combining
-    // characters (user-approved 2026-10-03, choosing "terminal widths").
-    ("cairn-ui", &["cairn-model", "freya", "unicode-width"]),
+    // characters.
+    // `async-io`: the timer a drag held still at a list's edge scrolls by, a future on the
+    // toolkit's executor rather than a sleep.
+    (
+        "cairn-ui",
+        &["async-io", "cairn-model", "freya", "unicode-width"],
+    ),
     (
         "cairn-app",
         &[
@@ -52,9 +58,9 @@ const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-app", &["freya-testing"]),
     // The fetch tests serve a real askpass channel; the engine never links the helper.
     ("cairn-git", &["cairn-askpass"]),
-    // R1.5's pin counts allocations, which needs a counting global allocator. The crate
-    // carries its own `#[global_allocator]`, so it replaces the allocator of the test
-    // binary that links it and of nothing the seam ships.
+    // The model's allocation pins count allocations, which needs a counting global allocator.
+    // The crate carries its own `#[global_allocator]`, so it replaces the allocator of the
+    // test binary that links it and of nothing the seam ships.
     ("cairn-model", &["allocation-counter"]),
 ];
 
@@ -615,7 +621,7 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
 /// Crates that may read `DiffContent` however they like: its owner, and this suite's fixtures.
 const DIFF_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
 
-/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod diff_tests;`): test
+/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod tests;`): test
 /// code that carries no `#[cfg(test)]` marker of its own for [`code_without_test_modules`] to
 /// find. Only a declaration at the top of its file (brace depth 0) names a file beside it —
 /// one inside `mod outer { .. }` names `outer/x.rs`, and one inside a test module is test
@@ -691,19 +697,19 @@ fn top_level_module_declarations(code: &str) -> (BTreeSet<String>, BTreeSet<Stri
     (test_only, otherwise)
 }
 
-/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state.
-/// Every variant is something a view has to draw (R6.8), and a wildcard arm compiles the
-/// day a ninth state lands and draws nothing for it. Production code only — test modules,
-/// `#[cfg(test)]` module files and `tests/` are left out, since a test that asserts one
-/// state (`matches!(content, DiffContent::Binary { .. })`) is a check, not a view.
+/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state. Every variant
+/// is something a view has to draw, and a wildcard arm still compiles when another state is added,
+/// and draws nothing for it. Production code only — test modules, `#[cfg(test)]` module files and
+/// `tests/` are left out, since a test that asserts one state (`matches!(content,
+/// DiffContent::Binary { .. })`) is a check, not a view.
 #[test]
 fn every_view_of_a_file_diff_names_every_state() {
     every_production_view_names_every_variant("DiffContent");
 }
 
 /// The diff's row enums, `cairn_model::UnifiedRow` and `cairn_model::SideBySideRow`, are read
-/// the same way (phase 07, which brought the second reader): each variant is a kind of row a
-/// view draws — a header, a line on one side or both, git's end-of-file marker — and a
+/// the same way, since each has more than one reader: each variant is a kind of row a view
+/// draws — a header, a line on one side or both, git's end-of-file marker — and a
 /// wildcard arm compiles the day another kind lands and draws nothing for it. Production code
 /// only, over every crate's `src/` but the model's and this suite's, as for `DiffContent`.
 #[test]
@@ -960,7 +966,7 @@ fn the_diff_content_matcher_catches_the_shapes_it_claims() {
     assert!(!found.contains(Path::new("crates/x/src/worker/pool.rs")));
     assert!(!found.contains(Path::new("crates/x/src/view/tests.rs")));
 
-    // G2: a declaration inside another module's braces names no file beside its parent,
+    // A declaration inside another module's braces names no file beside its parent,
     // and a file another declaration also names is not test-only — each would otherwise
     // leave a production file unscanned.
     let sources = vec![
@@ -1002,17 +1008,177 @@ const READS_DIR: &str = "crates/cairn-git/src/reads";
 /// The engine's source: the one crate that links `gix` and the runner.
 const ENGINE_SOURCE_DIR: &str = "crates/cairn-git/src";
 
+/// Whether `path` is one of the module `dir`'s files: under its directory, or the file that
+/// assembles it beside that directory (`ops.rs` for `ops/`) — the workspace's one module form,
+/// held by clippy's `mod_module_files`, so a module is its directory and its own file.
+fn in_module(path: &Path, dir: &str) -> bool {
+    path.starts_with(dir) || path == Path::new(dir).with_extension("rs")
+}
+
+/// The module `dir`'s sources, as [`rust_sources`] reads them: its directory's files and the
+/// file that assembles it, which sits beside the directory and is not under it.
+fn module_sources(dir: &str) -> Vec<(std::path::PathBuf, String)> {
+    let mut sources = rust_sources(dir);
+    let assembly = Path::new(dir).with_extension("rs");
+    let source = std::fs::read_to_string(repo_root().join(&assembly)).unwrap_or_else(|e| {
+        panic!(
+            "{} is gone ({e}): move the guard with the module",
+            assembly.display()
+        )
+    });
+    sources.insert(0, (assembly, source));
+    sources
+}
+
+/// The module matcher's self-test: the guards that exempt or require a module by path see its
+/// own file as its, and nothing that merely shares a prefix with it.
+#[test]
+fn a_module_is_its_directory_and_its_own_file() {
+    for inside in [
+        "crates/cairn-git/src/ops.rs",
+        "crates/cairn-git/src/ops/fetch.rs",
+        "crates/cairn-git/src/ops/nested/deeper.rs",
+    ] {
+        assert!(
+            in_module(Path::new(inside), OPS_DIR),
+            "{inside} not seen as ops'"
+        );
+    }
+    for outside in [
+        "crates/cairn-git/src/ops_tests.rs",
+        "crates/cairn-git/src/opsx.rs",
+        "crates/cairn-git/src/opsx/fetch.rs",
+        "crates/cairn-git/src/ops.rs.orig",
+        "crates/cairn-git/src/reads.rs",
+        "crates/cairn-git/ops.rs",
+        "crates/x/src/ops.rs",
+    ] {
+        assert!(
+            !in_module(Path::new(outside), OPS_DIR),
+            "{outside} seen as ops'"
+        );
+    }
+    let reads = module_sources(READS_DIR);
+    assert!(
+        reads
+            .iter()
+            .any(|(path, _)| path == &Path::new(READS_DIR).with_extension("rs")),
+        "the reads module's own file was not read"
+    );
+    assert!(
+        reads.iter().any(|(path, _)| path.starts_with(READS_DIR)),
+        "the reads module's directory was not read"
+    );
+}
+
+/// Whether `path` is an integration test's file: under the `tests/` directly beneath its crate
+/// (`crates/<crate>/tests/..`). A `tests/` anywhere deeper — a module's directory in `src/`,
+/// such as `local_changes/actions/tests/` — is not, and its files are scanned as the
+/// module's. A guard that skips or counts integration tests asks this, never whether a path has
+/// a `tests` component somewhere.
+fn is_integration_test(path: &Path) -> bool {
+    let mut parts = path.components().map(|part| part.as_os_str());
+    parts.next().is_some_and(|part| part == "crates")
+        && parts.next().is_some()
+        && parts.next().is_some_and(|part| part == "tests")
+        && parts.next().is_some()
+}
+
+/// The integration-test matcher's self-test: a crate's own `tests/` tree is one, and a `tests`
+/// directory or file inside `src/` — a module's — is scanned as the module's.
+#[test]
+fn the_integration_test_matcher_catches_the_shapes_it_claims() {
+    for integration in [
+        "crates/x/tests/b.rs",
+        "crates/x/tests/support/fixtures.rs",
+        "crates/x/tests/fetch/main.rs",
+        "crates/x/tests/fetch/remotes/ssh.rs",
+    ] {
+        assert!(
+            is_integration_test(Path::new(integration)),
+            "{integration} not seen as an integration test"
+        );
+    }
+    for scanned in [
+        "crates/x/src/a/tests/b.rs",
+        "crates/x/src/a/tests.rs",
+        "crates/x/src/tests.rs",
+        "crates/x/src/tests/b.rs",
+        "crates/tests/src/lib.rs",
+        "crates/x/benches/tests/b.rs",
+        "tests/b.rs",
+        "crates/x/tests",
+    ] {
+        assert!(
+            !is_integration_test(Path::new(scanned)),
+            "{scanned} seen as an integration test, and so skipped"
+        );
+    }
+}
+
+/// The `mod.rs` files among `paths` that sit in a crate's `tests/` tree. clippy's
+/// `mod_module_files` holds the workspace's one module form at the compiler tier but does not
+/// lint an integration test's modules, so this is the form's twin there alone.
+fn test_mod_rs_files<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Path> {
+    paths
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "mod.rs"))
+        .filter(|path| is_integration_test(path))
+        .collect()
+}
+
+#[test]
+fn no_test_module_is_a_mod_rs_file() {
+    let sources = rust_sources("crates");
+    let tests = sources
+        .iter()
+        .filter(|(path, _)| is_integration_test(path))
+        .count();
+    assert!(
+        tests > 0,
+        "the module-form guard found no file under any crate's tests/; did the crates move?"
+    );
+    let found = test_mod_rs_files(sources.iter().map(|(path, _)| path.as_path()));
+    assert!(
+        found.is_empty(),
+        "{found:?} is a `mod.rs`. The workspace has one module form, `name.rs` beside `name/` \
+         (CLAUDE.md, Conventions): a test binary with modules is `tests/<name>/main.rs`, and a \
+         helper shared by test binaries sits in `tests/support/`, reached by `#[path]`."
+    );
+}
+
+#[test]
+fn the_test_mod_rs_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        "crates/x/tests/fixtures/mod.rs",
+        "crates/x/tests/target_dir/nested/mod.rs",
+    ];
+    let ignored = [
+        "crates/x/tests/support/fixtures.rs",
+        "crates/x/tests/fetch/main.rs",
+        "crates/x/tests/mod_rs.rs",
+        "crates/x/tests/remotes/mod.rs.orig",
+        "crates/x/src/ops/mod.rs",
+        "crates/x/src/a/tests/mod.rs",
+    ];
+    let paths: Vec<&Path> = caught.iter().chain(&ignored).map(Path::new).collect();
+    let found = test_mod_rs_files(paths);
+    assert_eq!(
+        found,
+        caught.iter().map(Path::new).collect::<Vec<_>>(),
+        "the test mod.rs matcher misread a path"
+    );
+}
+
 #[test]
 fn only_the_ops_module_mutates_a_repository() {
-    let ops = Path::new(OPS_DIR);
-    let process = Path::new(PROCESS_DIR);
     let mut scanned = 0usize;
 
     for dir in PRODUCT_SOURCE_DIRS {
         for (path, source) in rust_sources(dir) {
             // `process/` runs the `git` binary by design; whether what it runs may write is
             // the write seal's (`the_runner_is_named_only_by_ops_and_reads`).
-            if path.starts_with(ops) || path.starts_with(process) {
+            if in_module(&path, OPS_DIR) || in_module(&path, PROCESS_DIR) {
                 continue;
             }
             scanned += 1;
@@ -1037,7 +1203,7 @@ fn only_the_ops_module_mutates_a_repository() {
     // that way). Test modules are scanned too: a fixture is built by running real git.
     let mut engine_files = 0usize;
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
-        if path.starts_with(ops) {
+        if in_module(&path, OPS_DIR) {
             continue;
         }
         engine_files += 1;
@@ -1064,6 +1230,315 @@ fn only_the_ops_module_mutates_a_repository() {
         "a crate other than cairn-git may now depend on gix, so the gitoxide half of this guard, \
          which reads {ENGINE_SOURCE_DIR} alone, no longer sees every caller: widen its scope"
     );
+}
+
+/// Production files outside `ops/` that change the filesystem, each with exactly the kinds of
+/// write the matcher may find there and why that is outside any repository. A row whose file
+/// shows another kind — or no longer shows one of its own — fails the guard, so a row excuses
+/// only what it names and cannot outlive its reason. A later write outside any repository — a
+/// settings store (#89) — adds a row of its own, with its reason.
+const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &[&str], &str)] = &[
+    (
+        "crates/cairn-askpass/src/channel.rs",
+        &[
+            "DirBuilder",
+            "UnixListener",
+            "remove_dir",
+            "remove_file",
+            "set_permissions",
+        ],
+        "the askpass channel's socket directory under the user's runtime directory: created \
+         0700, the socket bound in it, both removed when the channel goes",
+    ),
+    (
+        "crates/cairn-git/src/ownership.rs",
+        &["create_new", "remove_file"],
+        "a probe file created and removed in the temporary directory, to learn which uid owns a \
+         file this process creates, as git's ownership check compares",
+    ),
+];
+
+/// The filesystem writes `ops/` makes, by file and kind: the one mutation Cairn makes without
+/// `git`, `Remove index.lock…`'s removal. Any other kind in `ops/`, or in another file of it,
+/// fails the guard: the exception cannot widen unseen, and a second git-less write is a
+/// reviewed row.
+const OPS_FILESYSTEM_WRITES: &[(&str, &[&str])] =
+    &[("crates/cairn-git/src/ops/remove_lock.rs", &["remove_file"])];
+
+/// Where a test module is declared under a `cfg` that needs `test` and something more: compiled
+/// into no build that ships, so as much test code as `#[cfg(test)]`.
+const TEST_ONLY_CFGS: &[&str] = &["#[cfg(all(test, unix))]"];
+
+/// `source`'s production code: comments, strings and test modules blanked, a module under one
+/// of [`TEST_ONLY_CFGS`] counted as a test module.
+fn production_of(source: &str) -> String {
+    let mut code = code_without_strings(source);
+    for cfg in TEST_ONLY_CFGS {
+        // Same length, so every offset and line stays where it was.
+        let marker = format!("{:<width$}", "#[cfg(test)]", width = cfg.len());
+        code = code.replace(cfg, &marker);
+    }
+    code_without_test_modules(&code)
+}
+
+/// No production file outside `crates/cairn-git/src/ops/` removes, writes, renames, creates,
+/// links or changes the permissions of a file or directory: the one mutation Cairn makes
+/// without `git` — `Remove index.lock…` — is in `ops/`, behind its confirmation, and anything
+/// else that writes the disk is a row of `FILESYSTEM_MUTATION_EXCEPTIONS`, outside any
+/// repository. Test code — test modules, files a
+/// parent declares under `#[cfg(test)]` or `#[cfg(all(test, unix))]` — may write what it likes.
+#[test]
+fn only_the_ops_module_changes_the_filesystem() {
+    let mut scanned = 0usize;
+    let mut excused = BTreeSet::new();
+    let mut ops_mutates = false;
+    for dir in PRODUCT_SOURCE_DIRS {
+        let sources: Vec<_> = rust_sources(dir)
+            .into_iter()
+            .map(|(path, source)| {
+                let normalised = TEST_ONLY_CFGS.iter().fold(source.clone(), |text, cfg| {
+                    text.replace(cfg, &format!("{:<w$}", "#[cfg(test)]", w = cfg.len()))
+                });
+                (path, source, normalised)
+            })
+            .collect();
+        let declared: Vec<_> = sources
+            .iter()
+            .map(|(path, _, normalised)| (path.clone(), normalised.clone()))
+            .collect();
+        let test_only = test_only_module_files(&declared);
+        for (path, source, _) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            let production = production_of(source);
+            let found = mutates_the_filesystem(&production);
+            let kinds = filesystem_mutation_kinds(&production);
+            let relative = path
+                .strip_prefix(repo_root())
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
+            let allowed = |roster: &[(&str, &[&str])]| -> BTreeSet<String> {
+                roster
+                    .iter()
+                    .filter(|(file, _)| *file == relative)
+                    .flat_map(|(_, kinds)| kinds.iter().map(|kind| (*kind).to_owned()))
+                    .collect()
+            };
+            if in_module(path, OPS_DIR) {
+                ops_mutates |= !found.is_empty();
+                let rows = allowed(OPS_FILESYSTEM_WRITES);
+                assert_eq!(
+                    kinds, rows,
+                    "{relative} shows the filesystem writes {kinds:?}, where OPS_FILESYSTEM_WRITES \
+                     names {rows:?}: the one write ops/ makes without git is Remove index.lock's, \
+                     and another is a reviewed row ({found:?})"
+                );
+                if !rows.is_empty() {
+                    excused.insert(relative.clone());
+                }
+                continue;
+            }
+            scanned += 1;
+            let exception: Vec<(&str, &[&str])> = FILESYSTEM_MUTATION_EXCEPTIONS
+                .iter()
+                .map(|(file, kinds, _)| (*file, *kinds))
+                .collect();
+            if exception.iter().any(|(file, _)| *file == relative) {
+                let rows = allowed(&exception);
+                assert_eq!(
+                    kinds, rows,
+                    "{relative} shows the filesystem writes {kinds:?}, where its \
+                     FILESYSTEM_MUTATION_EXCEPTIONS row excuses exactly {rows:?}: a new kind of \
+                     write is a review of the row, and one no longer made leaves it ({found:?})"
+                );
+                excused.insert(relative.clone());
+                continue;
+            }
+            assert!(
+                found.is_empty(),
+                "{} changes the filesystem outside {OPS_DIR}, at {found:?}. Every mutation of \
+                 a repository is in that module, and so is the one Cairn makes without git \
+                 (removing a stale index.lock); a write outside any repository is a row of \
+                 FILESYSTEM_MUTATION_EXCEPTIONS, with its reason.",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        scanned > 0,
+        "the filesystem guard scanned nothing outside {OPS_DIR}; did the crates move?"
+    );
+    assert!(
+        ops_mutates,
+        "{OPS_DIR} shows the filesystem matcher no mutation, though Remove index.lock removes a \
+         file there: the matcher stopped reading real code, or the removal moved"
+    );
+    for file in FILESYSTEM_MUTATION_EXCEPTIONS
+        .iter()
+        .map(|(file, _, _)| *file)
+        .chain(OPS_FILESYSTEM_WRITES.iter().map(|(file, _)| *file))
+    {
+        assert!(
+            excused.contains(file),
+            "{file} has a row excusing its filesystem writes, but was not read, or no longer \
+             makes them; remove the row"
+        );
+    }
+}
+
+/// The filesystem matcher sees each spelling it claims — every identifier on its roster, the
+/// `fs::` functions by path and by import, aliased, `File::create`, a glob import and a renamed
+/// module — and passes reading and prose. Caught by: a roster entry the matcher stopped
+/// matching, or one that matches what only reads.
+#[test]
+fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
+    // One case spelled out for every roster entry, apart from the roster: an entry deleted from
+    // it fails here.
+    let spelled: &[(&str, &str)] = &[
+        ("remove_file", "fn f() { std::fs::remove_file(p).ok(); }"),
+        ("remove_dir", "fn f() { std::fs::remove_dir(p).ok(); }"),
+        (
+            "remove_dir_all",
+            "fn f() { let _ = fs::remove_dir_all(&dir); }",
+        ),
+        ("create_dir", "fn f() { std::fs::create_dir(p).ok(); }"),
+        ("create_dir_all", "fn f() { std::fs::create_dir_all(p)?; }"),
+        ("create_new", "fn f() { let _ = File::create_new(p); }"),
+        (
+            "OpenOptions",
+            "fn f() { OpenOptions::new().write(true).open(p); }",
+        ),
+        ("DirBuilder", "fn f() { fs::DirBuilder::new().create(p); }"),
+        ("hard_link", "fn f() { std::fs::hard_link(a, b)?; }"),
+        ("soft_link", "fn f() { std::fs::soft_link(a, b)?; }"),
+        ("symlink", "fn f() { std::os::unix::fs::symlink(a, b); }"),
+        (
+            "set_permissions",
+            "fn f() { fs::set_permissions(p, mode)?; }",
+        ),
+        (
+            "chown",
+            "fn f() { std::os::unix::fs::chown(p, Some(0), None)?; }",
+        ),
+        (
+            "fchown",
+            "fn f() { std::os::unix::fs::fchown(&file, None, None)?; }",
+        ),
+        (
+            "lchown",
+            "fn f() { std::os::unix::fs::lchown(p, None, None)?; }",
+        ),
+        ("set_len", "fn f() { file.set_len(0); }"),
+        ("set_modified", "fn f() { file.set_modified(when)?; }"),
+        ("set_times", "fn f() { file.set_times(times)?; }"),
+        ("UnixListener", "fn f() { let l = UnixListener::bind(p); }"),
+        ("UnixDatagram", "fn f() { let d = UnixDatagram::bind(p); }"),
+        (
+            "fs::write",
+            "use std::fs;\nfn f() { fs::write(p, b\"x\"); }",
+        ),
+        ("fs::rename", "fn f() { std :: fs :: rename(a, b); }"),
+        ("fs::copy", "fn f() { std::fs::copy(a, b); }"),
+        (
+            "File::create",
+            "fn f() { let _ = std::fs::File::create(p); }",
+        ),
+        (
+            "File::create_buffered",
+            "fn f() { let _ = File::create_buffered(p); }",
+        ),
+        (
+            "File::options",
+            "fn f() { File::options().append(true).open(p); }",
+        ),
+    ];
+    let roster: Vec<String> = cairn_guards::FILESYSTEM_MUTATION_IDENTS
+        .iter()
+        .map(|ident| (*ident).to_owned())
+        .chain(
+            cairn_guards::FILESYSTEM_MUTATION_FS_FUNCTIONS
+                .iter()
+                .map(|function| format!("fs::{function}")),
+        )
+        .chain(
+            cairn_guards::FILESYSTEM_MUTATION_FILE_FUNCTIONS
+                .iter()
+                .map(|function| format!("File::{function}")),
+        )
+        .collect();
+    for entry in &roster {
+        let Some((_, src)) = spelled.iter().find(|(kind, _)| kind == entry) else {
+            panic!("{entry} is on a filesystem roster with no case spelled out for it");
+        };
+        assert!(
+            cairn_guards::filesystem_mutation_kinds(src).contains(entry),
+            "{entry} not found in {src}: {:?}",
+            mutates_the_filesystem(src)
+        );
+    }
+    for (kind, _) in spelled {
+        assert!(
+            roster.iter().any(|entry| entry == kind),
+            "{kind} is on no roster"
+        );
+    }
+    let caught = [
+        "fn f() { std::fs::remove_file(p).ok(); }",
+        // The ways a `use` or a `type` hides a spelling.
+        "use std::fs::{self as f};\nfn g() { f::write(p, b); }",
+        "use std::fs::{*};",
+        "use std::fs::{self, *};",
+        "use std::{fs::*, io};",
+        "use std::{io::Read, fs::{*}};",
+        "use std::fs::File as Out;\nfn f() { Out::create(p); }",
+        "use std::fs::{File as Out};",
+        "type Out = std::fs::File;\nfn f() { Out::create(p); }",
+        "use std::fs::remove_file as gone;\nfn f() { gone(p); }",
+        "use std::fs;\nfn f() { fs::write(p, b\"x\"); }",
+        "fn f() { std :: fs :: rename(a, b); }",
+        "fn f() { std::fs::copy(a, b); }",
+        "use std::fs::{write as put};\nfn f() { put(p, b); }",
+        "use std::fs::{self, rename};",
+        "use std::fs::*;",
+        "use std::fs as disk;\nfn f() { disk::write(p, b); }",
+        "fn f() { let _ = File::create(p); }",
+        "fn f() { let _ = std::fs::File::create(p); }",
+        "fn f() { let _ = File::create_new(p); }",
+        "fn f() { OpenOptions::new().write(true).open(p); }",
+        "fn f() { fs::DirBuilder::new().create(p); }",
+        "fn f() { std::os::unix::fs::symlink(a, b); }",
+        "fn f() { file.set_len(0); }",
+        "fn f() { let l = UnixListener::bind(p); }",
+    ];
+    for src in caught {
+        assert!(!mutates_the_filesystem(src).is_empty(), "missed: {src}");
+    }
+    let innocent = [
+        "fn f() { let _ = std::fs::read_to_string(p); }",
+        "fn f() { let _ = std::fs::symlink_metadata(p); }",
+        "fn f() { let _ = File::open(p); }",
+        "use std::fs::File;\nfn f() { File::open(p); }",
+        "use std::{fs, io::*};",
+        "use std::fs::{self, File};",
+        "use std::io::Write;\nfn f() { out.write_all(b); out.write(b); }",
+        "fn f() { writer.rename_column(); let copy = x.clone(); }",
+        "// std::fs::remove_file(p) in a comment\nfn f() {}",
+        "fn f() { let s = \"fs::write and remove_file in a string\"; }",
+    ];
+    for src in innocent {
+        assert!(
+            mutates_the_filesystem(src).is_empty(),
+            "false hit: {src}: {:?}",
+            mutates_the_filesystem(src)
+        );
+    }
+    // A test module, and one under `cfg(all(test, unix))`, are test code.
+    let tested = "fn f() {}\n#[cfg(all(test, unix))]\nmod tests {\n    fn t() { std::fs::remove_file(p); }\n}\n";
+    assert!(mutates_the_filesystem(&production_of(tested)).is_empty());
+    let shipped = "#[cfg(unix)]\nmod real {\n    fn t() { std::fs::remove_file(p); }\n}\n";
+    assert!(!mutates_the_filesystem(&production_of(shipped)).is_empty());
 }
 
 /// The process half of a file's verdict: every way it builds, spawns, waits on or reads a
@@ -1138,24 +1613,23 @@ const PROCESS_YIELDING_METHODS: &[&str] = &["command"];
 const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "crates/cairn-app/src",
     "status",
-    "history_state::Progress::status, the history view's load state, read by the window and the status \
+    "history::state::Progress::status, the history view's load state, read by the window and the status \
      line. No process can be behind a `.status()` in cairn-app: a Command there is caught by its \
      name and by `.command(..)`, cairn-git's public surface yields none, and a dependency that \
      did would need an allowlist row",
 )];
 /// Nothing outside `process/` builds, spawns, waits on or reads a process, or calls a method that
-/// yields one (process-manager R1.3, G2). The environment twin pins that one file builds the
-/// `Command`; this pins that nothing else can drive one, so the runner's stdin, kill and error
-/// mapping cannot be bypassed with the built environment in hand.
+/// yields one. The environment twin pins that one file builds the `Command`; this pins that
+/// nothing else can drive one, so the runner's stdin, kill and error mapping cannot be bypassed
+/// with the built environment in hand.
 #[test]
 fn only_the_process_module_builds_or_runs_a_process() {
-    let process = Path::new(PROCESS_DIR);
     let (mut outside, mut inside) = (0usize, 0usize);
     let mut module = String::new();
 
     for dir in PRODUCT_SOURCE_DIRS {
         for (path, source) in rust_sources(dir) {
-            if path.starts_with(process) {
+            if in_module(&path, PROCESS_DIR) {
                 inside += 1;
                 module.push_str(&code_without_test_modules(&code_without_strings(&source)));
                 module.push('\n');
@@ -1182,11 +1656,10 @@ fn only_the_process_module_builds_or_runs_a_process() {
          move with it rather than exempt a directory that is not there"
     );
     // The module does what the matchers look for, so a matcher that stopped reading real code
-    // fails here rather than passing everything. The shapes are the runner's own. `.output()`
-    // and `.wait()` were here while `GitCommand::run` and `stream` existed, and went with them
-    // (process-manager phase 03): SWAPPED, not dropped, for the extension trait that puts each
-    // process in a group of its own and the stdout pipe a thread reads, beside `.try_wait()`,
-    // which is how the runner reaps. Those two stay on PROCESS_IDENTS and
+    // fails here rather than passing everything. The shapes are the runner's own: the extension
+    // trait that puts each process in a group of its own, the stdout pipe a thread reads, and
+    // `.try_wait()`, which is how the runner reaps. The runner calls neither `.output()` nor
+    // `.wait()`, so neither is required here, but both stay on PROCESS_IDENTS and
     // PROCESS_NULLARY_CALLS, so a call outside `process/` still fails.
     for (shape, hits) in [
         ("`.spawn()`", calls_nullary_method(&module, &["spawn"])),
@@ -1250,20 +1723,19 @@ const RUNNER_NAMES: &[&str] = &[
     "KillHandle",
 ];
 
-/// The runner the credential-prompts packet built, which process-manager replaced (R3.7, G18):
-/// the streamed process and its kill handle, by name. Banned everywhere in `cairn-git`,
-/// `process/` included, test modules included: the runner in `runner.rs` is the one way a
-/// process runs, and a second would be a second set of rules for ending one. They stay on
+/// A second runner's streamed process and its kill handle, by name. Banned everywhere in
+/// `cairn-git`, `process/` included, test modules included: the runner in `runner.rs` is the one
+/// way a process runs, and a second would be a second set of rules for ending one. They stay on
 /// [`RUNNER_NAMES`] as well, which is the weaker rule.
 const RETIRED_RUNNER_NAMES: &[&str] = &["Running", "ProcessKill"];
 
-/// That runner's two entry points, the methods `GitCommand` declared for it: `run` to
-/// completion and `stream` with a kill. Banned as a declaration in any `impl` block whose header
+/// That runner's two entry points, as methods of `GitCommand`: `run` to completion and
+/// `stream` with a kill. Banned as a declaration in any `impl` block whose header
 /// names `GitCommand`, and `stream` as a method call anywhere (`run` has innocent namesakes —
 /// the runner's own `Driver::run` — so its call is not matched; its declaration is).
 const RETIRED_RUNNER_METHODS: &[&str] = &["run", "stream"];
 
-/// The type the retired methods were declared on.
+/// The type a retired entry point would be declared on.
 const INVOCATION_BUILDER: &str = "GitCommand";
 
 /// Each `impl` block in `code` (strings and comments blanked) whose header names `ty`, as its
@@ -1388,22 +1860,21 @@ fn other_process_starts(source: &str) -> usize {
     .len()
 }
 
-/// The probe and fetch run on the runner, and the paths they ran on before are gone (process-
-/// manager R3.7, G18): nothing in `cairn-git` names the streamed `Running` or its
-/// `ProcessKill`, declares `GitCommand::run` or `GitCommand::stream`, or calls `.stream(..)` or
-/// `GitCommand::run(..)`/`GitCommand::stream(..)`. Over every file of `crates/cairn-git/src`,
-/// `process/` and test modules included — a test that keeps an old path alive keeps its rules
-/// alive (`tests/` cannot name these crate-private items at all). And production `process/`
-/// starts a process in exactly one place — one line calling `.spawn()`, and none calling
-/// `.output()`, `.status()` or `.exec()` — so a second runner starting its own process by those
-/// method calls, under any name, through an alias, a free function or a macro, fails here even
-/// where the name ban does not see it. Method-call syntax only: a path call
+/// The probe and fetch run on the runner, and on no second path to a process: nothing in
+/// `cairn-git` names a streamed `Running` or its `ProcessKill`, declares `GitCommand::run` or
+/// `GitCommand::stream`, or calls `.stream(..)` or `GitCommand::run(..)`/`GitCommand::stream(..)`.
+/// Over every file of `crates/cairn-git/src`, `process/` and test modules included — a test that
+/// keeps a second path alive keeps its rules alive (`tests/` cannot name these crate-private items
+/// at all). And production `process/` starts a process in exactly one place — one line calling
+/// `.spawn()`, and none calling `.output()`, `.status()` or `.exec()` — so a second runner starting
+/// its own process by those method calls, under any name, through an alias, a free function or a
+/// macro, fails here even where the name ban does not see it. Method-call syntax only: a path call
 /// (`Command::spawn(&mut c)`) or a `nix` start is not counted here; the terminal-prompt twin
 /// catches most of them, and what neither sees is stated in the root `CLAUDE.md`. Proven to
 /// read real code by finding `GitCommand`'s own impl blocks, and the runner's `start` in one
 /// of them.
 ///
-/// Residual review obligation, `qa-checklist`'s (its item 7): the names are read as spelled, so
+/// Residual review obligation, `qa-checklist`'s: the names are read as spelled, so
 /// a retired entry point declared through a `type` alias of the builder, as a free function or
 /// by a macro is seen only if it starts a process; two spawns written on one line count once;
 /// and a second path built ON `start` — a wrapper that
@@ -1417,7 +1888,7 @@ fn the_retired_runner_is_gone() {
     let mut other_starts = Vec::new();
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
-        if path.starts_with(PROCESS_DIR) {
+        if in_module(&path, PROCESS_DIR) {
             for _ in 0..process_spawns(&source) {
                 spawns.push(path.display().to_string());
             }
@@ -1639,9 +2110,9 @@ const WRITE_AUTHORITY_FILE: &str = "crates/cairn-git/src/ops/authority.rs";
 fn runner_violations(path: &Path, source: &str) -> Vec<String> {
     let code = code_without_strings(source);
     let at = |line: usize| format!("{}:{line}", path.display());
-    let in_ops = path.starts_with(OPS_DIR);
-    let in_process = path.starts_with(PROCESS_DIR);
-    let in_reads = path.starts_with(READS_DIR);
+    let in_ops = in_module(path, OPS_DIR);
+    let in_process = in_module(path, PROCESS_DIR);
+    let in_reads = in_module(path, READS_DIR);
     let mut found = Vec::new();
     if !(in_ops || in_process || in_reads) {
         for name in RUNNER_NAMES {
@@ -1688,18 +2159,500 @@ fn runner_violations(path: &Path, source: &str) -> Vec<String> {
 }
 
 /// Only `ops/` and `reads/` name the runner (beside `process/` itself), and only `ops/`
-/// constructs a `WriteAuthority` or builds a write (process-manager R1.2, R1.3, G1, G2). The
-/// compiler refuses most of this already — the authority's constructor is `pub(in crate::ops)`,
-/// the builder type is not re-exported, `process` is a private module — and this twin is what
-/// fails if any of that visibility is widened, which would compile quietly. Over `cairn-git`
+/// constructs a `WriteAuthority` or builds a write. The compiler refuses most of this already —
+/// the authority's constructor is `pub(in crate::ops)`, the builder type is not re-exported,
+/// `process` is a private module — and this twin is what fails if any of that visibility is
+/// widened, which would compile quietly. Over `cairn-git`
 /// alone, because the runner's names are crate-private: another crate cannot name them, which
 /// the visibility pins below keep true.
+/// Where a pin must sit to run: `function` declared once in `code` (comments and strings
+/// blanked), directly inside exactly one module, that module's attributes exactly
+/// `#[cfg(test)]` — no `cfg(any())` beside it, no nested module between it and the pin, no
+/// `impl` or function around the pin — the pin's own attributes exactly `own`, and its body
+/// still holding each of `required`. A pin compiled away, nested out of reach or emptied
+/// decides nothing while it still reads as there.
+fn pin_placement_violations(
+    code: &str,
+    file: &str,
+    function: &str,
+    own: &str,
+    required: &[&str],
+) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let declaration = format!("fn {function}(");
+    let found: Vec<usize> = code
+        .match_indices(&declaration)
+        .map(|(at, _)| at)
+        .filter(|at| {
+            code[..*at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+        .collect();
+    let [at] = found[..] else {
+        return vec![format!(
+            "{file} declares `{function}` {} times; its pin must be declared once",
+            found.len()
+        )];
+    };
+    let mut violations = Vec::new();
+    let since = |end: usize| code[..end].rfind(['}', ';', '{']).map_or(0, |b| b + 1);
+    let attributes = squeezed(&code[since(at)..at]);
+    if attributes != squeezed(own) {
+        violations.push(format!(
+            "{file} gives `{function}` the attributes `{attributes}`, where only `{own}` lets              it run"
+        ));
+    }
+    // Every block the pin sits in, outermost first, by matching braces.
+    let bytes = code.as_bytes();
+    let mut open = Vec::new();
+    for (i, b) in bytes.iter().enumerate().take(at) {
+        match b {
+            b'{' => open.push(i),
+            b'}' => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    let headed_module = |brace: usize| {
+        let head = code[since(brace)..brace].trim();
+        let words: Vec<&str> = head.split_whitespace().collect();
+        let mod_at = words.iter().rposition(|w| *w == "mod");
+        mod_at.map(|n| (n, words.len()))
+    };
+    match open[..] {
+        [brace] if headed_module(brace).is_some_and(|(n, len)| n + 2 == len) => {
+            let head = &code[since(brace)..brace];
+            let module_attributes = squeezed(&head[..head.rfind("mod").unwrap_or(0)]);
+            if module_attributes != "#[cfg(test)]" {
+                violations.push(format!(
+                    "{file} puts `{function}` in a module whose attributes are                      `{module_attributes}`, not exactly `#[cfg(test)]`: a module compiled away                      takes the pin with it"
+                ));
+            }
+        }
+        _ => violations.push(format!(
+            "{file} puts `{function}` inside {} blocks; the pin must sit directly in the one              `#[cfg(test)]` module, never in a nested module, an `impl` or a function, where a              `cfg` could take it away unseen",
+            open.len()
+        )),
+    }
+    // The pin's body, by matching braces from its own.
+    let body = block_after(code, at);
+    for line in required {
+        if !body.is_some_and(|body| squeezed(body).contains(&squeezed(line))) {
+            violations.push(format!(
+                "{file}'s pin `{function}` no longer reads `{line}`: an emptied pin decides nothing"
+            ));
+        }
+    }
+    violations
+}
+
+/// The first block in `code` after `at` — a function's body from its declaration — by
+/// matching braces from its own.
+fn block_after(code: &str, at: usize) -> Option<&str> {
+    let start = at + code[at..].find('{')?;
+    let mut depth = 0usize;
+    let mut end = start;
+    for (i, b) in code.bytes().enumerate().skip(start) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(&code[start..=end])
+}
+
+/// The body of the one function `code` declares as `fn {function}(`, if there is one.
+fn function_body<'a>(code: &'a str, function: &str) -> Option<&'a str> {
+    let declaration = format!("fn {function}(");
+    let at = code
+        .match_indices(&declaration)
+        .map(|(at, _)| at)
+        .find(|at| {
+            code[..*at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })?;
+    block_after(code, at)
+}
+
+/// The assertion macros a pin's rule example must sit in.
+const ASSERTIONS: &[&str] = &["assert!", "assert_eq!", "assert_ne!"];
+
+/// Each occurrence of a call among `calls` in `body` (comments and strings blanked) that is not
+/// inside an assertion's parentheses: walked outward from the call through parentheses and
+/// brackets alone, an `assert!`, `assert_eq!` or `assert_ne!` must open one of them before a
+/// brace or a statement's end does. `let _ = pin_violations(&x);`, a bare call, or one in an
+/// `if` decides nothing the test reports.
+fn unasserted_calls(body: &str, calls: &[&str]) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let bytes = body.as_bytes();
+    let mut found = Vec::new();
+    for call in calls {
+        // The call's name up to its parenthesis, found however the call is spaced.
+        let name = call.split('(').next().unwrap_or(call);
+        for (at, _) in body.match_indices(name) {
+            let starts_a_word = body[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            let rest = &body[at..];
+            let close = rest.find(')').map_or(rest.len(), |close| close + 1);
+            if !starts_a_word || squeezed(&rest[..close]) != squeezed(call) {
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut asserted = false;
+            for i in (0..at).rev() {
+                match bytes[i] {
+                    b')' | b']' | b'}' => depth += 1,
+                    b'(' | b'[' if depth > 0 => depth -= 1,
+                    b'{' if depth > 0 => depth -= 1,
+                    b'(' => {
+                        let before = body[..i].trim_end();
+                        let opens_an_assertion = ASSERTIONS.iter().any(|macro_name| {
+                            before.strip_suffix(macro_name).is_some_and(|ahead| {
+                                ahead
+                                    .chars()
+                                    .next_back()
+                                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+                            })
+                        });
+                        if opens_an_assertion {
+                            asserted = true;
+                            break;
+                        }
+                    }
+                    b'[' => {}
+                    b'{' => break,
+                    b';' if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            if !asserted {
+                found.push(format!(
+                    "`{call}` is called outside an assertion: a rule example whose answer \
+                     nothing asserts decides nothing"
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Local Changes' list-and-diff bare keys, as the accelerator table's pin declares them
+/// (CLAUDE.md: exactly Backspace and Delete — never Enter, since Fork's Return does nothing in
+/// the diff): a key added there would be admitted by the pin's rule and its loops alike, so the
+/// declaration itself is pinned.
+const LOCAL_CHANGES_BARE_KEYS_DECLARATION: &str =
+    "const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];";
+
+/// Local Changes' lists' own bare keys (CLAUDE.md: exactly Enter, heard from the file lists and
+/// never the diff), pinned for the same reason.
+const LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION: &str =
+    "const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = [NamedKey::Enter];";
+
+/// What the accelerator table's pin rests on, over the table's code (comments and strings
+/// blanked): the pin placed where it runs, holding each rule example inside an assertion; the
+/// rule function placed beside it and reading both sets of Local Changes' bare keys; and each
+/// set declared once, exactly as [`LOCAL_CHANGES_BARE_KEYS_DECLARATION`] and
+/// [`LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION`] read.
+fn accelerator_pin_violations(code: &str) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let mut found = pin_placement_violations(
+        code,
+        ACCELERATOR_TABLE,
+        ACCELERATOR_PIN,
+        "#[test]",
+        ACCELERATOR_PIN_BODY,
+    );
+    if let Some(body) = function_body(code, ACCELERATOR_PIN) {
+        found.extend(unasserted_calls(body, ACCELERATOR_PIN_BODY));
+    }
+    found.extend(pin_placement_violations(
+        code,
+        ACCELERATOR_TABLE,
+        "pin_violations",
+        "",
+        &[
+            "LOCAL_CHANGES_BARE_KEYS.contains(&named)",
+            "LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named)",
+        ],
+    ));
+    let all = squeezed(code);
+    for (name, declaration) in [
+        (
+            "LOCAL_CHANGES_BARE_KEYS",
+            LOCAL_CHANGES_BARE_KEYS_DECLARATION,
+        ),
+        (
+            "LOCAL_CHANGES_LISTS_BARE_KEYS",
+            LOCAL_CHANGES_LISTS_BARE_KEYS_DECLARATION,
+        ),
+    ] {
+        let declarations: usize = ["const", "static", "let", "letmut"]
+            .iter()
+            .map(|keyword| all.matches(&format!("{keyword}{name}:")).count())
+            .sum::<usize>()
+            + ["let", "letmut"]
+                .iter()
+                .map(|keyword| all.matches(&format!("{keyword}{name}=")).count())
+                .sum::<usize>();
+        if declarations != 1 || all.matches(&squeezed(declaration)).count() != 1 {
+            found.push(format!(
+                "{ACCELERATOR_TABLE} no longer declares `{name}` once, exactly as \
+                 `{declaration}` ({declarations} declarations): a key added there is admitted \
+                 by the pin it should fail"
+            ));
+        }
+    }
+    found
+}
+
+/// What the accelerator table's pin must still do, as code: check the table, and show the rule
+/// failing on each shape it refuses.
+const ACCELERATOR_PIN_BODY: &[&str] = &[
+    "pin_violations(&rows)",
+    "pin_violations(&enter_in_the_diff)",
+    "pin_violations(&moved)",
+    "pin_violations(&letter)",
+    "pin_violations(&press)",
+    "pin_violations(&twice)",
+    "pin_violations(&shared)",
+];
+
+/// What keeps the bounded-output helpers a read's alone, in `process/runner.rs` and
+/// `process/cli.rs`: the helpers declared once each, inside `impl Invocation<Read>`; the ceiling
+/// `drive` takes typed by the invocation's kind, a write's ceiling type `Infallible`, so no generic
+/// helper can hand a write a ceiling; and the compile-time pin present, in code, under no `cfg`
+/// that could compile it away.
+fn bounded_helper_violations(runner: &str, cli: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let runner_code = code_without_strings(runner);
+    let runner_production = code_without_test_modules(&runner_code);
+    let read_alone = runner_production
+        .split("impl Invocation<Read> {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    for helper in ["collect", "finish_within"] {
+        let declared = cairn_guards::function_signatures(&runner_production)
+            .into_iter()
+            .filter(|signature| signature.name == helper)
+            .count();
+        let on_a_read = cairn_guards::function_signatures(read_alone)
+            .iter()
+            .any(|signature| signature.name == helper);
+        if declared != 1 || !on_a_read {
+            found.push(format!(
+                "runner.rs should declare `{helper}` once, in `impl Invocation<Read> {{`; a \
+                 ceiling on a write can report a completed change as refused"
+            ));
+        }
+    }
+    let drive_takes_the_kinds_ceiling = cairn_guards::function_signatures(&runner_production)
+        .iter()
+        .any(|signature| {
+            signature.name == "drive"
+                && signature
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.replace(' ', "") == "ceiling:Option<K::Ceiling>")
+        });
+    if !drive_takes_the_kinds_ceiling {
+        found.push(
+            "`Invocation::drive` no longer takes `ceiling: Option<K::Ceiling>`; a ceiling typed \
+             apart from the kind lets a generic helper give a write one"
+                .to_owned(),
+        );
+    }
+    let cli_production = code_without_test_modules(&code_without_strings(cli));
+    let write_kind = cli_production
+        .split("impl Kind for Write {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    if !write_kind.contains("type Ceiling = std::convert::Infallible;") {
+        found.push(
+            "a write's `Kind::Ceiling` is no longer `std::convert::Infallible`; a ceiling a \
+             write can hold is a ceiling a write can cross"
+                .to_owned(),
+        );
+    }
+    for (function, lines) in [
+        ("the_bounded_output_helpers_exist_on_a_read_alone", &[][..]),
+        (
+            "helpers_by_kind",
+            &[
+                "let Absent = write.collect(",
+                "let Absent = another_write.finish_within(",
+            ][..],
+        ),
+    ] {
+        if !runner_code.contains(&format!("fn {function}(")) {
+            found.push(format!(
+                "runner.rs lost `{function}`, the pin that stops compiling when a \
+                 bounded-output helper is given to a write"
+            ));
+            continue;
+        }
+        // Where it sits and what it holds: one `#[cfg(test)]` module, nothing between, its
+        // own attributes exactly what lets it run, and its calls still in its body.
+        let own = if function == "helpers_by_kind" {
+            ""
+        } else {
+            "#[test]"
+        };
+        let required: Vec<&str> = if function == "helpers_by_kind" {
+            lines.to_vec()
+        } else {
+            vec!["helpers_by_kind"]
+        };
+        found.extend(pin_placement_violations(
+            &runner_code,
+            "runner.rs",
+            function,
+            own,
+            &required,
+        ));
+    }
+    found
+}
+
+/// The bounded-output helper check over the real files, and over each way of eroding them.
+#[test]
+fn the_bounded_output_helper_check_catches_the_shapes_it_claims() {
+    let read = |file: &str| {
+        rust_sources(PROCESS_DIR)
+            .into_iter()
+            .find(|(path, _)| path == &Path::new(PROCESS_DIR).join(file))
+            .map(|(_, source)| source)
+            .unwrap_or_else(|| panic!("{PROCESS_DIR}/{file} is gone"))
+    };
+    let (runner, cli) = (read("runner.rs"), read("cli.rs"));
+    assert_eq!(
+        bounded_helper_violations(&runner, &cli),
+        Vec::<String>::new()
+    );
+    // Built at run time so the debris hook, which reads added lines, does not take the fixture
+    // for a test left ignored.
+    let ignored_pin = format!(
+        "    #[test]\n    #[{}]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        "ignore"
+    );
+    let runner_shapes = [
+        (
+            "the helpers widened to every kind",
+            "impl Invocation<Read> {",
+            "impl<K: Kind> Invocation<K> {",
+        ),
+        (
+            "drive given a plain ceiling",
+            "ceiling: Option<K::Ceiling>,",
+            "ceiling: Option<usize>,",
+        ),
+        (
+            "the pin compiled away",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[test]\n    #[cfg(any())]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pin compiled away by a spaced attribute",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[test]\n    # [ cfg(any()) ]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pinned function compiled away",
+            "    fn helpers_by_kind(",
+            "    #[cfg(any())]\n    fn helpers_by_kind(",
+        ),
+        (
+            "the pin ignored",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            ignored_pin.as_str(),
+        ),
+        (
+            "the pin's write call commented out",
+            "let Absent = write.collect(",
+            "// let Absent = write.collect(",
+        ),
+        (
+            "the pin renamed",
+            "fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "fn some_other_test()",
+        ),
+        (
+            "the test module compiled away beside cfg(test)",
+            "#[cfg(test)]\nmod tests {",
+            "#[cfg(test)]\n#[cfg(any())]\nmod tests {",
+        ),
+        (
+            "the pin nested in a module compiled away",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[cfg(any())]\n    mod out_of_reach {\n    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pin no longer naming the pinned function",
+            "            helpers_by_kind;\n",
+            "            |_, _, _, _| {};\n",
+        ),
+    ];
+    for (shape, from, to) in runner_shapes {
+        assert!(
+            runner.contains(from),
+            "the {shape} fixture no longer applies to runner.rs"
+        );
+        let changed = runner.replacen(from, to, 1);
+        assert!(
+            !bounded_helper_violations(&changed, &cli).is_empty(),
+            "the R4.8 check missed {shape}"
+        );
+    }
+    let write_ceiling = "type Ceiling = std::convert::Infallible;";
+    assert!(
+        cli.contains(write_ceiling),
+        "the write-ceiling fixture no longer applies to cli.rs"
+    );
+    assert!(
+        !bounded_helper_violations(
+            &runner,
+            &cli.replacen(write_ceiling, "type Ceiling = usize;", 1)
+        )
+        .is_empty(),
+        "the R4.8 check missed a write given a byte-count ceiling"
+    );
+}
+
 #[test]
 fn the_runner_is_named_only_by_ops_and_reads() {
     let mut scanned = 0usize;
     let mut authority_file = None;
     let mut ops_docs = None;
     let mut library = None;
+    let mut runner = None;
+    let mut cli = None;
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
         let found = runner_violations(&path, &source);
@@ -1721,10 +2674,14 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         }
         if path == Path::new(WRITE_AUTHORITY_FILE) {
             authority_file = Some(source);
-        } else if path == Path::new(OPS_DIR).join("mod.rs") {
+        } else if path == Path::new(OPS_DIR).with_extension("rs") {
             ops_docs = Some(source);
         } else if path == Path::new(ENGINE_SOURCE_DIR).join("lib.rs") {
             library = Some(source);
+        } else if path == Path::new(PROCESS_DIR).join("runner.rs") {
+            runner = Some(source);
+        } else if path == Path::new(PROCESS_DIR).join("cli.rs") {
+            cli = Some(source);
         }
     }
     assert!(
@@ -1733,10 +2690,21 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     );
     for dir in [OPS_DIR, PROCESS_DIR, READS_DIR] {
         assert!(
-            repo_root().join(dir).is_dir(),
-            "{dir} is gone, and this guard exempts it by path: move the guard with the module"
+            repo_root().join(dir).is_dir() && repo_root().join(dir).with_extension("rs").is_file(),
+            "{dir} or {dir}.rs is gone, and this guard exempts the module by path: move the guard \
+             with the module"
         );
     }
+
+    // The bounded-output helpers are a read's alone: the type is the enforcement, and the pin
+    // that fails to compile when either is given to a write must stay.
+    let runner = runner.unwrap_or_else(|| panic!("{PROCESS_DIR}/runner.rs is gone"));
+    let cli = cli.unwrap_or_else(|| panic!("{PROCESS_DIR}/cli.rs is gone"));
+    let found = bounded_helper_violations(&runner, &cli);
+    assert!(
+        found.is_empty(),
+        "a ceiling can reach a write, or the pin that says it cannot is gone: {found:?}"
+    );
 
     let library = library.unwrap_or_else(|| panic!("{ENGINE_SOURCE_DIR}/lib.rs is gone"));
     let library = code_without_strings(&library);
@@ -1804,10 +2772,10 @@ fn the_runner_is_named_only_by_ops_and_reads() {
 
     // The public half of the seal: the doctests in ops' module docs, each a one-line difference
     // from a passing scaffold (stable rustdoc checks that a block fails, not why).
-    let docs = ops_docs.unwrap_or_else(|| panic!("{OPS_DIR}/mod.rs is gone"));
+    let docs = ops_docs.unwrap_or_else(|| panic!("{OPS_DIR}.rs is gone"));
     assert!(
         docs.contains("//! ```\n//! fn scaffold(git: &cairn_git::ops::GitBinary) {"),
-        "{OPS_DIR}/mod.rs lost the passing scaffold of its compile-fail doctests; without it the \
+        "{OPS_DIR}.rs lost the passing scaffold of its compile-fail doctests; without it the \
          refused blocks could all fail for a reason unrelated to the seal"
     );
     // Each refused block is exactly the scaffold plus its one line, so none can fail on a typo
@@ -1830,7 +2798,7 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         );
         assert!(
             refused_blocks.contains(&expected.as_str()),
-            "{OPS_DIR}/mod.rs no longer pins `{refused}` in a compile_fail doctest that is the \
+            "{OPS_DIR}.rs no longer pins `{refused}` in a compile_fail doctest that is the \
              passing scaffold plus that one line; from outside cairn-git, no write and no \
              WriteAuthority can be named or built (process-manager G1)"
         );
@@ -1841,13 +2809,22 @@ fn the_runner_is_named_only_by_ops_and_reads() {
 const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
 
 /// The one file that may build the second porcelain read, `git config` in query form —
-/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
-const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
+/// what a fetch of a remote will read, asked of git, and what a commit and an amend will.
+const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/config.rs";
 
 /// The one file that may build the third porcelain read, `git stash show` in raw form —
-/// what a stash changed, untracked files paired as git pairs them (the user's decision of
-/// 2026-10-07).
+/// what a stash changed, untracked files paired as git pairs them.
 const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
+
+/// The one file that may build the fourth porcelain read, `git stripspace --strip-comments` — a
+/// merge's message cleaned as git's editor cleans it.
+const STRIPSPACE_READ_FILE: &str = "crates/cairn-git/src/reads/stripspace.rs";
+
+/// The options the stripspace read passes, and must: the strip of comment lines (the editor's
+/// `strip` cleanup), and the comment of every line, which asks git for its comment string
+/// (where `scissors` cuts). Any literal of [`STRIPSPACE_READ_FILE`]'s production code that
+/// starts with `-` must be one of them — no short spelling, nor any other option.
+const STRIPSPACE_OPTIONS: &[&str] = &["--strip-comments", "--comment-lines"];
 
 /// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
 /// the working tree, a branch or a ref (`export` writes a ref, `import` the stash), and none
@@ -1917,8 +2894,8 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the reads of `reads/` say about the three porcelain verbs, as `path:line ..` for each
-/// way they break the three accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// What the reads of `reads/` say about the four porcelain verbs, as `path:line ..` for each
+/// way they break the four accepted exceptions. `diff`: the exact literal `"diff"` (plain,
 /// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
 /// with the next literal on its line `"--no-index"`, and that file's production code holds
 /// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
@@ -1930,12 +2907,66 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// exact literal `"stash"` appears in production code of [`STASH_READ_FILE`] alone, exactly
 /// once, `"show"` the literal after it; every literal there that starts with `-` is one of
 /// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
-/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. Comments and test modules are not read; a
-/// verb or an option built by `format!` or `concat!` is not seen.
+/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. `stripspace` ([`stripspace_read_violations`]): the
+/// exact literal `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`] alone,
+/// exactly once, and every literal there that starts with `-` is one of [`STRIPSPACE_OPTIONS`],
+/// each of which it passes. Comments and test modules are not read; a verb or an option built by
+/// `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
     found.extend(config_read_violations(files));
     found.extend(stash_read_violations(files));
+    found.extend(stripspace_read_violations(files));
+    found
+}
+
+/// The `git stripspace` fourth of [`porcelain_read_violations`]: the exact literal
+/// `"stripspace"` appears in production code of [`STRIPSPACE_READ_FILE`] alone, exactly once;
+/// every literal there that starts with `-` is one of [`STRIPSPACE_OPTIONS`], each of which it
+/// passes — checked per file, not per call: which call passes which option is not read.
+fn stripspace_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut passed: Vec<String> = Vec::new();
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(STRIPSPACE_READ_FILE);
+        for (line, text) in production_string_literals(source) {
+            if home && text.starts_with('-') {
+                if STRIPSPACE_OPTIONS.contains(&text.as_str()) {
+                    passed.push(text.clone());
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the stripspace read, which is not its option",
+                        at(line)
+                    ));
+                }
+            }
+            if text != "stripspace" {
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the verb `stripspace` outside {STRIPSPACE_READ_FILE}",
+                    at(line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `stripspace` {verbs} times in production code; the one \
+             accepted stripspace read is built once, in {STRIPSPACE_READ_FILE}"
+        ));
+    }
+    for required in STRIPSPACE_OPTIONS {
+        if !passed.iter().any(|option| option == required) {
+            found.push(format!(
+                "{STRIPSPACE_READ_FILE} does not pass `{required}`, which the stripspace read must"
+            ));
+        }
+    }
     found
 }
 
@@ -2140,23 +3171,28 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The three porcelain verbs a read runs are `git diff --no-index`, built once, by the
-/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
-/// in query form, built once, by the fetch-settings read (the user's decision of
-/// 2026-10-04), and `git stash show`, built once, by the stash read (the user's decision of
-/// 2026-10-07); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
-/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a
-/// setter writes the configuration, and every `git stash` subcommand but `show` and `list`
-/// writes a stash, the working tree or a branch, so a second `"diff"`, `"config"` or
-/// `"stash"` in `reads/`, an option outside the query form in the config read, a setter
-/// anywhere in `reads/`, `stash` without `show` after it, or a writing stash subcommand
-/// anywhere in `reads/` is the regression this catches. Scoped to those literals; a verb or
-/// option built at run time (`format!`), and whether every other verb a read runs is query
-/// plumbing, stay the reviewer's.
+/// The four porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null`, `git config` in query form, built once, by the
+/// config read, `git stash show`, built once, by the stash read, and `git stripspace` with
+/// `--strip-comments`, `--comment-lines` or no option — the options checked per file, not per
+/// call — built once, by the stripspace read. Porcelain `git diff` against the working tree
+/// refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a setter writes the
+/// configuration, and every `git stash` subcommand but `show` and `list` writes a stash, the
+/// working tree or a branch, so a second `"diff"`, `"config"`, `"stash"` or `"stripspace"` in
+/// `reads/`, an option outside the query form in the config read, a setter anywhere in
+/// `reads/`, `stash` without `show` after it, a writing stash subcommand anywhere in `reads/`,
+/// or an option of stripspace's but `--strip-comments` and `--comment-lines` is the regression
+/// this catches. Scoped to those literals; a verb or option built at run time (`format!`), and
+/// whether every other verb a read runs is query plumbing, stay `destructive-ops-reviewer`'s.
 #[test]
-fn the_porcelain_reads_are_the_three_named_queries() {
-    let sources = rust_sources(READS_DIR);
-    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE, STASH_READ_FILE] {
+fn the_porcelain_reads_are_the_named_queries() {
+    let sources = module_sources(READS_DIR);
+    for home in [
+        PORCELAIN_READ_FILE,
+        CONFIG_READ_FILE,
+        STASH_READ_FILE,
+        STRIPSPACE_READ_FILE,
+    ] {
         assert!(
             sources.iter().any(|(path, _)| path == Path::new(home)),
             "{home} is gone; this guard names it as the home of a porcelain read — move the \
@@ -2178,8 +3214,8 @@ fn the_porcelain_reads_are_the_three_named_queries() {
         found.is_empty(),
         "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
          `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
-         `git config` in query form built in {CONFIG_READ_FILE}, or `git stash show` built \
-         in {STASH_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
+         `git config` in query form built in {CONFIG_READ_FILE}, `git stash show` built \
+         in {STASH_READ_FILE}, or `git stripspace` built in {STRIPSPACE_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
          config` setter the configuration, and any other `git stash` the stashes or the \
          working tree."
     );
@@ -2194,13 +3230,19 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     let config_home = Path::new(CONFIG_READ_FILE);
     let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
                            const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
-                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
+                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n\
+                           const LAST_VALUE: [&str; 1] = [\"--get\"];\n";
     let stash_home = Path::new(STASH_READ_FILE);
     let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\", \"-z\", \
                           \"--no-abbrev\", \"--no-color\", \"--no-ext-diff\", \
                           \"--no-textconv\", \"--no-relative\", \"--end-of-options\"]; }";
-    // The `diff` cases are judged beside the accepted config and stash reads, unless they
-    // bring their own; the `config` and `stash` cases below bring theirs beside the rest.
+    let stripspace_home = Path::new(STRIPSPACE_READ_FILE);
+    let accepted_stripspace = "const VERB: &str = \"stripspace\";\n\
+                               const STRIP_COMMENTS: &str = \"--strip-comments\";\n\
+                               const COMMENT_LINES: &str = \"--comment-lines\";\n";
+    // The `diff` cases are judged beside the accepted config, stash and stripspace reads,
+    // unless they bring their own; the `config`, `stash` and `stripspace` cases below bring
+    // theirs beside the rest.
     let verdict = |files: &[(&Path, &str)]| {
         let mut all = files.to_vec();
         if !files.iter().any(|(path, _)| *path == config_home) {
@@ -2208,6 +3250,9 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
         }
         if !files.iter().any(|(path, _)| *path == stash_home) {
             all.push((stash_home, accepted_stash));
+        }
+        if !files.iter().any(|(path, _)| *path == stripspace_home) {
+            all.push((stripspace_home, accepted_stripspace));
         }
         porcelain_read_violations(&all)
     };
@@ -2326,7 +3371,11 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     }
     // The config read: once, in its file, in query form, and no setter anywhere.
     let config_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted), (stash_home, accepted_stash)];
+        let mut all = vec![
+            (home, accepted),
+            (stash_home, accepted_stash),
+            (stripspace_home, accepted_stripspace),
+        ];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -2379,6 +3428,16 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
             ],
         ),
         (
+            "the config read back at the path it was moved from",
+            &[
+                (config_home, "fn a() {}"),
+                (
+                    Path::new("crates/cairn-git/src/reads/fetch_settings.rs"),
+                    accepted_config,
+                ),
+            ],
+        ),
+        (
             "a second `config` in its file",
             &[(
                 config_home,
@@ -2414,7 +3473,11 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
 
     // The stash read: once, in its file, `show` after it, and no writing subcommand anywhere.
     let stash_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted), (config_home, accepted_config)];
+        let mut all = vec![
+            (home, accepted),
+            (config_home, accepted_config),
+            (stripspace_home, accepted_stripspace),
+        ];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -2529,6 +3592,103 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
         assert!(
             !stash_verdict(&[(stash_home, accepted_stash), (other, &source)]).is_empty(),
             "`{subcommand}` was not caught"
+        );
+    }
+
+    // The stripspace read: once, in its file, its two options each passed and no other.
+    let stripspace_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![
+            (home, accepted),
+            (config_home, accepted_config),
+            (stash_home, accepted_stash),
+        ];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        stripspace_verdict(&[(stripspace_home, accepted_stripspace)]).is_empty(),
+        "the accepted stripspace read"
+    );
+    assert!(
+        stripspace_verdict(&[
+            (stripspace_home, accepted_stripspace),
+            (
+                other,
+                "#[cfg(test)]\nmod tests {\n    fn t() { [\"stripspace\", \"-s\"]; }\n}\n"
+            ),
+        ])
+        .is_empty(),
+        "a test module's stripspace"
+    );
+    let refused_stripspace: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "`stripspace` in another file",
+            &[
+                (stripspace_home, accepted_stripspace),
+                (
+                    other,
+                    "fn b() { x.args([\"stripspace\", \"--strip-comments\"]); }",
+                ),
+            ],
+        ),
+        (
+            "a second `stripspace` in its file",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\"]; [\"stripspace\"]; }",
+            )],
+        ),
+        (
+            "`-s`, the short spelling of the strip",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"-s\", \"--comment-lines\"]; }",
+            )],
+        ),
+        (
+            "`-c`, the short spelling of the comment",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\", \"-c\"]; }",
+            )],
+        ),
+        (
+            "an option beside the two",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\", \"--comment-lines\", \"--verbose\"]; }",
+            )],
+        ),
+        (
+            "no `--strip-comments`",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--comment-lines\"]; }",
+            )],
+        ),
+        (
+            "no `--comment-lines`",
+            &[(
+                stripspace_home,
+                "fn s() { [\"stripspace\", \"--strip-comments\"]; }",
+            )],
+        ),
+        (
+            "no stripspace read at all",
+            &[(stripspace_home, "fn s() {}")],
+        ),
+        (
+            "`stripspace` as a raw string elsewhere",
+            &[
+                (stripspace_home, accepted_stripspace),
+                (other, "fn b() { x.arg(r#\"stripspace\"#); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused_stripspace {
+        assert!(
+            !stripspace_verdict(files).is_empty(),
+            "{shape} was not caught"
         );
     }
 
@@ -2688,7 +3848,7 @@ const SCRATCH_FILE: &str = "crates/cairn-git/src/history/scratch.rs";
 fn verdict(path: &str, source: &str) -> Vec<String> {
     let path = Path::new(path);
     let mut found = runner_violations(path, source);
-    if !path.starts_with(PROCESS_DIR) {
+    if !in_module(path, PROCESS_DIR) {
         found.extend(process_violations(path, source));
     }
     found
@@ -3040,10 +4200,10 @@ fn the_runner_matcher_catches_the_shapes_it_claims() {
     }
 }
 
-/// The four routes to a process that no guard saw before the process-manager packet
-/// (`docs/research/process-manager/runner-and-worker-as-built.md`, section 3), as they would
-/// be written today in a module outside `ops/`, `reads/` and `process/`, and a `reads/` file
-/// that constructs a `WriteAuthority`: each must fail a twin.
+/// Four routes to a process a guard could miss (named in
+/// `docs/research/process-manager/runner-and-worker-as-built.md`, section 3), as they would be
+/// written in a module outside `ops/`, `reads/` and `process/`, and a `reads/` file that
+/// constructs a `WriteAuthority`: each must fail a twin.
 #[test]
 fn the_unguarded_routes_to_a_process_now_fail_a_twin() {
     for (route, path, source) in [
@@ -3315,6 +4475,25 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         mentions_crate(&production, "READ_ONLY").len() >= 2,
         "READ_ONLY is declared in {PROCESS_ENVIRONMENT_FILE} but never applied; a read must get it."
     );
+    // The inherited roster: read with its comments, since each pinned entry must carry its
+    // reason beside it.
+    let inherited = commented_table(&source, "INHERITED").unwrap_or_else(|| {
+        panic!(
+            "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const INHERITED` roster; what git \
+             sees of the user's environment would be unenumerated"
+        )
+    });
+    let problems = inherited_roster_problems(inherited);
+    assert!(
+        problems.is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE}'s INHERITED roster: {}",
+        problems.join("; ")
+    );
+    assert!(
+        mentions_crate(&production, "INHERITED").len() >= 2,
+        "INHERITED is declared in {PROCESS_ENVIRONMENT_FILE} but never read; the constructor \
+         must copy it from the parent."
+    );
     // The helper is named in the constructor, from the `Askpass` it is given, not from a table.
     let constructor = code_without_test_modules(&with_strings);
     for variable in ["\"GIT_ASKPASS\"", "\"SSH_ASKPASS\"", "SOCKET_VARIABLE"] {
@@ -3340,8 +4519,7 @@ fn every_git_invocation_disables_the_terminal_prompt() {
     );
 }
 
-/// What a read's environment must carry, each with what goes wrong without it (process-manager
-/// PRD R2.3, and D3 as the user decided it on 2026-10-02).
+/// What a read's environment must carry, each with what goes wrong without it.
 const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
     (
         "GIT_OPTIONAL_LOCKS",
@@ -3357,6 +4535,122 @@ const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
          2026-10-02; git older than 2.44 ignores it).",
     ),
 ];
+
+/// What the inherited roster must copy from the parent, each with what goes wrong without it. Each
+/// must be an entry of `INHERITED` with a comment of its own beside it — the reason, which is what
+/// makes the leak deliberate.
+const INHERITED_PINS: &[(&str, &str)] = &[
+    (
+        "GNUPGHOME",
+        "without it gpg finds no secret key kept outside ~/.gnupg and every signed commit fails",
+    ),
+    (
+        "DISPLAY",
+        "without it a graphical pinentry never opens, so a signing passphrase is never asked",
+    ),
+    (
+        "WAYLAND_DISPLAY",
+        "without it a Wayland pinentry never opens, so a signing passphrase is never asked",
+    ),
+    (
+        "XAUTHORITY",
+        "without it the X display refuses a pinentry whose cookie is not in ~/.Xauthority",
+    ),
+    (
+        "GIT_AUTHOR_NAME",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_AUTHOR_EMAIL",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_COMMITTER_NAME",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_COMMITTER_EMAIL",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "EMAIL",
+        "without it git's fallback for an unset user.email is a guess from the host name",
+    ),
+];
+
+/// Never inherited: a stale date left in a shell would stamp every commit with it.
+const INHERITED_NEVER: &[&str] = &["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"];
+
+/// The entries of an `INHERITED` roster's text (comments kept), in order, each with whether a
+/// comment stands beside it: on a line of its own since the entry before, or after it on its
+/// line. A name in a comment is no entry.
+fn inherited_entries(table: &str) -> Vec<(String, bool)> {
+    let mut entries = Vec::new();
+    let mut reason = false;
+    for line in table.lines() {
+        let (code, comment) = match line.find("//") {
+            Some(at) => (&line[..at], line[at + 2..].trim()),
+            None => (line, ""),
+        };
+        let names: Vec<&str> = code.split('"').skip(1).step_by(2).collect();
+        if names.is_empty() {
+            reason |= !comment.is_empty();
+            continue;
+        }
+        for name in names {
+            entries.push((name.to_owned(), reason || !comment.is_empty()));
+        }
+        reason = false;
+    }
+    entries
+}
+
+/// What is wrong with an `INHERITED` roster: a pinned variable missing, a pinned one with no
+/// reason beside it, or a date variable (any `*_DATE`) inherited.
+fn inherited_roster_problems(table: &str) -> Vec<String> {
+    let entries = inherited_entries(table);
+    let mut problems = Vec::new();
+    for (pin, why) in INHERITED_PINS {
+        match entries.iter().find(|(name, _)| name == pin) {
+            None => problems.push(format!("{pin} is missing: {why}")),
+            Some((_, false)) => problems.push(format!(
+                "{pin} has no reason beside it; each inherited variable is a deliberate leak and \
+                 says why"
+            )),
+            Some((_, true)) => {}
+        }
+    }
+    for (name, _) in &entries {
+        if INHERITED_NEVER.contains(&name.as_str()) || name.ends_with("_DATE") {
+            problems.push(format!(
+                "{name} is inherited; a stale date in the shell would stamp every commit (R5.2)"
+            ));
+        }
+    }
+    problems
+}
+
+/// The text of the table `const <name>: ..` declares in `source`, comments KEPT, from its
+/// declaration to the `];` that closes it in code — found in [`code_without_strings`]'s
+/// reading, so a `];` inside a comment or a string closes nothing and the entries after it
+/// are still read; `None` when there is no such table. That reading writes one char per byte
+/// of `source` (outside a char literal), so its char offsets are `source`'s byte offsets; the
+/// declaration found there is checked against `source` at that offset, and a mismatch is
+/// `None` rather than a wrong slice.
+fn commented_table<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let code: Vec<char> = code_without_strings(source).chars().collect();
+    let declaration: Vec<char> = format!("const {name}:").chars().collect();
+    let closing = [']', ';'];
+    let start = code
+        .windows(declaration.len())
+        .position(|window| window == declaration.as_slice())?;
+    let end = start
+        + code[start..]
+            .windows(2)
+            .position(|window| window == closing)?;
+    let declared = source.get(start..start + declaration.len())?;
+    (declared == declaration.iter().collect::<String>()).then(|| source.get(start..end))?
+}
 
 /// The text of the table `const <name>: ..` declares in `source` (strings kept, comments
 /// blanked), from its declaration to its closing `];`; `None` when there is no such table. The
@@ -3381,6 +4675,108 @@ fn missing_pins<'a>(table: &str, pins: &'a [(&str, &str, &str)]) -> Vec<(String,
 
 #[test]
 fn the_process_environment_matcher_catches_the_shapes_it_claims() {
+    // The inherited pins, spelled out apart from the roster, so a pin dropped from it fails.
+    assert_eq!(
+        INHERITED_PINS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        [
+            "GNUPGHOME",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "EMAIL",
+        ],
+        "INHERITED_PINS no longer names exactly R5.2's nine"
+    );
+    assert_eq!(
+        INHERITED_NEVER,
+        ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"],
+        "INHERITED_NEVER no longer names the two date variables"
+    );
+    let every_pin = |extra: &str| {
+        let mut table =
+            String::from("const INHERITED: &[&str] = &[\n    // PATH.\n    \"PATH\",\n");
+        for (name, _) in INHERITED_PINS {
+            table.push_str(&format!("    // Why {name}.\n    \"{name}\",\n"));
+        }
+        table.push_str(extra);
+        table.push_str("];\nconst OTHER: &[&str] = &[\"GIT_AUTHOR_DATE\"];");
+        table
+    };
+    let whole = every_pin("");
+    let table = commented_table(&whole, "INHERITED")
+        .unwrap_or_else(|| panic!("the table matcher missed an INHERITED roster"));
+    assert_eq!(
+        inherited_roster_problems(table),
+        Vec::<String>::new(),
+        "the roster matcher fired on a roster that carries every pin with its reason, a date \
+         variable in the next table notwithstanding"
+    );
+    for (shape, source, reported) in [
+        (
+            "a pin missing",
+            every_pin("").replace("    // Why EMAIL.\n    \"EMAIL\",\n", ""),
+            "EMAIL is missing",
+        ),
+        (
+            "a pin only in a comment",
+            every_pin("").replace("    \"EMAIL\",\n", "    // \"EMAIL\",\n"),
+            "EMAIL is missing",
+        ),
+        (
+            "a pin with no reason of its own, the comment above it the entry before's",
+            every_pin("").replace("    // Why DISPLAY.\n", ""),
+            "DISPLAY has no reason",
+        ),
+        (
+            "the author date inherited",
+            every_pin("    // A date.\n    \"GIT_AUTHOR_DATE\",\n"),
+            "GIT_AUTHOR_DATE is inherited",
+        ),
+        (
+            "the committer date inherited",
+            every_pin("    // A date.\n    \"GIT_COMMITTER_DATE\",\n"),
+            "GIT_COMMITTER_DATE is inherited",
+        ),
+        (
+            "another date inherited",
+            every_pin("    \"SOURCE_DATE\", // a date\n"),
+            "SOURCE_DATE is inherited",
+        ),
+        (
+            "a date after a comment that seems to close the roster",
+            every_pin("    // a comment that closes nothing ];\n    \"GIT_AUTHOR_DATE\",\n"),
+            "GIT_AUTHOR_DATE is inherited",
+        ),
+        (
+            "a date after a string that seems to close the roster",
+            every_pin("    \"];\",\n    \"GIT_COMMITTER_DATE\",\n"),
+            "GIT_COMMITTER_DATE is inherited",
+        ),
+    ] {
+        let table = commented_table(&source, "INHERITED")
+            .unwrap_or_else(|| panic!("the table matcher missed the roster in {shape}"));
+        let problems = inherited_roster_problems(table);
+        assert!(
+            problems.len() == 1 && problems[0].contains(reported),
+            "the roster matcher did not report exactly {reported:?} for {shape}: {problems:?}"
+        );
+    }
+    // A trailing comment is a reason beside its entry.
+    assert_eq!(
+        inherited_entries(
+            "const INHERITED: &[&str] = &[\n    \"HOME\", // the user's\n    \"PATH\",\n];"
+        ),
+        [("HOME".to_owned(), true), ("PATH".to_owned(), false)],
+        "the entry reader misread a trailing comment"
+    );
+
     // The read pins, spelled out apart from the roster, so a pin dropped from it fails here.
     assert_eq!(
         READ_ONLY_PINS
@@ -3695,7 +5091,7 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
         !virtualizes_the_history.is_empty(),
         "no file under {RENDER_SOURCE_DIRS:?} uses `{VIRTUALIZING_VIEW}` over `HistoryRow`s. \
          The history list is the one unbounded list Cairn renders and it is virtualized \
-         (`crates/cairn-ui/src/history_list.rs`); restore that call site, or — if the list \
+         (`crates/cairn-ui/src/history/list.rs`); restore that call site, or — if the list \
          genuinely moved — move this guard with it."
     );
 
@@ -3760,23 +5156,72 @@ fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
     }
 }
 
-/// The accelerator table (D5, PRD R8): the one render file that may name a modifier,
-/// because it is where every chord is written down.
+/// The accelerator table: the one render file that may name a modifier, because it is where
+/// every chord is written down, per platform.
 const ACCELERATOR_TABLE: &str = "crates/cairn-ui/src/accelerators.rs";
 
-/// PRD R8.3, decision D5: a component asks the accelerator table which action a key press
+/// The one render file that may spell a chord for a person to read: a tooltip names an
+/// action's chord, rendered there from the accelerator table's data. A row whose file no longer
+/// spells a chord fails, so the exemption cannot outlive its need.
+const CHORD_NAMES: &[&str] = &["crates/cairn-ui/src/accelerators/chord_names.rs"];
+
+/// Whether `path` is a row of [`CHORD_NAMES`]: exactly, never by a name or a directory.
+fn spells_chords_for_people(path: &Path) -> bool {
+    CHORD_NAMES.iter().any(|row| path == Path::new(row))
+}
+
+/// A component asks the accelerator table which action a key press
 /// is, and never names a modifier itself — not the held-keys type, not the event's field,
 /// not a modifier key, and not a chord spelled out for a person to read. A `Ctrl` written
-/// into a component is a shortcut that is wrong on macOS.
+/// into a component is a shortcut that is wrong on macOS. The one exception is
+/// [`CHORD_NAMES`]: a chord spelled for a tooltip, from the table's data — each literal there
+/// one held key's name alone, never a chord typed out whole, and no element built there.
 #[test]
 fn no_component_names_a_literal_modifier() {
     let table = Path::new(ACCELERATOR_TABLE);
     let mut table_seen = false;
+    let mut chord_names_seen = BTreeSet::new();
     for dir in RENDER_SOURCE_DIRS {
         let mut scanned = 0usize;
         for (path, source) in rust_sources(dir) {
             scanned += 1;
             let hits = names_a_literal_modifier(&source);
+            if spells_chords_for_people(&path) {
+                chord_names_seen.insert(path.clone());
+                assert!(
+                    !spells_a_chord(&source).is_empty(),
+                    "{} spells no chord, so its CHORD_NAMES row is no longer needed: remove it",
+                    path.display()
+                );
+                let typed = hand_typed_chords(&source);
+                assert!(
+                    typed.is_empty(),
+                    "{}:{} types a chord out whole. A chord's name is put together from the \
+                     accelerator table's data; a literal here names one held key alone.",
+                    path.display(),
+                    typed[0]
+                );
+                // The table's data it may name: `Modifiers::<CONSTANT>`, written out. Anything
+                // else of a modifier — the event's field, a predicate, a modifier key — fails.
+                let named = names_a_modifier_in_code(&modifier_constants_blanked(&source));
+                assert!(
+                    named.is_empty(),
+                    "{}:{} names a keyboard modifier other than the table's constants \
+                     (`Modifiers::CONTROL` and the like, written out). It spells chords from \
+                     the table's data and reads no press.",
+                    path.display(),
+                    named[0]
+                );
+                let elements = names_an_element(&source);
+                assert!(
+                    elements.is_empty(),
+                    "{}:{} builds or names an element; it spells chords, and a component \
+                     draws them.",
+                    path.display(),
+                    elements[0]
+                );
+                continue;
+            }
             if path == table {
                 table_seen = true;
                 // The matcher has to see the modifiers the table really names, or it is
@@ -3810,6 +5255,96 @@ fn no_component_names_a_literal_modifier() {
         "{ACCELERATOR_TABLE} does not exist, so no render file is the table and the guard \
          exempts a file nobody can see. If the table moved, move the roster with it."
     );
+    for row in CHORD_NAMES {
+        assert!(
+            chord_names_seen.contains(Path::new(row)),
+            "{row} is a CHORD_NAMES row the scan never read: it moved or was deleted, and the \
+             row exempts nothing — move or remove it"
+        );
+    }
+}
+
+/// The chord-name exemption is exact, and narrow: its own file and no other path — not the
+/// table, not a sibling, not a file of the same name elsewhere, not a copy beside it — and,
+/// inside it, a literal naming one held key passes while a chord typed out whole fails.
+#[test]
+fn the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim() {
+    for row in CHORD_NAMES {
+        assert!(spells_chords_for_people(Path::new(row)), "{row}");
+    }
+    for other in [
+        ACCELERATOR_TABLE,
+        "crates/cairn-ui/src/chord_names.rs",
+        "crates/cairn-app/src/accelerators/chord_names.rs",
+        "crates/cairn-ui/src/accelerators/chord_names.rs.orig",
+        "crates/cairn-ui/src/accelerators/chord_names_copy.rs",
+        "crates/cairn-ui/src/accelerators",
+        "crates/cairn-ui/src/history/list.rs",
+    ] {
+        assert!(
+            !spells_chords_for_people(Path::new(other)),
+            "the roster exempts {other}"
+        );
+    }
+    // A component elsewhere spelling a chord is still caught by the modifier matcher.
+    assert!(!names_a_literal_modifier("fn f() { let t = \"Ctrl+Shift+.\"; }").is_empty());
+    let typed = [
+        "fn f() { let t = \"Ctrl+Shift+.\"; }",
+        "fn f() { let t = \"⌘⇧\"; }",
+        "fn f() { let t = \"Shift+\"; }",
+        "fn f() { let t = \"Ctrl+\"; }",
+        "fn f() { let t = \"\\u{2318}R\"; }",
+        "fn f() { let t = \"Cmd\"; }",
+        "fn f() { let t = format!(\"{}+{}\", \"Ctrl\", \"Shift+.\"); }",
+    ];
+    for source in typed {
+        assert!(
+            !hand_typed_chords(source).is_empty(),
+            "the hand-typed chord matcher missed {source:?}"
+        );
+    }
+    let named = [
+        "fn f() { let t = \"Ctrl\"; }",
+        "fn f() { let t = \"⌘\"; }",
+        "fn f() { let t = '⇧'; }",
+        "fn f() { let t = \"Shift\"; }",
+        "fn f() { let t = \"+\"; }",
+        "fn f() { let t = \"Return\"; }",
+        "#[cfg(test)]\nmod tests {\n    fn f() { let t = \"Ctrl+Shift+.\"; }\n}",
+    ];
+    // The code of the chord-name module names no modifier but the
+    // table's constants written out.
+    let in_code = |source: &str| names_a_modifier_in_code(&modifier_constants_blanked(source));
+    for source in [
+        "fn f(e: &KeyboardEventData) { let held = e.modifiers; }",
+        "fn f(m: M) -> bool { m.ctrl() }",
+        "fn f(m: M) -> bool { m.shift() && m.alt() }",
+        "fn f() { let k = NamedKey::Control; }",
+        "fn f() { let k = Code::ShiftLeft; }",
+        "use freya::prelude::Modifiers;",
+        "fn f() -> Modifiers { todo() }",
+        "fn f() { let m = Modifiers::CAPS_LOCK; }",
+        "fn f() { let m = Modifiers::CONTROLS; }",
+    ] {
+        assert!(
+            !in_code(source).is_empty(),
+            "the chord-name check missed {source:?}"
+        );
+    }
+    for source in [
+        "fn f() { let m = [(freya::prelude::Modifiers::CONTROL, \"Ctrl\")]; }",
+        "fn f() { let m = Modifiers::SHIFT | Modifiers::META | Modifiers::ALT; }",
+        "fn f() { let k = NamedKey::Enter; let c = Code::Period; }",
+    ] {
+        assert_eq!(in_code(source), Vec::<usize>::new(), "fired on {source:?}");
+    }
+    for source in named {
+        assert_eq!(
+            hand_typed_chords(source),
+            Vec::<usize>::new(),
+            "the hand-typed chord matcher fired on {source:?}"
+        );
+    }
 }
 
 #[test]
@@ -3898,6 +5433,12 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "if e.key == Key::Named(NamedKey::NumLock) {}",
         ),
         ("scroll lock as a code", "if e.code == Code::ScrollLock {}"),
+        // A held key's name alone, with no `+` or `-` beside it.
+        ("Alt alone", "label().text(\"Alt\")"),
+        ("Shift alone", "let k = \"Shift\";"),
+        ("Super alone", "let k = \"Super\";"),
+        ("Meta alone", "let k = \" Meta \";"),
+        ("Option alone", "let k = \"Option\";"),
     ];
     for (shape, source) in caught {
         assert!(
@@ -3949,6 +5490,14 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "a hyphen in a word",
             "label().text(\"Alternative-text and Metadata\")",
         ),
+        (
+            "a word starting as a key's name",
+            "label().text(\"Shifted\")",
+        ),
+        (
+            "a key's name inside a sentence",
+            "label().text(\"Options\")",
+        ),
     ];
     for (shape, source) in ignored {
         assert_eq!(
@@ -3960,7 +5509,7 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
 }
 
 /// The accelerator table holds data and the resolution of a press against it, and nothing
-/// a person reads (CLAUDE.md, Invariants; G3): an element built there, or a chord spelled
+/// a person reads (CLAUDE.md, Invariants): an element built there, or a chord spelled
 /// out in a literal, would be a view inside the one file the modifier guard exempts — the
 /// place a `Ctrl` label could hide from it.
 #[test]
@@ -3983,7 +5532,257 @@ fn the_accelerator_table_holds_data_and_resolution_only() {
          view; the table holds the chord as data.",
         spelled[0]
     );
+    // An action maps to a LIST of chords per platform, as Fork keeps alternates, and the pin
+    // that holds every chord of every list distinct, and every bare one a function key or one
+    // of Local Changes' own, stays a test that runs.
+    let code = code_without_strings(&table);
+    assert!(
+        code.contains("pub fn chords(action: Action, platform: Os) -> Chords"),
+        "{ACCELERATOR_TABLE} no longer answers an action's chords as a list (`pub fn \
+         chords(action: Action, platform: Os) -> Chords`); CLAUDE.md's modifier invariant says \
+         it does"
+    );
+    assert!(
+        !code.contains("pub fn chord("),
+        "{ACCELERATOR_TABLE} answers a single chord again; Fork's alternates need the list"
+    );
+    let placed = accelerator_pin_violations(&code);
+    assert!(
+        placed.is_empty(),
+        "the accelerator table's pin no longer runs as it must: {placed:?}"
+    );
 }
+
+/// The pin-placement check over the table's real pin, and over each way of putting it out of
+/// reach: the module compiled away beside `#[cfg(test)]`, the pin nested in a module of its
+/// own under `cfg(any())`, the pin ignored, its body emptied, a rule example dropped, the pin
+/// moved into an `impl`, and the pin renamed.
+#[test]
+fn the_pin_placement_check_catches_the_shapes_it_claims() {
+    let (_, table) = rust_sources("crates/cairn-ui/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(ACCELERATOR_TABLE))
+        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} does not exist"));
+    let check = |source: &str| accelerator_pin_violations(&code_without_strings(source));
+    assert_eq!(check(&table), Vec::<String>::new());
+    let pin = format!("    #[test]\n    fn {ACCELERATOR_PIN}() {{");
+    assert!(table.contains(&pin), "the pin fixture no longer applies");
+    let module = "#[cfg(test)]\nmod tests {";
+    assert!(
+        table.contains(module),
+        "the module fixture no longer applies"
+    );
+    // Built at run time so the debris hook, which reads added lines, does not take the fixtures
+    // for tests left ignored.
+    let ignored = format!(
+        "    #[test]\n    #[{}]\n    fn {ACCELERATOR_PIN}() {{",
+        "ignore"
+    );
+    let nested = format!("    #[cfg(any())]\n    mod out_of_reach {{\n    use super::*;\n{pin}");
+    let emptied = {
+        let at = table.find(&pin).unwrap_or_default() + pin.len();
+        let end = at + table[at..].find("\n    }\n").unwrap_or_default();
+        format!("{}\n{}", &table[..at], &table[end..])
+    };
+    let shapes: Vec<(&str, String)> = vec![
+        (
+            "the module compiled away beside cfg(test)",
+            table.replacen(module, "#[cfg(test)]\n#[cfg(any())]\nmod tests {", 1),
+        ),
+        (
+            "the module made something other than a test module",
+            table.replacen(module, "#[cfg(not(test))]\nmod tests {", 1),
+        ),
+        ("the pin ignored", table.replacen(&pin, &ignored, 1)),
+        (
+            "the pin nested in a module compiled away",
+            format!("{}\n    }}", table.replacen(&pin, &nested, 1)),
+        ),
+        ("the pin's body emptied", emptied),
+        (
+            "a rule example dropped",
+            table.replacen("pin_violations(&twice)", "Vec::<String>::new()", 1),
+        ),
+        (
+            "the pin moved into an impl",
+            table.replacen(&pin, &format!("    impl Row {{\n{pin}"), 1),
+        ),
+        (
+            "the pin renamed",
+            table.replacen(&format!("fn {ACCELERATOR_PIN}("), "fn another_test(", 1),
+        ),
+        (
+            "a rule example's answer let go of",
+            replaced(
+                &table,
+                "assert!(\n                !pin_violations(&letter).is_empty(),\n                \
+                 \"a bare D in Local Changes\"\n            );",
+                "let _ = pin_violations(&letter);",
+            ),
+        ),
+        (
+            "a rule example called bare",
+            replaced(
+                &table,
+                "assert!(!pin_violations(&press).is_empty(), \"a bare press\");",
+                "pin_violations(&press);",
+            ),
+        ),
+        (
+            "a rule example tested by an if",
+            replaced(
+                &table,
+                "assert!(!pin_violations(&press).is_empty(), \"a bare press\");",
+                "if pin_violations(&press).is_empty() { return; }",
+            ),
+        ),
+        (
+            "Enter back in the list-and-diff keys",
+            replaced(
+                &table,
+                "[NamedKey; 2] = [NamedKey::Backspace, NamedKey::Delete];",
+                "[NamedKey; 3] =\n        [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete];",
+            ),
+        ),
+        (
+            "a second key heard from the lists alone",
+            replaced(
+                &table,
+                "[NamedKey; 1] = [NamedKey::Enter];",
+                "[NamedKey; 2] = [NamedKey::Enter, NamedKey::Space];",
+            ),
+        ),
+        (
+            "the lists' keys declared again inside the pin",
+            replaced(
+                &table,
+                &pin,
+                &format!(
+                    "{pin}\n        const LOCAL_CHANGES_LISTS_BARE_KEYS: [NamedKey; 1] = \
+                     [NamedKey::Space];"
+                ),
+            ),
+        ),
+        (
+            "the rule no longer reading the lists' keys",
+            replaced(
+                &table,
+                "LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named)",
+                "[NamedKey::Space].contains(&named)",
+            ),
+        ),
+        (
+            "the bare Enter in the diff's scope no longer shown refused",
+            replaced(
+                &table,
+                "pin_violations(&enter_in_the_diff)",
+                "Vec::<String>::new()",
+            ),
+        ),
+        (
+            "the bare keys declared again inside the pin",
+            replaced(
+                &table,
+                &pin,
+                &format!(
+                    "{pin}\n        const LOCAL_CHANGES_BARE_KEYS: [NamedKey; 1] = \
+                     [NamedKey::Space];"
+                ),
+            ),
+        ),
+        (
+            "the rule no longer reading the bare keys",
+            replaced(
+                &table,
+                "LOCAL_CHANGES_BARE_KEYS.contains(&named)",
+                "[NamedKey::Space].contains(&named)",
+            ),
+        ),
+    ];
+    for (shape, changed) in shapes {
+        assert!(
+            !check(&changed).is_empty(),
+            "the pin-placement check missed {shape}"
+        );
+    }
+}
+
+/// `source` with `from` replaced by `to` once; a fixture that no longer applies fails.
+fn replaced(source: &str, from: &str, to: &str) -> String {
+    assert!(
+        source.contains(from),
+        "the fixture {from:?} no longer applies"
+    );
+    source.replacen(from, to, 1)
+}
+
+/// The assertion check alone: a rule example inside an assertion's parentheses — however deep
+/// in its argument, through a closure or a method chain — passes; one whose answer is bound,
+/// dropped, branched on or asserted inside a block of its own fails.
+#[test]
+fn the_unasserted_call_matcher_catches_the_shapes_it_claims() {
+    let calls = &["pin_violations(&rows)"];
+    for (shape, body) in [
+        (
+            "assert_eq!",
+            "{ assert_eq!(pin_violations(&rows), Vec::new(), \"x\"); }",
+        ),
+        (
+            "assert! over a chain",
+            "{ assert!(pin_violations(&rows).iter().any(|v| v.len() > 0)); }",
+        ),
+        (
+            "a negated assert!",
+            "{ assert!(!pin_violations(&rows).is_empty()); }",
+        ),
+        (
+            "assert_ne!",
+            "{ assert_ne!(pin_violations( &rows ), vec![]); }",
+        ),
+        (
+            "inside a closure called in an assertion",
+            "{ assert!((|| pin_violations(&rows))().is_empty()); }",
+        ),
+    ] {
+        assert_eq!(
+            unasserted_calls(body, calls),
+            Vec::<String>::new(),
+            "the assertion check refused {shape}"
+        );
+    }
+    for (shape, body) in [
+        ("bound to nothing", "{ let _ = pin_violations(&rows); }"),
+        ("called bare", "{ pin_violations(&rows); }"),
+        (
+            "branched on",
+            "{ if pin_violations(&rows).is_empty() { return; } }",
+        ),
+        (
+            "a debug assertion",
+            "{ debug_assert!(pin_violations(&rows).is_empty()); }",
+        ),
+        (
+            "asserted inside a block of its own",
+            "{ assert!({ let v = pin_violations(&rows); true }); }",
+        ),
+        (
+            "one of two asserted",
+            "{ assert!(pin_violations(&rows).is_empty()); let _ = pin_violations(&rows); }",
+        ),
+    ] {
+        assert_eq!(
+            unasserted_calls(body, calls).len(),
+            1,
+            "the assertion check missed {shape}"
+        );
+    }
+}
+
+/// The accelerator table's pin: no chord listed twice on a platform, and a bare chord a function
+/// key's, or Backspace or Delete in Local Changes' list-and-diff scope, or Enter in its file
+/// lists' scope alone, each shown to fail on the shapes it refuses.
+const ACCELERATOR_PIN: &str =
+    "chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own";
 
 #[test]
 fn the_element_matcher_catches_the_shapes_it_claims() {
@@ -4027,34 +5826,1924 @@ fn the_element_matcher_catches_the_shapes_it_claims() {
     );
 }
 
+/// The one key policy every text field takes: the one render file
+/// that may build Freya's `Input` or replace its key handler.
+const TEXT_FIELD_POLICY: &str = "crates/cairn-ui/src/text_field.rs";
+
+/// Every text field is built by the one key policy, which hands the window's chords and held
+/// modifiers to the window and keeps its own keys from the views around it. A field built
+/// anywhere else — Freya's `Input` named, or its key handler swapped — would claim every key
+/// again, hiding F5 and the held ⌘ or Ctrl from the window, as a filter field built on `Input`
+/// alone does (`docs/research/staging-and-commit/freya-ui-apis.md`, §2).
+/// What the one key policy must be seen naming, so a blind matcher fails: the field it builds
+/// and the handler it installs.
+const TEXT_FIELD_POLICY_NAMES: &[&str] = &["Input", "on_pre_key_down"];
+
+/// Render files allowed one name of [`TEXT_FIELD_IDENTS`](cairn_guards::TEXT_FIELD_IDENTS)
+/// that builds no field, each row required to still name it: the accelerator table reads the
+/// toolkit editor's own bindings (`freya::text_edit::EditBindings`) to know which
+/// primary+letter presses a field keeps.
+const TEXT_FIELD_EXCEPTIONS: &[(&str, &str)] = &[(ACCELERATOR_TABLE, "text_edit")];
+
+#[test]
+fn every_text_field_takes_the_shared_key_policy() {
+    let policy = Path::new(TEXT_FIELD_POLICY);
+    let mut policy_seen = false;
+    let mut exceptions_seen = BTreeSet::new();
+    for dir in RENDER_SOURCE_DIRS {
+        let mut scanned = 0usize;
+        for (path, source) in rust_sources(dir) {
+            scanned += 1;
+            let hits = builds_a_text_field(&source);
+            if path == policy {
+                policy_seen = true;
+                // The policy must be seen building the field and installing its handler, or
+                // the matcher reads nothing anywhere.
+                for ident in TEXT_FIELD_POLICY_NAMES {
+                    assert!(
+                        hits.iter().any(|(_, named)| named == ident),
+                        "{TEXT_FIELD_POLICY} does not name `{ident}`. Either the policy moved — \
+                         move this guard with it — or the matcher has gone blind."
+                    );
+                }
+                continue;
+            }
+            let excused: Vec<&str> = TEXT_FIELD_EXCEPTIONS
+                .iter()
+                .filter(|(file, _)| Path::new(file) == path)
+                .map(|(_, ident)| *ident)
+                .collect();
+            for (_, ident) in &hits {
+                if excused.contains(ident) {
+                    exceptions_seen.insert((path.clone(), *ident));
+                }
+            }
+            let unexcused: Vec<&(usize, &str)> = hits
+                .iter()
+                .filter(|(_, ident)| !excused.contains(ident))
+                .collect();
+            assert!(
+                unexcused.is_empty(),
+                "{}:{} names `{}`, building a text field or swapping its key handler outside the \
+                 one key policy. Build it with `cairn_ui::text_field` or `text_field_in` \
+                 ({TEXT_FIELD_POLICY}), which hand the window's chords and held keys on \
+                 (CLAUDE.md, Invariants; staging-and-commit R7.1).",
+                path.display(),
+                unexcused[0].0,
+                unexcused[0].1
+            );
+        }
+        assert!(
+            scanned > 0,
+            "the text-field guard found no files under {dir}; it is scanning less than it claims"
+        );
+    }
+    assert!(
+        policy_seen,
+        "{TEXT_FIELD_POLICY} does not exist, so the guard exempts a file nobody can see"
+    );
+    for (file, ident) in TEXT_FIELD_EXCEPTIONS {
+        assert!(
+            exceptions_seen.contains(&(Path::new(file).to_path_buf(), *ident)),
+            "TEXT_FIELD_EXCEPTIONS excuses `{ident}` in {file}, which no longer names it: remove \
+             the row"
+        );
+    }
+}
+
+#[test]
+fn the_text_field_matcher_catches_the_shapes_it_claims() {
+    for (shape, source, ident) in [
+        ("the constructor", "let field = Input::new(value);", "Input"),
+        ("spaced", "let field = Input :: new(value);", "Input"),
+        (
+            "an aliased import",
+            "use freya::prelude::Input as Field;",
+            "Input",
+        ),
+        ("a type alias", "type Field = Input;", "Input"),
+        ("the default handler", "Input::key_down_default(e)", "Input"),
+        (
+            "a swapped handler",
+            "field.on_pre_key_down(keys)",
+            "on_pre_key_down",
+        ),
+        (
+            "wrapped",
+            "field\n    .on_pre_key_down(\n        keys,\n    )",
+            "on_pre_key_down",
+        ),
+        (
+            "the editor hook",
+            "let editable = use_editable(content, config);",
+            "use_editable",
+        ),
+        (
+            "the editor's handle",
+            "fn draw(editable: UseEditable) {}",
+            "UseEditable",
+        ),
+        (
+            "the editor's configuration",
+            "let config = EditableConfig::new();",
+            "EditableConfig",
+        ),
+        (
+            "the editor's module",
+            "use freya::text_edit::*;",
+            "text_edit",
+        ),
+        (
+            "selectable text",
+            "SelectableText::new(value)",
+            "SelectableText",
+        ),
+        ("the code editor", "CodeEditor::new(data)", "CodeEditor"),
+    ] {
+        assert!(
+            builds_a_text_field(source)
+                .iter()
+                .any(|(_, named)| *named == ident),
+            "the text-field matcher missed {shape}: {source:?}"
+        );
+    }
+    for ident in cairn_guards::TEXT_FIELD_IDENTS {
+        assert!(
+            !builds_a_text_field(&format!("let x = {ident};")).is_empty(),
+            "`{ident}` is on the roster but the matcher does not read it"
+        );
+    }
+    for (shape, source) in [
+        ("another type", "InputMode::Shown"),
+        ("a validator", "fn check(v: InputValidator) {}"),
+        ("a comment", "// Freya's Input::new claims every key"),
+        ("a string", "const WHAT: &str = \"Input::new\";"),
+        ("a longer name", "let inputs = my_input();"),
+        (
+            "a longer editor name",
+            "let editable_area = use_editable_thing();",
+        ),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { Input::new(v); use_editable(c, k); }\n}",
+        ),
+    ] {
+        assert_eq!(
+            builds_a_text_field(source),
+            Vec::<(usize, &str)>::new(),
+            "the text-field matcher fired on {shape}: {source:?}"
+        );
+    }
+}
+
+/// The token a destructive operation takes, and the file that defines it.
+const CONFIRMED_TYPE: &str = "Confirmed";
+const CONFIRMED_TYPE_FILE: &str = "crates/cairn-model/src/confirm.rs";
+
+/// Its one constructor. The name is what the confirmation-surface roster is keyed on: it is
+/// spelled however the token is reached (`Confirmed::by_user`, an alias's `T::by_user`,
+/// `<Confirmed>::by_user`, `let mint = Confirmed::by_user;`).
+const CONFIRMED_CONSTRUCTOR: &str = "by_user";
+
+/// What the engine computes and the prompt is rendered from, and the types it is built of.
+const CONSEQUENCE_FILE: &str = "crates/cairn-model/src/consequence.rs";
+const CONSEQUENCE_TYPES: &[&str] = &[
+    "Consequence",
+    "DiscardedFile",
+    "FileLoss",
+    "Publication",
+    "Reflog",
+];
+
+/// Traits that would duplicate the token or build one without the constructor.
+const CONFIRMED_FORBIDDEN_TRAITS: &[&str] = &[
+    "Clone",
+    "Copy",
+    "Default",
+    "Deserialize",
+    "Decode",
+    "From",
+    "TryFrom",
+    "FromStr",
+];
+
+/// Traits that would build a `Consequence` or one of its parts without the engine computing
+/// it. `Clone` is allowed (a surface may keep the value it draws); that a surface could then
+/// build two tokens from one acknowledgement is `destructive-ops-reviewer`'s.
+const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
+    "Default",
+    "Deserialize",
+    "Decode",
+    "From",
+    "TryFrom",
+    "FromStr",
+];
+
+/// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
+/// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
+/// and presses the button that accepts it: the confirmation dialog — an amend that must be
+/// confirmed among what it confirms — and the Create Branch dialog, whose Create and Checkout
+/// (or Return) with Discard chosen is the acknowledgement: the radio chosen plus the press, as
+/// in Fork, the token built from the `Consequence` the engine computed for it. The commit box
+/// is not a surface: an amend git logs and no remote has takes no token, and any other is
+/// confirmed in the dialog. A row whose file no longer names the constructor fails.
+const CONFIRMATION_SURFACES: &[&str] = &[
+    "crates/cairn-ui/src/dialogs/confirm.rs",
+    "crates/cairn-ui/src/dialogs/create_branch.rs",
+];
+
+/// Every destructive operation, by file and function: each takes `Confirmed` by value, and
+/// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
+/// [`CONFIRMED_RECORD`]: discarding lines, discarding files — a tracked file's unstaged change
+/// restored, an untracked file deleted — amend, which replaces `HEAD`, removing `index.lock`,
+/// and Create Branch's Discard. The roster is never empty: an empty one would check every
+/// token-taking function against nothing, so the guard asserts a row.
+const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
+    ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
+    ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
+    ("crates/cairn-git/src/ops/commit.rs", "amend"),
+    // `Remove index.lock…`: the one file Cairn deletes without git.
+    (
+        "crates/cairn-git/src/ops/remove_lock.rs",
+        "remove_index_lock",
+    ),
+    // Create Branch's Discard: Fork's forced checkout, which discards staged and unstaged
+    // changes and untracked files in the way.
+    (
+        "crates/cairn-git/src/ops/checkout.rs",
+        "create_branch_discarding",
+    ),
+];
+
+/// The one function naming `Confirmed` that is not an operation: the record that spends the
+/// token, quoting its prompt (`Performed::destructive`) — by file, the type whose inherent
+/// impl declares it, and its name, so no other function of that name is excused. It takes the
+/// token by value too.
+const CONFIRMED_RECORD: (&str, &str, &str) =
+    ("crates/cairn-git/src/ops.rs", "Performed", "destructive");
+
+/// The types, each by its production file and its name, that may hold a `Confirmed` in a
+/// field: a token held in a type (`struct Pending { confirmed: Option<Confirmed> }`) can be
+/// handed to an operation behind a reference, where the by-value roster cannot see it, or kept
+/// and spent twice in spirit by a caller that clones what holds it. A row here is a review, and
+/// excuses that one declaration alone: a second type in the same file that holds a token
+/// fails, and so does a row whose type no longer exists or no longer holds one. The rows: the
+/// local write lane's `LocalWrite`, which carries a destructive write's token from the
+/// confirmation surface to the lane that spends it by value on the operation, and is neither
+/// `Clone` (but for a test-only impl that refuses a destructive write) nor kept once run; the
+/// engine's `Error`, whose `AmendNotMade` hands a confirmed amend's token back unspent when git
+/// failed with `HEAD` unmoved, so the skip amends without asking again — the one variant, and the
+/// one field, allowed to (`ENGINE_ERROR_TOKEN`, held by
+/// `the_engine_error_holds_a_token_only_as_an_unspent_amend`); and the two that carry that token on
+/// to the skip: the local lane's `Unspent`, on the write's ending to the window — whose `Clone`
+/// carries none, so one token is never two — and the window's Git Error state, `GitError`, which
+/// keeps it until the skip spends it or Close lets it go, each in one field alone
+/// (`WINDOW_TOKEN_FIELDS`, held by `the_window_holds_a_token_only_for_the_git_errors_skip`).
+const CONFIRMED_HOLDERS: &[(&str, &str)] = &[
+    ("crates/cairn-app/src/worker/local/lane.rs", "LocalWrite"),
+    ("crates/cairn-app/src/worker/local/lane.rs", "Unspent"),
+    ("crates/cairn-app/src/commit_box/state.rs", "GitError"),
+    ("crates/cairn-git/src/error.rs", "Error"),
+];
+
+/// The window's holders of a confirmed amend's unspent token, each by its file, its type and the
+/// one field it may hold the token in: the lane's carrier and the Git Error state.
+const WINDOW_TOKEN_FIELDS: &[(&str, &str, &str)] = &[
+    (
+        "crates/cairn-app/src/worker/local/lane.rs",
+        "Unspent",
+        "token: Option<Box<Confirmed>>,",
+    ),
+    (
+        "crates/cairn-app/src/commit_box/state.rs",
+        "GitError",
+        "unspent: Option<Confirmed>,",
+    ),
+];
+
+/// Where the declaration of `ty` in `code` names `Confirmed` other than as exactly `field`, once,
+/// or is not declared at all.
+fn holder_field_violations(code: &str, ty: &str, field: &str) -> Vec<String> {
+    let Some(declaration) = cairn_guards::type_declarations(code)
+        .into_iter()
+        .find(|declaration| declaration.name == ty)
+    else {
+        return vec![format!("`{ty}` is not declared")];
+    };
+    let holding: Vec<&str> = declaration
+        .body
+        .lines()
+        .filter(|line| !mentions_crate(line, CONFIRMED_TYPE).is_empty())
+        .map(str::trim)
+        .collect();
+    match holding.as_slice() {
+        [only] if *only == field => Vec::new(),
+        _ => vec![format!(
+            "`{ty}` names `{CONFIRMED_TYPE}` as {holding:?}; it holds one token, as `{field}` alone"
+        )],
+    }
+}
+
+/// The window keeps a confirmed amend's unspent token in two places and nowhere else, one field
+/// each: the lane's `Unspent`, which carries it on the write's ending, and the Git Error state,
+/// which keeps it for the skip. Their `CONFIRMED_HOLDERS` rows excuse the types; this pins the
+/// one field in each.
+#[test]
+fn the_window_holds_a_token_only_for_the_git_errors_skip() {
+    for (file, ty, field) in WINDOW_TOKEN_FIELDS {
+        let (_, source) = rust_sources("crates/cairn-app/src")
+            .into_iter()
+            .find(|(path, _)| path == Path::new(file))
+            .unwrap_or_else(|| panic!("{file} is gone; CONFIRMED_HOLDERS and this pin name it"));
+        let code = code_without_test_modules(&code_without_strings(&source));
+        let found = holder_field_violations(&code, ty, field);
+        assert!(found.is_empty(), "{file}: {found:?}");
+        assert!(
+            CONFIRMED_HOLDERS
+                .iter()
+                .any(|(row, holder)| row == file && holder == ty),
+            "{ty} in {file} is pinned but not on CONFIRMED_HOLDERS"
+        );
+    }
+}
+
+#[test]
+fn the_window_token_field_matcher_catches_the_shapes_it_claims() {
+    let field = "unspent: Option<Confirmed>,";
+    let accepted =
+        "pub struct GitError {\n    pub serial: u64,\n    unspent: Option<Confirmed>,\n}\n";
+    assert_eq!(
+        holder_field_violations(accepted, "GitError", field),
+        Vec::<String>::new(),
+        "the accepted shape"
+    );
+    for (shape, code) in [
+        (
+            "a second token",
+            "pub struct GitError {\n    unspent: Option<Confirmed>,\n    again: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "the field renamed",
+            "pub struct GitError {\n    kept: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "many tokens",
+            "pub struct GitError {\n    unspent: Vec<Confirmed>,\n}\n",
+        ),
+        (
+            "the field made public",
+            "pub struct GitError {\n    pub unspent: Option<Confirmed>,\n}\n",
+        ),
+        (
+            "none at all",
+            "pub struct GitError {\n    serial: u64,\n}\n",
+        ),
+        (
+            "the type gone",
+            "pub struct Other {\n    unspent: Option<Confirmed>,\n}\n",
+        ),
+    ] {
+        assert!(
+            !holder_field_violations(code, "GitError", field).is_empty(),
+            "{shape} was not caught"
+        );
+    }
+}
+
+/// The engine's error file, and the one variant and field of its `Error` that may hold a
+/// `Confirmed`: a confirmed amend's token handed back unspent.
+const ENGINE_ERROR_TOKEN: (&str, &str, &str) = (
+    "crates/cairn-git/src/error.rs",
+    "AmendNotMade",
+    "unspent: Box<Confirmed>,",
+);
+
+/// Where `code` — the engine error file's production code, comments and strings blanked —
+/// names `Confirmed` other than in an import and as `ENGINE_ERROR_TOKEN`'s one field of its one
+/// variant, or names it there not at all.
+fn engine_error_token_violations(code: &str) -> Vec<String> {
+    let (_, variant, field) = ENGINE_ERROR_TOKEN;
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut held = 0usize;
+    for line in mentions_crate(code, CONFIRMED_TYPE) {
+        let text = lines.get(line - 1).map_or("", |text| text.trim());
+        if text.starts_with("use ") {
+            continue;
+        }
+        let in_variant = lines[..line - 1]
+            .iter()
+            .rev()
+            .map(|text| text.trim())
+            .find(|text| {
+                text.ends_with('{') && text.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            })
+            .is_some_and(|header| header == format!("{variant} {{"));
+        if text == field && in_variant {
+            held += 1;
+        } else {
+            found.push(format!(
+                "line {line} names `{CONFIRMED_TYPE}` (`{text}`) other than as `{variant}`'s \
+                 `{field}`: the engine's error hands back an unspent amend token and holds no other"
+            ));
+        }
+    }
+    if held != 1 {
+        found.push(format!(
+            "`{variant}` holds `{field}` {held} times; it hands back exactly one unspent token"
+        ));
+    }
+    found
+}
+
+/// The engine's `Error` holds a token in exactly one place — `AmendNotMade`'s `unspent`, the
+/// confirmed amend's token handed back when git failed with `HEAD` unmoved — so no other
+/// failure can carry a confirmation out of an operation. Its `CONFIRMED_HOLDERS` row excuses
+/// the type; this pins where in it.
+#[test]
+fn the_engine_error_holds_a_token_only_as_an_unspent_amend() {
+    let (file, _, _) = ENGINE_ERROR_TOKEN;
+    let (_, source) = rust_sources("crates/cairn-git/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(file))
+        .unwrap_or_else(|| panic!("{file} is gone; CONFIRMED_HOLDERS and this pin name it"));
+    let code = code_without_test_modules(&code_without_strings(&source));
+    let found = engine_error_token_violations(&code);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn the_engine_error_token_matcher_catches_the_shapes_it_claims() {
+    let accepted = "use cairn_model::{Confirmed, ScrubbedLines};\n\
+                    pub enum Error {\n    Gone,\n    AmendNotMade {\n        failure: Box<Error>,\n        \
+                    unspent: Box<Confirmed>,\n    },\n}\n";
+    assert!(
+        engine_error_token_violations(accepted).is_empty(),
+        "the accepted shape"
+    );
+    for (shape, code) in [
+        (
+            "a second variant holding one",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Box<Confirmed>,\n    },\n    \
+             Other {\n        kept: Confirmed,\n    },\n}\n",
+        ),
+        (
+            "the field renamed",
+            "pub enum Error {\n    AmendNotMade {\n        token: Box<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "an Option of one",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Option<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "another variant's field of that name",
+            "pub enum Error {\n    Discard {\n        unspent: Box<Confirmed>,\n    },\n}\n",
+        ),
+        (
+            "none at all",
+            "pub enum Error {\n    AmendNotMade {\n    },\n}\n",
+        ),
+        (
+            "a function handing one out",
+            "pub enum Error {\n    AmendNotMade {\n        unspent: Box<Confirmed>,\n    },\n}\n\
+             impl Error {\n    pub fn take(self) -> Option<Confirmed> { None }\n}\n",
+        ),
+    ] {
+        assert!(
+            !engine_error_token_violations(code).is_empty(),
+            "{shape} was not caught"
+        );
+    }
+}
+
+/// Crates whose production code may spell a path into a `Consequence` (a variant, a part):
+/// the model that defines and renders it, and the engine that computes it.
+const CONSEQUENCE_BUILDERS: &[&str] = &["cairn-model", "cairn-git"];
+
+/// Every crate under `crates/` but the guards, whose fixtures spell the shapes they forbid.
+fn sealed_crates() -> Vec<String> {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|krate| krate != "cairn-guards")
+        .collect();
+    crates.sort();
+    crates
+}
+
+/// Each production file of `krates`' `src/`, as (path, code with comments, strings and test
+/// modules blanked); files a parent declares under `#[cfg(test)]` are test code and left out.
+fn production_code(krates: &[String]) -> Vec<(std::path::PathBuf, String)> {
+    let mut files = Vec::new();
+    for krate in krates {
+        let src = format!("crates/{krate}/src");
+        if !repo_root().join(&src).is_dir() {
+            continue;
+        }
+        let sources = rust_sources(&src);
+        let test_only = test_only_module_files(&sources);
+        for (path, source) in sources {
+            if !test_only.contains(&path) {
+                let code = code_without_test_modules(&code_without_strings(&source));
+                files.push((path, code));
+            }
+        }
+    }
+    files
+}
+
+/// What `confirm.rs` must say for the type to be the seal: two private fields, a
+/// `Consequence` and the prompt; no derive or impl that copies or conjures one; one inherent
+/// impl, with exactly the constructor taking a `Consequence` and two readers; and the
+/// `compile_fail` pins, each the passing scaffold plus its one refused line.
+fn confirmed_type_violations(source: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let production = code_without_test_modules(&code_without_strings(source));
+    match cairn_guards::type_declarations(&production)
+        .into_iter()
+        .find(|declaration| declaration.name == CONFIRMED_TYPE)
+    {
+        Some(declaration) => {
+            let fields: Vec<String> = declaration
+                .body
+                .split(',')
+                .map(|field| field.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|field| !field.is_empty())
+                .collect();
+            if declaration.keyword != "struct"
+                || fields != ["consequence: Consequence", "prompt: String"]
+            {
+                found.push(format!(
+                    "`{CONFIRMED_TYPE}` should be a struct of exactly two private fields, \
+                     `consequence: Consequence` and `prompt: String`; found {fields:?}"
+                ));
+            }
+        }
+        None => found.push(format!(
+            "{CONFIRMED_TYPE_FILE} no longer declares `{CONFIRMED_TYPE}`"
+        )),
+    }
+    if !production.contains("pub struct Confirmed {") {
+        found.push("`Confirmed` is no longer declared `pub struct Confirmed {`".to_owned());
+    }
+    for line in derives_or_implements(&production, CONFIRMED_TYPE, CONFIRMED_FORBIDDEN_TRAITS) {
+        found.push(format!(
+            "line {line} gives `{CONFIRMED_TYPE}` one of {CONFIRMED_FORBIDDEN_TRAITS:?}: a copy is \
+             one confirmation spent twice, and `Default` or `Deserialize` a token nobody confirmed"
+        ));
+    }
+    let impls: Vec<String> = cairn_guards::impl_headers(&production)
+        .into_iter()
+        .map(|(_, header)| header)
+        .collect();
+    if impls != ["impl Confirmed"] {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} should open exactly one impl block, `impl Confirmed {{`; found \
+             {impls:?}. `From`, `Default` or any trait impl is a second way to the token."
+        ));
+    }
+    // Every function, public or not, `const` or not: a private helper that builds the token
+    // is one `pub` away from a second constructor.
+    let functions: Vec<(String, bool)> = cairn_guards::function_signatures(&production)
+        .into_iter()
+        .map(|signature| (signature.name, signature.public))
+        .collect();
+    let expected: Vec<(String, bool)> = [CONFIRMED_CONSTRUCTOR, "consequence", "prompt"]
+        .iter()
+        .map(|name| ((*name).to_owned(), true))
+        .collect();
+    if functions != expected {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE}'s functions should be exactly `pub fn \
+             {CONFIRMED_CONSTRUCTOR}`, `pub fn consequence` and `pub fn prompt`; found \
+             {functions:?}"
+        ));
+    }
+    // An item that holds or makes a way to the constructor without being a function.
+    for keyword in ["const", "static", "macro_rules", "mod"] {
+        if names_keyword(&production, keyword) {
+            found.push(format!(
+                "{CONFIRMED_TYPE_FILE} declares a `{keyword}` item: a stored constructor, a \
+                 macro or a child module is a way to the token the function list cannot see"
+            ));
+        }
+    }
+    let constructor_lines = mentions_crate(&production, CONFIRMED_CONSTRUCTOR).len();
+    let literals = constructs_struct(&production, CONFIRMED_TYPE).len();
+    if constructor_lines != 1 || literals != 1 {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} should name `{CONFIRMED_CONSTRUCTOR}` once (its declaration) \
+             and build a `{CONFIRMED_TYPE}` once (in it); found {constructor_lines} and \
+             {literals}"
+        ));
+    }
+    if production
+        .lines()
+        .any(|line| line.contains("pub(") && line.contains("fn "))
+    {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} declares a restricted-visibility function; every way to the \
+             token is the one public constructor"
+        ));
+    }
+    if !production.contains("pub fn by_user(consequence: Consequence) -> Self {")
+        || !production.contains("let prompt = consequence.prompt();")
+    {
+        found.push(format!(
+            "`{CONFIRMED_TYPE}::{CONFIRMED_CONSTRUCTOR}` no longer takes a `Consequence` alone and \
+             renders the prompt from it; a prompt passed beside it can be typed"
+        ));
+    }
+    const SCAFFOLD: &str = "/// fn scaffold(consequence: cairn_model::Consequence) {\n\
+         ///     let confirmed = cairn_model::Confirmed::by_user(consequence);\n\
+         ///     let _ = confirmed.prompt();\n";
+    if !source.contains(&format!("/// ```\n{SCAFFOLD}/// }}\n/// ```")) {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} lost the passing scaffold of its compile-fail doctests; \
+             without it the refused blocks could all fail for a reason unrelated to the seal"
+        ));
+    }
+    let refused_blocks: Vec<&str> = source
+        .split("/// ```compile_fail\n")
+        .skip(1)
+        .filter_map(|block| block.split("/// ```\n").next())
+        .collect();
+    for refused in [
+        "let _ = confirmed.clone();",
+        "let spent = confirmed; let _ = confirmed.prompt();",
+        "let _ = cairn_model::Confirmed::by_user(String::from(\"Discard 3 files?\"));",
+        "let _ = cairn_model::Confirmed { consequence: unreachable!(), prompt: String::new() };",
+        "let _ = cairn_model::Confirmed::default();",
+        "let _: cairn_model::Confirmed = String::from(\"Discard 3 files?\").into();",
+    ] {
+        let expected = format!("{SCAFFOLD}///     {refused}\n/// }}\n");
+        if !refused_blocks.contains(&expected.as_str()) {
+            found.push(format!(
+                "{CONFIRMED_TYPE_FILE} no longer pins `{refused}` in a compile_fail doctest that \
+                 is the passing scaffold plus that one line"
+            ));
+        }
+    }
+    found
+}
+
+/// Whether `code` (strings and comments blanked) uses `keyword` as a word, a lifetime's
+/// `'static` aside.
+fn names_keyword(code: &str, keyword: &str) -> bool {
+    let bytes = code.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    code.match_indices(keyword).any(|(at, _)| {
+        let end = at + keyword.len();
+        (at == 0 || (!is_ident(bytes[at - 1]) && bytes[at - 1] != b'\''))
+            && bytes.get(end).is_none_or(|b| !is_ident(*b))
+    })
+}
+
+/// What `consequence.rs` must say for a `Consequence` to be the engine's to compute: no derive
+/// or impl that builds one or its parts without the engine, and one impl block, the renderer.
+fn consequence_type_violations(source: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let production = code_without_test_modules(&code_without_strings(source));
+    for name in CONSEQUENCE_TYPES {
+        for line in derives_or_implements(&production, name, CONSEQUENCE_FORBIDDEN_TRAITS) {
+            found.push(format!(
+                "line {line} gives `{name}` one of {CONSEQUENCE_FORBIDDEN_TRAITS:?}: a way to \
+                 build what a destructive operation will destroy without reading it"
+            ));
+        }
+    }
+    let impls: Vec<String> = cairn_guards::impl_headers(&production)
+        .into_iter()
+        .map(|(_, header)| header)
+        .collect();
+    if impls != ["impl Consequence"] {
+        found.push(format!(
+            "{CONSEQUENCE_FILE} should open exactly one impl block, `impl Consequence {{`, the \
+             renderer; found {impls:?}"
+        ));
+    }
+    if !production.contains("pub fn prompt(&self) -> String {") {
+        found.push(format!(
+            "{CONSEQUENCE_FILE} no longer renders the prompt beside the type (`pub fn \
+             prompt(&self) -> String`); a prompt rendered elsewhere can drift from it"
+        ));
+    }
+    found
+}
+
+/// The one way a type may name the token without keeping one: as the argument of a callback
+/// it holds — the confirmation dialog's `EventHandler<Confirmed>`, the window's
+/// `Rc<dyn Fn(Confirmed)>` — which is handed a token to spend and keeps none. Spelled exactly,
+/// so a callback that returns one, takes it beside other arguments or is named otherwise is
+/// still a holder.
+const TOKEN_CALLBACKS: &[&str] = &[
+    "EventHandler<Confirmed>",
+    "dyn Fn(Confirmed)",
+    "dyn FnMut(Confirmed)",
+    "dyn FnOnce(Confirmed)",
+];
+
+/// The names [`TOKEN_CALLBACKS`] trusts to mean the toolkit's handler and the language's
+/// closure traits.
+const TOKEN_CALLBACK_NAMES: &[&str] = &["EventHandler", "Fn", "FnMut", "FnOnce"];
+
+/// What would make a [`TOKEN_CALLBACKS`] spelling mean something else: a type, trait or alias
+/// declared under one of [`TOKEN_CALLBACK_NAMES`], or another item imported as one — so an
+/// `EventHandler<Confirmed>` that keeps its token cannot pass for the toolkit's handler.
+fn token_callback_shadow_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        let words: Vec<(usize, &str)> = code
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .scan(0usize, |offset, word| {
+                let at = *offset;
+                *offset += word.len() + 1;
+                Some((at, word))
+            })
+            .filter(|(_, word)| !word.is_empty())
+            .collect();
+        for pair in words.windows(2) {
+            let [(at, first), (_, second)] = pair else {
+                continue;
+            };
+            let declares = ["struct", "enum", "union", "type", "trait", "as"].contains(first);
+            if declares && TOKEN_CALLBACK_NAMES.contains(second) {
+                let line = code[..*at].matches('\n').count() + 1;
+                found.push(format!(
+                    "{}:{line} `{first} {second}`: a callback name the token-holder check trusts \
+                     is given to something else",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// `body` with every [`TOKEN_CALLBACKS`] spelling blanked, where it starts a word.
+fn without_token_callbacks(body: &str) -> String {
+    let mut kept = body.to_owned();
+    for callback in TOKEN_CALLBACKS {
+        let mut from = 0;
+        while let Some(at) = kept[from..].find(callback).map(|at| at + from) {
+            let starts_a_word = kept[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            if starts_a_word {
+                kept.replace_range(at..at + callback.len(), &" ".repeat(callback.len()));
+            }
+            from = at + callback.len();
+        }
+    }
+    kept
+}
+
+/// No type in the production code of `files` keeps a token in a field but the `holders`, each
+/// a file and the one type in it excused; and each holder is a type of that file that still
+/// holds one.
+fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[(&str, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    // Every (file, type) that holds a token.
+    let mut holding = Vec::new();
+    for (path, code) in files {
+        for declaration in cairn_guards::type_declarations(code) {
+            let body = without_token_callbacks(&declaration.body);
+            if mentions_crate(&body, CONFIRMED_TYPE).is_empty() {
+                continue;
+            }
+            holding.push((*path, declaration.name.clone()));
+            let excused = holders
+                .iter()
+                .any(|(file, ty)| Path::new(file) == *path && *ty == declaration.name);
+            if !excused {
+                found.push(format!(
+                    "{}:{} `{}` holds a `{CONFIRMED_TYPE}`: a token kept in a type reaches an \
+                     operation behind a reference, where the by-value roster cannot see it",
+                    path.display(),
+                    declaration.line,
+                    declaration.name
+                ));
+            }
+        }
+    }
+    for (file, ty) in holders {
+        let Some((_, code)) = files.iter().find(|(path, _)| *path == Path::new(file)) else {
+            found.push(format!(
+                "CONFIRMED_HOLDERS lists `{file}`, which is not a production file"
+            ));
+            continue;
+        };
+        let declared = cairn_guards::type_declarations(code)
+            .iter()
+            .any(|declaration| declaration.name == *ty);
+        if !declared {
+            found.push(format!(
+                "CONFIRMED_HOLDERS lists `{ty}` in `{file}`, which declares no such type"
+            ));
+        } else if !holding
+            .iter()
+            .any(|(path, name)| *path == Path::new(file) && name == ty)
+        {
+            found.push(format!(
+                "CONFIRMED_HOLDERS lists `{ty}` in `{file}`, which no longer holds a \
+                 `{CONFIRMED_TYPE}`: a dead row"
+            ));
+        }
+    }
+    found
+}
+
+/// The functions `code` declares inside the inherent impl block of `ty` (`impl ty {`).
+fn functions_in_impl(code: &str, ty: &str) -> Vec<cairn_guards::FunctionSignature> {
+    let header = format!("impl {ty} {{");
+    let Some(open) = code.find(&header) else {
+        return Vec::new();
+    };
+    let body_start = open + header.len() - 1;
+    let mut depth = 0usize;
+    let mut end = body_start;
+    for (at, byte) in code.bytes().enumerate().skip(body_start) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end = at;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    cairn_guards::function_signatures(&code[body_start..end.max(body_start)])
+}
+
+/// The destructive-operation roster over `crates/cairn-git/src`'s production code: every
+/// function that names `Confirmed` is on the roster (or is the record that spends it) and
+/// takes it by value; every roster row names such a function in its file; and no public
+/// function in `ops/` takes a `Consequence` without the token beside it, which would be a
+/// destructive operation reached with nobody's confirmation.
+fn destructive_roster_violations(
+    files: &[(&Path, &str)],
+    roster: &[(&str, &str)],
+    record: (&str, &str, &str),
+) -> Vec<String> {
+    let mut found = Vec::new();
+    let (record_file, record_type, record_function) = record;
+    for (path, code) in files {
+        // The record is excused by its place, not its name: the one function of that name in
+        // the inherent impl of its type, in its file.
+        let record_line = (*path == Path::new(record_file))
+            .then(|| {
+                let block = code.find(&format!("impl {record_type} {{"))?;
+                let before = code[..block].matches('\n').count();
+                functions_in_impl(code, record_type)
+                    .into_iter()
+                    .find(|signature| signature.name == record_function)
+                    .map(|signature| before + signature.line)
+            })
+            .flatten();
+        let rostered = |name: &str, line: usize| {
+            roster
+                .iter()
+                .any(|(file, function)| Path::new(file) == *path && *function == name)
+                || record_line == Some(line)
+        };
+        for signature in cairn_guards::function_signatures(code) {
+            let names_token = !mentions_crate(&signature.text, CONFIRMED_TYPE).is_empty();
+            if names_token {
+                if !in_module(path, OPS_DIR) {
+                    found.push(format!(
+                        "{}:{} `{}` names `{CONFIRMED_TYPE}` outside {OPS_DIR}: every destructive \
+                         operation is a mutation, and only ops/ mutates",
+                        path.display(),
+                        signature.line,
+                        signature.name
+                    ));
+                } else if !rostered(&signature.name, signature.line) {
+                    found.push(format!(
+                        "{}:{} `{}` takes a `{CONFIRMED_TYPE}` but is not on \
+                         DESTRUCTIVE_OPERATIONS; a destructive operation is a roster row",
+                        path.display(),
+                        signature.line,
+                        signature.name
+                    ));
+                }
+                if !cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE) {
+                    found.push(format!(
+                        "{}:{} `{}` names `{CONFIRMED_TYPE}` other than as one parameter taken by \
+                         value (a reference, an `Option`, a bound, a second one, a return): \
+                         `{}`. By value is what spends one confirmation on one operation.",
+                        path.display(),
+                        signature.line,
+                        signature.name,
+                        signature
+                            .text
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ));
+                }
+                continue;
+            }
+            let takes_consequence = signature
+                .parameters
+                .iter()
+                .any(|parameter| !mentions_crate(parameter, "Consequence").is_empty());
+            if signature.public && takes_consequence && in_module(path, OPS_DIR) {
+                found.push(format!(
+                    "{}:{} public `{}` takes a `Consequence` without a `{CONFIRMED_TYPE}`: an \
+                     operation acting on what it would destroy, with nobody's confirmation",
+                    path.display(),
+                    signature.line,
+                    signature.name
+                ));
+            }
+        }
+    }
+    // A dead row: no function of that name in its file. (One that exists but does not take the
+    // token by value is the by-value rule's to report, once.)
+    for (file, function) in roster {
+        let exists = files
+            .iter()
+            .filter(|(path, _)| *path == Path::new(file))
+            .flat_map(|(_, code)| cairn_guards::function_signatures(code))
+            .any(|signature| signature.name == *function);
+        if !exists {
+            found.push(format!(
+                "dead row: DESTRUCTIVE_OPERATIONS names `{function}` in {file}, which declares no \
+                 function of that name; a dead row is a destructive operation nobody checks"
+            ));
+        }
+    }
+    let record_exists = files
+        .iter()
+        .filter(|(path, _)| *path == Path::new(record_file))
+        .any(|(_, code)| {
+            functions_in_impl(code, record_type)
+                .iter()
+                .any(|signature| signature.name == record_function)
+        });
+    if !record_exists {
+        found.push(format!(
+            "dead row: CONFIRMED_RECORD names `{record_type}::{record_function}` in \
+             {record_file}, and no inherent impl of `{record_type}` there declares it"
+        ));
+    }
+    found
+}
+
+/// The confirmation-surface roster over production code: only `surfaces` name the
+/// constructor, and each of them does.
+fn confirmation_surface_violations(files: &[(&Path, &str)], surfaces: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        if *path == Path::new(CONFIRMED_TYPE_FILE) {
+            continue;
+        }
+        let hits = mentions_crate(code, CONFIRMED_CONSTRUCTOR);
+        if !hits.is_empty() && !surfaces.iter().any(|surface| Path::new(surface) == *path) {
+            found.push(format!(
+                "{}:{} names `{CONFIRMED_TYPE}::{CONFIRMED_CONSTRUCTOR}` in production code \
+                 outside CONFIRMATION_SURFACES: a token built where no person read its prompt",
+                path.display(),
+                hits[0]
+            ));
+        }
+    }
+    for surface in surfaces {
+        let names_it = files.iter().any(|(path, code)| {
+            *path == Path::new(surface) && !mentions_crate(code, CONFIRMED_CONSTRUCTOR).is_empty()
+        });
+        if !names_it {
+            found.push(format!(
+                "CONFIRMATION_SURFACES lists `{surface}`, which does not build a \
+                 `{CONFIRMED_TYPE}` in production code; a dead row is a hole nobody sees"
+            ));
+        }
+    }
+    found
+}
+
+/// Production code outside [`CONSEQUENCE_BUILDERS`] holds a `Consequence` and asks it for its
+/// words; it never spells a path into one or its parts, which is how one is built by hand.
+fn consequence_forgery_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        for name in CONSEQUENCE_TYPES {
+            let hits = if *name == "Consequence" {
+                cairn_guards::names_a_path_into(code, name)
+            } else {
+                mentions_crate(code, name)
+            };
+            if let Some(line) = hits.first() {
+                found.push(format!(
+                    "{}:{line} spells `{name}`'s variants or parts outside the engine and the \
+                     model: a `Consequence` is computed by cairn-git from the repository, never \
+                     built by hand",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Over every file of every crate but the guards, `src/` and `tests/` alike: no impl block for
+/// the token outside its file, none for the `Consequence` or its parts outside theirs, and no
+/// second name for any of them.
+fn seal_route_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, source) in files {
+        let owned = [(CONFIRMED_TYPE, CONFIRMED_TYPE_FILE)].into_iter().chain(
+            CONSEQUENCE_TYPES
+                .iter()
+                .map(|name| (*name, CONSEQUENCE_FILE)),
+        );
+        for (name, home) in owned {
+            if *path != Path::new(home)
+                && let Some(line) = cairn_guards::opens_an_impl_naming(source, name).first()
+            {
+                found.push(format!(
+                    "{}:{line} opens an impl naming `{name}` outside {home}: `From`, `Default`, a \
+                     trait whose method returns one — each a way to the token or a forged \
+                     consequence the guard cannot see",
+                    path.display()
+                ));
+            }
+            if let Some(line) = cairn_guards::renames_type(source, name).first() {
+                found.push(format!(
+                    "{}:{line} gives `{name}` another name; past it the constructor and the \
+                     variants are spelled without the names the guard reads",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// The confirmation seal: `Confirmed` is neither `Clone` nor
+/// `Copy`, carries a `Consequence` and the prompt rendered from it, and is built only by the
+/// confirmation surfaces on [`CONFIRMATION_SURFACES`]; every destructive operation is on
+/// [`DESTRUCTIVE_OPERATIONS`] and takes it by value; and a `Consequence` is spelled only by the
+/// engine and the model. What the compiler refuses — `.clone()`, a literal, `Default`, a
+/// conversion, a constructor given text — is pinned by `confirm.rs`'s doctests, whose presence
+/// this checks; what it cannot refuse is read here.
 #[test]
 fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     let (_, confirm) = rust_sources("crates/cairn-model/src")
         .into_iter()
-        .find(|(p, _)| p.ends_with("confirm.rs"))
+        .find(|(path, _)| path == Path::new(CONFIRMED_TYPE_FILE))
         .unwrap_or_else(|| {
-            panic!("cairn-model/src/confirm.rs is gone; the seal it defines is an invariant")
+            panic!("{CONFIRMED_TYPE_FILE} is gone; the seal it defines is an invariant")
         });
-    let code = code_only(&confirm);
-
+    let found = confirmed_type_violations(&confirm);
     assert!(
-        code.contains("acknowledged: String"),
-        "Confirmed's field stopped being private data: the token is only proof because it \
-         cannot be built without the prompt text the user saw."
+        found.is_empty(),
+        "the confirmation token is weaker than the seal: {found:?}"
     );
-    let constructors = code.matches("pub fn ").count();
+    let (_, consequence) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(CONSEQUENCE_FILE))
+        .unwrap_or_else(|| panic!("{CONSEQUENCE_FILE} is gone; the prompt is rendered there"));
+    let found = consequence_type_violations(&consequence);
+    assert!(
+        found.is_empty(),
+        "a Consequence can be built without the engine: {found:?}"
+    );
+
+    let crates = sealed_crates();
+    for builder in CONSEQUENCE_BUILDERS {
+        assert!(
+            crates.iter().any(|krate| krate == builder),
+            "CONSEQUENCE_BUILDERS names `{builder}`, which is not a crate under crates/"
+        );
+    }
+    let production = production_code(&crates);
+    let production: Vec<(&Path, &str)> = production
+        .iter()
+        .map(|(path, code)| (path.as_path(), code.as_str()))
+        .collect();
+
+    let engine: Vec<(&Path, &str)> = production
+        .iter()
+        .filter(|(path, _)| path.starts_with(ENGINE_SOURCE_DIR))
+        .copied()
+        .collect();
+    assert!(
+        engine.iter().any(|(path, _)| in_module(path, OPS_DIR)),
+        "the destructive-operation roster scanned no file of {OPS_DIR}"
+    );
+    assert!(
+        !DESTRUCTIVE_OPERATIONS.is_empty(),
+        "DESTRUCTIVE_OPERATIONS is empty: a roster of no operations checks every function \
+         taking a token against nothing (the user's decision, 2026-10-08, is that it is never \
+         empty)"
+    );
+    let found = destructive_roster_violations(&engine, DESTRUCTIVE_OPERATIONS, CONFIRMED_RECORD);
+    assert!(
+        found.is_empty(),
+        "the destructive-operation roster is broken: {found:?}"
+    );
+    // Every crate's production code, the application's above all: it carries a token from the
+    // surface that built it to the lane that spends it.
+    assert!(
+        production
+            .iter()
+            .any(|(path, _)| path.starts_with("crates/cairn-app/src/worker")),
+        "the token-holder check scanned no production file of the application's worker"
+    );
+    let found = confirmed_holder_violations(&production, CONFIRMED_HOLDERS);
+    assert!(found.is_empty(), "a type keeps a token: {found:?}");
+    let found = token_callback_shadow_violations(&production);
+    assert!(
+        found.is_empty(),
+        "a name the token-holder check trusts is shadowed: {found:?}"
+    );
+
+    for render in RENDER_SOURCE_DIRS {
+        assert!(
+            production.iter().any(|(path, _)| path.starts_with(render)),
+            "the confirmation-surface roster scanned no production file of {render}, where the \
+             surfaces live"
+        );
+    }
+    let found = confirmation_surface_violations(&production, CONFIRMATION_SURFACES);
+    assert!(
+        found.is_empty(),
+        "a Confirmed is built outside the confirmation surfaces: {found:?}"
+    );
+
+    let viewers: Vec<(&Path, &str)> = production
+        .iter()
+        .filter(|(path, _)| {
+            !CONSEQUENCE_BUILDERS
+                .iter()
+                .any(|builder| path.starts_with(format!("crates/{builder}")))
+        })
+        .copied()
+        .collect();
+    assert!(
+        viewers
+            .iter()
+            .any(|(path, _)| path.starts_with("crates/cairn-app/src")),
+        "the consequence-forgery check scanned no file of cairn-app"
+    );
+    let found = consequence_forgery_violations(&viewers);
+    assert!(
+        found.is_empty(),
+        "a Consequence is built by hand: {found:?}"
+    );
+
+    let everything: Vec<(std::path::PathBuf, String)> = crates
+        .iter()
+        .flat_map(|krate| rust_sources(format!("crates/{krate}")))
+        .collect();
+    assert!(
+        !everything.is_empty(),
+        "the seal-route check scanned nothing"
+    );
+    let everything: Vec<(&Path, &str)> = everything
+        .iter()
+        .map(|(path, source)| (path.as_path(), source.as_str()))
+        .collect();
+    let found = seal_route_violations(&everything);
+    assert!(found.is_empty(), "a route around the seal: {found:?}");
+}
+
+/// The four matchers of the seal, each over the shapes it claims and the ones it must let pass.
+#[test]
+fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
+    // The token's file: the real one passes, and each weakening is seen.
+    let (_, confirm) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(CONFIRMED_TYPE_FILE))
+        .unwrap_or_else(|| panic!("{CONFIRMED_TYPE_FILE} is gone"));
+    assert_eq!(confirmed_type_violations(&confirm), Vec::<String>::new());
+    let weakened = [
+        (
+            "Clone derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Clone, PartialEq, Eq)]",
+        ),
+        (
+            "Copy derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
+        ),
+        (
+            "Default derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Default, PartialEq, Eq)]",
+        ),
+        (
+            "a public field",
+            "    prompt: String,\n}",
+            "    pub prompt: String,\n}",
+        ),
+        (
+            "a third field",
+            "    prompt: String,\n}",
+            "    prompt: String,\n    note: String,\n}",
+        ),
+        (
+            "the text field it was",
+            "    consequence: Consequence,\n",
+            "    acknowledged: String,\n",
+        ),
+        (
+            "a From impl",
+            "impl Confirmed {",
+            "impl From<Consequence> for Confirmed {\n    fn from(c: Consequence) -> Self { Self::by_user(c) }\n}\n\nimpl Confirmed {",
+        ),
+        (
+            "a second constructor",
+            "    /// What the person accepted losing",
+            "    pub fn from_text(text: String) -> Self { unreachable!() }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a crate-visible constructor",
+            "    /// What the person accepted losing",
+            "    pub(crate) fn quietly(c: Consequence) -> Self { Self::by_user(c) }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a prompt passed beside the consequence",
+            "pub fn by_user(consequence: Consequence) -> Self {",
+            "pub fn by_user(consequence: Consequence, prompt: String) -> Self {",
+        ),
+        (
+            "a refused block changed",
+            "///     let _ = confirmed.clone();",
+            "///     let _ = confirmed.clone(); // ",
+        ),
+        (
+            "the passing scaffold gone",
+            "/// ```\n/// fn scaffold",
+            "/// ```text\n/// fn scaffold",
+        ),
+        (
+            "Deserialize derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, PartialEq, Eq, serde::Deserialize)]",
+        ),
+        (
+            "a Decode impl",
+            "impl Confirmed {",
+            "impl Decode for Confirmed {}\n\nimpl Confirmed {",
+        ),
+        (
+            "a public const constructor",
+            "    /// What the person accepted losing",
+            "    pub const fn mint(c: Consequence) -> Self { Self::by_user(c) }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a private helper building the token",
+            "    /// What the person accepted losing",
+            "    fn helper(c: Consequence) -> Self { Self::by_user(c) }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a stored constructor",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "pub const MINT: fn(Consequence) -> Confirmed = Confirmed::by_user;\n\n#[derive(Debug, PartialEq, Eq)]",
+        ),
+        (
+            "a static constructor",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "pub static MINT: fn(Consequence) -> Confirmed = Confirmed::by_user;\n\n#[derive(Debug, PartialEq, Eq)]",
+        ),
+        (
+            "an exported macro",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[macro_export]\nmacro_rules! mint {\n    ($c:expr) => {\n        $crate::Confirmed::by_user($c)\n    };\n}\n\n#[derive(Debug, PartialEq, Eq)]",
+        ),
+        (
+            "a child module building the literal",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "mod inner {\n    pub fn mint(c: super::Consequence) -> super::Confirmed {\n        super::Confirmed { prompt: c.prompt(), consequence: c }\n    }\n}\n\n#[derive(Debug, PartialEq, Eq)]",
+        ),
+        (
+            "an impl behind an attribute on its line",
+            "impl Confirmed {",
+            "#[doc(hidden)] impl Default for Confirmed {\n    fn default() -> Self {\n        unreachable!()\n    }\n}\n\nimpl Confirmed {",
+        ),
+    ];
+    for (shape, from, to) in weakened {
+        assert!(
+            confirm.contains(from),
+            "the {shape} fixture no longer applies to {CONFIRMED_TYPE_FILE}"
+        );
+        let changed = confirm.replacen(from, to, 1);
+        assert!(
+            !confirmed_type_violations(&changed).is_empty(),
+            "the token check missed {shape}"
+        );
+    }
+
+    // The signature reader the roster stands on.
+    let by_value = [
+        "pub fn discard(git: &GitBinary, confirmed: Confirmed) -> Result<Performed, Error> {}",
+        "fn discard(mut confirmed: cairn_model::Confirmed) {}",
+        "pub fn discard(\n    git: &GitBinary,\n    repo: &Repository,\n    confirmed: Confirmed,\n) -> Performed {}",
+        "fn discard(&self, f: impl Fn(&str) -> bool, confirmed: Confirmed) {}",
+        "fn discard<F: Fn() -> u8>(f: F, confirmed: ::cairn_model::Confirmed);",
+    ];
+    for source in by_value {
+        let signature = cairn_guards::function_signatures(source)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no signature read from {source:?}"));
+        assert!(
+            cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE),
+            "a by-value token was not read as one: {source:?} ({signature:?})"
+        );
+    }
+    let not_by_value = [
+        ("a reference", "pub fn discard(confirmed: &Confirmed) {}"),
+        (
+            "a mutable reference",
+            "pub fn discard(confirmed: &mut Confirmed) {}",
+        ),
+        (
+            "an Option",
+            "pub fn discard(confirmed: Option<Confirmed>) {}",
+        ),
+        ("a Box", "pub fn discard(confirmed: Box<Confirmed>) {}"),
+        (
+            "an impl Into",
+            "pub fn discard(confirmed: impl Into<Confirmed>) {}",
+        ),
+        (
+            "a generic bound",
+            "pub fn discard<C: Into<Confirmed>>(confirmed: C) {}",
+        ),
+        (
+            "a where clause",
+            "pub fn discard<C>(confirmed: C) where C: Into<Confirmed> {}",
+        ),
+        (
+            "two tokens",
+            "pub fn discard(a: Confirmed, b: Confirmed) {}",
+        ),
+        (
+            "a returned token",
+            "pub fn discard(c: Confirmed) -> Confirmed {}",
+        ),
+        ("a slice", "pub fn discard(c: &[Confirmed]) {}"),
+        ("a tuple", "pub fn discard(c: (Confirmed, u8)) {}"),
+    ];
+    for (shape, source) in not_by_value {
+        let signature = cairn_guards::function_signatures(source)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no signature read from the {shape} shape"));
+        assert!(
+            !cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE),
+            "{shape} was read as a token taken by value: {source:?}"
+        );
+    }
+    let read = cairn_guards::function_signatures(
+        "type F = fn(Confirmed);\npub(crate) const fn a(x: u8) -> [u8; 2] { [x; 2] }\npub fn b(&self) {}",
+    );
+    let read: Vec<(&str, bool, usize)> = read
+        .iter()
+        .map(|s| (s.name.as_str(), s.public, s.parameters.len()))
+        .collect();
     assert_eq!(
-        constructors, 2,
-        "Confirmed should expose exactly two public functions (`by_user` and `acknowledged`); \
-         found {constructors}. A second way to build the token is a second way to reach a \
-         destructive operation without a prompt."
+        read,
+        [("a", false, 1), ("b", true, 1)],
+        "a fn pointer, visibility or parameters misread"
     );
 
-    let ops = rust_sources("crates/cairn-git/src/ops");
+    // The destructive-operation roster: every broken fixture breaks one rule, and is reported
+    // once, by that rule.
+    let ops = |name: &str| format!("{OPS_DIR}/{name}");
+    let record_file = format!("{OPS_DIR}.rs");
+    let record_source = "impl Performed {\n    pub(crate) fn destructive(d: String, confirmed: Confirmed) -> Self {}\n}\n";
+    let discard_file = ops("discard.rs");
+    let roster: &[(&str, &str)] = &[(&discard_file, "discard_files")];
+    let record = (record_file.as_str(), "Performed", "destructive");
+    let check_files = |record_text: &str, discard: &str| {
+        destructive_roster_violations(
+            &[
+                (Path::new(&record_file), record_text),
+                (Path::new(&discard_file), discard),
+            ],
+            roster,
+            record,
+        )
+    };
+    let check = |discard: &str| check_files(record_source, discard);
+    assert_eq!(
+        check(
+            "pub fn discard_files(git: &GitBinary, confirmed: Confirmed) -> Performed {}\nfn helper(c: &Consequence) {}\npub fn compute() -> Consequence {}"
+        ),
+        Vec::<String>::new(),
+        "a rostered by-value operation, a private helper reading the consequence and a public \
+         function computing one must all pass"
+    );
+    let by_value_rule = "other than as one parameter taken by value";
+    let roster_rule = "is not on DESTRUCTIVE_OPERATIONS";
+    let consequence_rule = "takes a `Consequence` without a";
+    let broken = [
+        (
+            "a rostered operation taking a reference",
+            "pub fn discard_files(confirmed: &Confirmed) {}",
+            by_value_rule,
+        ),
+        (
+            "a rostered operation taking an Option",
+            "pub fn discard_files(confirmed: Option<Confirmed>) {}",
+            by_value_rule,
+        ),
+        (
+            "a rostered operation returning a second token",
+            "pub fn discard_files(confirmed: Confirmed) -> Confirmed {}",
+            by_value_rule,
+        ),
+        (
+            "a roster row with no function",
+            "pub fn other() {}",
+            "dead row",
+        ),
+        (
+            "an unrostered operation taking the token",
+            "pub fn discard_files(c: Confirmed) {}\npub fn amend(c: Confirmed) {}",
+            roster_rule,
+        ),
+        (
+            "an operation taking the consequence without the token",
+            "pub fn discard_files(c: Confirmed) {}\npub fn delete(consequence: Consequence) {}",
+            consequence_rule,
+        ),
+        (
+            "a borrowed consequence on the public surface",
+            "pub fn discard_files(c: Confirmed) {}\npub fn delete(consequence: &Consequence) {}",
+            consequence_rule,
+        ),
+    ];
+    for (shape, source, rule) in broken {
+        let found = check(source);
+        assert!(
+            found.len() == 1 && found[0].contains(rule),
+            "the roster should report {shape} once, as `{rule}`: {found:?}"
+        );
+    }
+    // The record is excused by its place: a function of its name elsewhere in its file is not.
+    let found = check_files(
+        &format!("{record_source}pub fn destructive(c: Confirmed) {{}}\n"),
+        "pub fn discard_files(c: Confirmed) {}",
+    );
     assert!(
-        ops.iter().any(|(_, s)| code_only(s).contains("Confirmed")),
-        "no operation in cairn-git/src/ops takes a Confirmed token; either the module is empty \
-         of destructive work (delete this guard's expectation) or the seal was dropped."
+        found.len() == 1 && found[0].contains(roster_rule),
+        "a second `destructive` outside the record's impl was excused: {found:?}"
+    );
+    let found = check_files(
+        "pub(crate) fn destructive(d: String, confirmed: Confirmed) -> Performed {}\n",
+        "pub fn discard_files(c: Confirmed) {}",
+    );
+    assert!(
+        found.iter().any(|v| v.contains("dead row"))
+            && found.iter().any(|v| v.contains(roster_rule)),
+        "the record moved out of its impl was still excused: {found:?}"
+    );
+    let outside = destructive_roster_violations(
+        &[
+            (Path::new(&record_file), record_source),
+            (
+                Path::new(&discard_file),
+                "pub fn discard_files(c: Confirmed) {}",
+            ),
+            (
+                Path::new("crates/cairn-git/src/history.rs"),
+                "pub fn rewrite(c: Confirmed) {}",
+            ),
+        ],
+        roster,
+        record,
+    );
+    assert!(
+        outside.len() == 1 && outside[0].contains("outside"),
+        "the roster should report a token taken outside ops/ once: {outside:?}"
+    );
+    let no_record = destructive_roster_violations(
+        &[(
+            Path::new(&discard_file),
+            "pub fn discard_files(c: Confirmed) {}",
+        )],
+        roster,
+        record,
+    );
+    assert!(
+        no_record.len() == 1 && no_record[0].contains("dead row"),
+        "the roster should report the record gone once: {no_record:?}"
+    );
+
+    // A token kept in a type.
+    let pending = ops("pending.rs");
+    for (shape, ty, source) in [
+        (
+            "a struct field",
+            "Pending",
+            "pub struct Pending {\n    pub confirmed: Option<Confirmed>,\n}",
+        ),
+        (
+            "an enum variant",
+            "Job",
+            "pub enum Job {\n    Discard(Confirmed),\n}",
+        ),
+        ("a tuple struct", "Held", "pub struct Held(pub Confirmed);"),
+    ] {
+        let found = confirmed_holder_violations(&[(Path::new(&pending), source)], &[]);
+        assert!(
+            found.len() == 1,
+            "the holder check missed {shape}: {found:?}"
+        );
+        assert_eq!(
+            confirmed_holder_violations(
+                &[(Path::new(&pending), source)],
+                &[(pending.as_str(), ty)]
+            ),
+            Vec::<String>::new(),
+            "a listed holder was refused for {shape}"
+        );
+    }
+    assert_eq!(
+        confirmed_holder_violations(
+            &[(
+                Path::new(&pending),
+                "pub struct Plan {\n    pub paths: Vec<String>,\n}\nfn run(c: Confirmed) {}"
+            )],
+            &[]
+        ),
+        Vec::<String>::new(),
+        "a type that keeps no token, beside a function that takes one, was refused"
+    );
+    assert!(
+        !confirmed_holder_violations(&[], &[(pending.as_str(), "Pending")]).is_empty(),
+        "a listed holder that does not exist was not refused"
+    );
+    // The names the exemption trusts cannot be given to anything else in production code.
+    for (shape, source) in [
+        (
+            "a local handler",
+            "pub struct EventHandler<T> {\n    kept: Option<T>,\n}",
+        ),
+        ("an aliased one", "type EventHandler<T> = Vec<T>;"),
+        (
+            "an import renamed to it",
+            "use crate::keeper::Keeper as EventHandler;",
+        ),
+        ("a trait named for a closure", "pub trait FnOnce<T> {}"),
+        (
+            "an import renamed to a closure",
+            "use crate::keeper::Keeper as Fn;",
+        ),
+    ] {
+        assert_eq!(
+            token_callback_shadow_violations(&[(Path::new(&pending), source)]).len(),
+            1,
+            "the shadow check missed {shape}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "the toolkit's handler imported",
+            "use freya::prelude::EventHandler;\nstruct D { on: EventHandler<Confirmed> }",
+        ),
+        (
+            "a closure bound",
+            "fn f(then: impl Fn(Confirmed) + 'static) {}",
+        ),
+        ("a longer name", "struct EventHandlerSet;"),
+    ] {
+        assert_eq!(
+            token_callback_shadow_violations(&[(Path::new(&pending), source)]),
+            Vec::<String>::new(),
+            "the shadow check fired on {shape}"
+        );
+    }
+    // A callback handed a token to spend keeps none; any other shape of one still holds it.
+    for (shape, source) in [
+        (
+            "the dialog's handler",
+            "pub struct Dialog {\n    on_confirm: EventHandler<Confirmed>,\n}",
+        ),
+        (
+            "the window's continuation",
+            "pub struct Asking {\n    then: Rc<dyn Fn(Confirmed)>,\n}",
+        ),
+        (
+            "a boxed one-shot",
+            "pub struct Asking {\n    then: Box<dyn FnOnce(Confirmed) + 'static>,\n}",
+        ),
+    ] {
+        assert_eq!(
+            confirmed_holder_violations(&[(Path::new(&pending), source)], &[]),
+            Vec::<String>::new(),
+            "a callback taking a token was refused: {shape}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a callback that returns one",
+            "pub struct Mint {\n    make: Rc<dyn Fn() -> Confirmed>,\n}",
+        ),
+        (
+            "a callback beside a token",
+            "pub struct Both {\n    then: Rc<dyn Fn(Confirmed)>,\n    kept: Option<Confirmed>,\n}",
+        ),
+        (
+            "a handler of more than the token",
+            "pub struct Pair {\n    on: EventHandler<(Confirmed, u8)>,\n}",
+        ),
+        (
+            "a handler named otherwise",
+            "pub struct Mine {\n    on: MyEventHandler<Confirmed>,\n}",
+        ),
+        (
+            "a variant named like the callback",
+            "pub enum Job {\n    MyFn(Confirmed),\n}",
+        ),
+    ] {
+        assert_eq!(
+            confirmed_holder_violations(&[(Path::new(&pending), source)], &[]).len(),
+            1,
+            "the holder check missed {shape}"
+        );
+    }
+    // In the application, as in the engine: only the rostered file may hold one.
+    let lane = "crates/cairn-app/src/worker/local/lane.rs";
+    let queued = "crates/cairn-app/src/worker/local/queued.rs";
+    let held = "pub enum LocalWrite {\n    DiscardFiles(Confirmed),\n}";
+    let row = [(lane, "LocalWrite")];
+    assert_eq!(
+        confirmed_holder_violations(&[(Path::new(lane), held)], &row),
+        Vec::<String>::new(),
+        "the rostered lane was refused"
+    );
+    assert_eq!(
+        confirmed_holder_violations(
+            &[
+                (Path::new(lane), held),
+                (Path::new(queued), "pub struct Queued(pub Confirmed);")
+            ],
+            &row
+        )
+        .len(),
+        1,
+        "an unrostered application file holding a token was not refused"
+    );
+    // The row excuses its type, not its file: a second holder beside it is refused.
+    let beside = format!("{held}\npub struct Parked {{\n    kept: Option<Confirmed>,\n}}");
+    let found = confirmed_holder_violations(&[(Path::new(lane), &beside)], &row);
+    assert!(
+        found.len() == 1 && found[0].contains("`Parked`"),
+        "a second holder in the rostered file was not refused: {found:?}"
+    );
+    // A row whose type holds no token, or does not exist, is a dead row.
+    let emptied = "pub enum LocalWrite {\n    StageFiles(Vec<String>),\n}";
+    let found = confirmed_holder_violations(&[(Path::new(lane), emptied)], &row);
+    assert!(
+        found.len() == 1 && found[0].contains("no longer holds"),
+        "a row whose type holds no token was not refused: {found:?}"
+    );
+    let renamed = "pub enum LaneWrite {\n    DiscardFiles(Confirmed),\n}";
+    let found = confirmed_holder_violations(&[(Path::new(lane), renamed)], &row);
+    assert!(
+        found.len() == 2
+            && found.iter().any(|f| f.contains("`LaneWrite` holds"))
+            && found.iter().any(|f| f.contains("declares no such type")),
+        "a row whose type was renamed was not refused: {found:?}"
+    );
+
+    // The consequence's own file.
+    let (_, consequence) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(CONSEQUENCE_FILE))
+        .unwrap_or_else(|| panic!("{CONSEQUENCE_FILE} is gone"));
+    assert_eq!(
+        consequence_type_violations(&consequence),
+        Vec::<String>::new()
+    );
+    for (shape, from, to) in [
+        (
+            "Default derived on a part",
+            "pub enum FileLoss {",
+            "#[derive(Default)]\npub enum FileLoss {",
+        ),
+        (
+            "a From impl",
+            "impl Consequence {",
+            "impl From<String> for Consequence {\n    fn from(_: String) -> Self {\n        unreachable!()\n    }\n}\n\nimpl Consequence {",
+        ),
+        (
+            "a constructor on a part",
+            "impl Consequence {",
+            "impl DiscardedFile {\n    pub fn new() -> Self {\n        unreachable!()\n    }\n}\n\nimpl Consequence {",
+        ),
+        (
+            "an impl behind an attribute on its line",
+            "impl Consequence {",
+            "#[doc(hidden)] impl Default for Publication {\n    fn default() -> Self {\n        Self::Unpublished\n    }\n}\n\nimpl Consequence {",
+        ),
+        (
+            "the renderer gone",
+            "pub fn prompt(&self) -> String {",
+            "pub fn words(&self) -> String {",
+        ),
+    ] {
+        assert!(
+            consequence.contains(from),
+            "the {shape} fixture no longer applies"
+        );
+        assert!(
+            !consequence_type_violations(&consequence.replacen(from, to, 1)).is_empty(),
+            "the consequence check missed {shape}"
+        );
+    }
+
+    // The confirmation-surface roster, over production code as the guard prepares it.
+    let surface = "crates/cairn-ui/src/confirmation.rs";
+    let prepared = |source: &str| code_without_test_modules(&code_without_strings(source));
+    let builds = [
+        (
+            "a direct call",
+            "fn f(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+        (
+            "a qualified call",
+            "let t = cairn_model::Confirmed::by_user(consequence);",
+        ),
+        (
+            "an alias",
+            "use cairn_model::Confirmed as Token;\nlet t = Token::by_user(c);",
+        ),
+        ("a qualified self type", "let t = <Confirmed>::by_user(c);"),
+        ("a function value", "let mint = Confirmed::by_user;"),
+        (
+            "a helper named for tests",
+            "pub fn confirmed_for_tests(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+        (
+            "a helper under a cfg that is not test alone",
+            "#[cfg(any(test, feature = \"testing\"))]\npub fn make(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+    ];
+    for (shape, source) in builds {
+        let code = prepared(source);
+        let found = confirmation_surface_violations(
+            &[(Path::new("crates/cairn-app/src/window.rs"), &code)],
+            &[],
+        );
+        assert!(
+            !found.is_empty(),
+            "the surface roster missed {shape}: {source:?}"
+        );
+        let found = confirmation_surface_violations(&[(Path::new(surface), &code)], &[surface]);
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "a listed surface was refused for {shape}"
+        );
+    }
+    let in_a_test =
+        prepared("#[cfg(test)]\nmod tests {\n    fn t() { let _ = Confirmed::by_user(c); }\n}");
+    assert_eq!(
+        confirmation_surface_violations(
+            &[(Path::new("crates/cairn-git/src/ops/x.rs"), &in_a_test)],
+            &[]
+        ),
+        Vec::<String>::new(),
+        "a test module was read as production code"
+    );
+    let holds = prepared("fn submit(confirmed: Confirmed) { send(confirmed) }");
+    let found = confirmation_surface_violations(&[(Path::new(surface), &holds)], &[surface]);
+    assert!(
+        !found.is_empty(),
+        "a listed surface that builds nothing was not refused"
+    );
+    assert!(
+        !confirmation_surface_violations(&[], &[surface]).is_empty(),
+        "a listed surface that does not exist was not refused"
+    );
+    assert_eq!(
+        confirmation_surface_violations(&[(Path::new("crates/cairn-app/src/x.rs"), &holds)], &[]),
+        Vec::<String>::new(),
+        "holding and passing a token was read as building one"
+    );
+
+    // Forging a consequence outside the engine and the model.
+    let forged = [
+        (
+            "a variant built",
+            "let c = Consequence::DiscardLines { path, index, working_tree, added, removed };",
+        ),
+        (
+            "a qualified variant",
+            "let c = cairn_model::Consequence::Amend { commit, subject, published };",
+        ),
+        ("a glob of the variants", "use cairn_model::Consequence::*;"),
+        (
+            "a grouped import of a variant",
+            "use cairn_model::Consequence::{RemoveLock};",
+        ),
+        (
+            "a qualified self type",
+            "let c = <Consequence>::RemoveLock { path, age, bytes };",
+        ),
+        (
+            "a variant matched",
+            "match c { Consequence::Amend { .. } => {} }",
+        ),
+        ("a part built", "let f = DiscardedFile { path, loss };"),
+        (
+            "a loss named",
+            "let l = FileLoss::Untracked { working_tree, bytes };",
+        ),
+        ("a publication named", "let p = Publication::Unpublished;"),
+        ("a reflog state named", "let r = Reflog::Written;"),
+    ];
+    for (shape, source) in forged {
+        let code = prepared(source);
+        assert!(
+            !consequence_forgery_violations(&[(Path::new("crates/cairn-app/src/x.rs"), &code)])
+                .is_empty(),
+            "the forgery check missed {shape}: {source:?}"
+        );
+    }
+    let viewing = prepared(
+        "use cairn_model::{Confirmed, Consequence};\nfn show(c: &Consequence) -> String { c.prompt() }\nfn label(c: &Consequence) -> String { c.action() }",
+    );
+    assert_eq!(
+        consequence_forgery_violations(&[(Path::new("crates/cairn-ui/src/x.rs"), &viewing)]),
+        Vec::<String>::new(),
+        "holding a consequence and asking it for its words was read as forging one"
+    );
+
+    // Routes around the seal, in any file.
+    let routes = [
+        (
+            "a From impl for the token",
+            "impl From<Consequence> for Confirmed {\n    fn from(c: Consequence) -> Self { unreachable!() }\n}",
+        ),
+        (
+            "a Default impl for the token",
+            "impl Default for Confirmed {\n    fn default() -> Self { unreachable!() }\n}",
+        ),
+        (
+            "a trait building a consequence",
+            "impl Sample for Consequence {\n    fn sample() -> Self { Self::RemoveLock { path, age, bytes } }\n}",
+        ),
+        (
+            "a generic impl bounded on the token",
+            "impl<T: Into<Confirmed>> Mint for T {\n}",
+        ),
+        ("a renamed token", "use cairn_model::Confirmed as Token;"),
+        (
+            "an aliased consequence",
+            "type Loss = cairn_model::Consequence;",
+        ),
+        ("a renamed part", "use cairn_model::FileLoss as Loss;"),
+        (
+            "an alias after an item's closing brace",
+            "struct Holder {}\ntype Token = Confirmed;",
+        ),
+        (
+            "an alias after a function",
+            "fn f() {}\ntype Loss = cairn_model::Consequence;",
+        ),
+        (
+            "an impl behind an attribute on its line",
+            "#[doc(hidden)] impl From<Consequence> for Confirmed {\n}",
+        ),
+    ];
+    for (shape, source) in routes {
+        assert!(
+            !seal_route_violations(&[(Path::new("crates/cairn-app/tests/x.rs"), source)])
+                .is_empty(),
+            "the route check missed {shape}: {source:?}"
+        );
+    }
+    let fine =
+        "fn takes(c: impl Into<Confirmed>) {}\nimpl Window {\n    fn f(&self, c: Confirmed) {}\n}";
+    assert_eq!(
+        seal_route_violations(&[(Path::new("crates/cairn-app/src/x.rs"), fine)]),
+        Vec::<String>::new(),
+        "an `impl Trait` argument or an impl for another type was read as an impl for the token"
+    );
+    assert_eq!(
+        seal_route_violations(&[(
+            Path::new(CONFIRMED_TYPE_FILE),
+            "impl Confirmed {\n    pub fn prompt(&self) -> &str { &self.prompt }\n}"
+        )]),
+        Vec::<String>::new(),
+        "the token's own impl was refused in its own file"
     );
 }
 
@@ -4309,7 +7998,7 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
             );
         }
 
-        if !path.starts_with("crates") || path.components().any(|c| c.as_os_str() == "tests") {
+        if !path.starts_with("crates") || is_integration_test(path) {
             continue;
         }
         let production = code_without_test_modules(&code_without_strings(source));
@@ -4733,7 +8422,7 @@ fn ci_runs_every_merge_bar_gate_step() {
 
 /// The partial-clone pin of `GIT_NO_LAZY_FETCH` skips on a git older than 2.44, which ignores
 /// the variable, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_NO_LAZY_FETCH` is
-/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it in the
+/// what turns that skip into a failure in CI. Pinned here: CI sets it in the
 /// `gate` job's own `env:`, which every step of that job sees — not in another job, and not
 /// on one step, where `test-full` would not see it — and the test still reads it in its
 /// skip branch (without that, setting it would change nothing).
@@ -4766,7 +8455,7 @@ fn the_partial_clone_pin_is_required_in_ci() {
     );
 }
 
-/// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
+/// The ssh acceptance criteria (`crates/cairn-git/tests/fetch/main.rs`) skip where the fixture's
 /// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
 /// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it
 /// installs the server) in the `gate` job's own `env:`, which every step of that job sees,
@@ -4782,7 +8471,7 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     };
     let ci = read(".github/workflows/ci.yml");
     let gate = read("scripts/gate.sh");
-    let fixture = read("crates/cairn-git/tests/remotes/ssh.rs");
+    let fixture = read("crates/cairn-git/tests/fetch/remotes/ssh.rs");
 
     assert!(
         job_env_entries(&ci, "gate")
@@ -4838,9 +8527,9 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     }
 }
 
-/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff/fsmonitor.rs`) skips where
-/// git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr
-/// is hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
+/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs`) skips
+/// where git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr is
+/// hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
 /// Pinned here: the test's skip branch fails when the variable is set; `scripts/gate.sh`'s
 /// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
 /// `git version --build-options`; and `scripts/git-floor.sh` clears it on every run of the
@@ -4859,7 +8548,7 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     };
     let gate = read("scripts/gate.sh");
     let floor = read("scripts/git-floor.sh");
-    let test = read("crates/cairn-git/tests/diff/fsmonitor.rs");
+    let test = read("crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs");
 
     let body = test
         .split("fn a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files()")
@@ -4914,7 +8603,7 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     }
 }
 
-/// The reftable tests (`crates/cairn-git/tests/refs.rs`, PRD C2) skip where the git on
+/// The reftable tests (`crates/cairn-git/tests/refs.rs`) skip where the git on
 /// `PATH` cannot make a reftable repository — before git 2.45 — wholly
 /// (`a_reftable_repository_is_refused_at_open_and_a_files_one_opens`) or for git's half
 /// (`the_ref_storage_setting_is_read_as_git_reads_it`), and a passing test's stderr is
@@ -5069,14 +8758,14 @@ fn the_required_skip_matcher_catches_the_shapes_it_claims() {
 }
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns
-/// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
-/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where their namespace cannot be
-/// made, and a passing test's stderr is hidden, so a variable of each one's own turns its
+/// (`crates/cairn-git/tests/fetch/main.rs`) and git's search across a filesystem boundary
+/// (`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`) — skip where their namespace
+/// cannot be made, and a passing test's stderr is hidden, so a variable of each one's own turns its
 /// skip into a failure: `CAIRN_REQUIRE_SECOND_OWNER` and `CAIRN_REQUIRE_MOUNT_NAMESPACE`.
 /// They need different things — a second uid that the namespace's root may give a file to
 /// (`chown 1:1`, which AppArmor's `unprivileged_userns` profile refuses on Ubuntu 24.04),
-/// and a mount namespace — so the gate probes each exactly as its test does (the user's
-/// decision, 2026-10-04), and a host that serves one requires that one. Pinned here: each
+/// and a mount namespace — so the gate probes each exactly as its test does, and a host that
+/// serves one requires that one. Pinned here: each
 /// test's skip branch fails when its variable is set and makes its availability check with
 /// the arguments its probe in `scripts/gate.sh` runs; `test-full` calls the probe
 /// (`gate_function_calls`), whose body runs both `unshare`s, exports both variables, sets
@@ -5096,14 +8785,14 @@ fn the_user_namespace_tests_are_required_wherever_they_can_run() {
         .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
     for (file, test, variable, availability, gate_probe) in [
         (
-            "crates/cairn-git/tests/fetch.rs",
+            "crates/cairn-git/tests/fetch/main.rs",
             "fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git()",
             "CAIRN_REQUIRE_SECOND_OWNER",
             r#".args(["--map-root-user", "--map-auto", "chown", "1:1"])"#,
             "unshare --map-root-user --map-auto chown 1:1 \"$probe/owned\"",
         ),
         (
-            "crates/cairn-git/tests/diff/bare_discovery.rs",
+            "crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs",
             "fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it()",
             "CAIRN_REQUIRE_MOUNT_NAMESPACE",
             r#".args(["--map-root-user", "--mount", "true"])"#,
@@ -5267,11 +8956,11 @@ fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
 /// is the day loop's subset of `test-full`, which the full gate runs instead.
 const LOCAL_FULL_GATE_EXEMPT: &[&str] = &["test-fast"];
 
-/// `scripts/gate.sh` with no arguments is the merge bar a contributor runs, so every step
-/// it can run by name is in it — `deps` and `git-floor`, which reach the network, included
-/// — but for the explicit exemptions above. Without this a step added to the dispatch
-/// arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of the
-/// local merge bar, and a contributor's green gate would not be CI's.
+/// `scripts/gate.sh` with no arguments is the full gate a contributor runs before a merge, so
+/// every step it can run by name is in it — `deps` and `git-floor`, which reach the network,
+/// included — but for the explicit exemptions above. Without this a step added to the
+/// dispatch arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of
+/// the local full gate, and a contributor's green gate would not be CI's.
 #[test]
 fn the_local_full_gate_runs_every_step_but_the_day_loops() {
     let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
@@ -5305,7 +8994,7 @@ fn the_local_full_gate_runs_every_step_but_the_day_loops() {
     }
 }
 
-/// `scripts/gate.sh` with no arguments is the merge bar only while two things hold that the
+/// `scripts/gate.sh` with no arguments is the full gate only while two things hold that the
 /// sequence reading cannot see: the default is the full run (`FAST=0`, set once at the top
 /// and changed only by `--fast`), and no merge-bar step's command is the literal `skip`,
 /// which passes it without running anything. Every dispatch arm but the day loop's names
@@ -5752,12 +9441,217 @@ fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
     }
 }
 
+/// Words that tie a comment to how the code was planned or reviewed rather than to what it
+/// does, matched case-insensitively.
+const PROCESS_HISTORY_PHRASES: &[&str] = &[
+    "packet",
+    "merge bar",
+    "redesign",
+    "brainstorm",
+    "adjudicat",
+    "state.md",
+    "progress.md",
+    "docs/work/",
+    "review-code",
+    "qa item",
+    "the user's decision",
+    "the user's answer",
+    "the user's ratification",
+    "the user's choice",
+    "the user's words",
+    "decided here",
+    "accepted by the user",
+    "ratified",
+    "as amended",
+    "user-approved",
+];
+
+/// The crate whose comments describe these words as what its guards refuse.
+const PROCESS_HISTORY_EXEMPT_CRATE: &str = "crates/cairn-guards";
+
+/// The text a line gives a person to read as a comment: what follows its `//`, or the
+/// value of a `reason = "..."` attribute. `None` for a line with neither.
+fn comment_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("//") {
+        return Some(rest);
+    }
+    if let Some(at) = trimmed.find("reason = \"") {
+        return Some(&trimmed[at..]);
+    }
+    trimmed.find(" // ").map(|at| &trimmed[at + 4..])
+}
+
+/// Why a comment's `text` reads as the project's history, or `None` if it describes code.
+/// Spans in backticks are code and stepped over, and so is a path (a word holding `/` or
+/// ending `.md`). A bare date is not matched: code about dates names them.
+fn process_history(text: &str) -> Option<String> {
+    let mut prose = String::new();
+    for (index, span) in text.split('`').enumerate() {
+        if index % 2 == 0 {
+            prose.push_str(span);
+            prose.push(' ');
+        }
+    }
+    let lower = prose.to_lowercase().replace('’', "'");
+    let starts_a_word = |at: usize| {
+        lower[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric())
+    };
+    if let Some(phrase) = PROCESS_HISTORY_PHRASES
+        .iter()
+        .find(|p| lower.match_indices(*p).any(|(at, _)| starts_a_word(at)))
+    {
+        return Some(format!("the phrase {phrase:?}"));
+    }
+    let words: Vec<&str> = prose
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | ':' | '"'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (at, word) in words.iter().enumerate() {
+        if word.contains('/') || word.ends_with(".md") {
+            continue;
+        }
+        let bare = word.trim_end_matches(['.', '\'', 's']);
+        if bare == "QA" {
+            return Some("a QA reference".to_owned());
+        }
+        if word.eq_ignore_ascii_case("phase")
+            && words
+                .get(at + 1)
+                .is_some_and(|next| next.starts_with(|c: char| c.is_ascii_digit()))
+        {
+            return Some(format!("a phase reference ({word} {})", words[at + 1]));
+        }
+        if let Some(number) = word.to_lowercase().strip_prefix("phase-")
+            && number.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some(format!("a phase reference ({word})"));
+        }
+        if let Some(rest) = bare.strip_prefix('R')
+            && let Some((major, minor)) = rest.split_once('.')
+            && !major.is_empty()
+            && !minor.is_empty()
+            && major.chars().all(|c| c.is_ascii_digit())
+            && minor.chars().all(|c| c.is_ascii_digit())
+        {
+            return Some(format!("a requirement id ({bare})"));
+        }
+    }
+    None
+}
+
+/// A comment says what the code does and why, as true today: never the phase, packet,
+/// review item or decision it came from, nor a requirement's id — those rot, and mean
+/// nothing to a reader who never saw the planning. They belong in commit messages,
+/// `docs/prd/` and `docs/research/`. Residual review obligation, `qa-checklist`'s: the
+/// phrase list is finite, so history told in other words ("used to", "no longer") or a bare
+/// date is the review's, and so are this crate's own comments, which name what its guards
+/// refuse.
+#[test]
+fn comments_describe_the_code_not_its_history() {
+    let mut scanned = 0;
+    let mut findings = Vec::new();
+    for (path, source) in rust_sources("crates") {
+        if path.starts_with(PROCESS_HISTORY_EXEMPT_CRATE) {
+            continue;
+        }
+        scanned += 1;
+        for (number, line) in source.lines().enumerate() {
+            if let Some(text) = comment_text(line)
+                && let Some(why) = process_history(text)
+            {
+                findings.push(format!("{}:{}: {why}", path.display(), number + 1));
+            }
+        }
+    }
+    assert!(
+        scanned > 0,
+        "found no Rust source outside the guards, so this checked nothing"
+    );
+    assert!(
+        findings.is_empty(),
+        "a comment describes the code, not how it came to be (CLAUDE.md, Conventions). Say \
+         what the code does and why, and keep the history in the commit message:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_process_history_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        " Phase 13's QA item 2: an amend reported unconfirmed.",
+        " (phase-07) the drag ends here",
+        " as the packet records",
+        " the merge bar's responsiveness 3",
+        " rule 3 of the redesign",
+        " the brainstorm's L8",
+        " adjudicated as item 4",
+        " see state.md",
+        " carried in progress.md",
+        " docs/work/staging-and-commit/state.md",
+        " review-code-app-ui.md H3",
+        " QA's finding",
+        " The user's decision: counts files",
+        " the user’s answer B",
+        " decided here, not there",
+        " ratified on 2026-10-10",
+        " accepted by the user",
+        " R4.10 as amended",
+        " (PRD R4.7) the message goes on stdin",
+        " R13.3's numbers",
+        "reason = \"no view asks for it in this packet\"",
+    ];
+    for text in caught {
+        assert!(
+            process_history(text).is_some(),
+            "the process-history matcher missed {text:?}"
+        );
+    }
+
+    let ignored = [
+        " the user's own `git status` lists it",
+        " as Fork does, a double press stages the file",
+        " F5 refreshes, as in Fork",
+        " C1 control characters are escaped",
+        " (`docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`)",
+        " docs/research/staging-and-commit/fork-observed-2026-10-10.md shows it",
+        " 2024-03-09 16:05:00 UTC.",
+        " 1970-01-01 is day zero",
+        " `Phase` is one measured stretch of frames",
+        " a phase of the measurement",
+        " the `packet_size` field",
+        " open issue #87",
+        " design decision D1",
+        " git 2.30.9 and 2.32.7",
+        " reads after the reap that it was amended",
+        " Decided on the calling thread",
+    ];
+    for text in ignored {
+        assert_eq!(
+            process_history(text),
+            None,
+            "the process-history matcher fired on {text:?}"
+        );
+    }
+
+    assert_eq!(comment_text("    /// what it does"), Some("/ what it does"));
+    assert_eq!(comment_text("let x = 1; // why"), Some("why"));
+    assert_eq!(
+        comment_text("            reason = \"no view asks\""),
+        Some("reason = \"no view asks\"")
+    );
+    assert_eq!(comment_text("let url = \"https://example.com\";"), None);
+}
+
 /// Where the application's embedded fonts live.
 const FONTS_DIR: &str = "crates/cairn-app/assets/fonts";
 
 /// Every font embedded in the application, with the licence file it ships under. A row is a
-/// user decision (the font's download is one, packet decision L16): IBM Plex Mono Regular,
-/// SIL Open Font License 1.1, approved 2026-10-03.
+/// decision to surface to the user, as a dependency is: IBM Plex Mono Regular, under the SIL
+/// Open Font License 1.1.
 const EMBEDDED_FONTS: &[(&str, &str)] = &[("IBMPlexMono-Regular.ttf", "IBMPlexMono-LICENSE.txt")];
 
 /// A font file is a dependency `cargo deny` cannot see: the embedded fonts directory holds

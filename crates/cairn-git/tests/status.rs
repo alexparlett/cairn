@@ -1,7 +1,6 @@
-//! The working tree's status (PRD R3; C4, and the measured half of C11). Every expectation
-//! is read out of `git` at test time by a command that is not `git status` — comparing the
-//! parsed answer with `git status --porcelain=v1` would only check that two of git's
-//! printers agree:
+//! The working tree's status, and what reading it costs. Every expectation is read out of
+//! `git` at test time by a command that is not `git status` — comparing the parsed answer
+//! with `git status --porcelain=v1` would only check that two of git's printers agree:
 //!
 //! - staged changes: `git diff --cached --name-status`, under the rename detection the
 //!   fixture's configuration gives `git status` (`--no-renames`, `-M` or `-C`, with
@@ -30,6 +29,9 @@
 //! fixture's own configuration.
 //!
 //! Run by `scripts/git-floor.sh` under git 2.30.9 and 2.32.7 as well as the host's git.
+
+#[path = "support/write_executable.rs"]
+mod write_executable;
 
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
@@ -608,7 +610,7 @@ fn assert_status_is_gits(repo: &Repo, expect: &Expect<'_>) -> Vec<StatusEntry> {
     entries
 }
 
-// ── C4 ──────────────────────────────────────────────────────────────────────
+// ── what status lists ───────────────────────────────────────────────────────
 
 /// Every plain kind: an unstaged edit and deletion, a staged addition, edit and deletion,
 /// and a file staged and then edited again.
@@ -670,10 +672,10 @@ fn renames_fixture(name: &str, config: &[(&str, &str)]) -> Repo {
     repo
 }
 
-/// Renames and copies are what the user's configuration makes `git status` report (R3.3),
-/// under each `status.renames` value and, where it is unset, `diff.renames`. Nothing Cairn
-/// passes overrides them. Caught by: `--no-renames`, `-M` or `--find-renames` added to the
-/// read, or a source lost.
+/// Renames and copies are what the user's configuration makes `git status` report, under
+/// each `status.renames` value and, where it is unset, `diff.renames`. Nothing Cairn passes
+/// overrides them. Caught by: `--no-renames`, `-M` or `--find-renames` added to the read,
+/// or a source lost.
 #[test]
 fn renames_and_copies_follow_the_users_configuration() {
     type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Renames);
@@ -1038,7 +1040,7 @@ fn submodules_fixture(name: &str) -> Repo {
 /// Submodules as each `submodule.<name>.ignore` makes `git status` report them, and as
 /// `diff.ignoreSubmodules` does for those with no `ignore` of their own; and none reporting
 /// untracked content under `status.showUntrackedFiles=no`, which git passes down. Every
-/// state of R3.2 reaches the model: new commits (`SC..`), modified content (`S.M.`) and
+/// submodule state reaches the model: new commits (`SC..`), modified content (`S.M.`) and
 /// untracked content (`S..U`). Caught by: `--ignore-submodules` added to the read, or a
 /// flag read from the wrong letter.
 #[test]
@@ -1123,7 +1125,7 @@ fn submodules_are_reported_as_their_ignore_settings_say() {
     );
 }
 
-// ── R3.7 ────────────────────────────────────────────────────────────────────
+// ── an index git cannot read ────────────────────────────────────────────────
 
 /// The first `git` on `PATH` that writes a sparse index (2.32 or later): under
 /// `scripts/git-floor.sh` the floor's own git comes first and cannot, so the fixture is
@@ -1143,10 +1145,10 @@ fn a_git_that_writes_a_sparse_index() -> PathBuf {
     panic!("no git on PATH writes a sparse index (2.32 or later), so R3.7 cannot be checked")
 }
 
-/// A sparse index on a git that cannot read one (before 2.32) answers R3.7's state, never an
-/// empty or partial list, and writes nothing; on a git that can, the list is git's.
-/// `sparse-checkout init --cone --sparse-index` is the one spelling that writes a sparse
-/// index from 2.32 on (`a_sparse_index_is_unsupported_and_says_so`).
+/// A sparse index on a git that cannot read one (before 2.32) answers `IndexUnreadable`,
+/// never an empty or partial list, and writes nothing; on a git that can, the list is
+/// git's. `sparse-checkout init --cone --sparse-index` is the one spelling that writes a
+/// sparse index from 2.32 on (`a_sparse_index_is_unsupported_and_says_so`).
 #[test]
 fn a_sparse_index_git_cannot_read_is_said_so_and_one_it_can_is_listed() {
     let repo = Repo::new("sparse");
@@ -1192,8 +1194,8 @@ fn a_sparse_index_git_cannot_read_is_said_so_and_one_it_can_is_listed() {
 
 /// A read that fails for any other reason — here an index whose signature is not `DIRC`,
 /// which no git reads (git does not verify an index's trailing checksum on a read, so an
-/// index cut short may be read as garbage instead) — is git's failure, never R3.7's state
-/// and never an empty list.
+/// index cut short may be read as garbage instead) — is git's failure, never
+/// `IndexUnreadable` and never an empty list.
 #[test]
 fn a_failed_read_that_is_not_a_sparse_index_is_an_error() {
     let repo = Repo::new("corrupt");
@@ -1330,6 +1332,90 @@ fn in_a_partial_clone_a_status_read_fails_rather_than_fetching() {
     }
 }
 
+/// Amend's staged list (`Repository::amend_staged`, `reads::staged_since`) in the same
+/// blob-less partial clone, `HEAD`'s parent holding the excluded file: the index against
+/// `HEAD^` pairs a staged inexact rename of it, so git compares a blob only the promisor
+/// has. The read never fetches it on git 2.44 and later — it fails, `Error::GitFailed`, and
+/// no pack is written — and on an older git it fetches and answers the rename, the floor's
+/// residual as for status. Caught by: the list read with a write's environment, which
+/// fetches on every git.
+#[test]
+fn in_a_partial_clone_amends_staged_list_fails_rather_than_fetching() {
+    let repo = Repo::new("partial-amend-source");
+    repo.git(&["config", "uploadpack.allowFilter", "true"]);
+    repo.write("in/i.txt", "i\n");
+    let big: String = (1..=200).map(|n| format!("{n}\n")).collect();
+    repo.write("out/big", &big);
+    repo.commit("base");
+    repo.write("in/i.txt", "i, again\n");
+    repo.commit("head");
+    repo.git(&["branch", "-M", "main"]);
+    let url = format!("file://{}", repo.path().display());
+    repo.build_in(
+        Path::new("git"),
+        &repo.root,
+        &[
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            "--no-checkout",
+            &url,
+            "clone",
+        ],
+    );
+    let clone = repo.root.join("clone");
+    let git = |args: &[&str]| repo.build_in(Path::new("git"), &clone, args);
+    git(&["sparse-checkout", "init", "--cone"]);
+    git(&["sparse-checkout", "set", "in"]);
+    git(&["checkout", "-q", "main"]);
+    let missing = |clone: &Path| {
+        let listed = repo.ask(clone, &["rev-list", "--objects", "--missing=print", "HEAD"]);
+        listed
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(b"?"))
+    };
+    assert!(
+        missing(&clone),
+        "the clone holds every blob, so nothing is lazy here"
+    );
+    git(&["update-index", "--force-remove", "out/big"]);
+    let renamed: String = (1..=199).map(|n| format!("{n}\n")).collect();
+    std::fs::write(clone.join("in/big2"), renamed).unwrap_or_else(|e| panic!("{e}"));
+    git(&["add", "in/big2"]);
+    assert!(missing(&clone), "building the fixture fetched the blob");
+    let before = packs(&clone.join(".git"));
+
+    let shared = SharedRepository::discover(&clone).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = shared
+        .to_worker()
+        .amend_staged(&repo.cairns_git(), &CancelSignal::new());
+    if the_git_in_use() >= since(44) {
+        assert!(
+            matches!(outcome, Err(Error::GitFailed { .. })),
+            "git {}: a rename over a blob the clone lacks did not fail: {outcome:?}",
+            the_git_in_use()
+        );
+        assert_eq!(packs(&clone.join(".git")), before, "the read fetched");
+        assert!(missing(&clone), "the read fetched the blob");
+    } else {
+        let Ok(files) = outcome else {
+            panic!("git {}: {outcome:?}", the_git_in_use());
+        };
+        assert!(
+            files
+                .iter()
+                .any(|file| matches!(file.status, cairn_model::ChangeStatus::Renamed(_))),
+            "{files:?}"
+        );
+        assert_ne!(
+            packs(&clone.join(".git")),
+            before,
+            "git {} did not fetch, so the residual stated is wrong",
+            the_git_in_use()
+        );
+    }
+}
+
 /// Every file under a git directory with its bytes and its mtime, `objects` included.
 fn snapshot(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
     let mut found = Vec::new();
@@ -1353,25 +1439,22 @@ fn snapshot(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
 
 /// A script beside the repository (outside its working tree, so never listed), executable.
 fn script(repo: &Repo, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
     let path = repo.root.join(name);
-    std::fs::write(&path, body).unwrap_or_else(|e| panic!("{e}"));
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        .unwrap_or_else(|e| panic!("{e}"));
+    write_executable::write_executable(&path, body, 0o755);
     path
 }
 
-/// R3.8 against what a status read must not write or run. The index carries an untracked
-/// cache, an fsmonitor token and a split index's link, all written by a locked `git status`
-/// before the read, and the tree has changed since, so a locked status would rewrite each;
-/// a caching textconv, an external diff, a driver's `command`, a smudge filter and a
+/// What a status read must not write or run. The index carries an untracked cache, an
+/// fsmonitor token and a split index's link, all written by a locked `git status` before
+/// the read, and the tree has changed since, so a locked status would rewrite each; a
+/// caching textconv, an external diff, a driver's `command`, a smudge filter and a
 /// `post-index-change` hook are configured to leave a mark. The read leaves the git
 /// directory byte-identical, every file's mtime unchanged but the shared index's (git
-/// freshens the one it uses, the residual R3.8 states), and runs none of those: only the
-/// `core.fsmonitor` hook, which answers a token, and the clean filter of the stat-dirty file
-/// it rehashes, which leave theirs. Only `git status` ran. Caught by: status built so that it
-/// writes (the untracked cache, the token, the refreshed stat), or a flag that runs a
-/// driver.
+/// freshens the one it uses, a residual `docs/systems/status.md` states), and runs none of
+/// those: only the `core.fsmonitor` hook, which answers a token, and the clean filter of
+/// the stat-dirty file it rehashes, which leave theirs. Only `git status` ran. Caught by:
+/// status built so that it writes (the untracked cache, the token, the refreshed stat), or
+/// a flag that runs a driver.
 #[test]
 fn a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor() {
     let repo = Repo::new("traps");
@@ -1419,14 +1502,11 @@ fn a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor() {
     ] {
         repo.git(&["config", key, &value]);
     }
-    let hooks = repo.path().join(".git/hooks");
-    std::fs::create_dir_all(&hooks).unwrap_or_else(|e| panic!("{e}"));
-    std::fs::write(
-        hooks.join("post-index-change"),
-        format!("#!/bin/sh\n: > '{}'\n", hook_mark.display()),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    repo.chmod(".git/hooks/post-index-change", 0o755);
+    write_executable::write_executable(
+        &repo.path().join(".git/hooks/post-index-change"),
+        &format!("#!/bin/sh\n: > '{}'\n", hook_mark.display()),
+        0o755,
+    );
     repo.write(".gitattributes", "*.txt diff=trap filter=mark\n");
     repo.git(&["add", ".gitattributes"]);
     // A locked status, as the user's own, writes the untracked cache and the token; the
@@ -1533,19 +1613,19 @@ fn a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor() {
     );
 }
 
-// ── C11 ─────────────────────────────────────────────────────────────────────
+// ── what a status read costs ────────────────────────────────────────────────
 
-/// C11's status numbers: release build, warm, median of seven, through
+/// What a status read costs: release build, warm, median of seven, through
 /// `Repository::status` with the `git` the application would find. On the repository
 /// `CAIRN_BENCH_REPO` names, clean and read only (its index and lock files are checked
 /// unchanged); then on a scratch clone of it (`git clone --local --no-hardlinks` into the
-/// temporary directory, never inside the bench repository): 1,000 tracked files modified and
-/// 10,000 untracked files in 1,000 tracked directories (one read); the same with the
+/// temporary directory, never inside the bench repository): 1,000 tracked files modified
+/// and 10,000 untracked files in 1,000 tracked directories (one read); the same with the
 /// untracked files in 1,000 new directories (git collapses them, so a second read with
-/// `--untracked-files=all`, new data the spike did not measure); and every tracked file's
-/// stat changed, content the same (recorded, not barred), with a read superseded 100 ms in
-/// to show the cancel ends it. Before each settled scenario the clone sleeps 1.5 s and a
-/// locked `git status` refreshes its index, so no entry is racily clean, as the spike did.
+/// `--untracked-files=all`); and every tracked file's stat changed, content the same
+/// (recorded, not barred), with a read superseded 100 ms in to show the cancel ends it.
+/// Before each settled scenario the clone sleeps 1.5 s and a locked `git status` refreshes
+/// its index, so no entry is racily clean.
 /// Run with `cargo test --release -p cairn-git --test status -- --ignored --nocapture`.
 #[test]
 #[ignore = "needs a large repository named by CAIRN_BENCH_REPO; run with --release"]

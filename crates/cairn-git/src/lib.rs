@@ -2,6 +2,7 @@
 
 mod ahead_behind;
 mod bare_discovery;
+mod branch_names;
 mod cancel;
 mod commit;
 mod commit_encoding;
@@ -9,10 +10,12 @@ mod diff;
 mod error;
 mod history;
 mod object_id;
+mod operation_in_progress;
 pub mod ops;
 mod ownership;
 mod process;
 mod reads;
+mod recent_messages;
 mod ref_storage;
 mod refs;
 mod remotes;
@@ -26,7 +29,10 @@ pub use diff::{
     ChangesRequest, ContentOptions, DiffInputs, DiffSession, LineBudget, Offered, PAGE_FILES,
     PAGE_LINES, Page, StagedInputs, WorkingTreeDiff,
 };
-pub use error::{Error, RefusedWrite};
+pub use error::{
+    CheckoutMoved, CheckoutRefusal, CommitRefusal, Error, LockRefusal, Refusal, RefusedWrite,
+};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
+pub use recent_messages::RECENT_MESSAGES;
 pub use refs::{RefsCost, RefsRead};
-pub use repository::{CLOSE_BOUND, Repository, SharedRepository};
+pub use repository::{CLOSE_BOUND, CommandMark, Repository, SharedRepository};

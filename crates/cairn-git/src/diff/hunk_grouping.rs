@@ -70,7 +70,7 @@ mod tests {
 
     /// Unset is git's defaults; set is the last value given, read as git reads an `int`
     /// (case-insensitive key, octal, a unit suffix). Real git reading the same keys is
-    /// `the_view_groups_hunks_as_the_users_git_diff_does`, in `tests/diff/parity.rs`.
+    /// `the_view_groups_hunks_as_the_users_git_diff_does`, in `tests/diff_engine/diff/parity.rs`.
     #[test]
     fn the_keys_read_as_porcelain_reads_them() {
         assert_eq!(

@@ -1,20 +1,20 @@
 //! `git status --porcelain=v2 -z`: the working tree's status, as the user's own `git status`
-//! answers it (PRD R3, the packet's L1 and L2).
+//! answers it.
 //!
 //! gix's status is not used: it differed from git on 12 of 38 fixtures
 //! (`docs/research/refs-and-status/status-agreement-spike.md`) and starts clean filters
 //! outside `process/`. So git answers, and everything that decides its answer is the user's:
-//! renames and copies as `status.renames`, `status.renameLimit` and `diff.renames` make them
-//! (R3.3) — nothing here passes `-M`, `--no-renames` or `--find-renames`; submodules as
-//! `submodule.<name>.ignore` and `diff.ignoreSubmodules` report them (R3.6) — nothing passes
-//! `--ignore-submodules`; and no `--ignored`, so an ignored file is never listed (R3.5).
+//! renames and copies as `status.renames`, `status.renameLimit` and `diff.renames` make them —
+//! nothing here passes `-M`, `--no-renames` or `--find-renames`; submodules as
+//! `submodule.<name>.ignore` and `diff.ignoreSubmodules` report them — nothing passes
+//! `--ignore-submodules`; and no `--ignored`, so an ignored file is never listed.
 //! Porcelain v2 is untranslated and ignores the user's presentation settings by design
 //! (`status.relativePaths`, `color.status`, `status.branch` and `status.showStash` change
 //! nothing in it: reproduced with 2.30.9, 2.32.7 and 2.56.0), and `-z` prints every path as
 //! its bytes, unquoted, each record ended by a NUL — so a path with a newline, a leading space
 //! or bytes that are not UTF-8 arrives whole, and nothing here splits on anything but NUL.
 //!
-//! **Untracked files, one per file unless the user said none (L2).** git's default lists an
+//! **Untracked files, one per file unless the user said none.** git's default lists an
 //! untracked directory as one `dir/` record; Fork, and Cairn, list its files. But
 //! `status.showUntrackedFiles=no` must be honoured, and git itself has to read it: the value
 //! is a different language on different gits (git 2.56 takes `false` for `no` and `true` for
@@ -35,11 +35,11 @@
 //! untracked cache, not the fsmonitor token — and `GIT_NO_LAZY_FETCH=1`. The index is held
 //! byte-identical after every read (`a_status_read_leaves_the_index_byte_identical`, and the
 //! fixtures of `crates/cairn-git/tests/status.rs`). Residuals, accepted as parity with the
-//! user's own `git status` (PRD R3.8): under a split index git advances the mtime of
-//! `sharedindex.*`, and under a sparse index the mtime of the loose tree objects it expands
-//! (bytes unchanged in both); it runs the repository's `core.fsmonitor` (hook or daemon) and
-//! each stat-dirty file's clean filter, as D1 allows a read; and in each submodule it reads,
-//! it runs `git status` inside it, with that repository's own hook and filters. Because a
+//! user's own `git status`: under a split index git advances the mtime of `sharedindex.*`,
+//! and under a sparse index the mtime of the loose tree objects it expands (bytes unchanged in
+//! both); it runs the repository's `core.fsmonitor` (hook or daemon) and each stat-dirty
+//! file's clean filter, the programs a read lets git start; and in each submodule it reads, it
+//! runs `git status` inside it, with that repository's own hook and filters. Because a
 //! read never writes the refreshed stat back, a tree whose every file's stat changed stays
 //! as slow to read as the first time (736 ms on rust-lang/rust) until something refreshes the
 //! index; nothing here does. Staged rename detection compares blobs of `HEAD` and the index,
@@ -51,7 +51,7 @@
 //! (`in_a_partial_clone_a_status_read_fails_rather_than_fetching`).
 //!
 //! **Failure.** Classified by exit status and the repository's state, never by stderr. One
-//! failure is a state rather than an error (R3.7): a git older than 2.32 cannot read a sparse
+//! failure is a state rather than an error: a git older than 2.32 cannot read a sparse
 //! index (it knows no `sdir` extension, `read-cache.c` before v2.32.0) and exits 128, so a
 //! failed read whose index gix finds sparse, on such a git, answers
 //! [`WorkingTreeStatus::IndexUnreadable`]. Every other failure is [`Error::GitFailed`]; a
@@ -1111,7 +1111,7 @@ mod tests {
         condition()
     }
 
-    /// C5: a status read superseded while git is still running ends its process group —
+    /// A status read superseded while git is still running ends its process group —
     /// git and what it started, here a `core.fsmonitor` hook that would sleep for a minute —
     /// rather than waiting for it: the read answers cancelled within a second, the
     /// repository's registry holds no running invocation the moment it returns, the command
@@ -1125,19 +1125,14 @@ mod tests {
         fixture.git(&["commit", "-q", "-m", "one"]);
         let pid_file = fixture.root.join("hook.pid");
         let hook = fixture.root.join("slow-fsmonitor");
-        std::fs::write(
+        crate::process::stub_git::write_executable(
             &hook,
-            format!(
+            &format!(
                 "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
                 pid_file.display()
             ),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
-                .unwrap_or_else(|e| panic!("{e}"));
-        }
+            0o755,
+        );
         fixture.git(&["config", "core.fsmonitor", &hook.display().to_string()]);
 
         let repo = Repository::discover(fixture.repo()).unwrap_or_else(|e| panic!("{e}"));
@@ -1214,12 +1209,12 @@ mod tests {
         panic!("no git on PATH writes a sparse index (2.32 or later)")
     }
 
-    /// A failed read answers R3.7's state only where both hold: the index is sparse, and
-    /// the git is older than 2.32. A stub `git` that fails every status, reporting the
-    /// version it is told to, over a real sparse index and over a plain one. Caught by: the
-    /// version left out (a 2.40 that failed for any reason in a sparse checkout would be
-    /// said not to read its index), or the index left out (any failure of an old git would
-    /// be said to be a sparse index).
+    /// A failed read answers that git cannot read the index only where both hold: the index
+    /// is sparse, and the git is older than 2.32. A stub `git` that fails every status,
+    /// reporting the version it is told to, over a real sparse index and over a plain one.
+    /// Caught by: the version left out (a 2.40 that failed for any reason in a sparse checkout
+    /// would be said not to read its index), or the index left out (any failure of an old git
+    /// would be said to be a sparse index).
     #[test]
     fn a_failure_is_the_unreadable_state_only_on_an_old_git_over_a_sparse_index() {
         let sparse = Fixture::new("sparse-state");

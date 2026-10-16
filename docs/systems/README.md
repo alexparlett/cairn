@@ -3,14 +3,16 @@ contract. Each is kept current in the same change that invalidates it.
 
 - `history-graph.md` — how the history view reads, lays out and draws a
   repository: the worker boundary, the history session, the lane assigner and
-  the virtualized list.
+  the virtualized list, Show Lost Commits and the Create Branch dialog.
 - `credentials.md` — the `git` subprocess backend and its environment, the
   askpass helper and its channel, the secret type, fetch end to end, and the
   decisions the `credential-prompts` packet locked.
 - `git-processes.md` — where every `git` process is built, the read/write seal,
   the environment each kind of invocation runs with, the runner, each
   repository's registry and command log, where a repository is refused at open,
-  and, in the application, `git` found once, the network lane and closing.
+  and, in the application, `git` found once, the network lane, the local write lane,
+  the activity popover, where each operation's ending goes, the leftover
+  `index.lock` and closing.
 - `diff.md` — how Cairn describes a change to a file: the one exact answer, the
   hunk, row and patch projections of it, presentation-independent line identity,
   the patch emitter with its reference applier, the engine queries that fill it
@@ -29,3 +31,7 @@ contract. Each is kept current in the same change that invalidates it.
 - `local-changes.md` — the Local Changes view: Unstaged and Staged laid out over a status on
   a worker, the filter, a path chosen and its working-tree diff asked and drawn for that path
   alone, and how the path chosen follows each refresh.
+- `staging.md` — staging, unstaging, discarding, committing and amending in the
+  engine: the write verbs and their arguments, the stale check before every patch, the
+  discards and an amend sealed behind a confirmation and the re-check before they run,
+  and what the commit box reads.

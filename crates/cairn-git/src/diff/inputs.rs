@@ -29,7 +29,7 @@
 //!   a diff reads, so its stamp says only when to look again.
 //!
 //! Nothing here reads a file's content but the index's and `HEAD`'s; the caller decides how
-//! to tell that a file moved (`crates/cairn-app/src/worker/diff_freshness.rs`).
+//! to tell that a file moved (`crates/cairn-app/src/worker/diff/freshness.rs`).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

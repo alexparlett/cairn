@@ -1,5 +1,5 @@
 //! How far each local branch and its upstream have gone apart: what
-//! `git rev-list --left-right --count <branch>...<upstream>` answers (PRD R2).
+//! `git rev-list --left-right --count <branch>...<upstream>` answers.
 //!
 //! gix has no API for it, so it is two walks with the other side hidden — the commits the
 //! branch reaches that its upstream does not, and the reverse — over the commits git's walk
@@ -94,7 +94,7 @@ fn reachable_only_from(
     let walk = walk::hiding(
         repo.inner(),
         object_id(from)?,
-        object_id(hiding)?,
+        [object_id(hiding)?],
         cancel,
         reads,
     )?;

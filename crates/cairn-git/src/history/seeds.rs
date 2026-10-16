@@ -1,9 +1,9 @@
-//! What a walk from a refs snapshot starts from, and what its rows carry from it (PRD
-//! R4.1-R4.3): every commit a local branch, a remote-tracking ref or a tag identifies, and
-//! `HEAD`'s — Fork's All Commits, git's `rev-list --branches --remotes --tags HEAD` — with
-//! the refs that label each, and the stash list. Nothing about a stash seeds the walk: not
-//! `refs/stash`, not the commit a stash was made on. A tag naming a tree or a blob
-//! identifies no commit, so it is no seed and labels no row.
+//! What a walk from a refs snapshot starts from, and what its rows carry from it: every
+//! commit a local branch, a remote-tracking ref or a tag identifies, and `HEAD`'s — Fork's
+//! All Commits, git's `rev-list --branches --remotes --tags HEAD` — with the refs that label
+//! each, and the stash list. Nothing about a stash seeds the walk: not `refs/stash`, not the
+//! commit a stash was made on. A tag naming a tree or a blob identifies no commit, so it is
+//! no seed and labels no row.
 //!
 //! [`RefSeeds`] is read from the snapshot alone, as plain data; [`Decoration`] is what a
 //! walk resolves it to once it opens — each stash's commit read for the dates its row is
@@ -48,6 +48,9 @@ pub(super) struct RefSeeds {
     /// Shared with the walk's [`Decoration`]: one entry per labelled commit, so never copied.
     labels: Arc<HashMap<Oid, Vec<SeedLabel>>>,
     stashes: Vec<StashEntry>,
+    /// Every local branch the snapshot lists, by full name: whose reflogs Show Lost Commits
+    /// reads, beside `HEAD`'s.
+    branches: Arc<[RefName]>,
 }
 
 impl RefSeeds {
@@ -59,6 +62,12 @@ impl RefSeeds {
         let mut tips = Vec::new();
         let mut seen = HashSet::new();
         let mut labels: HashMap<Oid, Vec<SeedLabel>> = HashMap::new();
+        let branches = snapshot
+            .refs
+            .iter()
+            .filter(|listed| listed.kind == RefKind::LocalBranch)
+            .map(|listed| listed.name.clone())
+            .collect();
         for listed in &snapshot.refs {
             let Some(commit) = listed.commit_id() else {
                 // A tag on a tree or a blob: no seed, and no row to label.
@@ -87,7 +96,13 @@ impl RefSeeds {
             detached,
             labels: Arc::new(labels),
             stashes: snapshot.stashes.clone(),
+            branches,
         }
+    }
+
+    /// Every local branch the snapshot lists, by full name.
+    pub(super) fn branches(&self) -> &Arc<[RefName]> {
+        &self.branches
     }
 }
 
@@ -157,9 +172,9 @@ pub(super) fn resolve(
             tips.push(id);
         }
     }
-    // One row per stash commit (the user's decision, 2026-10-07): `git stash store` can file
-    // one commit twice, and a commit is one row in a graph — the newest entry's, the list
-    // being newest first. The sidebar lists every entry from the snapshot.
+    // One row per stash commit: `git stash store` can file one commit twice, and a commit is
+    // one row in a graph — the newest entry's, the list being newest first. The sidebar lists
+    // every entry from the snapshot.
     let mut seen = HashSet::new();
     let stashes = seeds
         .stashes

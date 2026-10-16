@@ -27,7 +27,7 @@
 //! A limit of zero or less is "no limit" from git 2.33, and 32,767 before it; the default is
 //! 1,000 from git 2.33 and 400 before it. Every one of these is read from git's source at
 //! v2.30.0, v2.31.0, v2.32.0, v2.33.0 and v2.56.0, and the version that links decides the
-//! tests (`crates/cairn-git/tests/diff/changes.rs`).
+//! tests (`crates/cairn-git/tests/diff_engine/diff/changes.rs`).
 
 use cairn_model::{ChangeStatus, ChangedFile, RenameDetection};
 
@@ -236,7 +236,7 @@ mod tests {
     }
 
     /// `git_config_rename` over each spelling. Real git reading the same values is
-    /// `the_configuration_is_read_the_way_git_reads_it`, in `tests/diff/changes.rs`.
+    /// `the_configuration_is_read_the_way_git_reads_it`, in `tests/diff_engine/diff/changes.rs`.
     #[test]
     fn diff_renames_reads_the_way_git_config_rename_does() {
         assert_eq!(parse_renames(None), Some(Mode::Renames), "the bare key");

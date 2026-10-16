@@ -21,10 +21,11 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Five tests skip on these gits by design, and each run prints every test it skipped, by its
+# Seven tests skip on these gits by design, and each run prints every test it skipped, by its
 # whole name, so a skip is read rather than counted as a pass:
-#   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
-#     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
+#   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, and (in the `ops::`
+#     run) a_read_in_a_partial_clone_does_not_fetch_a_missing_object, on a git older than
+#     2.44, which ignores GIT_NO_LAZY_FETCH. Each fails instead if
 #     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment,
 #     and so is CAIRN_REQUIRE_FSMONITOR_DAEMON: these gits have no fsmonitor daemon.
 #   - a_bare_repository_is_answered_under_safe_bare_repository_explicit and
@@ -65,16 +66,23 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (83, 119 and 17), so a filter that silently matches less
-# fails; raise a floor as its run gains tests. `--test status` is the working tree's status
+# the run's count when it was set (154, 220, 18 and 5), so a filter that silently matches less
+# fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
+# recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
+# `--test diff_engine` holds the write verbs' effects too (`tests/diff_engine/diff/write_verbs.rs`, and
+# C3 through the verbs in `tests/diff_engine/diff/staging.rs`), and commit and amend's against real git
+# (`tests/diff_engine/diff/commit.rs`, phase 05). `--test status` is the working tree's status
 # against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
 # in use as much as the diff tests do; `--test diff_engine` holds a stash's list against
-# `git stash show` (C7, `tests/diff/stash.rs`), whose untracked half git 2.30.9 does not read
-# and 2.32.7 does.
+# `git stash show` (C7, `tests/diff_engine/diff/stash.rs`), whose untracked half git 2.30.9 does not read
+# and 2.32.7 does. `--test lost_commits` is Show Lost Commits against `git rev-list --reflog`
+# (C20, staging-and-commit phase 10), whose fixtures write their reflogs with the git in use,
+# and whose oracle that git reads.
 RUNS=(
-  "--lib|diff:: reads::|82"
-  "--test diff_engine||118"
-  "--test status||16"
+  "--lib|diff:: reads:: ops::|153"
+  "--test diff_engine||219"
+  "--test status||17"
+  "--test lost_commits||4"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

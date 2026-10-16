@@ -1,5 +1,5 @@
 //! `git stash show`: what a stash changed, as git lists it — the third porcelain exception a
-//! read runs, accepted by the user on 2026-10-07 (refs-and-status R6.2, Q1).
+//! read runs.
 //!
 //! Why porcelain. A stash made with `--include-untracked` keeps its untracked files in a
 //! third parent, apart from its tracked changes; with `stash.showIncludeUntracked` set (git

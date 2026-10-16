@@ -1,7 +1,7 @@
 //! `git diff-tree`: which paths two trees differ in, with git's own rename and copy pairs.
 //!
-//! The changes query's one process (decision E, `docs/design/engine.md`, "Where git answers
-//! a read"). It runs `git diff-tree -r -z --raw --no-abbrev`, query plumbing that writes
+//! The changes query's one process (`docs/design/engine.md`, "Where git answers a read").
+//! It runs `git diff-tree -r -z --raw --no-abbrev`, query plumbing that writes
 //! nothing — not the index, which it never reads, and not a ref or an object, since it is
 //! given neither `--textconv` nor `--ext-diff` and `--raw` reads no content but what rename
 //! detection compares. Detection is passed explicitly, as `-M` or `-C` with `-l<limit>`, or
@@ -206,6 +206,12 @@ impl RawRecords {
     /// How many files the records named so far.
     pub(super) fn len(&self) -> usize {
         self.files.len()
+    }
+
+    /// The files the records named so far, handed over: a reader that keeps only some of
+    /// a long answer takes them as they arrive rather than holding every one.
+    pub(super) fn take_files(&mut self) -> Vec<ChangedFile> {
+        std::mem::take(&mut self.files)
     }
 
     pub(super) fn finish(self, arguments: &str) -> Result<Vec<ChangedFile>, Error> {

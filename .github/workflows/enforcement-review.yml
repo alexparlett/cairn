@@ -75,7 +75,7 @@ jobs:
                | # | Rule |
                |---|------|
                | 1 | The UI thread never waits on repository work. Blocking I/O, a history walk, or a `.read()` of engine results inside a component's `render` is a violation however it is routed; work belongs on a worker thread in `cairn-app` with results handed back as values. |
-               | 2 | A prompt passed to `Confirmed::by_user` states the real consequence — what is lost, how much of it, and whether it is recoverable. A vague or reassuring prompt defeats the whole seal, and no check can read English. |
+               | 2 | The prompt `Consequence::prompt` renders — the one a `Confirmed` carries — states the real consequence: what is lost, how much of it, and whether it is recoverable. A vague or reassuring prompt defeats the whole seal, and no check can read English. |
                | 3 | APIs of `freya` and `gix` are verified against the linked version, never memory-coded. Both are pre-1.0 and rename freely. |
                | 4 | An unbounded list (history, file tree, diff hunks) is rendered virtualized. A repository is somebody's 10-year monorepo. |
                | 5 | Docs cite stable anchors (paths, symbols, pinned tests) — never counts or line numbers that rot; a doc edit may not claim coverage its twin does not prove. |

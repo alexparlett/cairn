@@ -274,7 +274,7 @@ fn with_no_cairn_listening_the_helper_fails_closed() {
 }
 
 /// The user cancels: nothing reaches git, and the token dies with the refusal
-/// so git's retry is refused too rather than asking again (PRD R2.5).
+/// so git's retry is refused too rather than asking again.
 #[test]
 fn a_refused_prompt_fails_closed_and_retires_the_token() {
     let runtime = RuntimeDir::new();
@@ -563,4 +563,31 @@ fn an_oversized_request_already_queued_still_gets_its_answer() {
         .unwrap()
         .unwrap_or_else(|refusal| panic!("refused: {refusal}"));
     assert_eq!(answer.expose_secret(), secret.as_bytes());
+}
+
+/// Each prompt names the operation whose token its helper presented, so a fetch's prompt and
+/// a commit's, both in flight, are told apart; a token issued with no name names none.
+/// Caught by: a name taken from whichever operation began last, or lost on accept.
+#[test]
+fn a_prompt_names_the_operation_whose_token_it_presented() {
+    let runtime = RuntimeDir::new();
+    let channel = shared(&runtime);
+    let fetch = channel.begin_for("origin").unwrap();
+    let commit = channel.begin_for("Commit").unwrap();
+    let unnamed = channel.begin().unwrap();
+    for (operation, expected) in [
+        (&commit, Some("Commit")),
+        (&fetch, Some("origin")),
+        (&unnamed, None),
+    ] {
+        let served = accept_once(channel.clone(), |prompt| {
+            let prompt = prompt.expect("a well-formed prompt");
+            let named = prompt.operation().map(str::to_owned);
+            prompt.answer(&Secret::from_string("x".to_owned())).unwrap();
+            named
+        });
+        let output = run_against(&channel, operation.token(), "Passphrase: ");
+        assert!(output.status.success());
+        assert_eq!(served.join().unwrap().as_deref(), expected);
+    }
 }

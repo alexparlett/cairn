@@ -1,0 +1,410 @@
+<title>Staging Redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; each flow = rules, then a horizontal-wrapping storyboard of numbered screens, then its choices as radio groups; a sticky answer bar at the end copies every choice */
+:root{
+  --bg:#f5f6f7; --surface:#ffffff; --screen:#fbfbfc; --ink:#1a1e23; --muted:#5a636e; --line:#d7dbe0;
+  --accent:#2f5d8a; --accent-bg:#e5edf5; --bad:#a3352b; --bad-bg:#fbeceb; --good:#2e6b3f; --good-bg:#e7f2ea; --warn:#7a5310; --warn-bg:#fbf2e0;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#131619; --surface:#1b1f24; --screen:#20252b; --ink:#e3e6ea; --muted:#9aa3ad; --line:#333a42;
+  --accent:#8fb7df; --accent-bg:#1e3245; --bad:#f0958b; --bad-bg:#3a1f1d; --good:#90d0a3; --good-bg:#1c3223; --warn:#e7c27b; --warn-bg:#352b17; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#131619; --surface:#1b1f24; --screen:#20252b; --ink:#e3e6ea; --muted:#9aa3ad; --line:#333a42;
+  --accent:#8fb7df; --accent-bg:#1e3245; --bad:#f0958b; --bad-bg:#3a1f1d; --good:#90d0a3; --good-bg:#1c3223; --warn:#e7c27b; --warn-bg:#352b17; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;padding-inline:16px;padding-block:32px 96px}
+main{max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:44px}
+h1{font-size:28px;font-weight:600;margin:0;text-wrap:balance}
+h2{font-size:21px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+h3{font-size:15.5px;font-weight:600;margin:18px 0 6px}
+p{margin:0 0 10px;max-width:70ch}
+ul{margin:0 0 10px;padding-left:20px;max-width:70ch}
+li{margin-bottom:4px}
+code{font-family:var(--mono);font-size:13px;background:var(--accent-bg);padding:1px 4px;border-radius:3px}
+.lede{color:var(--muted);font-size:16px}
+.eyebrow{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+section{border-top:1px solid var(--line);padding-top:24px}
+.note{background:var(--warn-bg);color:var(--ink);border-left:3px solid var(--warn);border-radius:0;padding:10px 14px;margin:10px 0;max-width:72ch}
+.note b{color:var(--warn)}
+.rules{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.rule{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+.rule .t{font-weight:600}
+.rule .d{color:var(--muted);font-size:14px}
+.story{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:12px 0 4px}
+.frame{min-width:0;display:flex;flex-direction:column;gap:5px}
+.frame .n{font-size:12.5px;color:var(--muted)}
+.frame .n b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.scr{background:var(--screen);border:1px solid var(--line);border-radius:6px;padding:9px 11px;font-size:12.5px;line-height:1.5;flex:1}
+.scr .bar{font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;gap:8px}
+.scr .row{padding:1px 4px;border-radius:3px}
+.scr .sel{background:var(--accent-bg)}
+.scr .pri{outline:1px solid var(--accent)}
+.scr .fld{border:1px solid var(--line);border-radius:4px;padding:2px 6px;margin-bottom:4px;background:var(--surface)}
+.scr .btn{display:inline-block;border:1px solid var(--muted);border-radius:4px;padding:0 7px;margin:5px 5px 0 0;font-size:12px;background:var(--surface)}
+.scr .btn.off{color:var(--muted);border-color:var(--line)}
+.scr .btn.focus{outline:2px solid var(--accent);outline-offset:1px}
+.scr .dlg{border:1px solid var(--muted);border-radius:6px;padding:7px 9px;background:var(--surface)}
+.scr .dt{font-weight:600;margin-bottom:3px}
+.scr .dim{color:var(--muted)}
+.scr .red{color:var(--bad)}
+.scr .mono{font-family:var(--mono);font-size:11.5px}
+.scr .tint{background:var(--good-bg)}
+.scr .banner{background:var(--warn-bg);border-radius:4px;padding:4px 6px;margin-bottom:5px}
+.cap{font-size:13px;color:var(--muted);max-width:70ch}
+.choices{display:flex;flex-direction:column;gap:12px;margin-top:10px}
+.choice{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:12px 14px;min-width:0}
+.choice .q{font-weight:600;margin-bottom:2px}
+.choice .ctx{font-size:13.5px;color:var(--muted);margin-bottom:8px;max-width:72ch}
+.opt{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:start;padding:5px 6px;border-radius:4px;cursor:pointer}
+.opt:hover{background:var(--accent-bg)}
+.opt input{margin-top:4px}
+.opt .ol{font-size:14px}
+.opt .oc{font-size:13px;color:var(--muted)}
+.rec{font-size:11.5px;font-weight:600;color:var(--accent);background:var(--accent-bg);border-radius:3px;padding:0 6px;margin-left:6px;white-space:nowrap}
+.revisit{font-size:11.5px;font-weight:600;color:var(--warn);background:var(--warn-bg);border-radius:3px;padding:0 6px;margin-left:6px;white-space:nowrap}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;border-bottom:1px solid var(--line);padding:6px 8px;vertical-align:top}
+th{font-size:12.5px;color:var(--muted);font-weight:600}
+.answers{position:sticky;bottom:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+.answers button{font:inherit;font-size:14px;font-weight:500;border:1px solid var(--accent);background:var(--accent);color:var(--surface);border-radius:5px;padding:6px 14px;cursor:pointer}
+.answers button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.answers .s{font-size:13px;color:var(--muted)}
+textarea#out{width:100%;min-height:120px;font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:5px;background:var(--screen);color:var(--ink);padding:8px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">Cairn · staging-and-commit · design pass</div>
+  <h1>Staging Redesign</h1>
+  <p class="lede">One design for the packet's flows, built from fresh research on what Fork and git actually do. The design rules come first. Then each flow is shown screen by screen, followed by its choices. Every choice starts on its recommendation, so you only touch what you want to change. When you're done, use <b>Copy answers</b> at the bottom and paste the result into the chat. No code changes until you've approved this.</p>
+  <div class="note"><b>Three earlier decisions rested on wrong Fork claims.</b> I checked each one against Fork's own issue tracker.
+    <ul style="margin:6px 0 0">
+      <li><b>Several selected files.</b> Fork doesn't draw several selected files' diffs together; it shows the first file only (fork-dev/Tracker #261, TrackerWin #786).</li>
+      <li><b>Stage All.</b> Fork's modifier key for Stage All is Shift, not Alt (TrackerWin #2429).</li>
+      <li><b>Merge comment lines.</b> Committing git's <code># Conflicts:</code> lines is a Fork bug that has been open since 2017 (Tracker #180), not a Fork design.</li>
+    </ul>
+    These came through me as "as Fork does". The flows below correct them.</div>
+</header>
+
+<section id="rules">
+  <h2>Design rules</h2>
+  <p class="cap">Every flow below follows these rules. Approve them, or mark any to discuss.</p>
+  <div class="rules" data-group="rules">
+    <div class="rule"><div><div class="t">1. Fork first, checked at the source</div><div class="d">Where Fork's behaviour is known, Cairn does the same. Every "as Fork does" cites the Fork issue or release note it comes from.</div></div><label><input type="checkbox" name="rule1" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">2. One confirmation rule</div><div class="d">An operation you can't undo, or one that rewrites history someone else may have, always gets the same confirmation dialog: Cancel has focus, and Escape goes back one step. An operation you can recover from asks nothing. The button and the keyboard chord always do the same thing.</div></div><label><input type="checkbox" name="rule2" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">3. Ask the cost at the press</div><div class="d">Cairn works out what an operation will destroy when you press its button, not on every refresh beforehand. No "reading…" button states.</div></div><label><input type="checkbox" name="rule3" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">4. One home for each kind of message</div><div class="d">
+      <ul style="margin:4px 0 0">
+        <li><b>Progress</b> shows in the title-bar status box.</li>
+        <li><b>A git failure</b> opens Fork's Git Error dialog.</li>
+        <li><b>A refusal Cairn finds while running</b> opens the same dialog, titled "Couldn't &lt;name&gt;".</li>
+        <li><b>A refusal Cairn knows in advance</b> shows as a greyed control with its reason beside it.</li>
+        <li><b>Success</b> says nothing.</li>
+        <li><b>A cancel</b> opens no dialog.</li>
+      </ul>
+      There is no line under the file lists.</div></div><label><input type="checkbox" name="rule4" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">5. One name per operation</div><div class="d">Fork's imperative name ("Stage 2 files", "Commit", "Create branch 'x'") everywhere it appears. Four status words: running, succeeded, failed, cancelled.</div></div><label><input type="checkbox" name="rule5" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">6. Short text, never cut</div><div class="d">Never cut off text you need to read; make it short instead. Never repeat what's already on screen. Per-file detail goes behind "Show files".</div></div><label><input type="checkbox" name="rule6" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">7. Let git decide</div><div class="d">Run git and show its refusal, rather than predicting what git would do. The message you see is the message that gets committed.</div></div><label><input type="checkbox" name="rule7" checked> Approve</label></div>
+    <div class="rule"><div><div class="t">8. One selection, one scope</div><div class="d">You select files in one list. The diff shows one file. Every route — chord, button, drag, menu — acts on what's selected, wherever focus is.</div></div><label><input type="checkbox" name="rule8" checked> Approve</label></div>
+  </div>
+</section>
+
+<section id="local">
+  <h2>1. Local Changes: selecting and staging</h2>
+  <p>Today "what is selected" is kept in three places that have to be kept in step by hand: the list's selection, the file whose diff is shown, and the set of files drawn together. That three-way sync caused a long run of fixes. The redesign keeps one selection, with a primary row whose diff is shown, as Fork does.</p>
+
+  <h3>Storyboard: select three files and stage them from the diff</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Shift-click c.rs</div><div class="scr"><div class="bar"><span>Unstaged · 4</span><span><span class="btn">Stage</span></span></div><div class="row sel">a.rs</div><div class="row sel">b.rs</div><div class="row sel pri">c.rs</div><div class="row">d.rs</div><div class="bar" style="margin-top:6px"><span>Staged · 0</span><span><span class="btn off">Unstage</span></span></div></div></div>
+    <div class="frame"><div class="n"><b>2</b> · The diff shows the primary file</div><div class="scr"><div class="bar"><span>c.rs  M</span><span>3 of 3 selected</span></div><div class="mono">@@ -10,4 +10,5 @@ fn parse</div><div class="mono red">- let x = 1;</div><div class="mono" style="color:var(--good)">+ let x = 2;</div></div></div>
+    <div class="frame"><div class="n"><b>3</b> · Click in the diff, press Return</div><div class="scr"><div class="bar"><span>cairn · main</span><span>⟳ Stage 3 files</span></div><span class="dim">All three are staged, whether focus was in the list or the diff. The spinner only appears if it takes longer than 250 ms.</span></div></div>
+    <div class="frame"><div class="n"><b>4</b> · Selection moves to the nearest file left</div><div class="scr"><div class="bar"><span>Unstaged · 1</span></div><div class="row sel pri">d.rs</div><div class="bar" style="margin-top:6px"><span>Staged · 3</span></div><div class="row">a.rs</div><div class="row">b.rs</div><div class="row">c.rs</div></div></div>
+  </div>
+
+  <h3>Storyboard: 40 files selected</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Rows 10–49 selected</div><div class="scr"><div class="bar"><span>src/x.rs  M</span><span>40 of 40 selected</span></div><span class="dim">One file's diff, with everything a single file has: Load Diff, the mode row, previous and next change. No line budget, no "Not shown…".</span></div></div>
+    <div class="frame"><div class="n"><b>2</b> · Backspace</div><div class="scr"><div class="dlg"><div class="dt">Discard Changes</div>Discard all changes in 40 files? You can't undo this.<br><span class="dim">▸ Show files</span><br><span class="btn">Discard Changes in 40 Files</span><span class="btn focus">Cancel</span></div></div></div>
+  </div>
+
+  <h3>Storyboard: line selection, switch apps and back</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Drag across six lines</div><div class="scr"><div class="mono tint">+ six lines tinted</div><span class="btn">Stage 6 Lines</span><span class="btn">Discard 6 Lines…</span></div></div>
+    <div class="frame"><div class="n"><b>2</b> · Alt-Tab away, then back; file untouched</div><div class="scr"><div class="mono tint">+ still tinted</div><span class="btn">Stage 6 Lines</span><span class="dim"><br>The selection survives, because the diff's text is the same.</span></div></div>
+    <div class="frame"><div class="n"><b>2′</b> · You edited the file meanwhile</div><div class="scr"><div class="bar"><span>a.rs  M</span><span>The file changed — line selection cleared.</span></div><span class="dim">That notice shows once and goes at your next key or click.</span></div></div>
+  </div>
+
+  <h3>Storyboard: Unstage All on Linux</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Hold Shift</div><div class="scr"><div class="bar"><span>Unstaged · 3</span><span><span class="btn">Stage All</span></span></div><div class="bar"><span>Staged · 12</span><span><span class="btn">Unstage All</span> ⇈</span></div><span class="dim">Both "All" buttons are enabled while Shift is held, as in Fork for Windows. Window managers don't take Shift-click, so this works on every Linux desktop. ⇈ is always visible.</span></div></div>
+  </div>
+
+  <div class="choices">
+    <div class="choice" data-q="L1"><div class="q">L1. What the diff shows with several files selected <span class="revisit">revisits 2026-10-09 R8.1</span></div><div class="ctx">Fork shows the first file's diff only. Its developer declined a combined view in 2019 and 2026.</div>
+      <label class="opt"><input type="radio" name="L1" value="A" checked><span><span class="ol">The primary file's diff, with "k of n selected" in the bar<span class="rec">recommended</span></span><br><span class="oc">Fork's way. Removes about 1,000 lines (the files-together view, its line budget and its lane).</span></span></label>
+      <label class="opt"><input type="radio" name="L1" value="B"><span><span class="ol">Keep the combined view, fixed</span><br><span class="oc">Files are read as you scroll to them, and actions act on the whole selection. Loses Load Diff and previous/next change per file unless rebuilt. A deviation from Fork.</span></span></label>
+      <label class="opt"><input type="radio" name="L1" value="C"><span><span class="ol">Fork's way, plus a "Show selected together" toggle</span><br><span class="oc">Costs both of the above.</span></span></label></div>
+    <div class="choice" data-q="L2"><div class="q">L2. Stage All / Unstage All <span class="revisit">revisits 2026-10-09 R8.2 4(d)</span></div>
+      <label class="opt"><input type="radio" name="L2" value="A" checked><span><span class="ol">Shift held on Linux (⌥ on macOS), plus a visible ⇈ in Staged's header<span class="rec">recommended</span></span><br><span class="oc">Fork's key, and Unstage All visible on every platform.</span></span></label>
+      <label class="opt"><input type="radio" name="L2" value="B"><span><span class="ol">Shift held only, no ⇈</span><br><span class="oc">Fork for Windows exactly. Unstage All stays hidden until Shift is held.</span></span></label>
+      <label class="opt"><input type="radio" name="L2" value="C"><span><span class="ol">Keep Alt</span><br><span class="oc">Doesn't work on window managers that take Alt (xfwm, openbox, Plasma 5).</span></span></label></div>
+    <div class="choice" data-q="L3"><div class="q">L3. Typing in the filter while files are selected</div>
+      <label class="opt"><input type="radio" name="L3" value="A" checked><span><span class="ol">The selection shrinks to the rows still shown<span class="rec">recommended</span></span><br><span class="oc">Nothing hidden is ever acted on. Matches your Stage All filter decision.</span></span></label>
+      <label class="opt"><input type="radio" name="L3" value="B"><span><span class="ol">Hidden rows stay selected</span><br><span class="oc">An action can then touch files you can't see.</span></span></label></div>
+    <div class="choice" data-q="L4"><div class="q">L4. A line selection when Cairn refreshes</div>
+      <label class="opt"><input type="radio" name="L4" value="A" checked><span><span class="ol">Kept while the diff's text is unchanged; otherwise cleared, with one notice<span class="rec">recommended</span></span><br><span class="oc">Switching to your editor and back costs nothing. A real change to the file is announced.</span></span></label>
+      <label class="opt"><input type="radio" name="L4" value="B"><span><span class="ol">Dropped by any refresh, silently (today)</span><br><span class="oc">The selection is lost every time you switch apps.</span></span></label></div>
+    <div class="choice" data-q="L5"><div class="q">L5. A selected file disappears because of a change made outside Cairn</div>
+      <label class="opt"><input type="radio" name="L5" value="A" checked><span><span class="ol">Select the row that took its place, as after a stage<span class="rec">recommended</span></span><br><span class="oc">One rule, whoever moved the file. Fork fixed a jump-to-the-first-row bug in 1.0.57.</span></span></label>
+      <label class="opt"><input type="radio" name="L5" value="B"><span><span class="ol">Jump to the first row (today)</span></span></label></div>
+  </div>
+</section>
+
+<section id="commit">
+  <h2>2. Committing and amending</h2>
+  <p>Amend has one confirmation dialog, used only when the amend matters: the commit is already on a remote, or the old commit can't be recovered. Otherwise it is one press, with no line under the button, and the chord does exactly what the button does. A hook failure always goes to Fork's Git Error dialog. Its skip runs once, never asks a second time, and sits in the dialog's footer for commits and amends alike.</p>
+
+  <h3>Storyboard: commit, a hook fails, skip</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Typing, 3 files staged</div><div class="scr"><div class="fld">Fix the parser <span class="dim" style="float:right">36</span></div><div class="fld dim">Description</div>☐ Amend <span style="float:right"><span class="btn">Commit 3 Files</span></span></div></div>
+    <div class="frame"><div class="n"><b>2</b> · Ctrl+Enter or the button</div><div class="scr"><div class="fld">Fix the parser</div>☐ Amend <span style="float:right"><span class="btn off">Committing 0:03</span><span class="btn">Cancel</span></span><div class="bar" style="margin-top:8px;border:0"><span></span><span>⟳ Commit</span></div></div></div>
+    <div class="frame"><div class="n"><b>3</b> · pre-commit fails</div><div class="scr"><div class="dlg"><div class="dt">Git Error</div>An unexpected error occurred while performing the git request.<br><span class="dim">Error Details:</span><div class="mono dim">$ git commit -q -F -<br>lint: 2 errors</div><span class="btn">Skip pre-commit hooks and commit</span><span class="btn focus">Close</span></div></div></div>
+    <div class="frame"><div class="n"><b>4</b> · Skip</div><div class="scr">Committed once with <code>--no-verify</code>. The fields clear and the history gains the row. Nothing else is said.</div></div>
+  </div>
+
+  <h3>Storyboard: amend</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Tick Amend</div><div class="scr"><div class="fld">Rework the parser so nested generics…</div><div class="fld dim">Description</div>☑ Amend <span style="float:right"><span class="btn">Amend 3f2a1c9</span></span><br><span class="dim">The empty draft fills with the last commit's message. No line under the button.</span></div></div>
+    <div class="frame"><div class="n"><b>2a</b> · Press: not pushed, reflog kept</div><div class="scr">It amends straight away, as in Fork. The old commit stays in Show Lost Commits.</div></div>
+    <div class="frame"><div class="n"><b>2b</b> · Press: already on a remote</div><div class="scr"><div class="dlg"><div class="dt">Amend Commit</div>3f2a1c9 is already on origin/main. Amending it rewrites history others may have.<br><span class="btn">Amend</span><span class="btn focus">Cancel</span></div></div></div>
+    <div class="frame"><div class="n"><b>2c</b> · Press: no reflog (rare)</div><div class="scr"><div class="dlg"><div class="dt">Amend Commit</div>3f2a1c9 can't be recovered after this: this repository keeps no reflog.<br><span class="btn">Amend</span><span class="btn focus">Cancel</span></div></div></div>
+  </div>
+
+  <h3>Storyboard: a merge in progress</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · After <code>git merge</code> stops on conflicts, once they're resolved</div><div class="scr"><div class="fld">Merge branch 'topic'</div><div class="fld dim">Description</div>☐ Amend (greyed) <span style="float:right"><span class="btn">Commit</span></span><br><span class="dim">Merging. Committing concludes the merge; Amend is unavailable.</span><br><span class="dim">git's <code># Conflicts:</code> lines are stripped the way git's own editor strips them. What you see is what's committed.</span></div></div>
+  </div>
+
+  <div class="choices">
+    <div class="choice" data-q="C1"><div class="q">C1. When amend asks for confirmation</div><div class="ctx">Fork for Windows warns when the commit is already pushed (since 1.91), and you can go past the warning. Fork for Mac asks nothing.</div>
+      <label class="opt"><input type="radio" name="C1" value="A" checked><span><span class="ol">A dialog at the press, only when the commit is pushed or no reflog is kept<span class="rec">recommended</span></span><br><span class="oc">Rule 2 applied as-is. It costs a short check before git runs.</span></span></label>
+      <label class="opt"><input type="radio" name="C1" value="B"><span><span class="ol">A note shown while Amend is ticked</span><br><span class="oc">The press still goes through, so the note confirms nothing. It brings back today's "reading" states.</span></span></label>
+      <label class="opt"><input type="radio" name="C1" value="C"><span><span class="ol">Never ask (Fork for Mac)</span><br><span class="oc">You find out a published commit was rewritten when you push.</span></span></label></div>
+    <div class="choice" data-q="C2"><div class="q">C2. git's comment lines in a merge message <span class="revisit">revisits decision E, R10.8</span></div><div class="ctx">git's editor strips them. Fork commits them, which is its open bug Tracker #180.</div>
+      <label class="opt"><input type="radio" name="C2" value="A" checked><span><span class="ol">Strip them when the draft is filled, using git's own <code>git stripspace --strip-comments</code><span class="rec">recommended</span></span><br><span class="oc">What you see is what gets committed. Costs one new read git answers, outside the reads allowed today, plus a guard update. Your call.</span></span></label>
+      <label class="opt"><input type="radio" name="C2" value="B"><span><span class="ol">Show them, and commit with <code>--cleanup=strip</code></span><br><span class="oc">Lines you can see vanish when you commit, including any <code>#</code> lines you type yourself.</span></span></label>
+      <label class="opt"><input type="radio" name="C2" value="C"><span><span class="ol">Keep today's behaviour: shown and committed</span><br><span class="oc">Copies Fork's bug.</span></span></label></div>
+    <div class="choice" data-q="C3"><div class="q">C3. A cherry-pick or revert in progress</div><div class="ctx">Fork and plain <code>git commit</code> both conclude it. Cairn refuses.</div>
+      <label class="opt"><input type="radio" name="C3" value="A" checked><span><span class="ol">Commit concludes a single cherry-pick or revert<span class="rec">recommended</span></span><br><span class="oc">Sequences, rebases and <code>git am</code> stay disabled, with git's own continue command shown as the reason.</span></span></label>
+      <label class="opt"><input type="radio" name="C3" value="B"><span><span class="ol">Keep refusing</span><br><span class="oc">You finish it in a terminal.</span></span></label></div>
+    <div class="choice" data-q="C4"><div class="q">C4. When to offer "Skip pre-commit hooks and commit"</div>
+      <label class="opt"><input type="radio" name="C4" value="A" checked><span><span class="ol">On every failed commit or amend<span class="rec">recommended</span></span><br><span class="oc">Catches hooks that a file check can't see: Husky's <code>core.hooksPath</code> (Fork's open complaint, Tracker #948) and hooks declared in git config. Where no hook ran, skipping fails the same way again, harmlessly.</span></span></label>
+      <label class="opt"><input type="radio" name="C4" value="B"><span><span class="ol">Only where a hook file is found</span><br><span class="oc">Closer to Fork, but misses those hooks.</span></span></label></div>
+    <div class="choice" data-q="C5"><div class="q">C5. Cancel beside "Committing…"</div>
+      <label class="opt"><input type="radio" name="C5" value="A" checked><span><span class="ol">Keep it<span class="rec">recommended</span></span><br><span class="oc">You stop a hung hook where you pressed Commit.</span></span></label>
+      <label class="opt"><input type="radio" name="C5" value="B"><span><span class="ol">Only the activity popover's ×</span><br><span class="oc">Fork-exact. You have to open the popover to stop it.</span></span></label></div>
+    <div class="choice" data-q="C6"><div class="q">C6. The amend button's caption</div>
+      <label class="opt"><input type="radio" name="C6" value="A" checked><span><span class="ol">"Amend 3f2a1c9"<span class="rec">recommended</span></span><br><span class="oc">The commit's id appears once, here, and the dialog refers back to it.</span></span></label>
+      <label class="opt"><input type="radio" name="C6" value="B"><span><span class="ol">"Amend"</span></span></label>
+      <label class="opt"><input type="radio" name="C6" value="C"><span><span class="ol">"Amend Last Commit"</span></span></label></div>
+    <div class="choice" data-q="C7"><div class="q">C7. When a draft is filled in for you (the last commit's message, MERGE_MSG)</div>
+      <label class="opt"><input type="radio" name="C7" value="A" checked><span><span class="ol">Only into an empty draft you haven't touched. Clearing it makes it yours.<span class="rec">recommended</span></span><br><span class="oc">One rule for every fill, matching Fork's developer in Tracker #61. Replaces today's once-per-merge flag.</span></span></label>
+      <label class="opt"><input type="radio" name="C7" value="B"><span><span class="ol">Refill whenever the draft is empty</span><br><span class="oc">A draft you clear refills at the next refresh.</span></span></label></div>
+    <div class="choice" data-q="C8"><div class="q">C8. Committing on a detached HEAD</div><div class="ctx">Fork warns (Tracker #487). The form of its warning is unknown.</div>
+      <label class="opt"><input type="radio" name="C8" value="A" checked><span><span class="ol">One line in the box: "HEAD is detached: this commit will be on no branch."<span class="rec">recommended</span></span><br><span class="oc">The commit can be recovered, so rule 2 says no dialog.</span></span></label>
+      <label class="opt"><input type="radio" name="C8" value="B"><span><span class="ol">A confirmation dialog</span></span></label></div>
+  </div>
+</section>
+
+<section id="discard">
+  <h2>3. Discarding</h2>
+  <p>Every destructive prompt uses one sentence frame: <i>&lt;Question naming what is discarded&gt;? [The worst loss, only when it's worse than changes.] You can't undo this.</i> Per-file detail goes behind "Show files". The dialog opens at once; while Cairn counts, it says "Counting…" and the button is greyed, so a large selection never leaves you waiting with nothing on screen.</p>
+  <h3>Storyboard: discard files</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · 31 files, 2 of them untracked</div><div class="scr"><div class="dlg"><div class="dt">Discard Changes</div>Discard all changes in 31 files? 2 untracked files will be deleted. You can't undo this.<br><span class="dim">▸ Show files</span><br><span class="btn">Discard Changes in 31 Files</span><span class="btn focus">Cancel</span></div></div></div>
+    <div class="frame"><div class="n"><b>2</b> · A submodule and a conflict among them</div><div class="scr"><div class="dlg"><div class="dt">Discard Changes</div>Discard all changes in 29 files? You can't undo this.<br><span class="dim">1 submodule and 1 conflicted file are left as they are.</span><br><span class="btn">Discard Changes in 29 Files</span><span class="btn focus">Cancel</span></div></div></div>
+    <div class="frame"><div class="n"><b>3</b> · Only staged files selected: menu</div><div class="scr"><div class="dim">Discard Changes… (greyed)</div><div class="dim" style="font-size:12px">Staged changes can't be discarded. Unstage them first.</div><span class="dim"><br>The reason wraps. It's never cut off.</span></div></div>
+    <div class="frame"><div class="n"><b>4</b> · Lines from the diff</div><div class="scr"><div class="dlg"><div class="dt">Discard Changes</div>Discard 2 changed lines in src/main.rs? You can't undo this.<br><span class="btn">Discard 2 Lines</span><span class="btn focus">Cancel</span></div></div></div>
+  </div>
+  <div class="choices">
+    <div class="choice" data-q="D1"><div class="q">D1. A selection that mixes discardable files with a submodule or conflict</div><div class="ctx">Fork asks twice, once for each kind. Cairn never discards submodules.</div>
+      <label class="opt"><input type="radio" name="D1" value="A" checked><span><span class="ol">Discard what can be discarded; one line in the dialog says what's left<span class="rec">recommended</span></span></span></label>
+      <label class="opt"><input type="radio" name="D1" value="B"><span><span class="ol">Refuse the whole discard, with a count ("1 of 31 can't be discarded")</span><br><span class="oc">Safe, but you have to deselect the rest yourself.</span></span></label></div>
+    <div class="choice" data-q="D2"><div class="q">D2. Prompt wording</div>
+      <label class="opt"><input type="radio" name="D2" value="A" checked><span><span class="ol">The one sentence frame, with "Show files"<span class="rec">recommended</span></span></span></label>
+      <label class="opt"><input type="radio" name="D2" value="B"><span><span class="ol">Keep today's prompts, which list every kind of change</span></span></label></div>
+    <div class="choice" data-q="D3"><div class="q">D3. Capitalisation of titles and buttons</div>
+      <label class="opt"><input type="radio" name="D3" value="A" checked><span><span class="ol">Title Case everywhere ("Discard Changes")<span class="rec">recommended</span></span><br><span class="oc">One convention, matching Fork's own "Create Branch".</span></span></label>
+      <label class="opt"><input type="radio" name="D3" value="B"><span><span class="ol">Fork for Windows' mix ("Discard changes" titles, Title Case buttons)</span></span></label></div>
+  </div>
+</section>
+
+<section id="branch">
+  <h2>4. Create Branch</h2>
+  <p>The dialog stays open beneath any confirmation or error, so Cancel takes you back with everything as you left it.</p>
+  <p>Git reproduced in throwaway repositories shows two things:</p>
+  <ul>
+    <li>A plain <code>git checkout -b</code> refuses where an untracked file is in the way, and then creates no branch.</li>
+    <li>Ignored files are lost on any checkout, so that loss isn't specific to Discard.</li>
+  </ul>
+  <h3>Storyboard: Discard, then check out</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · New Branch… on a commit</div><div class="scr"><div class="dlg"><div class="dt">Create Branch</div><span class="dim">Use '/' as a path separator to create folders</span><div class="fld">topic</div>☑ Check out after create<br>Local changes: ○ Don't change ○ <span class="dim">Stash and reapply</span> ● Discard<br><span class="btn">Create and Checkout…</span><span class="btn">Cancel</span></div></div></div>
+    <div class="frame"><div class="n"><b>2</b> · The confirmation opens over it</div><div class="scr"><div class="dlg"><div class="dt">Discard Changes</div>Discard all changes in 3 files, staged changes included, and check out new branch 'topic'? You can't undo this.<br><span class="dim">▸ Show files</span><br><span class="btn">Discard and Check Out</span><span class="btn focus">Cancel</span></div><span class="dim">Cancel → back to step 1, exactly as you left it.</span></div></div>
+    <div class="frame"><div class="n"><b>3a</b> · Nothing in the way</div><div class="scr">Both dialogs close. The new branch is checked out at that commit.</div></div>
+    <div class="frame"><div class="n"><b>3b</b> · An untracked file is in the way</div><div class="scr"><div class="dlg"><div class="dt">Git Error</div><span class="mono dim">error: The following untracked working tree files would be overwritten by checkout: build/gen.rs</span><br>Nothing was discarded.<br><span class="btn focus">Close</span></div><span class="dim">Every change is put back exactly as it was, and Create Branch is still open.</span></div></div>
+  </div>
+  <div class="choices">
+    <div class="choice" data-q="B1"><div class="q">B1. What Discard runs <span class="revisit">revisits 2026-10-09 (checkout -f)</span></div>
+      <label class="opt"><input type="radio" name="B1" value="A3" checked><span><span class="ol">Discard tracked changes, then a plain <code>git checkout -b</code>, all or nothing<span class="rec">recommended</span></span><br><span class="oc">Your changes are set aside with <code>git stash create</code> first. If git refuses, <code>git stash apply --index</code> puts every change back exactly; the agent checked this in throwaway repositories. This drops about 300 lines of Cairn predicting git, the source of three critical bugs. The only visible difference: an untracked file in the way is kept, and git says what to move. Adds the stash commands that packet 5b needs anyway.</span></span></label>
+      <label class="opt"><input type="radio" name="B1" value="A1"><span><span class="ol">Keep <code>git checkout -f -b</code>, with the new prompt frame</span><br><span class="oc">Deletes untracked files in the way, so Cairn has to keep predicting which ones and naming them. Keeps its known gaps.</span></span></label></div>
+    <div class="choice" data-q="B2"><div class="q">B2. Confirm Discard at all</div><div class="ctx">Fork ran it without confirmation in 2018. Whether it confirms today is unknown.</div>
+      <label class="opt"><input type="radio" name="B2" value="A" checked><span><span class="ol">Confirm<span class="rec">recommended</span></span><br><span class="oc">Cairn's promise: it tells you what an operation costs before it costs it.</span></span></label>
+      <label class="opt"><input type="radio" name="B2" value="B"><span><span class="ol">No confirmation, as Fork did in 2018</span></span></label></div>
+    <div class="choice" data-q="B3"><div class="q">B3. The button while Discard is selected</div>
+      <label class="opt"><input type="radio" name="B3" value="A" checked><span><span class="ol">"Create and Checkout…"<span class="rec">recommended</span></span><br><span class="oc">Fork's words. The ellipsis says another step follows.</span></span></label>
+      <label class="opt"><input type="radio" name="B3" value="B"><span><span class="ol">"Create and Checkout" (Fork)</span><br><span class="oc">Reads as if nothing will be lost.</span></span></label>
+      <label class="opt"><input type="radio" name="B3" value="C"><span><span class="ol">"Discard and Check Out…"</span><br><span class="oc">Duplicates the confirmation's own button.</span></span></label></div>
+    <div class="choice" data-q="B4"><div class="q">B4. Fork's third choice, "Stash and reapply"</div>
+      <label class="opt"><input type="radio" name="B4" value="A" checked><span><span class="ol">Show it greyed: "Comes with stashing."<span class="rec">recommended</span></span><br><span class="oc">Fork's layout, and honest about the gap.</span></span></label>
+      <label class="opt"><input type="radio" name="B4" value="B"><span><span class="ol">Leave it out (today)</span></span></label>
+      <label class="opt"><input type="radio" name="B4" value="C"><span><span class="ol">Build it now</span><br><span class="oc">Recommended B1 already adds most of the stash machinery, so this may be cheap. It widens this packet.</span></span></label></div>
+  </div>
+</section>
+
+<section id="feedback">
+  <h2>5. Progress, errors and the activity popover</h2>
+  <p>Today a message can appear in eight places, and the popover has eight status words. The redesign gives each kind of message one home (rule 4) and uses Fork's Activity Manager for the popover.</p>
+  <p>Fork does offer to remove <code>index.lock</code> (release notes 2.39: "Propose to remove index.lock file if repository is locked"), but only as part of the failure. A leftover lock becomes one state of the repository, decided by whether the file exists now.</p>
+  <h3>Storyboard: a stage refused because the file changed</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Stage a chunk while an editor saves the file</div><div class="scr"><div class="bar"><span>cairn · main</span><span>⟳ Stage lines of a.rs</span></div></div></div>
+    <div class="frame"><div class="n"><b>2</b> · Cairn refuses</div><div class="scr"><div class="dlg"><div class="dt">Couldn't stage lines of a.rs</div>a.rs changed after its diff was read. Nothing was changed.<br><span class="btn focus">Close</span></div><span class="dim">There's no Error Details box, because git didn't fail. Behind the dialog, the diff has already been redrawn.</span></div></div>
+  </div>
+  <h3>Storyboard: cancel a running commit</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Press Cancel</div><div class="scr"><span class="btn off">Cancelling…</span><span class="dim"><br>No dialog. The draft is kept.</span></div></div>
+    <div class="frame"><div class="n"><b>2</b> · The popover's entry</div><div class="scr"><div class="row">Commit  ◌  14:09</div><div class="dim">cancelled 14:09:02 · took 14 s</div>Cancelled while git was running. The lists and history show anything it had already done.<div class="mono dim">$ git commit -q -F -  (cancelled)</div></div></div>
+  </div>
+  <h3>Storyboard: index.lock left behind, then the next launch</h3>
+  <div class="story">
+    <div class="frame"><div class="n"><b>1</b> · Open the repository</div><div class="scr"><div class="banner">index.lock is in this repository, so git can't change the index. If no other git program is running, it was left behind. <span class="btn">Remove index.lock…</span></div><span class="dim">Shown only while the file exists and Cairn isn't running git.</span></div></div>
+    <div class="frame"><div class="n"><b>2</b> · Or a stage fails on it</div><div class="scr"><div class="dlg"><div class="dt">Git Error</div><span class="mono dim">fatal: Unable to create '…/index.lock': File exists.</span><br><span class="btn">Remove index.lock…</span><span class="btn focus">Close</span></div></div></div>
+    <div class="frame"><div class="n"><b>3</b> · Either route</div><div class="scr"><div class="dlg"><div class="dt">Remove stale lock</div>Remove /r/.git/index.lock? It was last changed 3 hours ago and holds 0 bytes. Another program may still own it: removing a lock a running git holds can corrupt the index. You can't undo this action.<br><span class="btn">Remove index.lock</span><span class="btn focus">Cancel</span></div><span class="dim">Your decision G, unchanged. The banner goes when the file does, however it was removed.</span></div></div>
+  </div>
+  <div class="choices">
+    <div class="choice" data-q="F1"><div class="q">F1. The status-box spinner for fast operations</div>
+      <label class="opt"><input type="radio" name="F1" value="A" checked><span><span class="ol">Only after 250 ms<span class="rec">recommended</span></span><br><span class="oc">A 90 ms stage shows nothing. A slow one on a big repository visibly runs.</span></span></label>
+      <label class="opt"><input type="radio" name="F1" value="B"><span><span class="ol">At once</span><br><span class="oc">The status box flickers on every stage.</span></span></label></div>
+    <div class="choice" data-q="F2"><div class="q">F2. A refusal Cairn finds while running</div>
+      <label class="opt"><input type="radio" name="F2" value="A" checked><span><span class="ol">Fork's dialog titled "Couldn't &lt;name&gt;", one sentence, no Error Details<span class="rec">recommended</span></span><br><span class="oc">Fork's shape, with honest words.</span></span></label>
+      <label class="opt"><input type="radio" name="F2" value="B"><span><span class="ol">Fork's Git Error text unchanged</span><br><span class="oc">Fork does this for its own non-git errors (Tracker #2645). But it calls a deliberate safety refusal "unexpected".</span></span></label>
+      <label class="opt"><input type="radio" name="F2" value="C"><span><span class="ol">A line at the control used</span><br><span class="oc">A keyboard stage from the list has no control to put the line beside, which is today's problem again.</span></span></label></div>
+    <div class="choice" data-q="F3"><div class="q">F3. The prompt you confirmed, in the popover <span class="revisit">revisits K</span></div>
+      <label class="opt"><input type="radio" name="F3" value="A" checked><span><span class="ol">Shown whole and wrapped, only for operations that ran<span class="rec">recommended</span></span><br><span class="oc">Prompts are short now, so Show All and the 4-line cut go.</span></span></label>
+      <label class="opt"><input type="radio" name="F3" value="B"><span><span class="ol">Drop it (Fork has none)</span></span></label></div>
+    <div class="choice" data-q="F4"><div class="q">F4. "Show Replaced Commit" <span class="revisit">revisits F</span></div>
+      <label class="opt"><input type="radio" name="F4" value="A" checked><span><span class="ol">Rename it "Show in Lost Commits"<span class="rec">recommended</span></span><br><span class="oc">Says that it turns the mode on, then selects the commit.</span></span></label>
+      <label class="opt"><input type="radio" name="F4" value="B"><span><span class="ol">Drop it</span><br><span class="oc">Fork has nothing like it. You'd turn on Show Lost Commits yourself.</span></span></label></div>
+    <div class="choice" data-q="F5"><div class="q">F5. Retry before reporting a locked index</div><div class="ctx">Fork retries (Tracker #1303; Windows 1.84 for commit).</div>
+      <label class="opt"><input type="radio" name="F5" value="A" checked><span><span class="ol">Wait about 1 s and retry once or twice, then fail<span class="rec">recommended</span></span><br><span class="oc">Most "File exists" errors come from a short-lived git in another tool.</span></span></label>
+      <label class="opt"><input type="radio" name="F5" value="B"><span><span class="ol">No retry (today)</span></span></label></div>
+    <div class="choice" data-q="F6"><div class="q">F6. When the lock banner shows</div>
+      <label class="opt"><input type="radio" name="F6" value="A" checked><span><span class="ol">The file exists, Cairn runs no git, and the file is older than about 10 s<span class="rec">recommended</span></span><br><span class="oc">No false alarm while a commit in your terminal has its editor open.</span></span></label>
+      <label class="opt"><input type="radio" name="F6" value="B"><span><span class="ol">Whenever the file exists and Cairn runs no git</span></span></label>
+      <label class="opt"><input type="radio" name="F6" value="C"><span><span class="ol">No banner; only the button in Git Error (Fork exactly)</span><br><span class="oc">A lock left by a forced close is only found when the next write fails.</span></span></label></div>
+    <div class="choice" data-q="F7"><div class="q">F7. Times in the popover</div>
+      <label class="opt"><input type="radio" name="F7" value="A" checked><span><span class="ol">HH:MM in the list row; HH:MM:SS UTC in the header<span class="rec">recommended</span></span><br><span class="oc">Local time waits on the filed timezone issue (your dependency decision).</span></span></label>
+      <label class="opt"><input type="radio" name="F7" value="B"><span><span class="ol">Keep "HH:MM:SS UTC" everywhere</span></span></label></div>
+    <div class="choice" data-q="F8"><div class="q">F8. How long an operation took</div>
+      <label class="opt"><input type="radio" name="F8" value="A" checked><span><span class="ol">Keep it in the header<span class="rec">recommended</span></span><br><span class="oc">Fork lacks it, and Fork users have asked for it (TrackerWin #2179).</span></span></label>
+      <label class="opt"><input type="radio" name="F8" value="B"><span><span class="ol">Drop it (Fork)</span></span></label></div>
+    <div class="choice" data-q="F9"><div class="q">F9. Fetch progress</div>
+      <label class="opt"><input type="radio" name="F9" value="A" checked><span><span class="ol">In the status box, as Fork does; Fetch is greyed while a fetch runs<span class="rec">recommended</span></span><br><span class="oc">The banner goes, and a second fetch is never refused because it can't be started.</span></span></label>
+      <label class="opt"><input type="radio" name="F9" value="B"><span><span class="ol">Keep the banner (today)</span></span></label></div>
+  </div>
+</section>
+
+<section id="fork">
+  <h2>Five minutes in Fork, if you have it</h2>
+  <p class="cap">Optional. Each answer settles a point the published evidence doesn't cover. Leave them blank and the recommendations stand.</p>
+  <ul>
+    <li>With several files selected, is the diff shown the topmost file or the first one clicked? With focus in the diff and no lines selected, what does Return stage?</li>
+    <li>After you commit the selected file in a terminal, which row does Fork select? Does a drag-selected range of lines survive switching apps and back?</li>
+    <li>Create a <code>.git/index.lock</code> by hand, then stage a file. What does Fork's dialog say, and what are its buttons?</li>
+    <li>Create Branch with "Discard" selected: does Fork ask you to confirm, and what command does its Activity Manager show?</li>
+    <li>Discarding one chunk from the diff: what is the exact text of Fork's prompt?</li>
+  </ul>
+  <textarea id="forknotes" aria-label="Your notes from Fork" placeholder="Anything you find in Fork (optional); it is included when you copy your answers."></textarea>
+</section>
+
+<section id="removed">
+  <h2>What this removes</h2>
+  <div class="tw"><table>
+    <tr><th>Area</th><th>Goes</th><th>Roughly</th></tr>
+    <tr><td>Local Changes</td><td>The files-together view and its lane, the three-way selection sync and its five follow-up cases, the fake "N files" header, answer counters</td><td>−1,300 to −1,500 lines</td></tr>
+    <tr><td>Commit box</td><td>Four amend button states, the in-place amend line, the amend read on every refresh, the skip in the Git Error body, Cairn's hook detection</td><td>several hundred lines</td></tr>
+    <tr><td>Create Branch</td><td>Predicting what <code>checkout -f</code> deletes, and the extra kinds of loss</td><td>about −300 lines</td></tr>
+    <tr><td>Messages</td><td>The line under the lists, operation banners, three wording tables, eight status words, the lock offer's six states, Show All, the "let go" notice</td><td>−600 to −900, +250 to 400</td></tr>
+  </table></div>
+  <p class="cap" style="margin-top:10px">The engine and app refactors from the review are separate: the re-check record, scrubbing whole lines once, the lane owner, the one drag primitive, and the write ledger. They go in only where this design touches the same code. The rest becomes a follow-up packet.</p>
+</section>
+
+<div class="answers" role="region" aria-label="Your answers">
+  <span class="s" id="summary">Every choice starts on its recommendation.</span>
+  <button type="button" id="copy">Copy answers</button>
+  <textarea id="out" hidden readonly aria-label="Your answers as text"></textarea>
+</div>
+</main>
+
+<script>
+(function(){
+  var KEY='staging-redesign-answers-v1';
+  function load(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){return {}}}
+  function save(s){try{localStorage.setItem(KEY,JSON.stringify(s))}catch(e){}}
+  var saved=load();
+  document.querySelectorAll('input[type=radio],input[type=checkbox]').forEach(function(i){
+    if(i.type==='radio'&&saved[i.name]!==undefined){i.checked=(saved[i.name]===i.value)}
+    if(i.type==='checkbox'&&saved[i.name]!==undefined){i.checked=!!saved[i.name]}
+    i.addEventListener('change',function(){var s=load(); if(i.type==='radio'){s[i.name]=i.value}else{s[i.name]=i.checked} save(s); summary()});
+  });
+  var notes=document.getElementById('forknotes');
+  if(saved.notes){notes.value=saved.notes}
+  notes.addEventListener('input',function(){var s=load(); s.notes=notes.value; save(s)});
+  function recommended(name){var r=document.querySelector('input[name="'+name+'"]');return r?r.value:null}
+  function changed(){
+    var out=[];
+    document.querySelectorAll('.choice').forEach(function(c){
+      var q=c.getAttribute('data-q');var picked=c.querySelector('input:checked');var first=c.querySelector('input');
+      if(picked&&first&&picked!==first){out.push(q)}
+    });
+    return out;
+  }
+  function summary(){
+    var c=changed();var rules=[].slice.call(document.querySelectorAll('[data-group=rules] input')).filter(function(i){return !i.checked}).length;
+    document.getElementById('summary').textContent=(c.length?c.length+' choice'+(c.length>1?'s':'')+' changed from the recommendation':'Every choice is on its recommendation')+(rules?', '+rules+' rule'+(rules>1?'s':'')+' to discuss.':'.');
+  }
+  summary();
+  document.getElementById('copy').addEventListener('click',function(){
+    var lines=['Staging redesign answers'];
+    document.querySelectorAll('[data-group=rules] .rule').forEach(function(r){
+      var t=r.querySelector('.t').textContent;var ok=r.querySelector('input').checked;lines.push(t+': '+(ok?'approved':'DISCUSS'));
+    });
+    document.querySelectorAll('.choice').forEach(function(c){
+      var qe=c.querySelector('.q').cloneNode(true);qe.querySelectorAll('.revisit').forEach(function(x){x.remove()});var q=qe.textContent.trim();var picked=c.querySelector('input:checked');var first=c.querySelector('input');
+      var ol=picked.closest('.opt').querySelector('.ol').cloneNode(true);ol.querySelectorAll('.rec').forEach(function(x){x.remove()});var label=ol.textContent.trim();
+      lines.push(q+' -> '+label+(picked===first?' (recommended)':' (CHANGED)'));
+    });
+    if(notes.value.trim()){lines.push('Fork notes: '+notes.value.trim())}
+    var text=lines.join('\n');var out=document.getElementById('out');out.value=text;out.hidden=false;
+    var btn=document.getElementById('copy');
+    function done(){btn.textContent='Copied — paste into the chat'}
+    try{navigator.clipboard.writeText(text).then(done,function(){out.focus();out.select();btn.textContent='Select and copy the text below'})}catch(e){out.focus();out.select();btn.textContent='Select and copy the text below'}
+  });
+})();
+</script>

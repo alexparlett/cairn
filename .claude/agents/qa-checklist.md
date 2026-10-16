@@ -56,12 +56,19 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    Conventional Commits with a body. If the diff touches the enforcement layer
    itself (guard checks, hooks, gate script, CI workflows, reviewer/skill
    definitions), dispatch pointer: `gate-integrity-reviewer`.
-7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`,
-   `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
+7. **Destructive operations** (any diff to the `crates/cairn-git/src/ops`,
+   `process` or `reads` module — `ops.rs` and `ops/` alike — or a new
    call site reaching one): the operation takes `cairn_model::Confirmed` by
-   value, the prompt text handed to `Confirmed::by_user` names the actual
-   consequence (what is lost, how much, whether it is recoverable), and nothing
-   constructs the token outside a user acknowledgement path. Also: no
+   value, the prompt `Consequence::prompt` renders for the `Consequence` handed
+   to `Confirmed::by_user` names the actual consequence (what is lost, how much,
+   whether it is recoverable), and nothing constructs the token outside a user
+   acknowledgement path. The seal's guard
+   (`destructive_operations_are_sealed_behind_the_confirmation_token`) reads
+   spellings, so these are yours: a token reached through a macro; a closure in
+   `ops/` taking one, which is no function the roster reads; and a public
+   function in `cairn-model` or `cairn-git` that builds a `Consequence` from
+   values its caller passes, through which a render crate could forge one
+   without spelling a path into it. Also: no
    `std::process::Command` reached through a spelling the terminal-prompt guard
    cannot read — a `type` alias for it, a wrapper crate that spawns, a macro
    that expands to one — anywhere but `crates/cairn-git/src/process/environment.rs`;
@@ -90,11 +97,19 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
    `process/environment.rs` (`nix` named outside `process/` is caught, and
    `fork` is `unsafe`, which the workspace forbids). In `reads/`, the
-   literal twin `the_porcelain_reads_are_the_three_named_queries`
+   literal twin `the_porcelain_reads_are_the_named_queries`
    reads string literals only, so a verb or option assembled at run time (a `format!`, a
    concatenation, a constant from elsewhere) is yours, and so is whether a
    read's verb really is plumbing or `status` — no twin tells a querying verb
-   from a mutating one built with `GitBinary::read_invocation`.
+   from a mutating one built with `GitBinary::read_invocation`. And the
+   filesystem-mutation twin (`only_the_ops_module_changes_the_filesystem`,
+   staging-and-commit R12.5) reads spellings too, so these are yours: a write
+   through a dependency's API (a crate that writes files, `nix`'s unistd), a
+   `File` or `OpenOptions` reached through a type alias declared in another
+   crate, a macro, a method call that writes on a `File` opened by a name the
+   matcher does not hold, and a kind of write its rosters do not name; and
+   whether each `FILESYSTEM_MUTATION_EXCEPTIONS` row really writes only outside
+   any repository, and its reason is still true.
    Dispatch pointer: `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the
@@ -119,7 +134,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     lets an `unwrap`/`expect` through on a path that holds one, since the panic
     message would print the value.
 11. **Keyboard modifiers** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`
-    touching a key or pointer handler, or `crates/cairn-ui/src/accelerators.rs`):
+    touching a key or pointer handler, `crates/cairn-ui/src/accelerators.rs` or
+    `crates/cairn-ui/src/accelerators/chord_names.rs`):
     the guard `no_component_names_a_literal_modifier` reads spellings, so what it
     cannot see is yours — a modifier reached through a `type` alias declared
     outside the render crates, a macro, or a raw bit pattern compared without
@@ -133,8 +149,29 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     and `Chord::press_hold` are for headless tests, and a render path calling
     either is a finding; `HeldKeys` answers which action a pointer press is, and a
     method of it that answered which key is held would be one); a key event
-    handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
-    right for each platform and clear of the desktop's and Fork's.
+    handled in `crates/cairn-ui/tests/` (unscanned); in the one chord-name module
+    (`CHORD_NAMES`), a name put together there from single-key literals rather than
+    from the chord the table lists — the guard sees each literal is one held key's
+    name, not that the name follows the table's chord; that the resolver
+    (`resolve_key_on`) still reads each chord's scope through
+    `accelerators::chord_heard_in` rather than its action's — the guard's pin reads the
+    table's rows, and only the table's unit tests
+    (`every_chord_resolves_to_its_action_in_its_scope_only`,
+    `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`) pin the resolver; and
+    whether a new chord is right for each platform and clear of the desktop's and Fork's.
+12. **Scrubbing git's diagnostic output** (any diff to the `crates/cairn-git/src/process` or
+    `crates/cairn-git/src/ops` module — its `.rs` file and its directory — or `crates/cairn-git/src/error.rs`, any diff naming
+    `ScrubbedLines`, `ScrubbedLine`, `Scrubber`, `strip_ansi` or `Error::shown`, or any new
+    `Update` or engine surface carrying git's words): the invariant "git's diagnostic output
+    reaches the application only scrubbed" is held by the type, so what it cannot see is yours
+    — a new engine surface that hands git's stderr, a commit's stdout, progress, a command
+    record or an error's arguments on as a `String` rather than `ScrubbedLines` (or the runner's
+    scrubbed argument copy); an error whose `Display` quotes a value beside git's words — a
+    configuration value, a record git printed — read by the application with `to_string` or
+    `format!("{error}")` where it should use `Error::shown`; a lane or view that scrubs again
+    (a second owner) or keeps an offset into a text where it was cut; and a read's answer
+    wrongly scrubbed (reads stay as git gave them, for parity). A URL a test splits by a `\n`
+    proves nothing: git splits nothing there; the carry is across a line's pieces.
 
 ## Review dispatch
 

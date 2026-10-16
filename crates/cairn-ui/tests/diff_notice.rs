@@ -1,5 +1,4 @@
-//! Headless tests for what stands where a file's rows would be (PRD R6.8, R6.9; criterion
-//! C11, "every R6.8 state draws its notice").
+//! Headless tests for what stands where a file's rows would be.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -74,14 +73,14 @@ fn oid(n: u8) -> Oid {
     Oid::from_bytes(&[n; 20]).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// C11, R6.8: every state that is not text draws its own notice, in words that say what it
-/// is and no other state's — both sizes for a binary, "Changes are too large to display" with
-/// Load Diff only while a load is offered, the pointer text under a label for an LFS
-/// pointer, git's `Subproject commit` lines (with `-dirty`) for a submodule and never
-/// "binary", git's mode lines for a mode change, git's rename lines for a rename with no
-/// content change, and the conflicted and unsupported states. Caught by: a state drawn with
-/// another's notice (the classic: a submodule called binary), a missing size, Load Diff
-/// offered past the ceiling, or one that reports nothing.
+/// Every state that is not text draws its own notice, in words that say what it is and no
+/// other state's — both sizes for a binary, "Changes are too large to display" with Load
+/// Diff only while a load is offered, the pointer text under a label for an LFS pointer,
+/// git's `Subproject commit` lines (with `-dirty`) for a submodule and never "binary", git's
+/// mode lines for a mode change, git's rename lines for a rename with no content change, and
+/// the conflicted and unsupported states. Caught by: a state drawn with another's notice (the
+/// classic: a submodule called binary), a missing size, Load Diff offered past the ceiling,
+/// or one that reports nothing.
 #[test]
 fn every_state_that_is_not_text_draws_its_notice() {
     let (binary, _) = draw(&shown(
@@ -94,7 +93,7 @@ fn every_state_that_is_not_text_draws_its_notice() {
     for wanted in [BINARY_FILE, OLD_SIDE, NEW_SIDE] {
         assert!(binary.iter().any(|l| l == wanted), "{wanted}: {binary:?}");
     }
-    // KiB, labelled as such: Fork's sample (Finding 22) does not settle the base.
+    // KiB, labelled as such: Fork's sample does not settle the base.
     assert!(
         binary.iter().any(|l| l == "2.0 KiB (2,048 bytes)"),
         "{binary:?}"
@@ -128,9 +127,9 @@ fn every_state_that_is_not_text_draws_its_notice() {
         "{large:?}"
     );
     assert_eq!(loads, 1, "Load Diff did not report its press");
-    // Past the 64 MiB ceiling: the file's size and the ceiling, in MiB (the user's words,
-    // 2026-10-03) — whichever limit the engine names, since the first ask names the drawing
-    // limit and only a load anyway names the ceiling.
+    // Past the 64 MiB ceiling: the file's size and the ceiling, in MiB — whichever limit the
+    // engine names, since the first ask names the drawing limit and only a load anyway names
+    // the ceiling.
     for limit in [1_048_576, 67_108_864] {
         let (past, loads) = draw(&shown(
             file(ChangeStatus::Modified),
@@ -195,7 +194,7 @@ fn every_state_that_is_not_text_draws_its_notice() {
     chmod.old_path = chmod.new_path.clone();
     chmod.new_mode = Some(FileMode::Executable);
     let (mode, _) = draw(&shown(chmod, DiffContent::ModeChangeOnly));
-    // The user's words for a mode-only change (2026-10-03).
+    // A mode-only change.
     assert!(mode.iter().any(|l| l == "Mode changed"), "{mode:?}");
     assert_eq!(MODE_CHANGED, "Mode changed");
     assert!(!mode.iter().any(|l| l == NO_CONTENT_CHANGE), "{mode:?}");
@@ -214,7 +213,7 @@ fn every_state_that_is_not_text_draws_its_notice() {
             overlay: DisplayOverlay::none(),
         },
     ));
-    // The user's words for a rename with no content change (2026-10-03), git's lines under.
+    // A rename with no content change, git's lines under.
     assert!(
         renamed.iter().any(|l| l == "Renamed without changes"),
         "{renamed:?}"
@@ -256,8 +255,8 @@ fn every_state_that_is_not_text_draws_its_notice() {
         assert!(copied.iter().any(|l| l == wanted), "{wanted}: {copied:?}");
     }
 
-    // A rename or a copy whose mode moved too: the user's words (2026-10-03, the copy's by
-    // analogy), git's mode lines first, as `git diff` prints them.
+    // A rename or a copy whose mode moved too (the copy's words by analogy), git's mode lines
+    // first, as `git diff` prints them.
     for (status, title, word) in [
         (
             ChangeStatus::Renamed(Similarity::from_percent(100)),
@@ -458,7 +457,7 @@ fn every_notice_sample() -> Vec<ShownDiff> {
     ]
 }
 
-/// Phase 08: a notice standing in place of a file's rows under its row in the Commit tab
+/// A notice standing in place of a file's rows under its row in the Commit tab
 /// (`cairn_ui::notice_rows`, one row each) says exactly the words the Changes tab's notice
 /// draws, in the same order, for every state — Load Diff only where it is offered. Caught
 /// by: a state given other words in place (a submodule called binary under its row), a

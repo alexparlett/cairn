@@ -162,12 +162,11 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// C10, R5.3: the author and the committer, each with name, email and the full timestamp at
-/// its own offset; the full id; each parent as its short id; and the
-/// files, a rename showing both names (the message, row for row:
-/// `the_message_is_the_rows_git_log_shows_for_it`). Caught by: dropping the
-/// committer, rendering a date in UTC or without its offset, abbreviating the id, dropping
-/// a parent or the body, or a rename showing only its new name.
+/// The author and the committer, each with name, email and the full timestamp at its own
+/// offset; the full id; each parent as its short id; and the files, a rename showing both
+/// names (the message, row for row: `the_message_is_the_rows_git_log_shows_for_it`). Caught
+/// by: dropping the committer, rendering a date in UTC or without its offset, abbreviating
+/// the id, dropping a parent or the body, or a rename showing only its new name.
 #[test]
 fn the_commit_tab_shows_every_field_r5_3_names() {
     let (test, _, _) = launch(change_set(0));
@@ -179,7 +178,7 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
         "Ada Lovelace <ada@example.com>".to_owned(),
         "Grace Hopper <grace@example.com>".to_owned(),
         // The author's and the committer's moments, each at its own offset, as Fork shows a
-        // date (user decision 1): one instant, two offsets, two different days.
+        // date: one instant, two offsets, two different days.
         "15 Nov 2023 03:43:20 +05:30".to_owned(),
         "14 Nov 2023 14:13:20 -08:00".to_owned(),
         ID_CAPTION.to_owned(),
@@ -209,10 +208,10 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     );
 }
 
-/// T3, R5.3: the message is the rows git shows for it, row for row and nothing between —
-/// the blank lines before and after it gone, each line without its trailing whitespace or
-/// `\r`, blank lines inside it kept, a tab expanded — between the last parent and Expand
-/// All above the first file. Caught by: popping only one trailing empty line, keeping the leading blank
+/// The message is the rows git shows for it, row for row and nothing between — the blank
+/// lines before and after it gone, each line without its trailing whitespace or `\r`, blank
+/// lines inside it kept, a tab expanded — between the last parent and Expand All above the
+/// first file. Caught by: popping only one trailing empty line, keeping the leading blank
 /// lines or a `\r`, dropping a blank line inside, or drawing the tab raw.
 #[test]
 fn the_message_is_the_rows_git_log_shows_for_it() {
@@ -227,8 +226,7 @@ fn the_message_is_the_rows_git_log_shows_for_it() {
         .iter()
         .position(|text| text == "docs/old-name.md → docs/new-name.md")
         .unwrap_or_else(|| panic!("no first file: {shown:?}"));
-    // Between them: the message, Expand All above the files (phase 08), then the first
-    // file's badge.
+    // Between them: the message, Expand All above the files, then the first file's badge.
     assert_eq!(shown[files - 2], EXPAND_ALL_CAPTION, "{shown:?}");
     let message: Vec<&str> = shown[after_parents..files - 2]
         .iter()
@@ -237,9 +235,9 @@ fn the_message_is_the_rows_git_log_shows_for_it() {
     assert_eq!(message, GIT_SHOWS);
 }
 
-/// R5.5, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`: the
-/// packet's own measured commit touches 55,184 paths, and the tab builds one viewport of
-/// them at the top and scrolled deep. Caught by: a list that builds a row per file.
+/// The twin of `only_a_viewport_of_rows_is_built_however_long_the_history`: a measured commit
+/// touches 55,184 paths, and the tab builds one viewport of them at the top and scrolled
+/// deep. Caught by: a list that builds a row per file.
 #[test]
 fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
     let viewport_rows = (HEIGHT / DETAIL_ROW_HEIGHT).ceil() as usize;
@@ -292,8 +290,8 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
     );
 }
 
-/// R5.3: a parent is a link that reports which parent it is; the tab itself reaches for
-/// nothing. Caught by: every link reporting the first parent.
+/// A parent is a link that reports which parent it is; the tab itself reaches for nothing.
+/// Caught by: every link reporting the first parent.
 #[test]
 fn a_parent_link_reports_its_parent() {
     let (mut test, _, parents) = launch(change_set(0));
@@ -309,9 +307,9 @@ fn a_parent_link_reports_its_parent() {
     assert_eq!(parents.borrow().as_slice(), [oid(11)]);
 }
 
-/// R2.2: a rename search `diff.renameLimit` stopped says so where the files are, with the
-/// limit git asks for; one that ran to the end says nothing. A commit with no files says
-/// that too. Caught by: the notice drawn always, never, or without its number.
+/// A rename search `diff.renameLimit` stopped says so where the files are, with the limit git
+/// asks for; one that ran to the end says nothing. A commit with no files says that too.
+/// Caught by: the notice drawn always, never, or without its number.
 #[test]
 fn a_cut_short_rename_search_is_said_above_the_files() {
     let notice = cut_short_notice(2774);
@@ -460,8 +458,9 @@ fn press_key(test: &mut TestingRunner, key: NamedKey) {
 
 fn press_action(test: &mut TestingRunner, action: Action) {
     // A named key: its code is not what the table matches it by.
-    let Some((key, _, modifiers)) =
-        accelerators::chord(action, Os::current()).and_then(|chord| chord.key_press())
+    let Some((key, _, modifiers)) = accelerators::chords(action, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
     else {
         panic!("{action:?} has no key chord");
     };
@@ -469,10 +468,10 @@ fn press_action(test: &mut TestingRunner, action: Action) {
     test.sync_and_update();
 }
 
-/// User decision 6, Fork's previous and next file: a pressed file row is the current file
-/// and gives the tab focus, and while it has focus ↑ and ↓ move the current file — stopping
-/// at either end, and bringing a file below the viewport into view. Caught by: arrows that
-/// move nothing, run past the ends, or leave the current file out of sight.
+/// Fork's previous and next file: a pressed file row is the current file and gives the tab
+/// focus, and while it has focus ↑ and ↓ move the current file — stopping at either end, and
+/// bringing a file below the viewport into view. Caught by: arrows that move nothing, run
+/// past the ends, or leave the current file out of sight.
 #[test]
 fn the_focused_file_list_moves_the_current_file_with_the_arrows() {
     let more = 40;
@@ -501,11 +500,24 @@ fn the_focused_file_list_moves_the_current_file_with_the_arrows() {
     );
 }
 
-/// User decision 6: previous and next change are heard only while the detail pane has
-/// focus, and pressing one moves no file; Tab moves focus into the file list and Shift-Tab
-/// out of it again, after which its arrows are not the list's. Caught by: change chords
-/// heard wherever focus is (they would take ⌘↑ from a text field), a file list that reads
-/// a chord as its arrow, or a tab that Tab cannot reach.
+/// Shift+↓ and Shift+↑ — Local Changes' list extension, a scope the Commit tab is not in —
+/// move the current file as ↓ and ↑ do. Caught by: a list that leaves alone every scope's
+/// chords.
+#[test]
+fn another_views_chord_is_the_commit_tabs_arrow() {
+    let (mut test, heard) = launch_focus(change_set(5));
+    click_label(&mut test, "src/file-000001.rs");
+    press_action(&mut test, Action::ExtendSelectionDown);
+    press_action(&mut test, Action::ExtendSelectionDown);
+    press_action(&mut test, Action::ExtendSelectionUp);
+    assert_eq!(heard.files.borrow().as_slice(), [1, 2, 3, 2]);
+}
+
+/// Previous and next change are heard only while the detail pane has focus, and pressing one
+/// moves no file; Tab moves focus into the file list and Shift-Tab out of it again, after
+/// which its arrows are not the list's. Caught by: change chords heard wherever focus is
+/// (they would take ⌘↑ from a text field), a file list that reads a chord as its arrow, or a
+/// tab that Tab cannot reach.
 #[test]
 fn the_change_chords_and_the_arrows_belong_to_the_focused_pane() {
     let (mut test, heard) = launch_focus(change_set(5));
@@ -600,7 +612,7 @@ fn click_label(test: &mut TestingRunner, caption: &str) {
     test.sync_and_update();
 }
 
-/// R5.2: Commit is the default and both tabs report themselves; the strip's control asks to
+/// Commit is the default and both tabs report themselves; the strip's control asks to
 /// collapse an open pane and to open a collapsed one. Caught by: Changes as the default, a
 /// tab reporting the other, or a control that only ever collapses.
 #[test]
@@ -619,10 +631,10 @@ fn the_strip_reports_its_tabs_and_its_collapse() {
     assert!(!*strip.collapsed.read());
 }
 
-/// The user's report (2026-10-04), from the running app: each file's row — disclosure, status
-/// letter, path — was drawn in the middle of the pane. A file's row starts at its left
-/// padding and is centred top to bottom. Caught by: a row turned horizontal that keeps the
-/// vertical row's `main_align(Center)`, which then centres its content across the width.
+/// A file's row — disclosure, status letter, path — starts at its left padding and is centred
+/// top to bottom, not drawn in the middle of the pane. Caught by: a row turned horizontal
+/// that keeps the vertical row's `main_align(Center)`, which then centres its content across
+/// the width.
 #[test]
 fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
     let (test, _, _) = launch(change_set(0));

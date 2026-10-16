@@ -1,5 +1,6 @@
 //! History query tests. Expectations are read back out of the `git` binary.
 
+#[path = "support/fixtures.rs"]
 mod fixtures;
 
 use std::cell::Cell;

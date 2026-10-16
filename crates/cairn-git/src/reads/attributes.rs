@@ -17,7 +17,7 @@
 //! running — which git consults as it reads the index of a repository with a working tree,
 //! as the user's own `git diff` does (`crate::reads`, "What a read may run";
 //! `the_content_query_writes_nothing_and_runs_nothing`, in
-//! `crates/cairn-git/tests/diff/content.rs`). The answer is three NUL-terminated fields per
+//! `crates/cairn-git/tests/diff_engine/diff/content.rs`). The answer is three NUL-terminated fields per
 //! path — the path, the attribute, its value — in the order the paths were given.
 
 use std::ffi::OsString;

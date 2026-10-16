@@ -1,5 +1,5 @@
-//! Fetching from a remote: the first operation to run a `git` verb, and the
-//! first that can ask the user for a credential.
+//! Fetching from a remote: a `git` verb that can ask the user for a
+//! credential.
 //!
 //! **Not destructive, and deliberately takes no [`cairn_model::Confirmed`].**
 //! With the refspecs git gives a clone (`+refs/heads/*:refs/remotes/<remote>/*`)
@@ -12,7 +12,7 @@
 //! `git fetch` honours it, so a remote-tracking ref the remote has already
 //! deleted is removed here too — its commits survive until `gc`, and the
 //! ref was never local work. Nothing is passed for prune, so git reads that
-//! configuration itself, fresh, on every run (decided on issue #17).
+//! configuration itself, fresh, on every run.
 //!
 //! What is never done, whatever the configuration: pruning a local tag.
 //! Tags have no reflog, so `--no-prune-tags` is always passed (in git since
@@ -26,9 +26,9 @@
 //! `+refs/*:refs/*`, any `refs/heads/*` destination — with the setting quoted
 //! in [`Error::FetchRefused`]; a fetch that overwrites local branches, with
 //! no reflog in a bare repository, is a fetch from a terminal, not from a
-//! button. Push, the next operation on this backend, is the one that needs
-//! the token whatever the configuration (L8); pruning that says what will
-//! go, as a confirmed operation, is issue #17's remainder.
+//! button. Push is the one that needs the token whatever the configuration;
+//! pruning that says what will go, as a confirmed operation, is tracked in
+//! #17.
 //!
 //! What it invalidates: `refs` (remote-tracking refs moved) and `objects`
 //! (new objects arrived), declared on the [`Performed`] per the cache contract
@@ -48,7 +48,7 @@
 //! can name them and say when acting on them is safe (`super::stranded_locks`);
 //! the runner lists them after the reap, because a fetch is a write.
 
-use cairn_model::AskpassToken;
+use cairn_model::{AskpassToken, ScrubbedLines};
 
 use super::{GitBinary, Invalidated, Performed, WriteAuthority, refspec_policy};
 use crate::process::{Invocation, KillHandle, Write};
@@ -109,28 +109,26 @@ impl FetchInProgress {
         FetchCancel(self.invocation.kill_handle())
     }
 
-    /// Streams git's progress to `progress`, one line per redraw, until the
-    /// process exits. Success is a [`Performed`] declaring `refs` and
-    /// `objects` invalid — the declaration is what a fetch CAN change; whether
-    /// a ref actually moved is for the caller to see, which the application does
-    /// by refreshing after every outcome (a failed or killed fetch may have
-    /// updated some refs before it stopped): it reads the refs snapshot again
-    /// ([`crate::Repository::refs`]) and reopens the history when what the walk
-    /// draws differs. That comparison sees only what the refs snapshot holds —
-    /// the local branches, remote-tracking refs and tags, `HEAD` and the stash
-    /// list — so a fetch that moves only a ref outside those namespaces
-    /// (`refs/notes/`, `refs/pull/`, `refs/replace/`) reopens nothing. A cancelled fetch is [`Error::GitCancelled`],
-    /// carrying every `*.lock` left under the git directory once git is gone;
-    /// anything git refused is [`Error::GitFailed`] carrying its stderr —
-    /// which is where "could not read Username ...: terminal prompts
-    /// disabled" arrives when no credential could be had — and the lock files
-    /// present. Dropped instead of finished, the fetch is ended and reaped on
-    /// a thread of the runner's.
+    /// Streams git's progress to `progress` until the process exits: the lines each read of stderr
+    /// completed, one line per redraw, whole and scrubbed of a URL's userinfo as the runner split
+    /// them, blank ones among them. Success is a [`Performed`] declaring `refs` and `objects`
+    /// invalid — the declaration is what a fetch CAN change; whether a ref actually moved is for
+    /// the caller to see, which the application does by refreshing after every outcome (a failed or
+    /// killed fetch may have updated some refs before it stopped): it reads the refs snapshot again
+    /// ([`crate::Repository::refs`]) and reopens the history when what the walk draws differs. That
+    /// comparison sees only what the refs snapshot holds — the local branches, remote-tracking refs
+    /// and tags, `HEAD` and the stash list — so a fetch that moves only a ref outside those
+    /// namespaces (`refs/notes/`, `refs/pull/`, `refs/replace/`) reopens nothing. A cancelled fetch
+    /// is [`Error::GitCancelled`], carrying every `*.lock` left under the git directory once git is
+    /// gone; anything git refused is [`Error::GitFailed`] carrying its stderr — which is where
+    /// "could not read Username ...: terminal prompts disabled" arrives when no credential could be
+    /// had — and the lock files present. Dropped instead of finished, the fetch is ended and reaped
+    /// on a thread of the runner's.
     ///
     /// The cancel is [`FetchCancel`]'s alone, so the signal the runner polls
     /// here is one nobody holds; and stdout, where `git fetch` writes nothing
     /// a person or Cairn reads, is drained and dropped.
-    pub fn finish(self, progress: impl FnMut(&str)) -> Result<Performed, Error> {
+    pub fn finish(self, progress: impl FnMut(&ScrubbedLines)) -> Result<Performed, Error> {
         self.invocation
             .finish(&CancelSignal::new(), |_| {}, progress)
             .map(|_| {
@@ -158,7 +156,7 @@ impl FetchCancel {
 
 /// Against a stub `git`, since the runner is crate-private: what the process is
 /// actually given. The behaviour the arguments buy is pinned end to end by the
-/// pruning tests in `tests/fetch.rs`.
+/// pruning tests in `tests/fetch/main.rs`.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -184,7 +182,7 @@ mod tests {
         let mut seen = Vec::new();
         fetch(&git, &repo, "-origin", None)
             .unwrap()
-            .finish(|line| seen.push(line.to_owned()))
+            .finish(|lines| seen.extend(lines.lines().map(str::to_owned)))
             .unwrap();
         let named = |option: &str, path: &std::path::Path| {
             format!("{option}{}", std::fs::canonicalize(path).unwrap().display())
@@ -230,8 +228,8 @@ mod tests {
             let mut seen = String::new();
             fetch(&git, &repo, "origin", token)
                 .unwrap()
-                .finish(|line| {
-                    seen.push_str(line);
+                .finish(|lines| {
+                    seen.push_str(lines.text());
                     seen.push('\n');
                 })
                 .unwrap();
@@ -261,13 +259,11 @@ mod tests {
         );
     }
 
-    /// G17, the engine half's last clause: a fetch run with an askpass token is
-    /// logged once, as what it was given and what it said, and its record holds
-    /// neither the token nor any value of the environment git ran with. Decisive
-    /// because the stub writes the environment it was given to a file beside
-    /// itself, which must show the token and every value looked for — so each
-    /// was there to leak — while what it says on stderr, which the log keeps,
-    /// is a line of progress.
+    /// A fetch run with an askpass token is logged once, as what it was given and what it said, and
+    /// its record holds neither the token nor any value of the environment git ran with. Decisive
+    /// because the stub writes the environment it was given to a file beside itself, which must
+    /// show the token and every value looked for — so each was there to leak — while what it says
+    /// on stderr, which the log keeps, is a line of progress.
     #[test]
     fn a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment() {
         let stub = StubGit::with_git_from(|directory| {
@@ -346,7 +342,7 @@ mod tests {
                 "origin"
             ]
         );
-        assert_eq!(record.stderr, "Receiving objects: 100%, done.");
+        assert_eq!(record.stderr.text(), "Receiving objects: 100%, done.");
         let rendered = format!("{log:?}");
         for (name, value) in values {
             assert!(

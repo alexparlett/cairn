@@ -1,8 +1,8 @@
 //! `git diff-tree -p`: which lines of a file changed, and the function context of each hunk,
 //! as git computes them.
 //!
-//! The content query's ranges are git's own (the content-parity decision of 2026-10-03,
-//! `docs/research/diff-engine/content-parity-spike.md`): gix reads both versions of a file,
+//! The content query's ranges are git's own, since gix's line diff and git's disagree
+//! (`docs/research/diff-engine/content-parity-spike.md`): gix reads both versions of a file,
 //! and this read asks git which of their lines changed. It runs
 //!
 //! ```text
@@ -37,8 +37,8 @@
 //!   group's, so a path holding `*` or `?` names that path alone. Not for the
 //!   whole-comparison form, whose only pathspecs are the `:(exclude,literal)` magic the
 //!   changes query's submodule rule needs, which literal pathspecs would switch off.
-//! - `-a` for one file: the caller has already decided the file is text, by git's rules
-//!   (R2.5), so git is not asked to decide it again. The whole-comparison and group forms
+//! - `-a` for one file: the caller has already decided the file is text, by git's rules,
+//!   so git is not asked to decide it again. The whole-comparison and group forms
 //!   leave it off, so a binary file costs git a line rather than a diff, and a file git and
 //!   the caller disagree about is asked about on its own.
 //! - `--raw -z` in the same call: the raw records come first, each file's patch after them

@@ -1,4 +1,4 @@
-//! Reading one commit in the detail the Commit tab shows (R1.8, R5.3).
+//! Reading one commit in the detail the Commit tab shows.
 
 use cairn_model::{CommitDetails, Oid, Signature, Timestamp};
 
@@ -53,8 +53,8 @@ pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDet
         encoding,
         id,
     )?;
-    // The raw message, not `message()`: R5.3 shows the message as written, and `message()`
-    // splits it into a summary and a body.
+    // The raw message, not `message()`: the Commit tab shows the message as written, and
+    // `message()` splits it into a summary and a body.
     Ok(CommitDetails {
         id: *id,
         parents,

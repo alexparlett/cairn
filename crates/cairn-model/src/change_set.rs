@@ -4,11 +4,11 @@
 use crate::text_filter::{BETWEEN_CHECKS, Folded};
 use crate::{ChangeStatus, ChangedFile, CommitDetails};
 
-/// How rename and copy detection went, so a view can say when it was cut short (R2.2).
+/// How rename and copy detection went, so a view can say when it was cut short.
 ///
 /// Detection is what the user's `diff.renames` asks for — off, renames, or renames and
 /// copies — searched by git under `diff.renameLimit`, exactly as their own `git show` would.
-/// Whether the limit cut the search short is decided by the engine from git's answer, never
+/// Whether the limit cut the search short is read by the engine from git's answer, never
 /// from its stderr.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RenameDetection {
@@ -33,13 +33,13 @@ impl RenameDetection {
     }
 }
 
-/// What a commit or a comparison changed (R2.1).
+/// What a commit or a comparison changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSet {
     /// Sorted by path, a rename or a copy under its destination. The order is total, so
     /// two runs of the same query list the same files in the same places.
     pub files: Vec<ChangedFile>,
-    /// Present when one commit was named, absent for a comparison of two (R2.1, R7.3).
+    /// Present when one commit was named, absent for a comparison of two.
     pub details: Option<CommitDetails>,
     pub renames: RenameDetection,
 }
@@ -49,18 +49,17 @@ impl ChangeSet {
     /// `keep_going` says to stop — asked before the first file and every few thousand after.
     /// An empty `text` matches every file.
     ///
-    /// The Changes tab's filter (R5.4), as Cairn reads Fork's: the text anywhere in a file's
-    /// path — a file name, an extension or a piece of a path, no wildcards (the vendor,
-    /// TrackerWin #152, 22 Jun 2019; Tracker #1482, 7 Oct 2021) — and for a rename or a copy
-    /// in either of its paths, ignoring case as Unicode reads it (`str::to_lowercase`, so `É`
-    /// finds `é`) — the user's decision of 2026-10-03, since whether Fork ignores case is not
-    /// established; a path that is not UTF-8 is read as git's lossy reading of it is. A pass
-    /// over every path, so the application runs it on a worker.
+    /// The Changes tab's filter, as Cairn reads Fork's: the text anywhere in a file's path — a file
+    /// name, an extension or a piece of a path, no wildcards (the vendor, TrackerWin #152, 22 Jun
+    /// 2019; Tracker #1482, 7 Oct 2021) — and for a rename or a copy in either of its paths,
+    /// ignoring case as Unicode reads it (`str::to_lowercase`, so `É` finds `é`), since whether
+    /// Fork ignores case is not established; a path that is not UTF-8 is read as git's lossy
+    /// reading of it is. A pass over every path, so the application runs it on a worker.
     ///
-    /// A known limit, accepted (the user's decision, 2026-10-03): `str::to_lowercase` is a
-    /// mapping, not a case fold, so a character whose lowercase is longer than itself folds
-    /// apart from what it is typed as — `İ` (U+0130) lowercases to `i̇`, an `i` and a combining
-    /// dot, so "istanbul" does not find `İstanbul.txt` (`the_dotted_capital_i_is_a_known_limit`).
+    /// A known limit: `str::to_lowercase` is a mapping, not a case fold, so a character whose
+    /// lowercase is longer than itself folds apart from what it is typed as — `İ` (U+0130)
+    /// lowercases to `i̇`, an `i` and a combining dot, so "istanbul" does not find `İstanbul.txt`
+    /// (`the_dotted_capital_i_is_a_known_limit`).
     pub fn files_matching(
         &self,
         text: &str,
@@ -138,9 +137,9 @@ mod tests {
         assert_eq!(changes.files_matching("*.rs", keep), Some(vec![]));
     }
 
-    /// The user's decision (2026-10-03): case is ignored as Unicode reads it, not ASCII
-    /// alone — `É` finds `é`, `ÉCOLE` finds `école`, `Σ` finds `σ` — and a path that is not
-    /// UTF-8 is still searched. Caught by: an ASCII-only fold, which leaves `É` and `é` apart.
+    /// Case is ignored as Unicode reads it, not ASCII alone — `É` finds `é`, `ÉCOLE` finds `école`,
+    /// `Σ` finds `σ` — and a path that is not UTF-8 is still searched. Caught by: an ASCII-only
+    /// fold, which leaves `É` and `é` apart.
     #[test]
     fn case_is_ignored_as_unicode_reads_it() {
         let changes = set(vec![
@@ -174,10 +173,9 @@ mod tests {
         assert_eq!(changes.files_matching("src/", keep), Some(vec![0, 1]));
     }
 
-    /// The accepted limit of folding case with `str::to_lowercase` (the user's decision,
-    /// 2026-10-03), pinned so a change to the fold is seen: `İ` lowercases to `i` and a
-    /// combining dot, so "istanbul" does not find `İstanbul.txt`, though typing the path's
-    /// own capital does.
+    /// The known limit of folding case with `str::to_lowercase`, pinned so a change to the fold is
+    /// seen: `İ` lowercases to `i` and a combining dot, so "istanbul" does not find `İstanbul.txt`,
+    /// though typing the path's own capital does.
     #[test]
     fn the_dotted_capital_i_is_a_known_limit() {
         let changes = set(vec![file("docs/İstanbul.txt")]);

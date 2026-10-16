@@ -15,7 +15,7 @@ pub const SOCKET_VARIABLE: &str = "CAIRN_ASKPASS_SOCKET";
 
 /// The environment variable carrying the token for the operation the helper
 /// serves. In the environment and never on `argv`, which `/proc` makes
-/// world-readable (decision L6).
+/// world-readable.
 pub const TOKEN_VARIABLE: &str = "CAIRN_ASKPASS_TOKEN";
 
 /// The token that ties a helper invocation to one operation Cairn is running.

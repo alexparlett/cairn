@@ -1,5 +1,5 @@
-//! R1.5, decided by counting: asking a row projection for one row allocates nothing,
-//! however long the diff is.
+//! Pinned by counting: asking a row projection for one row allocates nothing, however long the
+//! diff is.
 //!
 //! The unit tests next to the projections pin what the index STORED —
 //! `one_row_of_a_hundred_thousand_lines_is_reached_through_four_index_entries` and
@@ -11,9 +11,9 @@
 //! (0..self.len()).map(|n| self.row_uncached(n)).collect::<Vec<_>>().get(row).copied().flatten()
 //! ```
 //!
-//! leaves every one of those assertions green while making a single row cost a hundred
-//! thousand builds and a hundred thousand rows of heap. That mutation was applied and this
-//! file watched go red on it before it was committed; it is the reason the file exists.
+//! leaves every one of those assertions green while making a single row cost a hundred thousand
+//! builds and a hundred thousand rows of heap. This file goes red under that mutation; catching it
+//! is the reason the file exists.
 //!
 //! Why a counter and not a clock: a timing ratio is flaky on a shared machine, and a count
 //! kept inside `TextDiff` would put test state in a seam type. `allocation-counter` carries
@@ -94,9 +94,9 @@ fn a_unified_row_costs_no_allocation_however_long_the_diff_is() {
     }
 }
 
-/// The view's own path (phase 06): a layout kept across frames, asked for a row against
-/// the diff and overlay it was built from, with whitespace ignored — the ranges it reads
-/// come from the overlay — allocates nothing either.
+/// The view's own path: a layout kept across frames, asked for a row against the diff and overlay
+/// it was built from, with whitespace ignored — the ranges it reads come from the overlay —
+/// allocates nothing either.
 #[test]
 fn a_row_of_a_kept_layout_costs_no_allocation_however_long_the_diff_is() {
     let text = a_hundred_thousand_lines();
@@ -156,8 +156,8 @@ fn a_side_by_side_row_costs_no_allocation_however_long_the_diff_is() {
     }
 }
 
-/// Phase 07: the side-by-side view's own path, a kept [`SideBySideLayout`] asked against the
-/// diff and overlay it was built from, with whitespace ignored, allocates nothing either.
+/// The side-by-side view's own path, a kept [`SideBySideLayout`] asked against the diff and overlay
+/// it was built from, with whitespace ignored, allocates nothing either.
 #[test]
 fn a_row_of_a_kept_side_by_side_layout_costs_no_allocation_however_long_the_diff_is() {
     let text = a_hundred_thousand_lines();

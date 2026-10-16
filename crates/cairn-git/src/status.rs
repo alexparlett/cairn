@@ -1,5 +1,5 @@
-//! The working tree's status, as `git status` answers it (PRD R3): the engine's public face
-//! of `crate::reads`' status read, which says what git is asked and why.
+//! The working tree's status, as `git status` answers it: the engine's public face of
+//! `crate::reads`' status read, which says what git is asked and why.
 
 use cairn_model::WorkingTreeStatus;
 

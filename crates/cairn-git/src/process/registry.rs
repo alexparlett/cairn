@@ -35,9 +35,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cairn_model::{CommandExit, CommandRecord};
 
-use super::command_log::CommandLog;
+use super::command_log::{CommandLog, Origin};
 use super::group::{Group, TERMINATION_GRACE};
 use super::runner::DRAIN_BOUND;
+use cairn_model::ScrubbedLines;
 
 /// How long closing a repository waits for its invocations to be reaped: 3 s.
 ///
@@ -68,7 +69,14 @@ pub(crate) struct Processes {
     /// end the moment it enters.
     closing: AtomicBool,
     log: Mutex<CommandLog>,
+    /// The next invocation's place in the order invocations are built in.
+    built: AtomicU64,
 }
+
+/// A place in a repository's order of invocations: every invocation built after it was taken
+/// is at or after it ([`crate::Repository::command_mark`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandMark(u64);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -81,9 +89,19 @@ impl Processes {
     }
 
     /// How many invocations are running now.
-    #[cfg(test)]
     pub(crate) fn running(&self) -> usize {
         lock(&self.running).len()
+    }
+
+    /// Where the order of invocations stands now.
+    pub(crate) fn mark(&self) -> CommandMark {
+        CommandMark(self.built.load(Ordering::Acquire))
+    }
+
+    /// The records of the invocations this thread built since `mark` that are over, oldest
+    /// first by when they ended.
+    pub(crate) fn built_here_since(&self, mark: CommandMark) -> Vec<CommandRecord> {
+        lock(&self.log).built_on_since(std::thread::current().id(), mark.0)
     }
 
     /// Asks every running invocation to end — `SIGTERM` to its group now, and
@@ -122,9 +140,9 @@ impl Processes {
     /// has it, and whoever sees the registry empty sees the log complete. The
     /// lock order is the registry's, then the log's; nothing takes them the
     /// other way round.
-    fn leave(&self, id: Option<u64>, record: CommandRecord) {
+    fn leave(&self, id: Option<u64>, origin: Origin, record: CommandRecord) {
         let mut running = lock(&self.running);
-        lock(&self.log).push(record);
+        lock(&self.log).push(origin, record);
         if let Some(id) = id {
             running.remove(&id);
             drop(running);
@@ -144,11 +162,13 @@ pub(super) struct Registration {
     started: SystemTime,
     clock: Instant,
     finished: bool,
+    origin: Origin,
 }
 
 impl Registration {
-    /// Booked as starting now, with what the invocation was given. Nothing
-    /// from its environment: the record has nowhere to put it.
+    /// Booked as starting now, with what the invocation was given: its
+    /// arguments as `cli` scrubbed them for every report of it.
+    /// Nothing from its environment: the record has nowhere to put it.
     pub(super) fn new(
         processes: &Arc<Processes>,
         arguments: Vec<String>,
@@ -162,6 +182,10 @@ impl Registration {
             started: SystemTime::now(),
             clock: Instant::now(),
             finished: false,
+            origin: Origin {
+                thread: std::thread::current().id(),
+                order: processes.built.fetch_add(1, Ordering::AcqRel),
+            },
         }
     }
 
@@ -174,15 +198,15 @@ impl Registration {
 
     /// The process never started.
     pub(super) fn not_started(self) {
-        self.finish(CommandExit::NotStarted, false, String::new());
+        self.finish(CommandExit::NotStarted, false, ScrubbedLines::new());
     }
 
     /// The invocation is over: one record, and out of the registry.
-    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: String) {
+    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: ScrubbedLines) {
         self.book(exit, cancelled, stderr);
     }
 
-    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: String) {
+    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: ScrubbedLines) {
         if self.finished {
             return;
         }
@@ -196,7 +220,7 @@ impl Registration {
             cancelled,
             stderr,
         };
-        self.processes.leave(self.id.take(), record);
+        self.processes.leave(self.id.take(), self.origin, record);
     }
 }
 
@@ -204,7 +228,7 @@ impl Drop for Registration {
     /// Never the path an invocation takes — each ends by [`Registration::finish`]
     /// — but if one ever did not, it is still recorded, as an end nobody saw.
     fn drop(&mut self) {
-        self.book(CommandExit::Unknown, false, String::new());
+        self.book(CommandExit::Unknown, false, ScrubbedLines::new());
     }
 }
 
@@ -218,10 +242,10 @@ pub(super) fn exit_of(status: std::process::ExitStatus) -> CommandExit {
     }
 }
 
-/// G17's engine half and R6.2: one record per invocation however it ends, and a
-/// registry that holds exactly the invocations still running. Against a stub
-/// `git` run in the Cairn checkout, each test with a repository handle of its
-/// own, so its registry and log are its own.
+/// One record per invocation however it ends, and a registry that holds
+/// exactly the invocations still running. Against a stub `git` run in the
+/// Cairn checkout, each test with a repository handle of its own, so its
+/// registry and log are its own.
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -321,12 +345,14 @@ mod tests {
             .finish(
                 &signal,
                 |_| {},
-                |line| {
-                    if line == "hanging" {
-                        if by_handle {
-                            handle.kill();
-                        } else {
-                            signal.cancel();
+                |said| {
+                    for line in crate::process::spoken(said) {
+                        if line == "hanging" {
+                            if by_handle {
+                                handle.kill();
+                            } else {
+                                signal.cancel();
+                            }
                         }
                     }
                 },
@@ -334,7 +360,7 @@ mod tests {
             .map(drop)
     }
 
-    /// R8.1 field by field, from an invocation that finished: what it was
+    /// The record field by field, from an invocation that finished: what it was
     /// given, where it ran, when, for how long, its status, not cancelled, and
     /// what it said on stderr — and it was in the registry from the spawn until
     /// it was over, not after. Caught by: entering at the finish rather than the
@@ -371,6 +397,105 @@ mod tests {
         assert_eq!(record.exit, CommandExit::Code(0));
         assert!(!record.cancelled);
         assert_eq!(record.stderr, "said this");
+    }
+
+    /// Through the runner, read as lines, stdout and stderr are split by the one line type — a
+    /// character straddling the piece limit arrives whole on both — and a URL's userinfo
+    /// written across two reads is never handed on, kept in the failure or recorded; the kept
+    /// output lets go of whole older lines and says so; and the record's arguments carry no
+    /// userinfo either. Caught by: stdout and stderr split by two rules, a scrub after the cut,
+    /// a tail that starts part-way through a line, or an argument recorded as it was given.
+    #[test]
+    fn git_output_is_read_once_as_whole_scrubbed_lines_on_both_streams() {
+        let stub = stub(
+            "PATH=/usr/bin:/bin; command -v head >/dev/null || exit 99; \
+             x=$(head -c 262143 /dev/zero | tr '\\000' x); \
+             printf '%s\\303\\251 out\\n' \"$x\"; printf '%s\\303\\251 err\\n' \"$x\" >&2; \
+             sleep 0.1; printf 'fatal: https://user:SEC' >&2; sleep 0.2; \
+             printf 'RET@host/r denied\\n' >&2; printf 'to https://u:SECRET@h/x\\n'; exit 1",
+        );
+        let repo = repo();
+        let processes = processes(&repo);
+        let mut handed = Vec::new();
+        let outcome = discover_retrying(stub.environment())
+            .unwrap()
+            .read_invocation()
+            .in_repository(&repo)
+            .args(["stub", "https://user:SECRET@host/r"])
+            .start()
+            .unwrap()
+            .lines(&CancelSignal::new(), |lines| {
+                handed.extend(lines.lines().map(str::to_owned));
+            });
+        assert!(
+            handed.iter().all(|line| !line.contains('\u{FFFD}')),
+            "a character was cut"
+        );
+        for line in [
+            "é out",
+            "é err",
+            "fatal: https://host/r denied",
+            "to https://h/x",
+        ] {
+            assert!(
+                handed.iter().any(|said| said == line),
+                "{line:?} not handed on whole"
+            );
+        }
+        assert!(
+            handed.iter().all(|line| !line.contains("SEC")),
+            "{handed:?}"
+        );
+        let Err(Error::GitFailed {
+            stderr, arguments, ..
+        }) = outcome
+        else {
+            panic!("expected the failure, got {outcome:?}");
+        };
+        assert_eq!(
+            arguments, "stub https://host/r",
+            "the failure's arguments kept a token"
+        );
+        assert!(stderr.older_dropped(), "older lines let go of, unsaid");
+        assert!(stderr.bytes() <= super::super::pipes::TAIL_BYTES);
+        assert!(
+            stderr.contains("fatal: https://host/r denied"),
+            "{}",
+            &stderr[..80]
+        );
+        assert!(!stderr.contains("SEC"));
+        assert!(
+            stderr
+                .lines()
+                .all(|kept| handed.iter().any(|said| said == kept)),
+            "a kept line is not one handed on whole: the tail cut inside a line"
+        );
+        let record = the_one_record(&processes);
+        assert_eq!(
+            record.stderr, stderr,
+            "the log keeps what the failure carries"
+        );
+        assert_eq!(record.arguments, ["stub", "https://host/r"]);
+    }
+
+    /// stdout read as lines: its last line, written with no newline, is handed on, kept in the
+    /// failure and recorded. Caught by: the stdout splitter's last line left
+    /// unfinished when the stream ends.
+    #[test]
+    fn stdouts_last_line_without_a_newline_is_handed_on_kept_and_recorded() {
+        let stub = stub("printf 'first\\n'; printf 'last words'; exit 1");
+        let repo = repo();
+        let processes = processes(&repo);
+        let mut handed = Vec::new();
+        let outcome = started(&stub, &repo).lines(&CancelSignal::new(), |lines| {
+            handed.extend(lines.lines().map(str::to_owned));
+        });
+        assert_eq!(handed, ["first", "last words"]);
+        let Err(Error::GitFailed { stderr, .. }) = outcome else {
+            panic!("expected the failure, got {outcome:?}");
+        };
+        assert_eq!(stderr, "first\nlast words");
+        assert_eq!(the_one_record(&processes).stderr, "first\nlast words");
     }
 
     /// A failure is recorded as what it was: its status, and what it said.
@@ -626,7 +751,7 @@ mod tests {
         assert_eq!(processes.running(), 0);
     }
 
-    /// R6.2 across handles: every worker handle on a repository books into the
+    /// Across handles, every worker handle on a repository books into the
     /// one registry and log the shared repository answers for.
     #[test]
     fn every_handle_on_a_repository_shares_its_log() {
@@ -646,11 +771,61 @@ mod tests {
         assert_eq!(shared.command_log().len(), 2);
     }
 
-    /// R6.3, the engine half: ending every invocation reaches those being
-    /// driven and those dropped to a reaper, and returns once they are all
-    /// reaped, well inside the bound, with each recorded once as cancelled.
-    /// Caught by: ending only what is driven, waiting the whole bound whatever
-    /// happens, or returning before the reaps.
+    /// What one thread ran since its mark is its own invocations, not another thread's run
+    /// meanwhile, nor its own from before the mark; and the registry counts what runs on any
+    /// thread. Caught by: the log's tail handed out whole, a filter by time alone, or a running
+    /// count of one thread's.
+    #[test]
+    fn an_operations_commands_are_what_its_thread_built_since_its_mark() {
+        let quick = stub("echo \"ran $1\" >&2; exit 0");
+        let shared = SharedRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let git = discover_retrying(quick.environment()).unwrap();
+        let run = |worker: &Repository, name: &str| {
+            git.read_invocation()
+                .in_repository(worker)
+                .arg(name)
+                .start()
+                .unwrap()
+                .finish(&CancelSignal::new(), |_| {}, |_| {})
+                .unwrap();
+        };
+        let lane = shared.to_worker();
+        run(&lane, "before");
+        let mark = lane.command_mark();
+        run(&lane, "mine");
+        std::thread::scope(|threads| {
+            threads.spawn(|| run(&shared.to_worker(), "theirs"));
+        });
+        run(&lane, "mine-too");
+        let mine: Vec<_> = lane
+            .commands_since(mark)
+            .into_iter()
+            .map(|record| record.arguments.concat())
+            .collect();
+        assert_eq!(mine, ["mine", "mine-too"]);
+        assert_eq!(shared.command_log().len(), 4);
+
+        let hanging = stub(HANGING);
+        let hung = discover_retrying(hanging.environment()).unwrap();
+        assert_eq!(lane.running_invocations(), 0);
+        let invocation = hung
+            .read_invocation()
+            .in_repository(&lane)
+            .arg("hang")
+            .start()
+            .unwrap();
+        std::thread::scope(|threads| {
+            threads.spawn(|| assert_eq!(shared.to_worker().running_invocations(), 1));
+        });
+        drop(invocation);
+        assert!(eventually(|| lane.running_invocations() == 0));
+    }
+
+    /// Ending every invocation reaches those being driven and those dropped to
+    /// a reaper, and returns once they are all reaped, well inside the bound,
+    /// with each recorded once as cancelled. Caught by: ending only what is
+    /// driven, waiting the whole bound whatever happens, or returning before
+    /// the reaps.
     #[test]
     fn ending_every_invocation_ends_them_all_and_waits_for_their_reaps() {
         let stub = stub(HANGING);
@@ -776,9 +951,9 @@ mod tests {
         );
     }
 
-    /// The bounds this phase fixed, as `state.md` records them.
+    /// The log's bounds, a thousand records and 4 MiB, and the close's, three seconds.
     #[test]
-    fn the_log_and_close_bounds_have_the_values_the_packet_recorded() {
+    fn the_log_and_close_bounds_have_their_documented_values() {
         assert_eq!(LOG_ENTRIES, 1000);
         assert_eq!(LOG_BYTES, 4 * 1024 * 1024);
         assert_eq!(CLOSE_BOUND, Duration::from_secs(3));

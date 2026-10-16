@@ -9,7 +9,7 @@
 
 use cairn_model::Oid;
 
-use super::fetch_tests::UnbornRepository;
+use super::network::tests::UnbornRepository;
 
 /// A line of commits on `main`, `HEAD` on it.
 pub(crate) struct WrittenRepository {

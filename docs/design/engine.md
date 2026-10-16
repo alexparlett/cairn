@@ -65,38 +65,65 @@ implied.
   (`diff.md`, "Selections and patches").
 - **Whole files**: `git add` to stage; `git reset -q --` to unstage, which works on
   an unborn branch, `git reset -q -- <old> <new>` for a staged rename,
-  `git reset -q HEAD^ --` out of an amend and `git rm --cached -q --` out of a root
-  commit's amend, which has no `HEAD^`; `git restore --worktree --` to discard. A
+  `git reset -q HEAD^ --` out of an amend and `git rm --cached -f -q --` out of a root
+  commit's amend, which has no `HEAD^` — forced, since without `-f` git refuses the
+  very path an amend's staged list shows edited, one whose staged content differs
+  from both the file and `HEAD`, where an unstage drops that content as `git reset`
+  would; `git restore --worktree --` to discard. A
   submodule is never discarded: `git restore` exits 0 and leaves its commit where
   it was, only `git submodule update` moves it back, and no prompt can count what
   is dirty inside it. A conflicted path is staged with `git add`, which marks it
   resolved, and takes neither a patch of lines nor a discard; resolving its content
   is the conflict view's (`conflicts.md`).
-- **Untracked files**: `git clean -f --` with the exact paths status listed —
+- **Untracked files**: `git clean -f -q --` with the exact paths status listed —
   never a pattern, and never the list `git clean -n` prints, which is localised
-  and quoted — adding `-d` only for a collapsed directory; a nested repository is
-  refused, because deleting it deletes history the prompt cannot count. `git
+  and quoted — and never `-d`: status lists untracked files one per file, and the
+  one directory it lists whole, a nested repository, is refused, because deleting
+  it deletes history the prompt cannot count. `-q` because a `git clean` left
+  running unwatched by a second close dies at the first line it writes to a pipe
+  nobody reads (`processes.md`, "Lifecycle"). `git
   clean` takes no pathspec file, so its paths go on `argv`, split across several
   invocations under one re-check of what was confirmed when the list is long.
-- **Commits**: `git commit -F -` and `git commit --amend -F -`, the message on
-  stdin so it is never on `argv` or in the command log. No `--cleanup` is passed,
-  so the user's `commit.cleanup` decides exactly as it does for their own
-  `git commit -F`; `--no-verify` is passed only from the hook failure's skip
-  (`ui.md`, "The commit box"); the author is git's own identity — the one the
+- **Commits**: `git commit -q -F -` and `git commit -q --amend -F -`, the message
+  on stdin so it is never on `argv` or in the command log, and no
+  `--literal-pathspecs`, which git would export to every hook. No `--cleanup` is
+  passed, so the user's `commit.cleanup` decides exactly as it does for their own
+  `git commit -F`; `--no-verify` is passed only from the skip a failed commit or
+  amend offers (`ui.md`, "The commit box"); the author is git's own identity — the one the
   user's terminal would commit with, since the identity variables are inherited
   (`processes.md`, "The environment") — and git's own error is shown when it has
-  none. With a merge in progress the commit is the merge commit; during a rebase,
-  cherry-pick or revert Cairn does not commit, since continuing one is that
-  operation's own. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
-  since transcoding the message would need a dependency.
-- **Recovering a lost commit**: `git branch -- <name> <oid>`.
+  none. With a merge, a single cherry-pick or a single revert in progress the commit
+  concludes it, as `git commit` does; during a rebase, `git am` or a sequence of picks
+  or reverts Cairn does not commit, since continuing one is that operation's own — each
+  read from the files git's own status reads, the sequencer's included. A non-UTF-8
+  `i18n.commitEncoding`, as `git config` answers it, is refused with its reason, since
+  transcoding the message would need a dependency. An amend's cost is read when it is
+  pressed, in the job that runs it: one git logs and no remote has runs at once, being
+  recoverable; one a remote has, or git logs nowhere — `core.logAllRefUpdates` as `git
+  config` answers it — waits for the confirmation seal.
+- **Creating a branch**: `git branch -- <name> <oid>`, which also recovers a lost
+  commit; checked out as it is created, `git checkout -q -b <name> <oid> --`, which
+  carries the working tree's changes over or is refused by git, writing nothing,
+  where one would be overwritten; or, the user choosing to discard them, Fork's own
+  command, `git checkout -q --no-track -f -b <name> <oid> --` — destructive, the one
+  write that discards a staged change, and with it any untracked file in the way, as
+  git decides: its `Consequence` is a fixed sentence that predicts nothing, and its
+  re-check is that `HEAD`, the commit and the name are what they were. git leaves a
+  submodule's change in place and discards a conflicted path, as Fork's command does; an
+  operation in progress — a merge, a rebase, a cherry-pick, a revert, `git am` — is
+  refused before git runs, since the forced checkout would abandon it without a word
+  (evidence `docs/research/staging-and-commit/create-branch-discard-probe-2026-10-10.md`).
+  The name is
+  `-b`'s value, which git reads as the name whatever it begins with, and the commit
+  its full id, the `--` after it saying it is no path. Spec:
+  `docs/prd/staging-and-commit.md` R11.3.
 - **A stale lock**: no verb exists, so `Remove index.lock…` deletes exactly
   `<gitdir>/index.lock` through the filesystem, in `ops/`, once the lock is
   re-checked as the one whose age the user confirmed — the single mutation not
   made by `git`.
 
 Fetch, in the network lane, sits beside them (`credentials.md`). Spec:
-`docs/prd/staging-and-commit.md` R3, R6. Evidence, each verb run on git 2.30.9,
+`docs/prd/staging-and-commit.md` R3, R6. As built: `docs/systems/staging.md`. Evidence, each verb run on git 2.30.9,
 2.32.7 and 2.56.0: `docs/research/staging-and-commit/git-write-verbs.md`.
 
 Reads go to gitoxide because reads are what a GUI does constantly, and its
@@ -148,8 +175,8 @@ worktree's `includeIf "gitdir:..."` against the common directory where git uses
 the worktree's own git directory, reads the system file from its own path, and
 decides trust by an owner rule of its own, and each of those once let through a
 fetch git then made. So git answers: `git config --includes --null` with
-`--type=bool --get <key>` or `--get-all <key>`, query form only, never a setter
-(`reads::fetch_settings`), the second porcelain mode a read runs, accepted by
+`--type=bool --get <key>`, `--get <key>` or `--get-all <key>`, query form only, never a
+setter (`reads::fetch_settings`), the second porcelain mode a read runs, accepted by
 the user; the check fails closed when the read fails.
 
 The fourth case is status: which paths are staged, changed, untracked or in
@@ -219,18 +246,39 @@ a format-version-0 repository that names a ref storage, as git refuses it. Evide
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
 A write also needs answers only git can give, and asks them as reads, each query
-plumbing. Before any discard, of lines or of files, `git hash-object --path=<p> --
-<p>`, without `-w`, hashes the working-tree file in git's form — through the clean
-filter the diff ran, writing no object — to check it is still the side that was
-drawn and confirmed (`diff.md`, "Selections and patches"). `git rev-parse
---git-path hooks` says where git looks for hooks, `core.hooksPath` included, so a
-failed commit offers to skip its hooks only where a `pre-commit` or `commit-msg`
-hook exists and is executable. Neither is argued from a measured disagreement with
-gix: each is a question only git can answer — git's form of a working-tree file
-through the user's filters, and git's resolution of the hooks path — so asking git
-is the only way to ask it. They run inside the operation that needs them, on the
-local lane, and end with it rather than by a query's epoch. Spec:
-`docs/prd/staging-and-commit.md` R3.9.
+plumbing. Before a discard of lines, `git hash-object --path=<p> -- <p>`, without
+`-w`, hashes the working-tree file in git's form — through the clean filter the
+diff ran, writing no object — to check it is still the side that was drawn and
+confirmed (`diff.md`, "Selections and patches"). Every discard, of lines or of
+files, also compares the file's bytes and its executable bit as they are on disk,
+the bytes hashed in process with no filter — a symlink as its target, as git stores
+one — so an edit git's form does not show, a line ending alone, or a `chmod` still
+refuses it (`docs/prd/staging-and-commit.md`
+R3.9). Creating a branch asks one more: whether git takes a name for a new branch,
+exactly as `git branch` and `git checkout -b` take it: `git check-ref-format --branch`,
+which resolves a name in `@{-N}`'s form to another branch's exactly as both verbs do, where
+`check-ref-format refs/heads/<name>` would take `-x` and `HEAD`, which both refuse; a name
+holding `@{` is refused before git is asked, and a name a branch has, or one a branch's
+folder holds, is looked up — so the dialog refuses, before anything runs, exactly the
+names git would (R11.3). A commit asks two: `git
+stripspace`, given a merge's, cherry-pick's or revert's message on stdin, so the draft is
+what git's own editor session would leave under the repository's `commit.cleanup` and
+comment character — comment lines gone under `strip`, kept under `whitespace`, the message as
+written under `verbatim`, cut at git's scissors line under `scissors`, and no line a comment
+under `core.commentChar=auto` — git reading the comment character itself, and what is shown
+is what is committed (R6.10); and the
+settings the commit and an amend depend on, `core.logAllRefUpdates` and
+`i18n.commitEncoding`, through the same `git config` query fetch's refspec check
+makes, since gix's reading of a linked worktree's `includeIf`, the system file and
+trust is not git's (R6.11). None is argued from a measured disagreement with gix:
+each is a question only git can answer — git's form of a working-tree file through
+the user's filters, git's own rules for a branch's name, git's cleaning of a message
+and git's reading of its configuration — so asking git is the only way to ask it.
+Where hooks live is not asked at all: a failed commit always offers to skip them,
+since git finds hooks no file check sees. Those inside an operation run on the local
+lane and end with it rather than by a query's epoch; a branch name's check is a
+query of its own, superseded by the next name typed. Spec:
+`docs/prd/staging-and-commit.md` R3.9, R6.10, R6.11, R11.3.
 
 Each read git answers is a named function in `reads/` and runs under a read's
 environment — no optional locks, no askpass token. One a query asks is cancelled by
@@ -257,7 +305,7 @@ live in one application, and they can disagree. Three obligations follow.
    its `Performed`), and the worker acts on it (`concurrency.md`). Get this wrong
    and the UI shows the pre-write state, which reads to the user as "the
    operation failed". The contract is documented in
-   `crates/cairn-git/src/ops/mod.rs` and summarised in
+   `crates/cairn-git/src/ops.rs` and summarised in
    `docs/systems/credentials.md`.
 2. **Filters affect reads, not only writes** — the next section.
 3. **Edge cases can diverge.** A gix read against git's under sparse checkout,
@@ -280,12 +328,16 @@ those users a diff `git diff` does not, and would hand staging a patch built fro
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git
 does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
-the top of the working tree (`./-` for `-`) — one of the three porcelain modes
-a read runs (the others are `git config` in query form and `git stash show` in raw
-form, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
+the top of the working tree (`./-` for `-`) — one of the four porcelain modes
+a read runs (the others are `git config` in query form, `git stash show` in raw
+form and `git stripspace`, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
-diff (`git diff-index --cached`) reads only objects. gix reads the index, fresh
+diff (`git diff-index --cached`) reads only objects; a staged rename or copy is
+paired as the user's `git diff --cached` pairs it, by a first `git diff-index
+--cached --raw --diff-filter=RC` over the whole index with their rename detection,
+since plumbing reads no `diff.renames` and a pathspec of one path pairs nothing
+(Spec: `docs/prd/staging-and-commit.md` R2.6). gix reads the index, fresh
 for every query, for what git's answer does not say alone, and every blob git
 names.
 
@@ -334,12 +386,15 @@ will destroy — the paths, the lines and bytes of each, the blob ids the loss w
 computed against, a commit's id, a lock file's path and age — from which the
 prompt is rendered, never typed beside it. The token is neither `Clone` nor `Copy`,
 so one confirmation buys one operation, and only the confirmation surfaces on a
-roster the guard holds construct it: the confirmation dialog, and the commit box,
-whose amend button's visible text is its prompt (`ui.md`). The destructive
-operations are a roster of the guard's too — discarding lines, discarding files,
-deleting untracked files, amending, and removing a stale `index.lock` — and an
-operation on it without the token, or a roster entry with no such operation,
-fails.
+roster the guard holds construct it: the confirmation dialog, and the Create Branch
+dialog, where choosing Discard and pressing Create and Checkout is the
+acknowledgement, as in Fork (`ui.md`). Destructive means what cannot be undone or
+what rewrites history someone else may have; what can be recovered asks nothing
+and takes no token. The destructive operations are a roster of the guard's too —
+discarding lines, discarding files, deleting untracked files, an amend a remote has
+or git keeps no reflog for, Create Branch's Discard, and removing a stale
+`index.lock` — and an operation on it without the token, or a roster entry with no
+such operation, fails.
 
 Immediately before it runs, each destructive operation re-reads the state its
 `Consequence` names and refuses, writing nothing, when anything moved: a file
@@ -363,4 +418,4 @@ Unstaging a staged version the working tree no longer holds leaves that blob
 unreachable; Fork does not confirm it and neither does Cairn, a residual that
 stays `destructive-ops-reviewer`'s. No destructive operation takes a backup first:
 what a confirmation protects is said in `feature-inventory.md`, "Recovery". Spec:
-`docs/prd/staging-and-commit.md` R1.
+`docs/prd/staging-and-commit.md` R1. As built: `docs/systems/staging.md`, "Discards, sealed".

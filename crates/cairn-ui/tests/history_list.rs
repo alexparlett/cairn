@@ -1,6 +1,6 @@
 //! Headless component tests for `HistoryList`.
 
-#[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
+#[path = "../../cairn-model/tests/support/layout_before_compaction.rs"]
 mod layout_before_compaction;
 
 use std::cell::RefCell;
@@ -11,9 +11,10 @@ use cairn_model::{
     GraphRow, History, Lane, LaneAssigner, Oid, PagedCommit, RowContent, RowEdges, RowId, RowsPage,
 };
 use cairn_ui::accelerators::{self, Action, Os};
-use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
+use cairn_ui::{HistoryList, NEW_BRANCH_CAPTION, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use layout_before_compaction::AssignerBeforeCompaction;
 
 const WIDTH: f32 = 600.;
@@ -57,21 +58,28 @@ fn rows(range: impl IntoIterator<Item = usize>) -> History {
 struct Reports {
     selected: Rc<RefCell<Vec<RowId>>>,
     reached_end: Rc<RefCell<usize>>,
+    actions: Rc<RefCell<Vec<Action>>>,
+    new_branch: Rc<RefCell<Vec<(Oid, String)>>>,
 }
 
 #[derive(Clone)]
 struct Fixture {
     rows: State<History>,
     selected: State<Option<RowId>>,
+    /// The second of a compared pair.
+    also: State<Option<RowId>>,
 }
 
-/// Each row draws as one label: its subject, prefixed `> ` when the list says it is selected.
+/// Each row draws as one label: its subject, prefixed `> ` when the list says it is selected
+/// and `~ ` when it says the row is lost.
 fn list(reports: Reports) -> impl Fn() -> Element + 'static {
     move || {
         let fixture = use_consume::<Fixture>();
         let mut selected = fixture.selected;
         let on_select = reports.selected.clone();
         let reached_end = reports.reached_end.clone();
+        let actions = reports.actions.clone();
+        let new_branch = reports.new_branch.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
             let subject = match render.content {
@@ -79,12 +87,16 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
                 RowContent::Stash(stash) => stash.message,
             };
             let marker = if render.selected { "> " } else { "" };
+            let lost = if render.lost { "~ " } else { "" };
             label()
                 .height(Size::px(ROW_HEIGHT))
-                .text(format!("{marker}{subject}"))
+                .text(format!("{marker}{lost}{subject}"))
                 .into()
         })
+        .on_action(move |action| actions.borrow_mut().push(action))
+        .on_new_branch(move |at: (Oid, String)| new_branch.borrow_mut().push(at))
         .selected(*selected.read())
+        .also_selected(*fixture.also.read())
         .on_select(move |id: RowId| {
             on_select.borrow_mut().push(id);
             selected.set(Some(id));
@@ -95,13 +107,21 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
 }
 
 fn launch(initial: History, reports: &Reports) -> (TestingRunner, Fixture) {
+    let listed = list(reports.clone());
     let (mut test, fixture) = TestingRunner::new(
-        list(reports.clone()),
+        move || -> Element {
+            rect()
+                .expanded()
+                .child(listed())
+                .child(ContextMenuViewer::new())
+                .into()
+        },
         (WIDTH, HEIGHT).into(),
         move |runner| {
             runner.provide_root_context(|| Fixture {
                 rows: State::create(initial),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -215,9 +235,9 @@ fn labelled_rows(length: usize, per_row: usize, crowded: usize, crowd: usize) ->
 }
 
 /// The viewport twin with labelled rows: the history list still builds one viewport of
-/// rows, and a row labelled by thousands of refs lays out only the chips its column holds
-/// (R5.3, phase 05 QA RR3). Caught by: chips laid out for every label, or labels making the
-/// list build rows past its viewport.
+/// rows, and a row labelled by thousands of refs lays out only the chips its column holds.
+/// Caught by: chips laid out for every label, or labels making the list build rows past its
+/// viewport.
 #[test]
 fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips() {
     let viewport_rows = (HEIGHT / ROW_HEIGHT).ceil() as usize;
@@ -244,6 +264,7 @@ fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_o
             runner.provide_root_context(|| Fixture {
                 rows: State::create(history),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -273,10 +294,10 @@ fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_o
     );
 }
 
-/// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "previous change",
-/// "next change" — resolved through the table, not the list's "next commit", though the
-/// detail pane that hears those chords does not have focus here. Caught by: the list moving
-/// on any arrow whatever is held, or asking only the scope it sits in.
+/// An arrow held with a chord's modifiers is the accelerator's — "previous change", "next
+/// change" — resolved through the table, not the list's "next commit", though the detail pane
+/// that hears those chords does not have focus here. Caught by: the list moving on any arrow
+/// whatever is held, or asking only the scope it sits in.
 #[test]
 fn an_accelerators_chord_does_not_move_the_selection() {
     let reports = Reports::default();
@@ -284,7 +305,7 @@ fn an_accelerators_chord_does_not_move_the_selection() {
     press(&mut test, NamedKey::ArrowDown);
 
     for action in [Action::NextChange, Action::PreviousChange] {
-        let chord = accelerators::chord(action, Os::current()).unwrap();
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
         let (key, _, held) = chord.key_press().unwrap();
         test.press_key_with_modifiers(key, held);
         test.sync_and_update();
@@ -301,6 +322,121 @@ fn an_accelerators_chord_does_not_move_the_selection() {
         Some(&RowId::Commit(oid(1))),
         "the plain arrow stopped moving the selection"
     );
+}
+
+/// The history's own chord, Show Lost Commits, is reported to the list's caller as its
+/// action, and moves no selection; a chord of the detail pane's scope is left alone and
+/// reported as nothing. Caught by: the chord left unheard, heard as an arrow, or another
+/// scope's chord reported as the history's.
+#[test]
+fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
+    let reports = Reports::default();
+    let (mut test, _) = launch(rows(0..100), &reports);
+    press(&mut test, NamedKey::ArrowDown);
+    for action in [
+        Action::ShowLostCommits,
+        Action::NextChange,
+        Action::ShowLostCommits,
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, code, modifiers) = chord.key_press().unwrap();
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyDown,
+            key,
+            code,
+            modifiers,
+        });
+        test.sync_and_update();
+    }
+    assert_eq!(
+        reports.actions.borrow().as_slice(),
+        &[Action::ShowLostCommits, Action::ShowLostCommits]
+    );
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        &[RowId::Commit(oid(0))],
+        "a chord moved the commit selection"
+    );
+}
+
+/// A row of a commit no ref reaches is drawn lost, and only that row, from the history's own
+/// flag — and drawn as any other once a later page says a ref reaches it after all. Caught
+/// by: the flag not handed to the row, handed to its neighbours, or read from a stale copy.
+#[test]
+fn a_lost_row_is_drawn_lost_and_no_other() {
+    let mut history = History::new();
+    let mut first = page(0..2);
+    for n in 2..4 {
+        first.push_lost(
+            GraphRow::new(oid(n), Lane::new(1), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: &format!("commit {n}"),
+                author: "A",
+                author_time: 0,
+            },
+        );
+    }
+    hold(&mut history, first);
+    hold(&mut history, page(4..6));
+    let reports = Reports::default();
+    let (mut test, fixture) = launch(history, &reports);
+    let texts = |test: &TestingRunner| -> Vec<String> {
+        built_rows(test).into_iter().map(|(text, _)| text).collect()
+    };
+    assert_eq!(
+        texts(&test),
+        [
+            "commit 0",
+            "commit 1",
+            "~ commit 2",
+            "~ commit 3",
+            "commit 4",
+            "commit 5"
+        ]
+    );
+    let mut rows = fixture.rows;
+    let mut reached = RowsPage::new();
+    reached.reached(3, oid(3));
+    test.run_in(|| hold(&mut rows.write(), reached));
+    test.sync_and_update();
+    test.sync_and_update();
+    assert_eq!(
+        texts(&test),
+        [
+            "commit 0",
+            "commit 1",
+            "~ commit 2",
+            "commit 3",
+            "commit 4",
+            "commit 5"
+        ]
+    );
+}
+
+/// Shift+↓ — Local Changes' list extension, a chord of a scope the history list is not in —
+/// moves the commit selection as ↓ does, and Shift+↑ as ↑. Caught by: a list that leaves
+/// alone every scope's chords, which would swallow Shift+arrows here.
+#[test]
+fn another_views_chord_is_the_history_lists_arrow() {
+    let reports = Reports::default();
+    let (mut test, _) = launch(rows(0..100), &reports);
+    press(&mut test, NamedKey::ArrowDown);
+    for (action, expected) in [
+        (Action::ExtendSelectionDown, 1),
+        (Action::ExtendSelectionDown, 2),
+        (Action::ExtendSelectionUp, 1),
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, _, held) = chord.key_press().unwrap();
+        test.press_key_with_modifiers(key, held);
+        test.sync_and_update();
+        assert_eq!(
+            reports.selected.borrow().last(),
+            Some(&RowId::Commit(oid(expected))),
+            "{action:?} did not move the commit selection as its arrow does"
+        );
+    }
 }
 
 #[test]
@@ -447,6 +583,7 @@ fn a_click_gives_the_list_the_keyboard() {
                 runner.provide_root_context(|| Fixture {
                     rows: State::create(rows(0..100)),
                     selected: State::create(None),
+                    also: State::create(None),
                 })
             }
         },
@@ -585,10 +722,10 @@ fn braided_walk(len: usize) -> Vec<(Oid, Vec<Oid>)> {
     walk
 }
 
-/// The QA brief's scroll: deep, then back to the top. Every row the list draws, each time it
-/// draws it, carries exactly the edges the assigner retained for it before compaction.
-/// Caught by: deriving a row from a snapshot other than its own nearest, or from state a
-/// previous row's derivation left behind.
+/// A scroll deep, then back to the top. Every row the list draws, each time it draws it,
+/// carries exactly the edges the assigner retained for it before compaction. Caught by:
+/// deriving a row from a snapshot other than its own nearest, or from state a previous row's
+/// derivation left behind.
 #[test]
 fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
     let length = 3_000;
@@ -649,6 +786,7 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
             runner.provide_root_context(|| Fixture {
                 rows: State::create(history),
                 selected: State::create(None),
+                also: State::create(None),
             })
         },
         1.,
@@ -690,13 +828,13 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
     );
 }
 
-/// RR1: the list keeps where its selection sits in the hint its caller gives it, and reads it
+/// The list keeps where its selection sits in the hint its caller gives it, and reads it
 /// there first — so a row its caller chose (a pressed ref's, a parent link's), told to the
 /// hint, is moved from at once rather than searched for among every loaded row. A press is
-/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a
-/// history no walk makes, built so the two ways of finding it disagree — the hint at 500
-/// moves an arrow key to 501, where a search from the top would find 5 and move to 6. Caught
-/// by: the list keeping a hint of its own and ignoring the caller's.
+/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a history
+/// no walk makes, built so the two ways of finding it disagree — the hint at 500 moves an
+/// arrow key to 501, where a search from the top would find 5 and move to 6. Caught by: the
+/// list keeping a hint of its own and ignoring the caller's.
 #[test]
 fn the_list_moves_from_the_row_its_callers_hint_names() {
     #[derive(Clone)]
@@ -771,5 +909,130 @@ fn the_list_moves_from_the_row_its_callers_hint_names() {
         reports.selected.borrow().as_slice(),
         [RowId::Commit(oid(501))],
         "the arrow moved from the row a search found, not the one the hint named"
+    );
+}
+
+fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
+    test.move_cursor(at);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: at.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    test.sync_and_update();
+}
+
+/// Every commit row's context menu offers Fork's "New Branch…", and choosing it reports that
+/// row's commit — a lost row's as any other's; a stash's row offers none. Caught by: the menu
+/// on lost rows alone, the wrong commit reported, or a stash's row offering a branch at its
+/// stash commit.
+#[test]
+fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
+    let mut history = rows(0..3);
+    let mut lost = RowsPage::new();
+    lost.push_lost(
+        GraphRow::new(oid(3), Lane::new(1), Vec::new()),
+        PagedCommit {
+            parents: 1,
+            subject: "commit 3",
+            author: "A",
+            author_time: 0,
+        },
+    );
+    lost.push_stash(
+        GraphRow::new(oid(4), Lane::new(2), Vec::new()),
+        cairn_model::PagedStash {
+            index: 0,
+            base: oid(0),
+            message: "commit 4 stash",
+            author: "A",
+            author_time: 0,
+        },
+    );
+    hold(&mut history, lost);
+    let reports = Reports::default();
+    let (mut test, _) = launch(history, &reports);
+    let row_at = |n: usize| (100., (n as f64 + 0.5) * f64::from(ROW_HEIGHT));
+    let menu_offered = |test: &TestingRunner| {
+        test.find(|_, element| {
+            Label::try_downcast(element).filter(|l| l.text == NEW_BRANCH_CAPTION)
+        })
+        .is_some()
+    };
+    for n in [1usize, 3] {
+        right_click(&mut test, row_at(n));
+        assert!(menu_offered(&test), "row {n} offered no menu");
+        let item = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == NEW_BRANCH_CAPTION)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no item"));
+        test.click_cursor((f64::from(item.x), f64::from(item.y)));
+        test.sync_and_update();
+        assert_eq!(
+            reports.new_branch.borrow().last(),
+            Some(&(oid(n), format!("commit {n}"))),
+            "row {n}"
+        );
+        assert!(!menu_offered(&test), "the menu stayed open");
+    }
+    right_click(&mut test, row_at(4));
+    assert!(!menu_offered(&test), "a stash's row offered New Branch");
+    assert_eq!(reports.new_branch.borrow().len(), 2);
+}
+
+/// As in Fork for Windows, a right-click selects the row it lands on — so the detail pane
+/// follows and the menu acts on what is shown — and a right-click on a row of the selection
+/// already made, either of a compared pair, keeps the whole selection. Caught by: a
+/// right-click that leaves the selection where it was, or one inside a compared pair that
+/// collapses it to one row.
+#[test]
+fn a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in() {
+    let reports = Reports::default();
+    let (mut test, fixture) = launch(rows(0..5), &reports);
+    let row_at = |n: usize| (100., (n as f64 + 0.5) * f64::from(ROW_HEIGHT));
+    right_click(&mut test, row_at(2));
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        &[RowId::Commit(oid(2))],
+        "the right-click did not select its row"
+    );
+    assert_eq!(selected_rows(&test), vec!["commit 2".to_owned()]);
+    assert!(
+        test.find(|_, element| {
+            Label::try_downcast(element).filter(|l| l.text == NEW_BRANCH_CAPTION)
+        })
+        .is_some(),
+        "the menu did not open on the row selected"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    test.sync_and_update();
+
+    let (mut selected, mut also) = (fixture.selected, fixture.also);
+    test.run_in(|| {
+        selected.set(Some(RowId::Commit(oid(0))));
+        also.set(Some(RowId::Commit(oid(3))));
+    });
+    test.sync_and_update();
+    for n in [3usize, 0] {
+        right_click(&mut test, row_at(n));
+        assert_eq!(
+            reports.selected.borrow().len(),
+            1,
+            "a right-click on row {n} of the compared pair collapsed it"
+        );
+        test.press_key(Key::Named(NamedKey::Escape));
+        test.sync_and_update();
+    }
+    right_click(&mut test, row_at(1));
+    assert_eq!(
+        reports.selected.borrow().last(),
+        Some(&RowId::Commit(oid(1))),
+        "a right-click outside the pair did not select its row"
     );
 }

@@ -5,9 +5,9 @@
 //! (`--git-dir`), and Cairn names every repository it opens to the `git` it runs
 //! (`process/cli.rs`), so git's own check never runs on Cairn's behalf: it is made here,
 //! as the repository is opened, and a repository git's discovery refuses is refused —
-//! [`Error::DubiousOwnership`], before anything in it is read or run (the user's decision
-//! of 2026-10-04: refuse at open where git would refuse, as a bare repository found by
-//! searching is refused, `crate::bare_discovery`). Nothing git opens is refused.
+//! [`Error::DubiousOwnership`], before anything in it is read or run — refused at open where
+//! git would refuse, as a bare repository found by searching is refused
+//! (`crate::bare_discovery`). Nothing git opens is refused.
 //!
 //! The rule depends on the version of the `git` that will be asked, and each band below
 //! was read in git's own source at every tag from v2.30.0 to v2.56.0 (`setup.c`,
@@ -15,8 +15,8 @@
 //! that carried a change named beside it, and reproduced against git 2.56.0, 2.32.7 and
 //! 2.30.9 by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`:
 //!
-//! - **No check** before 2.30.3, 2.31.2, 2.32.1, 2.33.2, 2.34.2 and 2.35.2 (CVE-2022-24765
-//!   landed in those and in 2.36.0): every repository opens.
+//! - **No check** before 2.30.3, 2.31.2, 2.32.1, 2.33.2, 2.34.2 and 2.35.2 (the fix for
+//!   CVE-2022-24765 is in those and in 2.36.0): every repository opens.
 //! - **One path**, the working tree's top (the directory holding `.git`) or, bare, the git
 //!   directory, owned when its owner (`lstat`) is the effective uid; `safe.directory`
 //!   compared byte for byte with that path, the empty value resetting.
@@ -55,7 +55,7 @@
 //! The environment that configuration, `HOME` and `SUDO_UID` are read through is the one
 //! Cairn was launched with, what the user's own `git`, run from the same place, reads —
 //! the session-wide settings honoured as git honours them, while `GIT_DIR` and
-//! `GIT_WORK_TREE` are ignored by design (the user's decision of 2026-10-04, stated once in
+//! `GIT_WORK_TREE` are ignored by design (stated once in
 //! `docs/systems/git-processes.md`'s opening section); the
 //! effective uid is the process's own ([`Identity::of_this_process`]), read from
 //! `/proc/self/status` or, where that cannot be read, as the owner of a file the process
@@ -70,7 +70,7 @@
 //! the configuration files are found as `crate::bare_discovery` finds them, with its
 //! residuals; the created file's owner is the effective uid on a filesystem that records
 //! the creator, which one mounted with a fixed owner (FAT, a squashing NFS) does not, and
-//! a temporary directory on one is the review's; and gix, once Cairn has decided git opens
+//! a temporary directory on one is not checked; and gix, once Cairn has decided git opens
 //! a repository, checks the working tree's owner again by its own rule
 //! (`gix::sec::identity::is_path_owned_by_current_user` over the directory `core.worktree`
 //! names, and gix's `safe.directory` reading, which knows neither the command line, `.`,
@@ -84,7 +84,7 @@
 //!
 //! The real case needs a second owner, so it is a privileged run rather than a gate step:
 //! `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`, an
-//! `#[ignore]`d test in `crates/cairn-git/tests/diff/ownership.rs`, run as root by whoever
+//! `#[ignore]`d test in `crates/cairn-git/tests/diff_engine/diff/ownership.rs`, run as root by whoever
 //! reviews a change here. Every other case is decided without one: by
 //! `GIT_TEST_ASSUME_DIFFERENT_OWNER` against git itself, and by an [`Identity`] whose
 //! effective uid is not the owner's in `SharedRepository`'s own tests.

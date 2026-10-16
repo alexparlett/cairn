@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use cairn_model::AskpassToken;
+use cairn_model::{AskpassToken, ScrubbedLines, Scrubber};
 
 use super::GitEnvironment;
 use super::environment::Profile;
@@ -116,6 +116,16 @@ impl Write {
 /// What an invocation's kind decides: what it adds to the base environment,
 /// and what its cancellation and failure report.
 pub(crate) trait Kind {
+    /// What a ceiling on this kind's stdout can be: a byte count for a read,
+    /// and no value at all for a write — `Infallible` has none, so the only
+    /// ceiling a write's invocation can be driven under is no ceiling. A crossed
+    /// ceiling outranks a clean exit, and a write's completed change must never be
+    /// reported refused.
+    type Ceiling: Copy;
+
+    /// The bytes a ceiling allows.
+    fn ceiling_bytes(ceiling: Self::Ceiling) -> usize;
+
     fn profile(&self) -> Profile<'_>;
 
     /// The error for a cancelled invocation, built after the reap.
@@ -126,8 +136,14 @@ pub(crate) trait Kind {
 }
 
 /// A read writes nothing, so it leaves nothing behind and fails on no lock of
-/// its own: its cancellation is that and nothing else (R5.2).
+/// its own: its cancellation is that and nothing else.
 impl Kind for Read {
+    type Ceiling = usize;
+
+    fn ceiling_bytes(ceiling: usize) -> usize {
+        ceiling
+    }
+
     fn profile(&self) -> Profile<'_> {
         Profile::Read
     }
@@ -143,9 +159,15 @@ impl Kind for Read {
 
 /// A write's cancellation lists the lock files present once it is reaped —
 /// what a `SIGKILL` stranded, or a lock another git holds — and its failure
-/// names those present, which is what a write fails on (R5.2, R5.3). Listed,
+/// names those present, which is what a write fails on. Listed,
 /// never removed.
 impl Kind for Write {
+    type Ceiling = std::convert::Infallible;
+
+    fn ceiling_bytes(ceiling: std::convert::Infallible) -> usize {
+        match ceiling {}
+    }
+
     fn profile(&self) -> Profile<'_> {
         Profile::Write {
             token: self.token.as_ref(),
@@ -230,13 +252,19 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         self.start_with(&os_thread)
     }
 
-    /// Starts and collects to the end, for a test whose stub or real `git`
-    /// writes little: never cancelled, and a ceiling far above what any test
-    /// prints.
+    /// Starts and gathers everything to the end, for a test whose stub or real
+    /// `git` writes little: never cancelled. Through [`Invocation::finish`],
+    /// which every kind has, since the bounded-output helpers are a read's
+    /// alone.
     #[cfg(test)]
     pub(crate) fn collected(self) -> Result<Output, Error> {
-        self.start()?
-            .collect(&crate::CancelSignal::new(), 16 * 1024 * 1024, |_| {})
+        let mut stdout = Vec::new();
+        let output = self.start()?.finish(
+            &crate::CancelSignal::new(),
+            |chunk| stdout.extend_from_slice(chunk),
+            |_| {},
+        )?;
+        Ok(Output::new(stdout, output.stderr))
     }
 
     /// [`GitCommand::start`] with no thread able to start, for a test outside
@@ -263,20 +291,16 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Its own group, so ending it reaches everything it started (R3.1).
+            // Its own group, so ending it reaches everything it started.
             .process_group(0);
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
+        // The one copy of the arguments anything keeps or reports — the log's record and every
+        // error the runner builds — scrubbed of a URL's userinfo here, once.
+        let arguments = scrubbed_arguments(&self.arguments);
         let registration = self.processes.as_ref().map(|processes| {
-            Registration::new(
-                processes,
-                self.arguments
-                    .iter()
-                    .map(|argument| argument.to_string_lossy().into_owned())
-                    .collect(),
-                self.directory.clone(),
-            )
+            Registration::new(processes, arguments.clone(), self.directory.clone())
         });
         let child = match command.spawn() {
             Ok(child) => child,
@@ -294,7 +318,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             child,
             self.input,
             self.kind,
-            describe(&self.arguments),
+            arguments.join(" "),
             self.dirs,
             registration,
             spawner,
@@ -351,40 +375,36 @@ fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> 
     location
 }
 
-/// The arguments as a user would have typed them, for an error message.
-fn describe(arguments: &[OsString]) -> String {
+/// The arguments as a user would have typed them, lossily decoded, each scrubbed of a URL's
+/// userinfo though Cairn passes none: what the command log records and, joined by
+/// spaces, what every error about the invocation names — so neither carries a token.
+fn scrubbed_arguments(arguments: &[OsString]) -> Vec<String> {
+    let mut scrubber = Scrubber::new();
     arguments
         .iter()
-        .map(|argument| argument.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .map(|argument| scrubber.line(&argument.to_string_lossy()).into_string())
+        .collect()
 }
 
 /// What a successful invocation wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Output {
     stdout: Vec<u8>,
-    stderr: String,
+    stderr: ScrubbedLines,
 }
 
 impl Output {
-    pub(super) fn new(stdout: Vec<u8>, stderr: String) -> Self {
+    pub(super) fn new(stdout: Vec<u8>, stderr: ScrubbedLines) -> Self {
         Self { stdout, stderr }
     }
 
     /// Bytes, because paths are bytes: decode at the point that knows the format.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "fetch reads nothing from stdout; the first operation to will be status"
-        )
-    )]
     pub(crate) fn stdout(&self) -> &[u8] {
         &self.stdout
     }
 
-    /// Lossily decoded; git's stderr is prose for a person, never parsed.
+    /// Whole lines, lossily decoded and scrubbed (`pipes::Lines`); git's stderr is prose for
+    /// a person, never parsed.
     #[cfg_attr(
         not(test),
         expect(
@@ -394,7 +414,7 @@ impl Output {
         )
     )]
     pub(crate) fn stderr(&self) -> &str {
-        &self.stderr
+        self.stderr.text()
     }
 
     pub(crate) fn stdout_text(&self) -> Cow<'_, str> {
@@ -424,7 +444,7 @@ mod tests {
     fn output(stdout: &[u8]) -> Output {
         Output {
             stdout: stdout.to_vec(),
-            stderr: String::new(),
+            stderr: ScrubbedLines::new(),
         }
     }
 
@@ -449,10 +469,17 @@ mod tests {
         assert_eq!(output.stdout(), b"only");
     }
 
+    /// The arguments as typed, each scrubbed of a URL's userinfo: the one copy the log records
+    /// and the runner's errors name. Caught by: a raw argument reported.
     #[test]
-    fn arguments_are_described_as_typed() {
+    fn arguments_are_described_as_typed_and_scrubbed() {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
-        assert_eq!(describe(&arguments), "fetch --prune");
+        assert_eq!(scrubbed_arguments(&arguments), ["fetch", "--prune"]);
+        let quoting = [
+            OsString::from("fetch"),
+            OsString::from("https://u:SECRET@h/r"),
+        ];
+        assert_eq!(scrubbed_arguments(&quoting), ["fetch", "https://h/r"]);
     }
 
     /// Runs the test at `path` (from the crate root) in this test binary again, with
@@ -512,7 +539,7 @@ mod stub_tests {
         ))
     }
 
-    /// PRD B1 and G3 end to end, for a read: what the child actually sees is
+    /// End to end, for a read: what the child actually sees is
     /// the base, the editor pinned, optional locks and lazy fetching off, no
     /// token — spelled out variable by variable — and nothing from this
     /// process. The test process is full of `CARGO_*` variables, which is what
@@ -668,7 +695,7 @@ mod stub_tests {
     /// log records the verb and its arguments, as it always has. Caught by: a
     /// repository left to git's discovery, which finds an enclosing repository or
     /// refuses a bare one under `safe.bareRepository=explicit` (both against real
-    /// git in `tests/diff/changes.rs` and `tests/fetch.rs`), or the location put
+    /// git in `tests/diff_engine/diff/changes.rs` and `tests/fetch/main.rs`), or the location put
     /// after the verb, where git reads it as the verb's own option.
     #[test]
     fn a_trusted_repository_is_named_to_git_ahead_of_the_verb() {
@@ -725,7 +752,7 @@ mod stub_tests {
     /// home are empty. Caught by: the location withheld for a reduced repository,
     /// which leaves the `git` Cairn runs to discover from the working tree — none
     /// at all from `/` — with an environment that carries none of the launch
-    /// environment's `safe.directory` (end to end in `tests/diff/ownership.rs`).
+    /// environment's `safe.directory` (end to end in `tests/diff_engine/diff/ownership.rs`).
     #[test]
     fn every_repository_is_named_to_git_whatever_trust_gix_gave_it() {
         use std::os::unix::fs::MetadataExt as _;
@@ -844,7 +871,7 @@ mod stub_tests {
             .finish(
                 &CancelSignal::new(),
                 |chunk| stdout.extend_from_slice(chunk),
-                |line| seen.push(line.to_owned()),
+                |said| seen.extend(crate::process::spoken(said)),
             )
             .unwrap();
         assert_eq!(
@@ -879,7 +906,7 @@ mod stub_tests {
             .finish(
                 &CancelSignal::new(),
                 |_| {},
-                |line| seen.push(line.to_owned()),
+                |said| seen.extend(crate::process::spoken(said)),
             )
             .unwrap_err();
         match error {

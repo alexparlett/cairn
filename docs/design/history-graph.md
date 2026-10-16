@@ -19,9 +19,11 @@ remote-tracking ref, every tag that identifies a commit, and `HEAD`, read in one
 snapshot that the walk and its labels share. A branch the checkout cannot reach
 is in the graph, because a user looking for it would otherwise conclude it is
 gone. Narrowing the graph to one branch is a filter over this, not a different
-walk. Show Lost Commits widens it instead: every entry of `HEAD`'s reflog and of
-each local branch's joins the tips, each reflog read whole, and a commit no ref
-reaches is drawn dimmed in its lane, as Fork draws it (`ui.md`, "Show Lost
+walk. Show Lost Commits widens it instead: the old and the new id of every entry
+of `HEAD`'s reflog and of each local branch's join the tips — as `git rev-list
+--reflog` reads a reflog, so a commit an amend replaced is found even where the
+only entry naming it is the amend's own, as its old id — each reflog read whole,
+and a commit no ref reaches is drawn dimmed in its lane, as Fork draws it (`ui.md`, "Show Lost
 Commits"). Turning it on or off reopens the walk like any other change of tips.
 
 ## Labels

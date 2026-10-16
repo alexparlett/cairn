@@ -3,6 +3,18 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-14 — staging-and-commit shipped and torn down
+
+Packet 5 passed its merge bar (every C1-C35 met, C21 within its bars on three fresh bench
+clones; full gate green), after a redesign the user approved on 2026-10-10 that phases
+12-20 rebuilt. Torn down on `feature/staging-and-commit`: PRD
+`docs/prd/staging-and-commit.md` stamped shipped; as built in `docs/systems/staging.md`,
+`local-changes.md`, `git-processes.md` and `history-graph.md`; C21's numbers in
+`docs/research/staging-and-commit/measured.md`; the invariants it added graduated into the
+root `CLAUDE.md`; leftovers filed as #90-#133, and #41, #46, #47, #48, #66 and #87 commented. O3 stays closed (no backup before a
+discard); program L4 is met (Show Lost Commits shipped with amend). 5b's brief was checked
+against what the packet left and updated in `roadmap.md`.
+
 ## 2026-10-07 — staging-and-commit planned; O3 closed; 5b inserted
 
 Packet 5 planned with `/feature-plan`: PRD `docs/prd/staging-and-commit.md`, work

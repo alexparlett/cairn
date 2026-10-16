@@ -1,5 +1,6 @@
 //! Lane assigner tests.
 
+#[path = "support/histories.rs"]
 mod histories;
 
 use cairn_model::LaneAssigner;
@@ -331,8 +332,9 @@ fn malformed_input_is_placed_rather_than_rejected() {
     assert_every_parent_edge_is_drawn(&dangling, &rows);
 }
 
-// --- Compact rows (C15): every row draws what the assigner drew before compaction ---
+// --- Compact rows: every row draws what the assigner drew before compaction ---
 
+#[path = "support/layout_before_compaction.rs"]
 mod layout_before_compaction;
 
 use cairn_model::{EdgeKind, GraphRow, LaneChange, Oid, RowEdges, row_edges};
@@ -659,8 +661,8 @@ fn the_lanes_kept_rows_name_are_the_lanes_their_edges_reach() {
     );
 }
 
-/// FNV-1a over C15's reference, from its first line that is not module documentation, as
-/// it stood when compact rows landed. The reference is what every equivalence test compares
+/// FNV-1a over the reference assigner, from its first line that is not module documentation.
+/// The reference is what every equivalence test compares
 /// against; editing it would let them pass against a different layout.
 const REFERENCE_FINGERPRINT: u64 = 0xf6bc_be46_1014_e960;
 
@@ -670,10 +672,10 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Caught by: any edit to the reference's code, which C15 forbids.
+/// Caught by: any edit to the reference's code, which must stay verbatim.
 #[test]
 fn the_reference_assigner_is_the_one_compact_rows_were_checked_against() {
-    let source = include_str!("layout_before_compaction/mod.rs");
+    let source = include_str!("support/layout_before_compaction.rs");
     let body: Vec<&str> = source
         .lines()
         .skip_while(|line| line.starts_with("//!"))
@@ -685,7 +687,7 @@ fn the_reference_assigner_is_the_one_compact_rows_were_checked_against() {
     assert_eq!(
         fnv1a(body.join("\n").as_bytes()),
         REFERENCE_FINGERPRINT,
-        "C15's reference, crates/cairn-model/tests/layout_before_compaction/mod.rs, was \
+        "C15's reference, crates/cairn-model/tests/support/layout_before_compaction.rs, was \
          edited: it must stay the assigner rows were compacted from, verbatim. A layout \
          change belongs in LaneAssigner, with its own tests."
     );

@@ -5,24 +5,29 @@ use std::rc::Rc;
 use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
-    ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
-    current_branch,
+    ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
+    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running, StatusBox,
+    Tracking, current_branch,
 };
 use freya::prelude::*;
 
-use crate::detail_pane::DetailPane;
-use crate::diff_state::DiffState;
-use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
-use crate::history_state::{Progress, Status};
-use crate::local_changes_pane::LocalChangesPane;
-use crate::local_changes_state::LocalChangesView;
-use crate::refresh_state::RefreshState;
-use crate::selection::Pair;
-use crate::sidebar_pane::SidebarPane;
-use crate::sidebar_state::{SIDEBAR_MIN_WIDTH, SidebarView};
+use crate::detail::pane::DetailPane;
+use crate::diff::state::DiffState;
+use crate::history::ref_find;
+use crate::history::selection::Pair;
+use crate::history::state::{Progress, Status};
+use crate::history::{selection, status_text};
+use crate::local_changes::pane::LocalChangesPane;
+use crate::local_changes::state::LocalChangesView;
+use crate::modal::Modal;
+use crate::operations::confirming::Confirming;
+use crate::operations::fetch::{FetchStatus, PromptView};
+use crate::operations::local_writes::{self, LocalWrites};
+use crate::refresh::state::RefreshState;
+use crate::sidebar::pane::SidebarPane;
+use crate::sidebar::state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
-use crate::{PAGE_ROWS, ref_find, selection, shortcuts, status_text};
+use crate::{PAGE_ROWS, shortcuts};
 
 /// The detail pane's height until the splitter is dragged.
 pub const PANE_HEIGHT: f32 = 260.0;
@@ -43,8 +48,12 @@ pub struct View {
     pub fetch: State<FetchStatus>,
     pub prompt: State<Option<PromptView>>,
     pub remotes: State<Vec<RemoteSummary>>,
-    /// A fetch the worker refused, until another is asked for.
-    pub refused: State<Option<FetchRefusal>>,
+    /// The endings' Git Error and "Couldn't <name>" dialogs waiting to be read, but the commit
+    /// box's (`crate::operations::ending_dialog`).
+    pub endings: State<crate::operations::ending_dialog::Endings>,
+    /// The leftover lock: what the last stat found of `<gitdir>/index.lock`, and its removal
+    /// asked (`crate::operations::leftover_lock`).
+    pub lock: State<crate::operations::leftover_lock::LeftoverLock>,
     /// The diff selection and the answers kept for it.
     pub diff: State<DiffState>,
     /// The commit list's scroll, shared so a parent link can bring its row into view.
@@ -53,12 +62,12 @@ pub struct View {
     /// pressed ref's, a parent link's — is told to it and the next arrow key starts there
     /// rather than searching the loaded rows.
     pub history_cursor: State<usize>,
-    /// The detail pane's tab, kept for the session (R5.2).
+    /// The detail pane's tab, kept for the session.
     pub detail_tab: State<DetailTab>,
     pub pane_collapsed: State<bool>,
     /// The pane's height as last dragged; read when the pane is laid out again.
     pub pane_height: State<f32>,
-    /// The settings every diff view shares, kept for the session (R6.1, R6.3).
+    /// The settings every diff view shares, kept for the session.
     pub diff_settings: State<DiffSettings>,
     /// The diff view's scroll, shared so previous and next change can move it.
     pub diff_scroll: ScrollController,
@@ -68,7 +77,7 @@ pub struct View {
     pub filter_text: State<String>,
     /// The Changes tab's file list's share of the pane as last dragged, in percent.
     pub changes_list_width: State<f32>,
-    /// Two commits selected to compare (R7), `selected` the one pressed plainly; `None` while
+    /// Two commits selected to compare, `selected` the one pressed plainly; `None` while
     /// one is selected.
     pub pair: State<Option<Pair>>,
     /// The keys the window hears held, which a press on a row is resolved against (a pointer
@@ -81,8 +90,23 @@ pub struct View {
     pub repository: State<Option<String>>,
     /// The sidebar: its rows, the filter, what the main region shows, a press's find.
     pub sidebar: SidebarView,
-    /// Local Changes: its lists, its filter and its diff's scroll (refs-and-status R9).
+    /// Local Changes: its lists, its filter and its diff's scroll.
     pub local: LocalChangesView,
+    /// The local writes: queued, running and ended, and whether the window waits on one to
+    /// close.
+    pub writes: State<LocalWrites>,
+    /// A destructive operation's confirmation, while one is open: drawn over everything, the
+    /// window's chords inert until it is answered.
+    pub confirming: State<Option<Confirming>>,
+    /// Show Lost Commits: whether the history walks from every
+    /// reflog entry too and draws what no ref reaches dimmed. Off as the window opens, kept
+    /// for the session.
+    pub show_lost: State<bool>,
+    /// Create Branch: its dialog, its name, its sticky check box and a create's failure.
+    pub branch: crate::operations::create_branch::CreateBranchView,
+    /// The activity popover: the session's operations, and whether it is open,
+    /// in two states.
+    pub activity: crate::operations::activity::ActivityView,
 }
 
 impl std::fmt::Debug for View {
@@ -90,7 +114,7 @@ impl std::fmt::Debug for View {
         f.debug_struct("View")
             .field("fetch", &*self.fetch.read())
             .field("prompt", &*self.prompt.read())
-            .field("refused", &*self.refused.read())
+            .field("confirming", &*self.confirming.read())
             .finish_non_exhaustive()
     }
 }
@@ -108,20 +132,29 @@ pub fn window(
     let counted = status_text::loaded_count(&view.progress.read());
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
-    let refused = view.refused.read().clone();
+    let confirming = view.confirming.read().clone();
+    // The one banner about the window: which write it waits on to close.
+    let closing_on = local_writes::closing_line(&view.writes.read());
     let hearing = submit.clone();
+    let erring = submit.clone();
+    let ending = submit.clone();
+    let branching = submit.clone();
+    let popping = submit.clone();
+    let unlocking = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
     // window has it is never heard here, and a press after coming back must not be read as a
-    // chord still held (the user's decision, 2026-10-04).
+    // chord still held.
     let mut held_keys = view.held_keys;
     use_side_effect(move || {
         if !*Platform::get().is_app_focused.read() {
             held_keys.set(HeldKeys::default());
         }
     });
-    // Coming back to the window reads the refs and the working tree again (R10.1).
-    crate::refresh::on_focus_gained(submit.clone());
-    // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
+    // Coming back to the window reads the refs and the working tree again.
+    crate::refresh::focus::on_focus_gained(submit.clone());
+    // `Remove index.lock…`'s answer, read at its press, opens its confirmation.
+    crate::operations::leftover_lock::use_lock_confirmation(view, submit.clone());
+    // A scroll of the list supersedes a find in the sidebar: subscribed to the list's
     // scroll alone, and acting only while a find looks.
     let stopping = submit.clone();
     use_side_effect(move || {
@@ -140,21 +173,29 @@ pub fn window(
     let list = rect()
         .width(Size::fill())
         .height(Size::fill())
-        .child(HistoryHeader::new())
+        .child({
+            // Show Lost Commits' check box flips the toggle exactly as its chord does.
+            let toggling = submit.clone();
+            HistoryHeader::new().show_lost_commits(*view.show_lost.read(), move |_: bool| {
+                crate::history::lost_commits::toggle(view, toggling.as_deref());
+            })
+        })
         .child(match status_text::placeholder(&status, has_rows) {
             Some(message) => notice(message, opened),
             None => history(view, lanes, submit.clone()),
         })
+        // A page that failed under rows already drawn: the list's own line, under it — about
+        // the history, not an operation.
         .maybe(has_rows, |el| match &status {
-            Status::Failed(message) => el.child(banner(message.clone(), true)),
+            Status::Failed(message) => el.child(list_line(message.clone())),
             _ => el,
         });
 
     rect()
         .expanded()
         .theme_background()
-        // Every shortcut resolves through the accelerator table (R8): here the ones heard
-        // wherever focus is; the detail pane hears its own (`detail_pane`).
+        // Every shortcut resolves through the accelerator table: here the ones heard
+        // wherever focus is; the detail pane hears its own (`detail::pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
             let mut held = view.held_keys;
             held.write().heard(&e, true);
@@ -167,23 +208,33 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            status_box(view.repository.read().clone(), &view.refreshed.read()),
+            // Fork's: the status box opens the activity popover, which hangs from where the box
+            // is laid out.
+            rect()
+                .on_press(move |_| view.activity.open())
+                .on_sized(move |e: Event<SizedEventData>| {
+                    let anchor = (e.area.min_x(), e.area.max_y());
+                    let mut log = view.activity.log;
+                    if log.peek().anchor_moved(anchor) {
+                        log.write().set_anchor(anchor);
+                    }
+                })
+                .child(status_box(
+                    view.repository.read().clone(),
+                    &view.refreshed.read(),
+                    running(view),
+                ))
+                .into(),
             &counted,
             &fetch,
             view.fetch,
-            view.refused,
             &view.remotes.read(),
             submit.clone(),
         ))
-        .maybe_child(status_text::fetch_line(&fetch).map(|line| {
-            let failed = matches!(fetch, FetchStatus::Failed { .. });
-            banner(line, failed)
-        }))
-        .maybe_child(
-            refused
-                .as_ref()
-                .map(|refusal| banner(status_text::refusal_line(refusal), false)),
-        )
+        // The two banners: the leftover lock, about the repository, and closing, about
+        // the window.
+        .maybe_child(crate::operations::leftover_lock::banner(view, unlocking))
+        .maybe_child(closing_on.map(banner))
         .child(beside(
             SidebarPane::new(view, submit.clone()).into(),
             match *view.sidebar.main.read() {
@@ -192,11 +243,60 @@ pub fn window(
             },
             view,
         ))
-        .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        // One modal state (`crate::modal`): the dialog on top, or the popover, is the
+        // only one drawn, so no key reaches one beneath it. A credential prompt sets an open
+        // confirmation aside — a write running behind it asked for a secret and waits on it —
+        // and the confirmation is drawn again, focus on Cancel, once the prompt is answered or
+        // refused; a commit's Git Error is drawn over Create Branch, which is drawn again as it
+        // was left once it is closed.
+        .maybe_child(match crate::modal::drawn(view) {
+            Some(Modal::Prompt) => prompt.map(|prompt| dialog(prompt, view.prompt, answer)),
+            Some(Modal::Confirmation) => {
+                confirming.map(|asking| confirmation(asking, view.confirming))
+            }
+            // A commit's Git Error dialog: its skip may open the amend's confirmation in
+            // its place.
+            Some(Modal::CommitError) => crate::commit_box::pane::git_error(view, erring),
+            Some(Modal::Ending) => crate::operations::ending_dialog::dialog(view, ending),
+            Some(Modal::CreateBranch) => crate::operations::create_branch::dialog(view, branching),
+            // A child of its own, the one reader of the log: a streamed line draws
+            // it again, never the window.
+            Some(Modal::Popover) => {
+                Some(crate::operations::activity::ActivityLayer::new(view, popping).into())
+            }
+            None => None,
+        })
+        // Every context menu opens here, so none panics for want of a host.
+        .child(ContextMenuViewer::new())
         .into()
 }
 
-/// The sidebar left of the main region, behind a draggable splitter (refs-and-status R8.1).
+/// The confirmation a destructive operation waits on: its token handed where the
+/// asking view said, and the dialog let go of on either answer — counting, ready or refused,
+/// one dialog under one serial from the press to its answer.
+fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> Element {
+    let serial = asking.serial();
+    let title = asking.title().to_owned();
+    let answer = asking.answer().clone();
+    let left = asking.left().map(str::to_owned);
+    let letting_go = asking.clone();
+    // Keyed by its serial: another confirmation is another dialog, never this one's handlers
+    // and answered state under new words.
+    ConfirmDialog::answering(serial, title, answer)
+        .left(left)
+        .key(DiffKey::U64(serial))
+        .on_confirm(move |token| {
+            showing.set(None);
+            asking.confirmed(token);
+        })
+        .on_cancel(move |()| {
+            showing.set(None);
+            letting_go.let_go();
+        })
+        .into()
+}
+
+/// The sidebar left of the main region, behind a draggable splitter.
 fn beside(sidebar: Element, main: Element, view: View) -> Element {
     let mut width = view.sidebar.width;
     // Peeked: the width only matters when the split is laid out anew, and reading it would
@@ -218,7 +318,7 @@ fn beside(sidebar: Element, main: Element, view: View) -> Element {
         .into()
 }
 
-/// The commit list over the detail pane, behind a draggable splitter (R5.1); a collapsed
+/// The commit list over the detail pane, behind a draggable splitter; a collapsed
 /// pane keeps only its strip, under a list that takes the rest.
 fn split(list: Rect, pane: Element, view: View) -> Element {
     let View {
@@ -262,17 +362,17 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
 /// The credential dialog for `prompt`, answering through `answer` exactly once.
 fn dialog(
     prompt: PromptView,
-    fetch: &FetchStatus,
     mut showing: State<Option<PromptView>>,
     answer: Option<Replier>,
 ) -> Element {
-    // A prompt is only shown while a fetch is in flight (`session::apply` refuses one
-    // otherwise), so the fallback names what asked when that holds no remote.
-    let remote = fetch.remote_in_flight().unwrap_or("git").to_owned();
+    // Titled by the operation whose token the helper presented — the fetch's remote, or the
+    // local write ("Commit is asking for a credential") — whatever else runs beside it, and
+    // by git when the token named none.
+    let asking = prompt.asking.clone().unwrap_or_else(|| "git".to_owned());
     let id = prompt.id;
     let on_submit = answer.clone();
     let on_cancel = answer;
-    CredentialPrompt::new(remote, prompt.text)
+    CredentialPrompt::new(asking, prompt.text)
         .on_submit(move |typed: String| {
             // The first Cairn-owned type the characters reach; the buffer moves, no copy.
             let secret = Secret::from_string(typed);
@@ -294,6 +394,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let mut progress = view.progress;
     let choosing = submit.clone();
     let extending = submit.clone();
+    let acting = submit.clone();
     let second = view
         .pair
         .read()
@@ -306,9 +407,10 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
             RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
                 .chips(render.chips)
                 .head(render.head)
+                .lost(render.lost)
                 .selected(render.selected)
                 .into(),
-            // A stash's row: its `stash@{n}` chip and its message as the subject (R5.4).
+            // A stash's row: its `stash@{n}` chip and its message as the subject.
             RowContent::Stash(stash) => {
                 CommitRow::new(stash.as_commit(), render.graph, render.lanes)
                     .chips(render.chips)
@@ -327,13 +429,28 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     // Choosing a row asks what it changed; the pane draws the answer for that row alone. It
     // supersedes a find in the sidebar, and the entry pressed there is let go of.
     .on_select(move |id: RowId| {
+        // A key heard behind the activity popover moves nothing.
+        if crate::shortcuts::keys_inert(view) {
+            return;
+        }
         ref_find::row_chosen(view, choosing.as_deref());
         selection::choose(id, view, choosing.as_deref());
     })
     // A row pressed with the table's extending chord is the second commit of a comparison.
     .on_extend(move |(id, index): (RowId, usize)| {
+        if crate::shortcuts::keys_inert(view) {
+            return;
+        }
         ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
+    })
+    // "New Branch…" on a commit row opens Create Branch.
+    .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
+        crate::operations::create_branch::open(view, at, subject);
+    })
+    // The history's own chord, Show Lost Commits.
+    .on_action(move |action| {
+        crate::history::lost_commits::history_action(action, view, acting.as_deref())
     })
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
@@ -353,11 +470,11 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .into()
 }
 
-/// The status box for the repository called `name` (R7.1) — none until it is open — `*` while the last status
-/// listed a change, the current branch and its distance from its upstream, from what the last
-/// refresh answered — each as old as the answer it is read from (a status may be one refresh
-/// behind, R10.3 as amended).
-fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
+/// The status box for the repository called `name` — none until it is open — `*` while the last
+/// status listed a change, the current branch and its distance from its upstream, from what the
+/// last refresh answered — each as old as the answer it is read from (a status may be one
+/// refresh behind).
+fn status_box(name: Option<String>, refreshed: &RefreshState, running: Vec<Running>) -> StatusBox {
     let refs = refreshed.refs();
     let head = refs.map(|refs| refs.head.clone());
     let tracking = refs
@@ -377,15 +494,52 @@ fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
             false
         }
     };
-    StatusBox::new(name, head).dirty(dirty).tracking(tracking)
+    StatusBox::new(name, head)
+        .dirty(dirty)
+        .tracking(tracking)
+        .running(running)
+}
+
+/// What runs, for the status box: the local write by its one name with the writes
+/// waiting behind it, and a fetch with git's latest progress line — each shown by the box once
+/// it has run 250 ms.
+fn running(view: View) -> Vec<Running> {
+    let writes = view.writes.read();
+    let write = writes
+        .running()
+        .zip(writes.running_since())
+        .map(|(asked, started)| Running {
+            serial: asked.id.number(),
+            name: asked.name.clone(),
+            started,
+            waiting: writes.queued().count(),
+            progress: None,
+        });
+    let fetch = view.fetch.read();
+    let progress = match &*fetch {
+        FetchStatus::Running { line, .. } => line.clone(),
+        _ => None,
+    };
+    let fetching = fetch
+        .is_in_flight()
+        // Read without subscribing: the fetch's own state draws the box again as it changes.
+        .then(|| view.activity.log.peek().fetch_running())
+        .flatten()
+        .map(|(serial, name, started)| Running {
+            serial: u64::MAX - serial,
+            name,
+            started,
+            waiting: 0,
+            progress,
+        });
+    write.into_iter().chain(fetching).collect()
 }
 
 fn title_bar(
-    status: StatusBox,
+    status: Element,
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
-    refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Element {
@@ -410,47 +564,33 @@ fn title_bar(
                 .font_size(13.)
                 .color(get_theme_or_default().read().colors().text_placeholder),
         )
-        .maybe_child(fetch_button(fetch, fetch_state, refused, remotes, submit))
+        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
         .into()
 }
 
-/// "Fetch <remote>" for the default remote while nothing is in flight;
-/// "Cancel" while a fetch is; nothing when the repository has no remote to
-/// fetch. The press itself marks the fetch as starting, so a second press
-/// before the worker answers has no button to land on, and takes down an
-/// earlier refusal, which was about a press before this one.
+/// "Fetch <remote>" for the default remote, greyed while a fetch is in flight, so a second
+/// fetch is never asked and the network lane's refusal never drawn; nothing when the repository
+/// has no remote to fetch. The press itself marks the fetch as starting, so a second press before
+/// the worker answers lands on a greyed button. A running fetch is cancelled from the activity
+/// popover, as in Fork.
 fn fetch_button(
     fetch: &FetchStatus,
     mut fetch_state: State<FetchStatus>,
-    mut refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Option<Element> {
     let submit = submit?;
-    if fetch.can_be_cancelled() {
-        return Some(
-            Button::new()
-                .compact()
-                .on_press(move |_| {
-                    // Said at once: the worker's answer is up to a grace period away.
-                    fetch_state.write().cancelling();
-                    submit(Request::CancelFetch);
-                })
-                .child("Cancel")
-                .into(),
-        );
-    }
-    if fetch.is_in_flight() {
-        // Cancelling: nothing to press until the worker says the process is gone.
-        return None;
-    }
     let remote = remotes.first()?.name.clone();
     let caption = format!("Fetch {remote}");
+    let in_flight = fetch.is_in_flight();
     Some(
         Button::new()
             .compact()
+            .enabled(!in_flight)
             .on_press(move |_| {
-                refused.set(None);
+                if fetch_state.peek().is_in_flight() {
+                    return;
+                }
                 fetch_state.write().starting(remote.clone());
                 submit(Request::Fetch {
                     remote: remote.clone(),
@@ -479,27 +619,38 @@ fn notice(message: impl Into<String>, path: &str) -> Element {
         .into()
 }
 
-/// One line across the window; `alarming` draws it in the error colour.
-fn banner(message: String, alarming: bool) -> Element {
+/// A banner across the window: wrapped, never cut.
+fn banner(message: String) -> Element {
     let colours = get_theme_or_default();
-    let colour = if alarming {
-        colours.read().colors().error
-    } else {
-        colours.read().colors().text_secondary
-    };
     rect()
         .width(Size::fill())
-        .height(Size::px(ROW_HEIGHT))
         .cross_align(Alignment::center())
-        .padding(Gaps::new(0., 12., 0., 12.))
+        .padding(Gaps::new(6., 12., 6., 12.))
         .background(colours.read().colors().surface_tertiary)
         .child(
             label()
                 .text(message)
-                .max_lines(1)
-                .text_overflow(TextOverflow::Ellipsis)
                 .font_size(13.)
-                .color(colour),
+                .width(Size::fill())
+                .color(colours.read().colors().text_secondary),
+        )
+        .into()
+}
+
+/// The history's own line under its rows: why a page failed to load.
+fn list_line(message: String) -> Element {
+    let colours = get_theme_or_default();
+    rect()
+        .width(Size::fill())
+        .min_height(Size::px(ROW_HEIGHT))
+        .cross_align(Alignment::center())
+        .padding(Gaps::new(0., 12., 0., 12.))
+        .child(
+            label()
+                .text(message)
+                .font_size(13.)
+                .width(Size::fill())
+                .color(colours.read().colors().error),
         )
         .into()
 }
@@ -517,20 +668,20 @@ pub(crate) mod tests {
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
-    use crate::detail_pane::{NOTHING_SELECTED, READING};
+    use crate::detail::pane::{NOTHING_SELECTED, READING};
     use crate::worker::Comparison;
 
-    use crate::fetch_state::{FetchStatus, PromptView};
+    use crate::operations::fetch::{FetchStatus, PromptView};
 
-    use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width};
+    use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width, running_text};
 
     use super::*;
-    use crate::history_state;
+    use crate::history::state;
 
     const HEIGHT: f32 = 600.;
     /// Where the main region begins: right of the sidebar at its opening width and the
     /// splitter's handle. The window is as wide again as the main region's 800 px.
-    const LEFT: f32 = crate::sidebar_state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
+    const LEFT: f32 = crate::sidebar::state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
     const LEFT_X: f64 = LEFT as f64;
     const WINDOW_WIDTH: f32 = LEFT + 800.;
     const PATH: &str = "/home/ada/engine";
@@ -631,35 +782,7 @@ pub(crate) mod tests {
             app,
             (WINDOW_WIDTH, HEIGHT).into(),
             move |runner| {
-                runner.provide_root_context(|| View {
-                    rows: State::create(held(initial)),
-                    progress: State::create(progress),
-                    selected: State::create(None),
-                    fetch: State::create(fetch),
-                    prompt: State::create(prompt),
-                    remotes: State::create(vec![RemoteSummary {
-                        name: "origin".to_owned(),
-                        url: Some("https://git.example.com/ada/engine".to_owned()),
-                    }]),
-                    refused: State::create(None),
-                    diff: State::create(DiffState::default()),
-                    history_scroll: ScrollController::new(0, 0, Vec::new()),
-                    history_cursor: State::create(0),
-                    detail_tab: State::create(DetailTab::default()),
-                    pane_collapsed: State::create(false),
-                    pane_height: State::create(PANE_HEIGHT),
-                    diff_settings: State::create(DiffSettings::default()),
-                    diff_scroll: ScrollController::new(0, 0, Vec::new()),
-                    change_cursor: State::create(None),
-                    filter_text: State::create(String::new()),
-                    changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
-                    pair: State::create(None),
-                    held_keys: State::create(HeldKeys::default()),
-                    refreshed: State::create(RefreshState::default()),
-                    repository: State::create(Some("engine".to_owned())),
-                    sidebar: SidebarView::created(),
-                    local: crate::local_changes_state::LocalChangesView::created(),
-                })
+                runner.provide_root_context(|| test_view(initial, progress, fetch, prompt))
             },
             1.,
         );
@@ -667,6 +790,51 @@ pub(crate) mod tests {
             test.sync_and_update();
         }
         (test, view, submitted, answered)
+    }
+
+    /// The view state a test window is drawn from: `initial` rows loaded, everything else as
+    /// a window opens.
+    fn test_view(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        fetch: FetchStatus,
+        prompt: Option<PromptView>,
+    ) -> View {
+        View {
+            rows: State::create(held(initial)),
+            progress: State::create(progress),
+            selected: State::create(None),
+            fetch: State::create(fetch),
+            prompt: State::create(prompt),
+            remotes: State::create(vec![RemoteSummary {
+                name: "origin".to_owned(),
+                url: Some("https://git.example.com/ada/engine".to_owned()),
+            }]),
+            endings: State::create(Default::default()),
+            lock: State::create(Default::default()),
+            diff: State::create(DiffState::default()),
+            history_scroll: ScrollController::new(0, 0, Vec::new()),
+            history_cursor: State::create(0),
+            detail_tab: State::create(DetailTab::default()),
+            pane_collapsed: State::create(false),
+            pane_height: State::create(PANE_HEIGHT),
+            diff_settings: State::create(DiffSettings::default()),
+            diff_scroll: ScrollController::new(0, 0, Vec::new()),
+            change_cursor: State::create(None),
+            filter_text: State::create(String::new()),
+            changes_list_width: State::create(crate::detail::changes_tab::LIST_WIDTH),
+            pair: State::create(None),
+            held_keys: State::create(HeldKeys::default()),
+            refreshed: State::create(RefreshState::default()),
+            repository: State::create(Some("engine".to_owned())),
+            sidebar: SidebarView::created(),
+            local: crate::local_changes::state::LocalChangesView::created(),
+            writes: State::create(crate::operations::local_writes::LocalWrites::default()),
+            confirming: State::create(None),
+            show_lost: State::create(false),
+            activity: crate::operations::activity::ActivityView::created(),
+            branch: crate::operations::create_branch::CreateBranchView::created(),
+        }
     }
 
     fn click_label(test: &mut TestingRunner, caption: &str) {
@@ -840,10 +1008,9 @@ pub(crate) mod tests {
 
     /// `main` when rows were slimmed, and what each of its commits' rows drew in the window
     /// before: subject, author, short id, date, and whether its node is a merge's ring.
-    /// Committed with the slimming (`1b0ca9f`); its lines were read by this test run
-    /// against a build of `4205d5d`, while every row still carried its full parents and its
-    /// author's address, and they agree with `CAIRN_BEFORE` in
-    /// `crates/cairn-git/tests/slim_rows.rs`, committed at `4205d5d`
+    /// A frozen oracle: its lines were read by this test run against a build whose rows still
+    /// carried their full parents and their author's address, and they agree with
+    /// `CAIRN_BEFORE` in `crates/cairn-git/tests/slim_rows.rs`, frozen from the same build
     /// (`the_windows_table_agrees_with_the_engines_table_captured_before`).
     const MAIN_DRAWN_BEFORE: &[(&str, &str, &str, &str, &str, bool)] = &[
         (
@@ -992,15 +1159,15 @@ pub(crate) mod tests {
         ),
     ];
 
-    /// C16, headless, over the Cairn checkout: its rows, read by the worker, applied as the
+    /// Headless, over the Cairn checkout: its rows, read by the worker, applied as the
     /// window applies every page and drawn by the window's own rows, draw what they drew
     /// before rows were slimmed. Caught by: a row reading another row's text or author, a
     /// parent count that is not its commit's, or a page's authors misnumbered in the
     /// history.
-    /// The window's table and the engine's, captured at `4205d5d` and committed there: the
-    /// same commits, in the same order, with the same subjects and authors, and a ring
-    /// exactly where the engine counted more than one parent. Caught by: a table edited
-    /// after the rows were slimmed to match what they draw now.
+    /// The window's table and the engine's, both frozen from one build before rows were
+    /// slimmed: the same commits, in the same order, with the same subjects and authors, and a
+    /// ring exactly where the engine counted more than one parent. Caught by: a table edited
+    /// to match what the slim rows draw.
     #[test]
     fn the_windows_table_agrees_with_the_engines_table_captured_before() {
         let engine = include_str!("../../cairn-git/tests/slim_rows.rs");
@@ -1053,7 +1220,10 @@ pub(crate) mod tests {
             .iter()
             .map(|&(hex, ..)| RowId::Commit(Oid::parse(hex).unwrap()))
             .collect();
-        handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+        handle.submit(Request::OpenHistory {
+            rows: PAGE_ROWS,
+            lost: false,
+        });
         loop {
             let (page, complete) = match crate::worker::next_update(&mut updates) {
                 update @ crate::worker::Update::Rows { complete, .. } => (update, complete),
@@ -1115,8 +1285,8 @@ pub(crate) mod tests {
                         .map(|_| node.layout().area.center().y)
                 })
                 .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
-            // The chips are phase 07's, and name whatever refs the checkout has today: what
-            // the row drew before is its text past them.
+            // The chips name whatever refs the checkout has today: what the row drew before is
+            // its text past them.
             let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
             let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
                 let area = node.layout().area;
@@ -1169,7 +1339,7 @@ pub(crate) mod tests {
             })
             .collect();
         // As sets of texts: a row whose chips fill its column pushes its subject past the
-        // author's (R5.3, as in Fork), which a left-to-right reading would then put second.
+        // author's (as in Fork), which a left-to-right reading would then put second.
         // The columns' own order is `commit_row`'s tests'.
         let sorted = |line: &Vec<String>| {
             let mut line = line.clone();
@@ -1195,7 +1365,7 @@ pub(crate) mod tests {
         let page: Vec<TestRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
         let mut progress = Progress::opening();
         progress.received(
-            history_state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
+            state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
             true,
             page.len(),
         );
@@ -1351,7 +1521,95 @@ pub(crate) mod tests {
         );
     }
 
-    /// PRD product rule: a prompt in the view state is drawn as the dialog naming the
+    /// A prompt raised while a local write runs is titled by the write's one name; the first
+    /// close asked while it runs says, in one banner, which write the window waits on and that
+    /// closing again quits now. Caught by: a close that waits in silence, a prompt titled "git", or
+    /// the write called anything but its one name.
+    #[test]
+    fn the_window_names_the_write_it_waits_on_and_its_prompt() {
+        let (mut test, view, _, _) = launch_with(
+            (0..3).map(row).collect(),
+            received(3, true),
+            FetchStatus::Idle,
+            Some(PromptView {
+                id: crate::worker::PromptId::for_tests(2),
+                text: "Enter passphrase for key '/k': ".to_owned(),
+                asking: Some("Stage 1 File".to_owned()),
+            }),
+        );
+        let id = crate::worker::OperationId::for_tests(11);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("src/a.rs")],
+            },
+        );
+        writes.write().started(id);
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Stage 1 File is asking for a credential"),
+            "the dialog does not name the write: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|t| t.starts_with("Closing after")),
+            "waiting on a close nobody asked for: {shown:?}"
+        );
+
+        writes.write().closing();
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Closing after Stage 1 File finishes. Close again to quit now."),
+            "the close does not say which write it waits on: {shown:?}"
+        );
+    }
+
+    /// The status box is handed each operation running by its one name — the
+    /// write with the writes waiting behind it, the fetch with git's latest progress line — to
+    /// show once it has run 250 ms. Caught by: a write named otherwise, the waiting count left
+    /// out, or the fetch's progress dropped.
+    #[test]
+    fn the_status_box_is_handed_what_runs_by_its_one_name() {
+        let (test, view, _) = launch(Vec::new(), received(0, true));
+        let mut writes = view.writes;
+        let stage = |path: &str| crate::worker::LocalWrite::StageFiles {
+            paths: vec![cairn_model::RepoPath::from(path)],
+        };
+        let (one, two) = (
+            crate::worker::OperationId::for_tests(1),
+            crate::worker::OperationId::for_tests(2),
+        );
+        test.run_in(|| {
+            writes.write().asked(one, &stage("a"));
+            writes.write().asked(two, &stage("b"));
+            writes.write().started(one);
+        });
+        let mut fetch = view.fetch;
+        let mut activity = view.activity.log;
+        test.run_in(|| {
+            activity.write().fetch_started("origin");
+            fetch.write().started("origin".to_owned());
+            fetch
+                .write()
+                .progressed("Receiving objects: 40%".to_owned());
+        });
+        let shown: Vec<String> = test.run_in(|| running(view).iter().map(running_text).collect());
+        assert_eq!(
+            shown,
+            [
+                "Stage 1 File · 1 waiting",
+                "Fetch 'origin'  Receiving objects: 40%"
+            ]
+        );
+    }
+
+    /// A prompt in the view state is drawn as the dialog naming the
     /// remote being fetched and the URL git asked about, and what is typed leaves as a
     /// secret naming that prompt — once — after which the dialog is gone.
     #[test]
@@ -1367,6 +1625,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id,
                 text: "Password for 'https://git.example.com/ada/engine': ".to_owned(),
+                asking: Some("origin".to_owned()),
             }),
         );
         let shown = texts(&test);
@@ -1403,6 +1662,49 @@ pub(crate) mod tests {
         );
     }
 
+    /// With a fetch and a commit both in flight, a prompt is titled by the operation whose
+    /// token asked — the commit's hook's, here — never by whichever is in flight. Caught by: a
+    /// title read from the fetch in flight, a guess that would name "origin".
+    #[test]
+    fn a_prompt_is_titled_by_its_own_operation_with_a_fetch_and_a_write_in_flight() {
+        let (mut test, view, _, _) = launch_with(
+            Vec::new(),
+            received(0, true),
+            FetchStatus::Running {
+                remote: "origin".to_owned(),
+                line: None,
+            },
+            Some(PromptView {
+                id: crate::worker::PromptId::for_tests(5),
+                text: "Enter passphrase for key '/k': ".to_owned(),
+                asking: Some("Commit".to_owned()),
+            }),
+        );
+        let id = crate::worker::OperationId::for_tests(12);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        );
+        writes.write().started(id);
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Commit is asking for a credential"),
+            "the prompt is not titled by its own operation: {shown:?}"
+        );
+        assert!(
+            !shown
+                .iter()
+                .any(|t| t == "origin is asking for a credential"),
+            "{shown:?}"
+        );
+    }
+
     #[test]
     fn cancelling_the_dialog_refuses_that_prompt() {
         let id = crate::worker::PromptId::for_tests(3);
@@ -1416,6 +1718,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id,
                 text: "Username for 'https://git.example.com/x': ".to_owned(),
+                asking: Some("origin".to_owned()),
             }),
         );
         click_label(&mut test, "Cancel");
@@ -1423,153 +1726,51 @@ pub(crate) mod tests {
         assert_eq!(*view.prompt.read(), None);
     }
 
+    /// Fetch fetches the default remote and is greyed while a fetch is in flight — from the
+    /// press, before the worker answers — so a second fetch is never asked and the network
+    /// lane's refusal never drawn; once it has ended, it fetches again. Caught by: a second
+    /// fetch asked while one runs, or a button that never comes back.
     #[test]
-    fn the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running() {
+    fn fetch_is_greyed_while_a_fetch_is_in_flight() {
         let (mut test, view, submitted) = launch(Vec::new(), received(0, true));
         click_label(&mut test, "Fetch origin");
-        assert_eq!(
-            submitted.borrow().as_slice(),
-            [Request::Fetch {
-                remote: "origin".to_owned()
-            }]
-        );
-
-        // The press itself takes the button away, before the worker answers.
+        let fetches = |submitted: &Submitted| {
+            submitted
+                .borrow()
+                .iter()
+                .filter(|request| matches!(request, Request::Fetch { .. }))
+                .count()
+        };
+        assert_eq!(fetches(&submitted), 1);
         assert_eq!(
             *view.fetch.read(),
             FetchStatus::Starting {
                 remote: "origin".to_owned()
             }
         );
-        assert!(
-            !texts(&test).iter().any(|t| t == "Fetch origin"),
-            "a second fetch could be asked for before the first was confirmed"
-        );
-
+        click_label(&mut test, "Fetch origin");
         let mut fetch = view.fetch;
         fetch.write().started("origin".to_owned());
-        fetch
-            .write()
-            .progressed("Receiving objects: 40%".to_owned());
         test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
-            "the progress is not shown: {shown:?}"
-        );
-        assert!(
-            !shown.iter().any(|t| t == "Fetch origin"),
-            "a second fetch was offered while one runs"
-        );
-        click_label(&mut test, "Cancel");
-        assert_eq!(submitted.borrow().last(), Some(&Request::CancelFetch));
-        // The press says so at once, and takes the button away: the worker may need the
-        // runner's whole grace period before it answers.
+        click_label(&mut test, "Fetch origin");
         assert_eq!(
-            *view.fetch.read(),
-            FetchStatus::Cancelling {
-                remote: "origin".to_owned()
-            }
-        );
-        test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown.iter().any(|t| t == "Cancelling fetch of origin…"),
-            "the cancel was not said: {shown:?}"
-        );
-        assert!(
-            !shown.iter().any(|t| t == "Cancel" || t == "Fetch origin"),
-            "a button was offered while the cancel is in progress: {shown:?}"
-        );
-    }
-
-    #[test]
-    fn a_failed_fetch_is_said_in_the_window_and_the_button_comes_back() {
-        let (test, _, _, _) = launch_with(
-            (0..3).map(row).collect(),
-            received(3, true),
-            FetchStatus::Failed {
-                remote: "origin".to_owned(),
-                message: "could not read Username for 'https://x': terminal prompts disabled"
-                    .to_owned(),
-            },
-            None,
-        );
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t.contains("Fetch of origin failed") && t.contains("could not read")),
-            "{shown:?}"
-        );
-        assert!(shown.iter().any(|t| t == "Fetch origin"), "{shown:?}");
-        assert!(
-            shown.iter().any(|t| t == "commit 0"),
-            "the rows were lost: {shown:?}"
-        );
-    }
-
-    /// PRD R7.2, G15's window half: a refused fetch is drawn as a reason, beside the fetch
-    /// in flight, which goes on showing; and the next press takes it down. Caught by: not
-    /// drawing the refusal, drawing it in place of the running fetch, or leaving it up
-    /// after the user has asked again.
-    #[test]
-    fn a_refused_fetch_is_drawn_with_its_reason_until_the_next_press() {
-        let (mut test, view, submitted, _) = launch_with(
-            (0..3).map(row).collect(),
-            received(3, true),
-            FetchStatus::Running {
-                remote: "origin".to_owned(),
-                line: Some("Receiving objects: 40%".to_owned()),
-            },
-            None,
-        );
-        let mut refused = view.refused;
-        refused.set(Some(FetchRefusal {
-            remote: "origin".to_owned(),
-            reason: "a fetch of origin is already running".to_owned(),
-        }));
-        test.sync_and_update();
-        let shown = texts(&test);
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetch of origin not started: a fetch of origin is already running"),
-            "the refusal is not drawn: {shown:?}"
-        );
-        assert!(
-            shown
-                .iter()
-                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
-            "the refusal took the running fetch's place: {shown:?}"
+            fetches(&submitted),
+            1,
+            "a second fetch was asked while one ran"
         );
 
-        let mut fetch = view.fetch;
-        fetch.set(FetchStatus::Finished {
+        fetch.set(FetchStatus::Failed {
             remote: "origin".to_owned(),
         });
         test.sync_and_update();
         click_label(&mut test, "Fetch origin");
-        assert_eq!(*view.refused.read(), None, "the press left the refusal up");
-        assert!(
-            !texts(&test).iter().any(|t| t.contains("not started")),
-            "{:?}",
-            texts(&test)
-        );
-        assert_eq!(
-            submitted.borrow().last(),
-            Some(&Request::Fetch {
-                remote: "origin".to_owned()
-            })
-        );
+        assert_eq!(fetches(&submitted), 2, "Fetch did not come back");
     }
 
-    /// The dialog's fallback when the view state holds a prompt with no fetch in flight
-    /// (which `session::apply` prevents): it still names what asked.
+    /// The dialog's fallback for a prompt whose token named no operation: it still names what
+    /// asked.
     #[test]
-    fn a_prompt_with_no_fetch_in_flight_is_attributed_to_git() {
+    fn a_prompt_naming_no_operation_is_attributed_to_git() {
         let (test, _, _, _) = launch_with(
             Vec::new(),
             received(0, true),
@@ -1577,6 +1778,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id: crate::worker::PromptId::for_tests(2),
                 text: "Username for 'https://git.example.com/x': ".to_owned(),
+                asking: None,
             }),
         );
         assert!(
@@ -1653,19 +1855,121 @@ pub(crate) mod tests {
     /// Presses `action`'s chord on this platform, as a key press reaches the window; for the
     /// other window tests too, so no other test file names a modifier.
     pub(crate) fn press_chord(test: &mut TestingRunner, action: Action) {
-        let chord = accelerators::chord(action, accelerators::Os::current()).unwrap();
+        // The first chord heard wherever its action is — not the stage's bare Return, which
+        // the file lists alone hear — so the press reaches the action from a list or the diff.
+        let chord = accelerators::chords(action, accelerators::Os::current())
+            .iter()
+            .find(|chord| {
+                accelerators::chord_heard_in(action, *chord) == accelerators::heard_in(action)
+            })
+            .unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {
             name: KeyboardEventName::KeyDown,
-            key,
+            key: key.clone(),
             code,
             modifiers,
+        });
+        test.sync_and_update();
+        // Let go of, every key with it, as a keyboard does: the window's held keys are not
+        // left holding the chord's modifiers for the next press.
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyUp,
+            key,
+            code,
+            modifiers: Default::default(),
         });
         test.sync_and_update();
         test.sync_and_update();
     }
 
-    /// R4.4 at the place it is drawn, through the window: choosing a row asks what it changed
+    /// Show Lost Commits' chord, heard on the history list, turns it on and reopens the history
+    /// from every reflog entry — the old rows handed to a worker to free, after the open is
+    /// asked — and again turns it off and reopens the plain walk — the list keeping the
+    /// keyboard through each reopen, so the chord is heard again with no click. Caught by: the
+    /// chord left unheard, a toggle that asks no reopen (the list keeps drawing the walk it had), a
+    /// reopen that keeps walking as before, or a list that loses the keyboard while the reopened
+    /// walk's first page is on its way.
+    #[test]
+    fn the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        submitted.borrow_mut().clear();
+        assert!(!*view.show_lost.read(), "off as the window opens");
+
+        for turned in [true, false] {
+            press_chord(&mut test, Action::ShowLostCommits);
+            assert_eq!(*view.show_lost.read(), turned);
+            let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+            match asked.as_slice() {
+                [Request::OpenHistory { lost, .. }, Request::Retire(retired)] => {
+                    assert_eq!(*lost, turned, "the reopen walks as the toggle says");
+                    assert_eq!(retired.replaced_rows(), Some(10), "the rows replaced");
+                }
+                other => panic!("the toggle asked {other:?}"),
+            }
+            assert_eq!(
+                view.rows.read().len(),
+                0,
+                "the old rows are no longer drawn"
+            );
+            // The reopened walk's first page arrives, and the list is drawn again.
+            let (mut rows, mut progress) = (view.rows, view.progress);
+            test.run_in(|| {
+                hold(&mut rows.write(), (0..10).map(row).collect());
+                progress.set(received(10, true));
+            });
+            test.sync_and_update();
+            test.sync_and_update();
+            // No click: the list keeps the keyboard through the reopen, so the next press of
+            // the chord is heard.
+            submitted.borrow_mut().clear();
+        }
+    }
+
+    /// Show Lost Commits' check box flips the toggle as the chord does — a reopen walking from
+    /// the reflogs, then, once the reopened walk's first page draws the list, the chord heard
+    /// again with no click (the list takes the keyboard back from the box). Caught by: a box that
+    /// asks nothing, one that walks otherwise than the chord would, or a list left without the
+    /// keyboard after a press on the box.
+    #[test]
+    fn the_show_lost_commits_box_flips_the_toggle_as_its_chord_does() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        submitted.borrow_mut().clear();
+        click_label(&mut test, cairn_ui::SHOW_LOST_COMMITS_CAPTION);
+        assert!(*view.show_lost.read(), "the box turned it on");
+        let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+        assert!(
+            matches!(
+                asked.as_slice(),
+                [Request::OpenHistory { lost: true, .. }, Request::Retire(_)]
+            ),
+            "{asked:?}"
+        );
+        let (mut rows, mut progress) = (view.rows, view.progress);
+        test.run_in(|| {
+            hold(&mut rows.write(), (0..10).map(row).collect());
+            progress.set(received(10, true));
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        press_chord(&mut test, Action::ShowLostCommits);
+        assert!(
+            !*view.show_lost.read(),
+            "the chord, heard with no click, turned it off"
+        );
+        assert!(
+            matches!(
+                submitted.borrow().as_slice(),
+                [Request::OpenHistory { lost: false, .. }, Request::Retire(_)]
+            ),
+            "{:?}",
+            submitted.borrow()
+        );
+    }
+
+    /// At the place it is drawn, through the window: choosing a row asks what it changed
     /// and the Commit tab draws that row's answer alone — not the last row's while the next
     /// one's is on its way, and not one the diff state holds for a row no longer selected.
     /// Choosing the same row again asks nothing new. Caught by: a pane that draws whatever
@@ -1711,7 +2015,7 @@ pub(crate) mod tests {
         );
 
         click_row(&mut test, 3);
-        // The query, then the answer it replaces, handed to the worker to free (R2).
+        // The query, then the answer it replaces, handed to the worker to free.
         match &submitted.borrow()[1..] {
             [asked, Request::Retire(retired)] => {
                 assert_eq!(
@@ -1748,7 +2052,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// C10, R5.2: Commit is the default tab, and the tab chosen is kept for the session —
+    /// Commit is the default tab, and the tab chosen is kept for the session —
     /// across another row chosen, and across a collapse, which leaves the strip to open the
     /// pane again. Caught by: a selection resetting the tab, or a collapse forgetting it.
     #[test]
@@ -1791,7 +2095,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Q3: while a credential prompt is up no accelerator acts — the dialog owns the keys
+    /// While a credential prompt is up no accelerator acts — the dialog owns the keys
     /// until it is answered — and once it is gone they act again. Caught by: a window that
     /// acts on a chord typed into the dialog.
     #[test]
@@ -1799,6 +2103,7 @@ pub(crate) mod tests {
         let prompt = PromptView {
             id: crate::worker::PromptId::for_tests(1),
             text: "Password for 'https://ada@git.example.com': ".to_owned(),
+            asking: None,
         };
         let (mut test, view, _, _) = launch_with(
             (0..10).map(row).collect(),
@@ -1891,7 +2196,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// C13: the tab chords resolve through the accelerator table and act in the window, a
+    /// The tab chords resolve through the accelerator table and act in the window, a
     /// collapsed pane opening for the tab asked for. Caught by: a window that resolves no
     /// chord, or acts on one by its literal keys.
     #[test]
@@ -1916,7 +2221,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// R5.3: a loaded parent's link selects its row, asks what it changed and brings it into
+    /// A loaded parent's link selects its row, asks what it changed and brings it into
     /// view; an unloaded parent's does nothing visible (reaching it is issue #3). Caught by:
     /// a link that selects whatever is at some index, or one that asks for a parent the
     /// list cannot show.
@@ -1985,7 +2290,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// R5.1: the splitter between the list and the pane drags, and the height dragged to is
+    /// The splitter between the list and the pane drags, and the height dragged to is
     /// the one the pane opens at again after a collapse. Caught by: a fixed pane, or one
     /// that forgets its height when it collapses.
     #[test]
@@ -2087,8 +2392,8 @@ pub(crate) mod tests {
     }
 
     /// Row 2 chosen, its change set arrived, and the Changes tab shown, which chooses its
-    /// one file as Fork chooses the first (phase 08: a press in the Commit tab opens a file in
-    /// place instead, and the Changes tab keeps a file of its own).
+    /// one file as Fork chooses the first (a press in the Commit tab opens a file in place
+    /// instead, and the Changes tab keeps a file of its own).
     fn choose_the_file(test: &mut TestingRunner, view: View) {
         click_row(test, 2);
         arrives(test, view, 2, Vec::new());
@@ -2116,7 +2421,7 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// Phase 06 wiring, R4.4: the Changes tab's file is asked at the session's settings,
+    /// The Changes tab's file is asked at the session's settings,
     /// says it is reading, then draws the answer's rows under the bar naming the file — and an
     /// answer naming the file at other options is not drawn. Caught by: a file chosen that
     /// asks nothing, an answer drawn for a query no longer selected, or a diff drawn from
@@ -2128,13 +2433,13 @@ pub(crate) mod tests {
         let query = last_file_query(&submitted);
         assert_eq!(
             query.options,
-            crate::diff_actions::options(DiffSettings::default())
+            crate::diff::actions::options(DiffSettings::default())
         );
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
             pane(&test)
                 .iter()
-                .any(|t| t == crate::changes_tab::READING_DIFF),
+                .any(|t| t == crate::detail::changes_tab::READING_DIFF),
             "{:?}",
             pane(&test)
         );
@@ -2185,16 +2490,16 @@ pub(crate) mod tests {
             by_all,
             outcome: Ok(Box::new(cairn_model::ShownDiff::new(
                 diff,
-                crate::diff_actions::options(DiffSettings::default()).context,
+                crate::diff::actions::options(DiffSettings::default()).context,
             ))),
         }
     }
 
-    /// C10, R5.3 through the window (Fork, Finding 4): a file pressed in the Commit tab asks
-    /// for its diff in place — the Commit tab stays shown — says it is reading under its row,
+    /// Through the window, as Fork does: a file pressed in the Commit tab asks for its diff in
+    /// place — the Commit tab stays shown — says it is reading under its row,
     /// then draws the answer's rows there; pressed again, it closes, and what it drew is
-    /// handed to a worker. Caught by: a press that switches to the Changes tab (phase 06's
-    /// wiring), asks nothing, or draws the rows anywhere but the Commit tab.
+    /// handed to a worker. Caught by: a press that switches to the Changes tab, asks
+    /// nothing, or draws the rows anywhere but the Commit tab.
     #[test]
     fn a_file_pressed_in_the_commit_tab_opens_its_diff_in_place() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -2246,7 +2551,87 @@ pub(crate) mod tests {
         );
     }
 
-    /// C10, R5.3 through the window: Expand All asks from the first file; each page opens its
+    /// The centre of the visible diff row reading `text`, if one is drawn.
+    fn visible_row(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
+        test.find(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|paragraph| {
+                    node.is_visible()
+                        && paragraph
+                            .spans
+                            .iter()
+                            .map(|span| span.text.as_ref())
+                            .collect::<String>()
+                            == text
+                })
+                .map(|_| node.layout().area.center())
+        })
+        .map(|centre| (f64::from(centre.x), f64::from(centre.y)))
+    }
+
+    /// Whether any of the staging gesture's actions is drawn.
+    fn draws_a_staging_action(test: &TestingRunner) -> bool {
+        texts(test).iter().any(|text| {
+            [
+                cairn_ui::STAGE_CHUNK_CAPTION,
+                cairn_ui::UNSTAGE_CHUNK_CAPTION,
+                cairn_ui::DISCARD_CHUNK_CAPTION,
+            ]
+            .contains(&text.as_str())
+        })
+    }
+
+    /// The commit's tabs, through the window: a changed row hovered in the Changes tab's
+    /// diff, and in a file opened in place in the Commit tab, floats no Stage, Unstage or
+    /// Discard — a commit's change is not the working tree's. Caught by: either tab handed the
+    /// gesture Local Changes' diff carries.
+    #[test]
+    fn a_commits_diff_hovered_in_either_tab_draws_no_staging_action() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        let at = visible_row(&test, "LINE 5")
+            .unwrap_or_else(|| panic!("no changed row drawn: {:?}", pane_rows(&test)));
+        test.move_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            !draws_a_staging_action(&test),
+            "the Changes tab offered staging: {:?}",
+            texts(&test)
+        );
+
+        click_tab(&mut test, DetailTab::Commit);
+        click_label(&mut test, "file-of-2.rs");
+        test.sync_and_update();
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .expansion_arrived(vec![opened_file(0, text_answer(2, 40), false)], None)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        // The pane is short: the tab's list scrolled until the changed row is in view.
+        let header = visible_row(&test, "@@ -3,7 +3,7 @@")
+            .unwrap_or_else(|| panic!("the file did not open: {:?}", pane_rows(&test)));
+        test.scroll(header, (0., -200.));
+        test.sync_and_update();
+        test.sync_and_update();
+        let at = visible_row(&test, "LINE 5")
+            .unwrap_or_else(|| panic!("no changed row drawn: {:?}", pane_rows(&test)));
+        test.move_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            !draws_a_staging_action(&test),
+            "the Commit tab offered staging: {:?}",
+            texts(&test)
+        );
+    }
+
+    /// Through the window: Expand All asks from the first file; each page opens its
     /// files under their rows; when Expand All stops with its budget spent the tab says how
     /// many files stay collapsed, and the button is Collapse All, which closes every file and
     /// ends what is in flight. Caught by: Expand All asking nothing, a page not drawn, the
@@ -2311,7 +2696,8 @@ pub(crate) mod tests {
     /// Holds (`down`) or lets go of the keys of the table's extending chord — ⌘ on macOS,
     /// Ctrl elsewhere — through the table, as the window hears them.
     fn hold_extending(test: &mut TestingRunner, down: bool) {
-        let chord = accelerators::chord(Action::ExtendSelection, accelerators::Os::current())
+        let chord = accelerators::chords(Action::ExtendSelection, accelerators::Os::current())
+            .first()
             .and_then(|chord| chord.press_hold())
             .expect("the extending chord is a press");
         let (key, code, modifiers) = chord;
@@ -2446,7 +2832,7 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// R7.1, the QA brief: the title bar names the repository — `*` while status lists a
+    /// The title bar names the repository — `*` while status lists a
     /// change — the current branch and its counts behind then ahead; a gone upstream says so
     /// and draws no counts; a detached `HEAD` its short id; an unborn branch its name and that
     /// it has no commit. Caught by: the star drawn for a clean tree or missed for a dirty one,
@@ -2559,10 +2945,10 @@ pub(crate) mod tests {
         assert!(shown.contains(&"folder*".to_owned()), "{shown:?}");
     }
 
-    /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the
+    /// Through the window: a row's chips are laid out against the refresh's snapshot — the
     /// current branch first with its check mark and folded with its upstream at that commit,
     /// another remote's ref its own chip — and `HEAD`'s subject is bold; selected, its Commit
-    /// tab draws the same chips in a REFS row (R6.1), and a commit no ref points at has none.
+    /// tab draws the same chips in a REFS row, and a commit no ref points at has none.
     /// Caught by: the window not handing the list the snapshot (no fold, no current first),
     /// the head flag dropped, or the REFS row not given the selected row's chips.
     #[test]
@@ -2716,12 +3102,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// A stash's row (refs-and-status R4.2, R5.4): its `stash@{n}` chip, then its message as
-    /// its subject, on one row; pressed, it is selected by its
-    /// own identity and asks what `git stash show` lists of it (R6.2); pressed with the extending
-    /// chord beside a commit, the pair holds the stash's row, the lower of the two the base.
-    /// Caught by: a stash's row drawing nothing, selected as a commit's, or asking a commit's
-    /// comparison of its stash commit rather than `git stash show`'s.
+    /// A stash's row: its `stash@{n}` chip, then its message as its subject, on one row;
+    /// pressed, it is selected by its own identity and asks what `git stash show` lists of it;
+    /// pressed with the extending chord beside a commit, the pair holds the stash's row, the lower
+    /// of the two the base. Caught by: a stash's row drawing nothing, selected as a commit's, or
+    /// asking a commit's comparison of its stash commit rather than `git stash show`'s.
     #[test]
     fn a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base() {
         let (mut test, view, submitted) = launch((0..3).map(row).collect(), received(6, true));
@@ -2788,7 +3173,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// C12, R7.1-R7.3 through the window: a row pressed with the table's extending chord
+    /// Through the window: a row pressed with the table's extending chord
     /// selects it beside the row selected — exactly two, drawn selected — and asks for the
     /// comparison tip against tip with the LOWER row the base, whichever was pressed first,
     /// far apart and adjacent; the pane shows the Changes tab under a header naming both
@@ -2891,7 +3276,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// C12 and the QA brief: a comparison is never left half-selected. A third press with the
+    /// A comparison is never left half-selected. A third press with the
     /// chord replaces the second, the row pressed plainly staying — exactly two; a press with
     /// the chord on one of the pair leaves the other selected alone; on the one row selected it
     /// changes nothing; and a plain press while the comparison is on its way returns to one,
@@ -2977,11 +3362,10 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// Phase 08 QA's U1, R7.3 and the session's tab: while two commits are compared the
-    /// Commit tab is unavailable — pressed, it changes nothing, not even the tab kept for the
-    /// session — and when one commit is selected again, the tab chosen before the comparison
-    /// is the one drawn. Caught by: the press reaching the session's tab while it is drawn
-    /// disabled (the Commit tab shown once the comparison ends).
+    /// While two commits are compared the Commit tab is unavailable — pressed, it changes
+    /// nothing, not even the tab kept for the session — and when one commit is selected again,
+    /// the tab chosen before the comparison is the one drawn. Caught by: the press reaching the
+    /// session's tab while it is drawn disabled (the Commit tab shown once the comparison ends).
     #[test]
     fn the_commit_tab_is_unavailable_while_comparing_and_the_tab_chosen_comes_back() {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
@@ -3001,13 +3385,15 @@ pub(crate) mod tests {
         arrives(&mut test, view, 4, Vec::new());
         let shown = pane(&test);
         assert!(
-            shown.iter().any(|t| t == crate::changes_tab::READING_DIFF)
+            shown
+                .iter()
+                .any(|t| t == crate::detail::changes_tab::READING_DIFF)
                 && !shown.iter().any(|t| t == cairn_ui::EXPAND_ALL_CAPTION),
             "the Changes tab chosen before the comparison is not the one drawn: {shown:?}"
         );
     }
 
-    /// The user's decision (2026-10-04): the comparison's header — base, then tip, and the
+    /// The comparison's header — base, then tip, and the
     /// swap — is drawn the moment the pair is set, with "Reading the comparison…" under it
     /// while the change set is awaited, and its failure under it if it fails. Caught by: the
     /// header drawn only once the answer arrives (the tab saying only that it reads).
@@ -3027,7 +3413,7 @@ pub(crate) mod tests {
             at(cairn_ui::BASE_CAPTION) < at(&base_id)
                 && at(&base_id) < at(cairn_ui::TIP_CAPTION)
                 && at(cairn_ui::TIP_CAPTION) < at(&tip_id)
-                && at(&tip_id) < at(crate::changes_tab::READING_COMPARISON),
+                && at(&tip_id) < at(crate::detail::changes_tab::READING_COMPARISON),
             "the header is not drawn over the comparison being read: {shown:?}"
         );
 
@@ -3053,7 +3439,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// The user's decision (2026-10-04): the keys held are let go of when the window loses
+    /// The keys held are let go of when the window loses
     /// focus — a release made in another window is never heard here — so a plain press after
     /// coming back selects one commit and compares nothing. Caught by: the held keys kept
     /// across the focus loss (the plain press read as the extending chord).
@@ -3077,7 +3463,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Phase 08 QA's U6: a row pressed with the extending chord while nothing is selected is
+    /// A row pressed with the extending chord while nothing is selected is
     /// selected alone, and its changes asked — nothing to compare it with. Caught by: a pair
     /// made with nothing, or the press ignored.
     #[test]
@@ -3099,7 +3485,7 @@ pub(crate) mod tests {
         let pushing = submitted.clone();
         let submit = move |request| pushing.borrow_mut().push(request);
         test.run_in(|| {
-            crate::diff_actions::change_settings(view, Some(&submit), |settings| {
+            crate::diff::actions::change_settings(view, Some(&submit), |settings| {
                 settings.more_lines()
             })
         });
@@ -3115,7 +3501,7 @@ pub(crate) mod tests {
         requests.iter().any(|r| matches!(r, Request::Expand(_)))
     }
 
-    /// Phase 08 QA's U3 through the window: a setting changed asks at once only the selection
+    /// Through the window: a setting changed asks at once only the selection
     /// whose tab is shown — with the Commit tab shown and a file open in place, the files
     /// opened in place and not the Changes tab's file; with the Changes tab shown, its file
     /// and not the files opened in place — and the other is asked, at the new setting, as
@@ -3180,12 +3566,12 @@ pub(crate) mod tests {
         );
     }
 
-    /// The user's decision (2026-10-04), departing from Fork: Entire File is the Changes
-    /// tab's alone. With it on there, a file opened in place in the Commit tab, and Expand
-    /// All, are asked at the shared line context and draw hunks; turning it off asks nothing
-    /// for the files opened in place; and the context and whitespace, which the two tabs
-    /// share, still reach them. Caught by: the Commit tab stuck showing the entire file with
-    /// no bar to turn it off (the user's report), or a toggle that re-reads its open files.
+    /// Departing from Fork, Entire File is the Changes tab's alone. With it on there, a file
+    /// opened in place in the Commit tab, and Expand All, are asked at the shared line context
+    /// and draw hunks; turning it off asks nothing for the files opened in place; and the context
+    /// and whitespace, which the two tabs share, still reach them. Caught by: the Commit tab stuck
+    /// showing the entire file with no bar to turn it off, or a toggle that re-reads its open
+    /// files.
     #[test]
     fn entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -3273,7 +3659,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// R6.2, R6.3, C11 through the window: each line button moves the context by one and asks
+    /// Through the window: each line button moves the context by one and asks
     /// the file again at it, never below one line; the entire file and ignoring whitespace
     /// ask again with theirs; every diff view shares the settings, so the next file chosen is
     /// asked at them. Caught by: a step of more than one, a floor of zero, a setting that
@@ -3362,10 +3748,10 @@ pub(crate) mod tests {
         y
     }
 
-    /// R6.2, R8 with the user's chords: next change moves the diff to the first change, then
-    /// one change at a time, and previous back — heard while focus is inside the detail
-    /// pane, and not from the history list. The bar's buttons do the same. Caught by: a
-    /// chord heard window-wide, one that does nothing, or buttons and chords that disagree.
+    /// Next change moves the diff to the first change, then one change at a time, and previous
+    /// back — heard while focus is inside the detail pane, and not from the history list. The bar's
+    /// buttons do the same. Caught by: a chord heard window-wide, one that does nothing, or buttons
+    /// and chords that disagree.
     #[test]
     fn previous_and_next_change_move_the_diff_while_the_pane_has_focus() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -3473,9 +3859,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// C10, R5.4 through the window: the Changes tab shows the commit's one-line summary —
+    /// Through the window: the Changes tab shows the commit's one-line summary —
     /// author, short id, date, subject — its files in a list, and, with no file chosen, the
-    /// first file's diff asked for, as Fork selects the first file (Finding 5); the answer is
+    /// first file's diff asked for, as Fork selects the first file; the answer is
     /// drawn beside the list. Caught by: no summary, no list, or a tab that waits for a file
     /// to be chosen elsewhere.
     #[test]
@@ -3521,9 +3907,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// C10, R5.4 and the QA brief's "a list operation, not a diff operation": typing in the
-    /// filter over 55,184 files asks a worker which match — handing it the window's own change
-    /// set, shared, not a copy — and the UI thread filters nothing: until the answer the list
+    /// Filtering is a list operation, not a diff operation: typing in the filter over 55,184
+    /// files asks a worker which match — handing it the window's own change set, shared, not a
+    /// copy — and the UI thread filters nothing: until the answer the list
     /// says it is filtering and shows no file, then shows the files it names and no others, one
     /// viewport of them, under "Showing N of M files". Caught by: filtering on the UI thread
     /// (files shown before any answer), a copied change set, or rows drawn for files the
@@ -3567,7 +3953,7 @@ pub(crate) mod tests {
             .filter_map(|request| match request {
                 Request::FilterFiles { text, files, .. } => {
                     let shared = match view.diff.peek().changes() {
-                        Some((_, crate::diff_state::Answer::Ready(kept))) => {
+                        Some((_, crate::diff::state::Answer::Ready(kept))) => {
                             std::sync::Arc::ptr_eq(kept, files)
                         }
                         _ => false,
@@ -3606,10 +3992,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// C10 and the QA brief: a file chosen in the Changes tab's list asks its diff and lets go
+    /// A file chosen in the Changes tab's list asks its diff and lets go
     /// of the last one's — the query it replaces is no longer wanted, so its answer, if it
     /// still arrives, is never drawn, and the diff thread's epoch for the lane has moved on
-    /// (`worker::diff_tests`' `a_superseded_diff_kills_its_git` shows that kills its `git`).
+    /// (`worker::diff::tests`' `a_superseded_diff_kills_its_git` shows that kills its `git`).
     /// Caught by: a list that reports nothing, or a choice that leaves the last query wanted.
     #[test]
     fn a_file_chosen_in_the_list_supersedes_the_last_ones_diff() {
@@ -3631,7 +4017,7 @@ pub(crate) mod tests {
         assert_eq!(view.diff.peek().file_index(), Some(1));
     }
 
-    /// R6.1, the QA brief's "genuinely shared": side-by-side is one setting for every diff
+    /// Side-by-side is one setting for every diff
     /// view, kept for the session — it holds across another file and another commit — and
     /// toggling it asks git nothing, since it draws the same answer another way. Caught by: a
     /// per-view setting, one the next file forgets, or a toggle that asks again.
@@ -3671,7 +4057,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// R6.8, R6.9: Load Diff on a file past the limits asks it again with `load_anyway`, and
+    /// Load Diff on a file past the limits asks it again with `load_anyway`, and
     /// while it is shown a setting changed keeps it loaded; another file starts unloaded.
     /// Caught by: Load Diff asking nothing, a context change that drops the load (the notice
     /// would come back), or a load that leaks to the next file.
@@ -3742,7 +4128,7 @@ pub(crate) mod tests {
         .unwrap_or_else(|| panic!("no splitter in the Changes tab"))
     }
 
-    /// The user's decision (2026-10-03): the Changes tab's file list opens at about 35% of the
+    /// The Changes tab's file list opens at about 35% of the
     /// pane, a drag never takes it below about 200 px, and the width dragged to is kept for
     /// the session — across another tab shown and back. Caught by: a fixed pixel width, no
     /// floor, or a width forgotten when the tab is shown again.
@@ -3806,7 +4192,7 @@ pub(crate) mod tests {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
         changes_tab_over(&mut test, view, 3);
         let opened = list_split(&test);
-        let reading = crate::changes_tab::READING_DIFF;
+        let reading = crate::detail::changes_tab::READING_DIFF;
         assert!(
             diff_side_labels(&test).iter().any(|t| t == reading),
             "{:?}",
@@ -3860,7 +4246,7 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// R10.1 and the QA brief, headless with focus set: gaining focus asks for a refresh,
+    /// Headless with focus set: gaining focus asks for a refresh,
     /// and that submit is all the UI thread does — no row cleared, nothing else asked;
     /// losing focus asks nothing; each gain asks once, so focus flapping asks twice and
     /// leaves superseding the first to the worker (`a_refresh_asked_twice_at_once_draws_one_
@@ -3896,7 +4282,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// R10.1: the Refresh action, through the accelerator table's chord on this platform,
+    /// The Refresh action, through the accelerator table's chord on this platform,
     /// asks for a refresh and nothing else. Caught by: the action placed in the table and
     /// never acted on, or acting by more than a submit.
     #[test]
@@ -3908,10 +4294,366 @@ pub(crate) mod tests {
         assert_eq!(view.rows.read().len(), 10);
     }
 
-    /// C10 headless with focus set, through the real boundary: the window opens its history
+    /// Presses the sidebar's filter field, so it holds focus.
+    fn focus_sidebar_filter(test: &mut TestingRunner) {
+        let field = test
+            .find(|node, element| {
+                Paragraph::try_downcast(element)
+                    .filter(|paragraph| {
+                        paragraph
+                            .spans
+                            .iter()
+                            .any(|span| span.text.as_ref() == cairn_ui::SIDEBAR_FILTER_PLACEHOLDER)
+                    })
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no filter field in the sidebar"));
+        test.click_cursor((f64::from(field.x), f64::from(field.y)));
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// A focused text field hands the window's chords and the held modifiers to the
+    /// window. With the sidebar's filter focused, the Refresh chord asks for a refresh and types
+    /// nothing into the field, and a row pressed with the extending chord held — the hold made
+    /// while the field had focus — selects it beside the row selected. Caught by: a field whose
+    /// key handler claims every key, which cancels the window's global key event, so F5 is
+    /// unheard and `HeldKeys` never sees ⌘ or Ctrl go down (a hole in Freya's
+    /// dispatch, `docs/research/staging-and-commit/freya-ui-apis.md` §2).
+    #[test]
+    fn a_focused_filter_field_hands_the_windows_chords_and_held_keys_to_the_window() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        focus_sidebar_filter(&mut test);
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(
+            requests_since(&submitted, from)
+                .into_iter()
+                .filter(|request| matches!(request, Request::Refresh))
+                .count(),
+            1,
+            "the Refresh chord went unheard while the filter had focus"
+        );
+        assert_eq!(
+            view.sidebar.filter_text.peek().as_str(),
+            "",
+            "the chord typed"
+        );
+
+        focus_sidebar_filter(&mut test);
+        extend_row(&mut test, 7);
+        assert_eq!(
+            selection(view),
+            (Some(RowId::Commit(oid(2))), Some(RowId::Commit(oid(7)))),
+            "the extending chord held while the filter had focus was never heard"
+        );
+    }
+
+    /// What a discard of one modified file would cost, for a confirmation to draw.
+    fn one_file_discard() -> cairn_model::Consequence {
+        discard_of("src/lib.rs")
+    }
+
+    /// What a discard of the one modified file at `path` would cost.
+    fn discard_of(path: &str) -> cairn_model::Consequence {
+        use cairn_model::{Consequence, DiscardedFile, FileLoss};
+        Consequence::DiscardFiles {
+            files: vec![DiscardedFile {
+                path: RepoPath::from(path),
+                loss: FileLoss::Modified {
+                    index: oid(1),
+                    working_tree: Some(oid(2)),
+                    executable: false,
+                    lines: Some(3),
+                    mode: None,
+                },
+            }],
+        }
+    }
+
+    /// Opens a confirmation of [`one_file_discard`] whose token goes to the returned list.
+    fn confirm_open(
+        test: &mut TestingRunner,
+        view: View,
+    ) -> Rc<RefCell<Vec<cairn_model::Confirmed>>> {
+        let tokens: Rc<RefCell<Vec<cairn_model::Confirmed>>> = Rc::default();
+        let kept = tokens.clone();
+        let mut confirming = view.confirming;
+        confirming.set(Some(Confirming::new(
+            "Discard Changes",
+            one_file_discard(),
+            move |token| kept.borrow_mut().push(token),
+        )));
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        tokens
+    }
+
+    /// A confirmation of a discard at `path` whose token goes to `kept`.
+    fn asking(path: &str, kept: &Rc<RefCell<Vec<cairn_model::Confirmed>>>) -> Confirming {
+        let kept = kept.clone();
+        Confirming::new("Discard Changes", discard_of(path), move |token| {
+            kept.borrow_mut().push(token)
+        })
+    }
+
+    fn settle(test: &mut TestingRunner) {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+    }
+
+    /// A confirmation replaced in place by another — B set while A is open —
+    /// draws B and hands B's token, built from B's consequence, to B's continuation; A's gets
+    /// nothing. Caught by: a dialog whose buttons keep the first confirmation's handlers (the
+    /// toolkit keeps a component's old props when they compare equal), which spends a token
+    /// naming A's paths under B's words.
+    #[test]
+    fn a_confirmation_replaced_in_place_hands_its_own_token_to_its_own_continuation() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let (first, second) = (
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+        );
+        let mut confirming = view.confirming;
+        confirming.set(Some(asking("src/lib.rs", &first)));
+        settle(&mut test);
+        confirming.set(Some(asking("src/other.rs", &second)));
+        settle(&mut test);
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == &discard_of("src/other.rs").prompt()),
+            "{:?}",
+            texts(&test)
+        );
+        click_label(&mut test, "Discard Changes in 1 File");
+        assert!(
+            first.borrow().is_empty(),
+            "the replaced confirmation got a token"
+        );
+        assert_eq!(second.borrow().len(), 1, "the confirmation drawn got none");
+        assert_eq!(
+            second.borrow()[0].prompt(),
+            discard_of("src/other.rs").prompt(),
+            "the token names what was drawn"
+        );
+    }
+
+    /// A confirmation opened by the previous one's answer — its continuation asks
+    /// for the next — answers afresh: Escape dismisses it, and so does Cancel, pressed twice
+    /// harmlessly; confirming builds exactly one token for it. Caught by: an answered flag that
+    /// outlives the confirmation it guarded, leaving the next one deaf while the window's chords
+    /// are inert — the window stuck.
+    #[test]
+    fn a_confirmation_opened_by_the_last_ones_answer_answers_afresh() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let (first, second) = (
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+        );
+        let mut confirming = view.confirming;
+        let next = Rc::new(RefCell::new(Some(asking("src/other.rs", &second))));
+        let opener = view.confirming;
+        let chain = move |first: &Rc<RefCell<Vec<cairn_model::Confirmed>>>,
+                          next: &Rc<RefCell<Option<Confirming>>>| {
+            let (first, next) = (first.clone(), next.clone());
+            Confirming::new("Discard Changes", discard_of("src/lib.rs"), move |token| {
+                first.borrow_mut().push(token);
+                let mut confirming = opener;
+                if let Some(next) = next.borrow_mut().take() {
+                    confirming.set(Some(next));
+                }
+            })
+        };
+
+        // Escape dismisses the second.
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert_eq!(first.borrow().len(), 1);
+        assert!(
+            view.confirming.peek().is_some(),
+            "the next confirmation did not open"
+        );
+        test.press_key(Key::Named(NamedKey::Escape));
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "Escape did nothing");
+
+        // Cancel dismisses the second, and a second press of it is harmless.
+        *next.borrow_mut() = Some(asking("src/other.rs", &second));
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert!(view.confirming.peek().is_some());
+        let cancel = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == cairn_ui::CANCEL_CAPTION)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no Cancel"));
+        let at = (f64::from(cancel.x), f64::from(cancel.y));
+        test.click_cursor(at);
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "Cancel did nothing");
+        test.click_cursor(at);
+        settle(&mut test);
+
+        // Confirming the second builds exactly one token, for the second.
+        *next.borrow_mut() = Some(asking("src/other.rs", &second));
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "the second did not close");
+        assert_eq!(
+            second.borrow().len(),
+            1,
+            "the second built {} tokens",
+            second.borrow().len()
+        );
+        assert_eq!(
+            second.borrow()[0].prompt(),
+            discard_of("src/other.rs").prompt()
+        );
+        assert_eq!(first.borrow().len(), 3);
+    }
+
+    /// Through the window: while a confirmation is open the window's chords do
+    /// nothing — Refresh asks for nothing, a tab chord shows no tab — and a press behind it
+    /// selects nothing there but cancels; Return, with focus on Cancel, cancels; the button
+    /// hands the token, built from the consequence drawn, where the asking view said, and
+    /// closes the dialog; once closed the chords act again. Caught by: a window that acts on
+    /// a chord under the dialog (its key listener runs before the dialog's), a dialog a press
+    /// can reach past, or a token that goes nowhere.
+    #[test]
+    fn no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        let tokens = confirm_open(&mut test, view);
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == "Discard Changes in 1 File"),
+            "{:?}",
+            texts(&test)
+        );
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        press_chord(&mut test, Action::ShowChangesTab);
+        for _ in 0..3 {
+            test.press_key(Key::Named(NamedKey::Tab));
+            test.sync_and_update();
+        }
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "a chord acted under it"
+        );
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        assert!(view.confirming.peek().is_some());
+
+        // A press behind it, on a row: the row is not chosen, and the dialog is cancelled.
+        click_row(&mut test, 5);
+        assert_eq!(selection(view), (Some(RowId::Commit(oid(2))), None));
+        assert!(view.confirming.peek().is_none(), "a press outside kept it");
+        assert!(tokens.borrow().is_empty());
+
+        // Return, on Cancel, cancels.
+        let tokens = confirm_open(&mut test, view);
+        test.press_key(Key::Named(NamedKey::Enter));
+        test.sync_and_update();
+        assert!(view.confirming.peek().is_none(), "Return did not cancel");
+        assert!(tokens.borrow().is_empty(), "Return confirmed");
+
+        // The button builds the token from the consequence drawn and hands it on.
+        let tokens = confirm_open(&mut test, view);
+        click_label(&mut test, "Discard Changes in 1 File");
+        assert_eq!(tokens.borrow().len(), 1);
+        assert_eq!(tokens.borrow()[0].prompt(), one_file_discard().prompt());
+        assert!(view.confirming.peek().is_none());
+
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+    }
+
+    /// A context menu opens from anywhere in the window, since the window mounts the
+    /// host every menu needs (`ContextMenuViewer`), without which the toolkit panics. Caught
+    /// by: no host mounted.
+    #[test]
+    fn a_context_menu_opens_from_inside_the_window() {
+        const MENU_ITEM: &str = "Copy Path";
+        const STRIP: f32 = 40.;
+        let (mut test, _) = TestingRunner::new(
+            || {
+                let view = use_consume::<View>();
+                rect()
+                    .expanded()
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .height(Size::px(HEIGHT - STRIP))
+                            .child(window(PATH, view, None, None)),
+                    )
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .height(Size::px(STRIP))
+                            .on_secondary_down(|_| {
+                                ContextMenu::open_from_down(
+                                    Menu::new().child(MenuButton::new().child(MENU_ITEM)),
+                                );
+                            }),
+                    )
+            },
+            (WINDOW_WIDTH, HEIGHT).into(),
+            |runner| {
+                runner.provide_root_context(|| {
+                    test_view(
+                        (0..3).map(row).collect(),
+                        received(3, true),
+                        FetchStatus::Idle,
+                        None,
+                    )
+                })
+            },
+            1.,
+        );
+        test.sync_and_update();
+        let at = (20., f64::from(HEIGHT - STRIP / 2.));
+        test.move_cursor(at);
+        for name in [
+            freya_testing::prelude::MouseEventName::MouseDown,
+            freya_testing::prelude::MouseEventName::MouseUp,
+        ] {
+            test.send_event(PlatformEvent::Mouse {
+                name,
+                cursor: at.into(),
+                button: Some(MouseButton::Right),
+            });
+            test.sync_and_update();
+        }
+        test.sync_and_update();
+        assert!(
+            texts(&test).iter().any(|t| t == MENU_ITEM),
+            "no menu: {:?}",
+            texts(&test)
+        );
+    }
+
+    /// Headless with focus set, through the real boundary: the window opens its history
     /// from its first refresh; a row is chosen; a ref moves; the window gains focus, the
     /// refresh finds the move and the history is reopened — the old rows retired to the
-    /// worker — and the chosen row, arriving again, is drawn chosen (R10.5); gaining focus
+    /// worker — and the chosen row, arriving again, is drawn chosen; gaining focus
     /// again with nothing moved reopens nothing. Caught by: focus that does not refresh, a
     /// reopen that drops the selection, or one on an unchanged snapshot.
     #[test]

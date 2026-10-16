@@ -53,7 +53,8 @@ const ALWAYS: &[(&str, &str)] = &[
     // ssh consults SSH_ASKPASS only when it has no controlling terminal unless
     // told otherwise; `force` makes it ask the helper even from a Cairn
     // launched in a terminal, so a key passphrase never lands on a tty the
-    // user is not looking at (evidence record; the OpenSSH floor is O5).
+    // user is not looking at. `SSH_ASKPASS_REQUIRE` needs OpenSSH 8.4 (evidence:
+    // `docs/research/credential-prompts/git-credential-delegation.md`).
     ("SSH_ASKPASS_REQUIRE", "force"),
     // A GUI has no terminal, and git still launches a configured `core.editor`
     // with `TERM` unset — a `vim` on a pipe, or a `code --wait` window nobody
@@ -61,8 +62,8 @@ const ALWAYS: &[(&str, &str)] = &[
     // one. `false` and not `:`, because `:` silently accepts whatever message
     // git proposed: a merge message the user never read. GIT_EDITOR is the
     // first thing git's `editor.c` consults, ahead of `core.editor`, `VISUAL`
-    // and `EDITOR` (evidence:
-    // `docs/research/process-manager/platform-and-git-behaviour.md` C9).
+    // and `EDITOR` (evidence: "Editors" in
+    // `docs/research/process-manager/platform-and-git-behaviour.md`).
     ("GIT_EDITOR", "false"),
     // Both, because the rebase todo list's editor is `GIT_SEQUENCE_EDITOR`,
     // then `sequence.editor`, and only then GIT_EDITOR, so a user's
@@ -82,7 +83,8 @@ const READ_ONLY: &[(&str, &str)] = &[
     // `status` honours it: porcelain `diff` and `describe --dirty` refresh the
     // index anyway, which is why a read runs plumbing or `status` — or `diff
     // --no-index`, which reads no index — and nothing else (`crate::reads`; evidence:
-    // `docs/research/process-manager/platform-and-git-behaviour.md` C3).
+    // the `GIT_OPTIONAL_LOCKS` section of
+    // `docs/research/process-manager/platform-and-git-behaviour.md`).
     ("GIT_OPTIONAL_LOCKS", "0"),
     // In a partial clone, asking for an object only the promisor remote holds
     // fetches it: a pack written and the network reached, from a read. With
@@ -91,8 +93,8 @@ const READ_ONLY: &[(&str, &str)] = &[
     // can still lazy-fetch: carrying no askpass token, it fails closed only
     // where the promisor needs a prompt, and one a configured credential
     // helper or the ssh agent answers fetches. That is a constraint the reads in `crate::reads`
-    // design around, not one this line removes (decided by the user,
-    // 2026-10-02: keep the floor, set the variable).
+    // design around, not one this line removes: the floor stays 2.30 and the variable is
+    // set for the gits that read it.
     ("GIT_NO_LAZY_FETCH", "1"),
 ];
 
@@ -101,17 +103,32 @@ const READ_ONLY: &[(&str, &str)] = &[
 /// the user's own setup: a credential helper or ssh-agent that already works
 /// must keep working.
 ///
-/// Deliberately NOT here, and never will be without a decision: every `GIT_*`
-/// variable (`GIT_DIR` would redirect the write, `GIT_CONFIG_GLOBAL` would swap
-/// the user's configuration out, `GIT_ASKPASS` may be meant for something
-/// else), which includes `GIT_SSH_COMMAND` and `GIT_SSH` — a user who sets
-/// those in a shell rather than in `core.sshCommand` will find Cairn ignores
-/// them, and that is the cost of never inheriting a git override. The two
-/// exceptions, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`, name a CA bundle and
-/// nothing else (issue #18). Display (`DISPLAY`, `WAYLAND_DISPLAY`) and
-/// signing (`GNUPGHOME`) variables remain open questions for the user on
-/// that issue, not omissions. `GIT_EDITOR` and `EDITOR` are not inherited
-/// either: [`ALWAYS`] pins the editor to `false`.
+/// Deliberately NOT here: every `GIT_*` variable (`GIT_DIR` would redirect the
+/// write, `GIT_CONFIG_GLOBAL` would swap the user's configuration out,
+/// `GIT_ASKPASS` may be meant for something else), which includes
+/// `GIT_SSH_COMMAND` and `GIT_SSH` — a user who sets those in a shell rather
+/// than in `core.sshCommand` will find Cairn ignores them, and that is the cost
+/// of never inheriting a git override. The exceptions are named one by one:
+/// `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`, which name a CA bundle and nothing
+/// else (issue #18), and `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
+/// `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` — with `EMAIL`, which is no
+/// `GIT_*` name, the five identity variables, which name who a commit is by.
+/// Never the date variables (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`): a stale
+/// one left in a shell would stamp every commit Cairn makes with it.
+/// `GIT_EDITOR` and `EDITOR` are not inherited either: [`ALWAYS`] pins the
+/// editor to `false`.
+///
+/// Every local write runs the user's hooks, filters and signing programs with
+/// this environment too, so it is what a `pre-commit` hook and `gpg` see; each
+/// entry is a deliberate leak of the user's environment, which
+/// `destructive-ops-reviewer` reviews.
+///
+/// One roster for every invocation, a read's as a write's: a read's clean
+/// filter or fsmonitor hook sees the display, signing and identity variables
+/// too: that is what the user's own `git` gives those programs from a shell, so
+/// a filter or hook behaves under Cairn as it does there, and a second roster
+/// for reads would be a second list to keep right for no program that needs
+/// less.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",
@@ -141,7 +158,7 @@ const INHERITED: &[&str] = &[
     "LC_ALL",
     "LC_CTYPE",
     "LC_MESSAGES",
-    // Transport, decided on issue #18: each configures how git reaches a
+    // Transport (issue #18): each configures how git reaches a
     // remote, and its absence is a "cannot connect" the user cannot diagnose
     // from Cairn. A proxy URL may carry the user's proxy credentials; they go
     // to git and nowhere else, since a `GitEnvironment` is never rendered,
@@ -170,8 +187,8 @@ const INHERITED: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     // git's own spelling of the same two, overriding `http.sslCAInfo` and
-    // `http.sslCAPath` (git-config(1)); the only `GIT_*` names on the roster,
-    // and they name a CA bundle and nothing else.
+    // `http.sslCAPath` (git-config(1)); they name a CA bundle and nothing else
+    // (the identity variables below are the roster's other `GIT_*` names).
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
     // Kerberos, for a remote authenticated over GSSAPI: the credential cache
@@ -180,6 +197,36 @@ const INHERITED: &[&str] = &[
     // its default place.
     "KRB5CCNAME",
     "KRB5_CONFIG",
+    // Signing and the desktop (issue #18): a commit under `commit.gpgSign` runs `gpg`,
+    // whose agent asks for a key's passphrase through a pinentry on the user's desktop.
+    //
+    // GnuPG's home, when the user keeps their keys anywhere but `~/.gnupg`: without it
+    // `gpg` finds no secret key and every signed commit fails.
+    "GNUPGHOME",
+    // The X display a graphical pinentry (and an `ssh-askpass` the user configured
+    // themselves) opens its window on; without it the passphrase is never asked for.
+    "DISPLAY",
+    // The Wayland display, the same for a pinentry built for Wayland.
+    "WAYLAND_DISPLAY",
+    // Where the X cookie a pinentry presents to the display lives when it is not
+    // `~/.Xauthority`: a path, never the cookie itself; without it the display refuses
+    // the pinentry's connection.
+    "XAUTHORITY",
+    // Identity: the terminal's identity is the one Cairn commits with, so a per-project
+    // identity set in the shell (direnv) is honoured exactly as the user's own
+    // `git commit` honours it, ahead of `user.name`.
+    //
+    // The author's name a commit records, over `user.name` and `author.name`.
+    "GIT_AUTHOR_NAME",
+    // The author's email a commit records, over `user.email` and `author.email`.
+    "GIT_AUTHOR_EMAIL",
+    // The committer's name, over `user.name` and `committer.name`.
+    "GIT_COMMITTER_NAME",
+    // The committer's email, over `user.email` and `committer.email`.
+    "GIT_COMMITTER_EMAIL",
+    // git's fallback for an email no configuration sets, before it guesses one from the
+    // host name.
+    "EMAIL",
 ];
 
 /// Every variable a `git` subprocess will see, but for the per-invocation
@@ -266,7 +313,7 @@ mod tests {
         )
     }
 
-    /// PRD B1: the whole set, spelled out. Adding a variable means editing this list.
+    /// The whole set, spelled out. Adding a variable means editing this list.
     #[test]
     fn the_environment_is_exactly_the_deliberate_entries() {
         let environment = GitEnvironment::new(
@@ -279,12 +326,19 @@ mod tests {
                 "ALL_PROXY",
                 "CAIRN_ASKPASS_SOCKET",
                 "DBUS_SESSION_BUS_ADDRESS",
+                "DISPLAY",
+                "EMAIL",
                 "GIT_ASKPASS",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
                 "GIT_EDITOR",
                 "GIT_SEQUENCE_EDITOR",
                 "GIT_SSL_CAINFO",
                 "GIT_SSL_CAPATH",
                 "GIT_TERMINAL_PROMPT",
+                "GNUPGHOME",
                 "HOME",
                 "HTTPS_PROXY",
                 "KRB5CCNAME",
@@ -302,6 +356,8 @@ mod tests {
                 "SSL_CERT_DIR",
                 "SSL_CERT_FILE",
                 "TMPDIR",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
@@ -351,9 +407,9 @@ mod tests {
         );
     }
 
-    /// PRD R3.2, R3.3: the helper is named whether or not there is a channel,
-    /// so git and ssh never fall back to a terminal; without a channel there
-    /// is simply no socket for it to find.
+    /// The helper is named whether or not there is a channel, so git and ssh
+    /// never fall back to a terminal; without a channel there is simply no
+    /// socket for it to find.
     #[test]
     fn without_a_channel_the_helper_is_still_named_and_the_socket_is_not() {
         let environment =
@@ -397,8 +453,15 @@ mod tests {
             [
                 "ALL_PROXY",
                 "DBUS_SESSION_BUS_ADDRESS",
+                "DISPLAY",
+                "EMAIL",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
                 "GIT_SSL_CAINFO",
                 "GIT_SSL_CAPATH",
+                "GNUPGHOME",
                 "HOME",
                 "HTTPS_PROXY",
                 "KRB5CCNAME",
@@ -414,6 +477,8 @@ mod tests {
                 "SSL_CERT_DIR",
                 "SSL_CERT_FILE",
                 "TMPDIR",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
@@ -434,9 +499,9 @@ mod tests {
             "SSH_ASKPASS_REQUIRE",
             "CAIRN_ASKPASS_SOCKET",
             "CAIRN_ASKPASS_TOKEN",
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "GNUPGHOME",
+            // A stale date would stamp every commit.
+            "GIT_AUTHOR_DATE",
+            "GIT_COMMITTER_DATE",
             "GIT_EDITOR",
             "EDITOR",
             // curl reads the proxy for plain HTTP in lower case only (httpoxy).
@@ -456,10 +521,10 @@ mod tests {
         for poison in [
             "GIT_DIR",
             "GIT_CONFIG_GLOBAL",
-            "DISPLAY",
+            "GIT_AUTHOR_DATE",
+            "GIT_COMMITTER_DATE",
             "HTTP_PROXY",
             "CURL_CA_BUNDLE",
-            "GNUPGHOME",
             "CAIRN_ASKPASS_TOKEN",
         ] {
             assert_eq!(environment.get(poison), None, "{poison} reached git");
@@ -553,7 +618,7 @@ mod tests {
             .collect()
     }
 
-    /// PRD G3, a read: the base, the editor pinned to `false`, optional locks
+    /// A read: the base, the editor pinned to `false`, optional locks
     /// and lazy fetching off, and no token — spelled out variable by variable,
     /// so adding one to either profile is an edit here.
     #[test]
@@ -578,7 +643,7 @@ mod tests {
         assert!(read.get_program() == "git");
     }
 
-    /// PRD G3, a write: the same base with the editor pinned, no read-only
+    /// A write: the same base with the editor pinned, no read-only
     /// variable, and the token exactly when the operation was given one.
     #[test]
     fn a_write_is_the_base_with_its_token_only_when_given() {

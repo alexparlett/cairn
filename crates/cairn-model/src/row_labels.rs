@@ -1,4 +1,4 @@
-//! The refs a history row carries (PRD R4.3): the branches, remote-tracking refs and tags
+//! The refs a history row carries: the branches, remote-tracking refs and tags
 //! that point at its commit, and whether it is `HEAD`'s, from the snapshot its walk began
 //! from. A row's labels are kept beside it in its history — the names in the history's text
 //! store, the labels of every labelled row in a store of their own — never in the row, so a

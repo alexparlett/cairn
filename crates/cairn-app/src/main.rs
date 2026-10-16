@@ -1,30 +1,18 @@
 //! The Cairn binary.
 
-mod changes_tab;
 mod closing;
-mod detail_pane;
-mod diff_actions;
-mod diff_state;
-mod fetch_state;
-mod file_filter;
-mod history_state;
-mod local_changes_pane;
-mod local_changes_state;
-#[cfg(test)]
-mod local_changes_tests;
-mod ref_find;
+mod commit_box;
+mod detail;
+mod diff;
+mod history;
+mod local_changes;
+mod modal;
+mod operations;
 mod refresh;
-mod refresh_state;
 mod repository_path;
-mod row_finder;
-mod selection;
 mod session;
 mod shortcuts;
-mod sidebar_pane;
-mod sidebar_state;
-#[cfg(test)]
-mod sidebar_tests;
-mod status_text;
+mod sidebar;
 mod window;
 #[cfg(test)]
 mod window_check;
@@ -38,21 +26,21 @@ use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
 
 use closing::Closing;
-use diff_state::DiffState;
-use fetch_state::{FetchStatus, PromptView};
-use history_state::Progress;
+use diff::state::DiffState;
+use history::state::Progress;
+use operations::fetch::{FetchStatus, PromptView};
 use window::View;
 use worker::Request;
 
 const PAGE_ROWS: usize = 64;
 
 /// IBM Plex Mono Regular, from IBM's release `@ibm/plex-mono@2.5.0`, under the SIL Open Font
-/// Licence 1.1 beside it in `assets/fonts/` (L16): the diff's typeface, embedded so the
+/// Licence 1.1 beside it in `assets/fonts/`: the diff's typeface, embedded so the
 /// application draws the same text wherever it runs.
 const DIFF_FONT: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf");
 
 fn main() {
-    // Found once, as the application starts, on a thread of its own (PRD R6.1).
+    // Found once, as the application starts, on a thread of its own.
     let git = worker::Discovery::start();
     let closing = Closing::default();
     let window = WindowConfig::new({
@@ -60,7 +48,7 @@ fn main() {
         move || app(git.clone(), closing.clone())
     })
     .with_title("Cairn")
-    // Closing the window closes its repository first (PRD R6.3): see `closing`.
+    // Closing the window closes its repository first: see `closing`.
     .with_on_close(move |_, _| closing.requested());
     launch(
         LaunchConfig::new()
@@ -79,11 +67,12 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let fetch = use_state(|| FetchStatus::Idle);
     let prompt = use_state(|| None::<PromptView>);
     let remotes = use_state(Vec::<RemoteSummary>::new);
-    let refused = use_state(|| None);
+    let endings = use_state(crate::operations::ending_dialog::Endings::default);
+    let lock = use_state(crate::operations::leftover_lock::LeftoverLock::default);
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
     let history_cursor = use_state(|| 0usize);
-    // Session state: the tab and the pane's shape outlive every selection (R5.2).
+    // Session state: the tab and the pane's shape outlive every selection.
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
     let pane_height = use_state(|| window::PANE_HEIGHT);
@@ -93,18 +82,28 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let change_cursor = use_state(|| None);
     // Session state of the Changes tab: its filter and its list's width.
     let filter_text = use_state(String::new);
-    let changes_list_width = use_state(|| changes_tab::LIST_WIDTH);
+    let changes_list_width = use_state(|| detail::changes_tab::LIST_WIDTH);
     // The second commit of a comparison, and the keys a press on a row is resolved against.
     let pair = use_state(|| None);
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
-    // What the last refresh answered (R10).
-    let refreshed = use_state(refresh_state::RefreshState::default);
+    // What the last refresh answered.
+    let refreshed = use_state(refresh::state::RefreshState::default);
     // What the title bar calls the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
-    // The sidebar's state, for the session (refs-and-status R8).
-    let sidebar = sidebar_state::SidebarView::used();
-    // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
-    let local = local_changes_state::LocalChangesView::used();
+    // The sidebar's state, for the session.
+    let sidebar = sidebar::state::SidebarView::used();
+    // Local Changes' lists, filter and diff, for the session.
+    let local = local_changes::state::LocalChangesView::used();
+    // The local writes, for the session.
+    let writes = use_state(operations::local_writes::LocalWrites::default);
+    // A destructive operation's confirmation, while one is open.
+    let confirming = use_state(|| None::<operations::confirming::Confirming>);
+    // Show Lost Commits, off as the window opens.
+    let show_lost = use_state(|| false);
+    // Create Branch, for the session.
+    let branch = operations::create_branch::CreateBranchView::used();
+    // The activity popover's operations, for the session.
+    let activity = operations::activity::ActivityView::used();
     let view = View {
         rows,
         progress,
@@ -112,7 +111,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         fetch,
         prompt,
         remotes,
-        refused,
+        endings,
+        lock,
         diff,
         history_scroll,
         history_cursor,
@@ -130,6 +130,11 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         repository,
         sidebar,
         local,
+        writes,
+        confirming,
+        show_lost,
+        branch,
+        activity,
     };
 
     let opened = use_hook(|| {
@@ -145,12 +150,17 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         move || match worker::open(&path, &git) {
             Ok((handle, mut updates, reply)) => {
                 closing.opened(handle.clone());
+                // The first close asked while a write runs waits for it, and says which.
+                closing.when_requested(move || {
+                    let mut told = writes;
+                    told.write().closing();
+                });
                 let platform = Platform::get();
                 handle.submit(Request::ListRemotes);
                 handle.submit(Request::ConfiguredContext);
                 // The refs, ahead/behind and status, read for the first time: the refs'
                 // answer has no walk to compare with, so it asks for the history, which
-                // then walks from them (R10, R11.2).
+                // then walks from them.
                 handle.submit(Request::Refresh);
                 let submitting = handle.clone();
                 // Weak: the task must not keep the answering end alive past the window,

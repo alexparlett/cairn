@@ -1,5 +1,4 @@
-//! Headless tests for the diff view, unified and side by side, and the bar over it (PRD
-//! R6.1-R6.7, R6.9, criteria C9 and C11).
+//! Headless tests for the diff view, unified and side by side, and the bar over it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -120,7 +119,54 @@ fn built_rows(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// C9 for unified rows, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`:
+/// The first visible row's text.
+fn first_shown(test: &TestingRunner) -> String {
+    built_rows(test)
+        .into_iter()
+        .find(|(_, visible)| *visible)
+        .map(|(text, _)| text)
+        .unwrap_or_default()
+}
+
+/// With the diff focused, Shift+↓ — Local Changes' list extension, a scope the diff view is
+/// not in — scrolls a row as ↓ does, and Shift+↑ back as ↑ does. Caught by: a view that
+/// leaves alone every scope's chords.
+#[test]
+fn another_views_chord_is_the_diff_views_arrow() {
+    use cairn_ui::accelerators::{self, Action, Os};
+    let shown = |test: &mut TestingRunner, action: Option<Action>, times: usize| {
+        for _ in 0..times {
+            match action {
+                Some(action) => {
+                    let chord = accelerators::chords(action, Os::current()).first().unwrap();
+                    let (key, _, held) = chord.key_press().unwrap();
+                    test.press_key_with_modifiers(key, held);
+                }
+                None => test.press_key(Key::Named(NamedKey::ArrowDown)),
+            }
+            test.sync_and_update();
+        }
+        first_shown(test)
+    };
+    let focus = |test: &mut TestingRunner| {
+        test.click_cursor((f64::from(WIDTH) / 2., f64::from(HEIGHT) / 2.));
+        test.sync_and_update();
+    };
+    let mut arrows = launch(ShownDiff::new(long_file(1_000), Context::EntireFile));
+    focus(&mut arrows);
+    let top = first_shown(&arrows);
+    let by_arrow = shown(&mut arrows, None, 5);
+    assert_ne!(by_arrow, top, "the arrow did not scroll the focused diff");
+
+    let mut chords = launch(ShownDiff::new(long_file(1_000), Context::EntireFile));
+    focus(&mut chords);
+    let by_chord = shown(&mut chords, Some(Action::ExtendSelectionDown), 5);
+    assert_eq!(by_chord, by_arrow, "Shift+↓ did not scroll as ↓ does");
+    let back = shown(&mut chords, Some(Action::ExtendSelectionUp), 5);
+    assert_eq!(back, top, "Shift+↑ did not scroll back as ↑ does");
+}
+
+/// For unified rows, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`:
 /// over a 1,000-line and a 100,000-line file drawn whole, the view builds one viewport of
 /// rows at the top, scrolled deep and scrolled to the end — the same number at each — and
 /// the end is the projection's last row, so the view's length is the projection's. Caught
@@ -235,10 +281,10 @@ fn only_a_viewport_of_diff_rows_is_built_however_long_the_file() {
     );
 }
 
-/// The user's report (2026-10-07): scrolled to the end, the last row sits above the horizontal
-/// scrollbar, which Freya draws over the viewport's bottom, never under it — unified and side
-/// by side, over a file whose lines are wider than the view, so the bar is there to cover it.
-/// Caught by: the list exactly as long as its rows (the last row flush with the bottom edge).
+/// Scrolled to the end, the last row sits above the horizontal scrollbar, which Freya draws
+/// over the viewport's bottom, never under it — unified and side by side, over a file whose
+/// lines are wider than the view, so the bar is there to cover it. Caught by: the list
+/// exactly as long as its rows (the last row flush with the bottom edge).
 #[test]
 fn scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar() {
     let lines = 200u32;
@@ -288,7 +334,7 @@ fn scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar() {
 }
 
 /// One drawn row, read with its colour ignored: the gutter's two numbers and the text —
-/// and nothing else, since no marker column is drawn (the user's decision, 2026-10-04).
+/// and nothing else, since no marker column is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Read {
     old: String,
@@ -350,13 +396,12 @@ fn read(old: &str, new: &str, text: &str) -> Read {
     }
 }
 
-/// R6.4, and the user's decision of 2026-10-04 (no marker column, as Fork's default): a
-/// row draws its numbers and its text and nothing between them, and the gutter alone still
-/// says what the tint says — a removed line has an old number and a blank new gutter, an
-/// added one the reverse, a context line both; a hunk header is git's `@@` line with the
-/// function context git printed, and no numbers; git's end-of-file marker is a row of its
-/// own. Caught by: a `-`/`+` column drawn again, a number drawn on the side a line is not
-/// on, a header without its function context.
+/// With no marker column, as Fork's default, a row draws its numbers and its text and
+/// nothing between them, and the gutter alone still says what the tint says — a removed line
+/// has an old number and a blank new gutter, an added one the reverse, a context line both;
+/// a hunk header is git's `@@` line with the function context git printed, and no numbers;
+/// git's end-of-file marker is a row of its own. Caught by: a `-`/`+` column drawn again, a
+/// number drawn on the side a line is not on, a header without its function context.
 #[test]
 fn a_row_reads_the_same_with_its_colour_ignored() {
     let text = TextDiff::new(
@@ -402,12 +447,12 @@ fn highlighted(test: &TestingRunner) -> Vec<Highlighted> {
     })
 }
 
-/// C11: intra-line ranges are drawn — in the stronger tint of their line's side, at the
-/// columns they cover after a tab is expanded — and a context line, or an added line with
-/// no pair, has none. The paired lines sit at different numbers on their sides and carry
-/// different ranges, so each side's ranges are looked up by its own line. Caught by:
-/// dropping the ranges, swapping the two sides' tints, passing byte offsets through, or
-/// looking a removed line up among the added lines' pairs (or the other way about).
+/// Intra-line ranges are drawn — in the stronger tint of their line's side, at the columns
+/// they cover after a tab is expanded — and a context line, or an added line with no pair,
+/// has none. The paired lines sit at different numbers on their sides and carry different
+/// ranges, so each side's ranges are looked up by its own line. Caught by: dropping the
+/// ranges, swapping the two sides' tints, passing byte offsets through, or looking a removed
+/// line up among the added lines' pairs (or the other way about).
 #[test]
 fn intra_line_ranges_are_drawn_in_the_stronger_tint() {
     let text = TextDiff::new(
@@ -444,10 +489,10 @@ fn intra_line_ranges_are_drawn_in_the_stronger_tint() {
     assert!(find("same").1.is_empty(), "a context line was highlighted");
 }
 
-/// R6.7, C11: ignoring whitespace hides whitespace-only changes — no row is drawn for them —
-/// and the answer says a change is hidden only when one is: not when whitespace is not
-/// ignored, and not when ignoring it hides nothing. Caught by: the notice following the
-/// toggle rather than the answer, or rows drawn from the exact ranges.
+/// Ignoring whitespace hides whitespace-only changes — no row is drawn for them — and the
+/// answer says a change is hidden only when one is: not when whitespace is not ignored, and
+/// not when ignoring it hides nothing. Caught by: the notice following the toggle rather than
+/// the answer, or rows drawn from the exact ranges.
 #[test]
 fn ignoring_whitespace_hides_whitespace_only_changes_and_says_so_only_then() {
     let respaced = || {
@@ -579,11 +624,11 @@ fn glyph_colours(test: &TestingRunner, name: &str) -> Vec<Color> {
     colours
 }
 
-/// R6.2, R6.3, C11: the bar holds previous and next change and every toggle, side-by-side
-/// among them (phase 07), each found by the name assistive technology reads; each enabled
-/// button reports its action, fewer lines is disabled at one line and both line buttons while
-/// the entire file is shown. Caught by: a button wired to another action, fewer lines
-/// pressable at the floor, side-by-side still disabled.
+/// The bar holds previous and next change and every toggle, side-by-side among them, each
+/// found by the name assistive technology reads; each enabled button reports its action,
+/// fewer lines is disabled at one line and both line buttons while the entire file is shown.
+/// Caught by: a button wired to another action, fewer lines pressable at the floor,
+/// side-by-side still disabled.
 #[test]
 fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
     let mut at_one = DiffSettings::default();
@@ -629,12 +674,12 @@ fn button_backgrounds(test: &TestingRunner) -> Vec<Option<Color>> {
     })
 }
 
-/// The user's decision (2026-10-03), Fork's bar: every button is a glyph whose name — Fork's
-/// tooltip where one is recorded — is read by assistive technology rather than drawn as a
-/// caption; a toggle that is on has its glyph drawn wholly in the accent (the theme's
-/// `text_highlight`, which `CURRENT_CHANGE` copies) and is not filled, and a toggle that is
-/// off, or a plain button, draws none of it. Caught by: a caption drawn in place of a glyph,
-/// a button with no name, an active toggle filled, or its glyph not lit.
+/// Fork's bar: every button is a glyph whose name — Fork's tooltip where one is recorded —
+/// is read by assistive technology rather than drawn as a caption; a toggle that is on has
+/// its glyph drawn wholly in the accent (the theme's `text_highlight`, which `CURRENT_CHANGE`
+/// copies) and is not filled, and a toggle that is off, or a plain button, draws none of it.
+/// Caught by: a caption drawn in place of a glyph, a button with no name, an active toggle
+/// filled, or its glyph not lit.
 #[test]
 fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
     let mut on = DiffSettings::default();
@@ -683,9 +728,9 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
     }
 }
 
-/// R6.7: the notice is drawn when the answer hides a change and not otherwise, whatever the
-/// toggle says; the path is drawn as its directory and its emphasised name. Caught by: a
-/// notice shown whenever whitespace is ignored.
+/// The notice is drawn when the answer hides a change and not otherwise, whatever the toggle
+/// says; the path is drawn as its directory and its emphasised name. Caught by: a notice
+/// shown whenever whitespace is ignored.
 #[test]
 fn the_bar_says_changes_are_hidden_only_when_they_are() {
     let mut ignoring = DiffSettings::default();
@@ -720,10 +765,10 @@ fn the_bar_says_changes_are_hidden_only_when_they_are() {
     );
 }
 
-/// The QA brief's horizontal extent: every row is as wide as the answer's widest line,
-/// measured once, so the extent is the same whether that line is built or not — at the top,
-/// where it is not, and at the end, where it is. Caught by: rows sized to their own text
-/// (the horizontal scrollbar would change as the view scrolls).
+/// The horizontal extent: every row is as wide as the answer's widest line, measured once,
+/// so the extent is the same whether that line is built or not — at the top, where it is
+/// not, and at the end, where it is. Caught by: rows sized to their own text (the horizontal
+/// scrollbar would change as the view scrolls).
 #[test]
 fn the_horizontal_extent_is_the_widest_lines_wherever_the_view_is() {
     let lines = 600u32;
@@ -818,14 +863,14 @@ fn side_paragraphs(test: &TestingRunner) -> Vec<(String, bool, bool)> {
     })
 }
 
-/// C9 for side-by-side rows, the twin of `only_a_viewport_of_diff_rows_is_built_however_long_
-/// the_file`: over a 1,000-line and a 100,000-line file drawn whole and side by side, the view
-/// builds one viewport of rows at the top, scrolled deep and scrolled to the end — the same
-/// number at each — its length is the file's real row count (one header and one row per line,
-/// a replaced line and its replacement sharing one), counted from the file and not from a
-/// second projection, and the end is the last line, in both columns. Caught by: a plain
-/// list, two scroll views, a length that drops or adds a row, or pairing that builds a row
-/// per changed line.
+/// For side-by-side rows, the twin of
+/// `only_a_viewport_of_diff_rows_is_built_however_long_the_file`: over a 1,000-line and a
+/// 100,000-line file drawn whole and side by side, the view builds one viewport of rows at
+/// the top, scrolled deep and scrolled to the end — the same number at each — its length is
+/// the file's real row count (one header and one row per line, a replaced line and its
+/// replacement sharing one), counted from the file and not from a second projection, and the
+/// end is the last line, in both columns. Caught by: a plain list, two scroll views, a length
+/// that drops or adds a row, or pairing that builds a row per changed line.
 #[test]
 fn only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file() {
     let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
@@ -966,14 +1011,13 @@ fn cell(number: &str, text: &str) -> Option<(String, String)> {
     Some((number.to_owned(), text.to_owned()))
 }
 
-/// R1.4, R6.1, R6.4 side by side: the i-th removed line beside the i-th added one, the
-/// shorter side's rows filler, one number per column and no marker (the user's decision of
-/// 2026-10-04, as Fork's default), the hunk header with git's function context in both
-/// columns, a context line in both, and git's end-of-file marker in the column of the side
-/// whose last line did not end. Here the sides differ in length both ways, and a whole side
-/// of one change is empty. Caught by: pairing by position in the hunk rather than in the
-/// change, filler drawn as a blank line with a number, the header in one column only, or a
-/// `-`/`+` drawn again.
+/// Side by side: the i-th removed line beside the i-th added one, the shorter side's rows
+/// filler, one number per column and no marker, as Fork's default, the hunk header with
+/// git's function context in both columns, a context line in both, and git's end-of-file
+/// marker in the column of the side whose last line did not end. Here the sides differ in
+/// length both ways, and a whole side of one change is empty. Caught by: pairing by position
+/// in the hunk rather than in the change, filler drawn as a blank line with a number, the
+/// header in one column only, or a `-`/`+` drawn again.
 #[test]
 fn side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour() {
     let text = TextDiff::new(
@@ -1007,11 +1051,11 @@ fn side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour() {
     );
 }
 
-/// R6.1, Fork's equal panes (Finding 11): the two columns are equal and together fill the
-/// view whatever the lines' lengths, each with its own gutter; a sideways scroll slides both
-/// columns' text by the same distance while each gutter stays put, and the view's extent is
-/// the widest line's overflow past its column. Caught by: columns sized to their text (one
-/// side pushed off screen), a gutter that scrolls away, or the sides scrolled apart.
+/// Fork's equal panes: the two columns are equal and together fill the view whatever the
+/// lines' lengths, each with its own gutter; a sideways scroll slides both columns' text by
+/// the same distance while each gutter stays put, and the view's extent is the widest line's
+/// overflow past its column. Caught by: columns sized to their text (one side pushed off
+/// screen), a gutter that scrolls away, or the sides scrolled apart.
 #[test]
 fn side_by_side_columns_are_equal_halves_and_slide_together() {
     let wide = "w".repeat(300);
@@ -1081,12 +1125,12 @@ fn side_by_side_columns_are_equal_halves_and_slide_together() {
     assert!(slid[0] > 0. && (slid[0] - slid[1]).abs() < 0.5, "{slid:?}");
 }
 
-/// R6.9, phase 06 QA's obligation: a file loaded past the limits with one line of several
-/// mebibytes draws that line cut at the long-line limit with the marker after it, in either
-/// view, so a row costs at most the limit's text however long the line, and the horizontal
-/// extent is the cut's, not the line's; the marker says how many bytes are not drawn. Caught
-/// by: a row that draws the whole line, a cut with no marker, a marker that miscounts, or an
-/// extent measured from the line's length.
+/// A file loaded past the limits with one line of several mebibytes draws that line cut at
+/// the long-line limit with the marker after it, in either view, so a row costs at most the
+/// limit's text however long the line, and the horizontal extent is the cut's, not the
+/// line's; the marker says how many bytes are not drawn. Caught by: a row that draws the
+/// whole line, a cut with no marker, a marker that miscounts, or an extent measured from the
+/// line's length.
 #[test]
 fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
     let long = "x".repeat(4 * 1024 * 1024);
@@ -1120,7 +1164,7 @@ fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
             .unwrap_or_else(|| panic!("the long line is not drawn: {drawn:?}"));
         assert_eq!(line.len(), 2, "no marker after the cut: {:?}", line.len());
         assert_eq!(line[0].len(), cut, "side by side: {side_by_side}");
-        // The user's marker (2026-10-03): how many of the line's bytes are not drawn.
+        // The marker: how many of the line's bytes are not drawn.
         assert_eq!(line[1], " … 4,192,256 more bytes");
         assert_eq!(4 * 1024 * 1024 - cut, 4_192_256);
     }
@@ -1180,16 +1224,14 @@ fn line_paragraphs(test: &TestingRunner) -> Vec<(i32, Area)> {
     })
 }
 
-/// The user's visual check (2026-10-04): "there is no gap between the line numbers and the
-/// divider", "the gutter column is too big for the text size", and Fork's captures
-/// (user-supplied, 2026-10-04): small numbers, a few pixels either side of the divider, no
-/// marker column. In both views every number's box ends at least `NUMBER_PADDING` before
-/// the separator to its right, every line's text starts at least `TEXT_PADDING` after the
-/// separator to its left, the numbers are drawn at `NUMBER_FONT_SIZE`, smaller than the
-/// text, and the unified gutter is two columns of `number_width` for the file's widest
-/// number. Caught by: the padding set on the number's own label — which this toolkit
-/// build lays its paragraph out over, right-aligning the digits against the separator —
-/// the numbers drawn at the text's size, or a marker column between separator and text.
+/// Fork's gutter: small numbers, a few pixels either side of the divider, no marker column.
+/// In both views every number's box ends at least `NUMBER_PADDING` before the separator to
+/// its right, every line's text starts at least `TEXT_PADDING` after the separator to its
+/// left, the numbers are drawn at `NUMBER_FONT_SIZE`, smaller than the text, and the unified
+/// gutter is two columns of `number_width` for the file's widest number. Caught by: the
+/// padding set on the number's own label — which this toolkit build lays its paragraph out
+/// over, right-aligning the digits against the separator — the numbers drawn at the text's
+/// size, or a marker column between separator and text.
 #[test]
 fn the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_views() {
     for side_by_side in [false, true] {
@@ -1247,14 +1289,13 @@ fn the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_vie
     const { assert!(NUMBER_FONT_SIZE < cairn_ui::diff_palette::DIFF_FONT_SIZE) };
 }
 
-/// Fork's captures (user-supplied, 2026-10-04): in unified the gutter keeps the plain
-/// ground on a changed row and the tint starts at the separator; side by side the tint
-/// runs across the pane, its number column included. Read as the backgrounds of the rects
-/// that hold a removed and an added row's number; and in both views the tint is what is
-/// drawn behind the changed line's text — the innermost rect with a background under the
-/// text's first glyph is the row's tint. Caught by: the side-by-side tint left after the
-/// number, the unified gutter tinted, or the tint held to the number column or covered by
-/// another ground before it reaches the text.
+/// As Fork draws it, in unified the gutter keeps the plain ground on a changed row and the
+/// tint starts at the separator; side by side the tint runs across the pane, its number
+/// column included. Read as the backgrounds of the rects that hold a removed and an added
+/// row's number; and in both views the tint is what is drawn behind the changed line's text
+/// — the innermost rect with a background under the text's first glyph is the row's tint.
+/// Caught by: the side-by-side tint left after the number, the unified gutter tinted, or the
+/// tint held to the number column or covered by another ground before it reaches the text.
 #[test]
 fn a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_side_by_side() {
     for side_by_side in [false, true] {

@@ -9,16 +9,7 @@ mod diff;
 mod edge_scroll;
 mod end_room;
 mod history;
-mod local_changes {
-    //! Local Changes (`docs/systems/local-changes.md`): its filter field and its Unstaged and
-    //! Staged lists, the selection in them, a drag of rows between them, and a row's
-    //! context menu.
-
-    pub(crate) mod drag;
-    pub(crate) mod list;
-    pub(crate) mod menu;
-    pub(crate) mod selection;
-}
+mod local_changes;
 mod sidebar;
 mod text_field;
 mod title_bar;

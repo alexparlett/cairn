@@ -1,6 +1,6 @@
 ---
 name: destructive-ops-reviewer
-description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff under crates/cairn-git/src/ops/, crates/cairn-git/src/process/ or crates/cairn-git/src/reads/, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
+description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff to crates/cairn-git/src/ops.rs, process.rs or reads.rs or under their ops/, process/ or reads/ directories, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
 tools: Read, Grep, Glob, Bash
 maxTurns: 20
 ---
@@ -23,9 +23,9 @@ SUFFICIENT.
 
 ## Scope gate, run this FIRST
 
-Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing under
-`crates/cairn-git/src/ops/`, `crates/cairn-git/src/process/` or
-`crates/cairn-git/src/reads/` changed, neither
+Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing in the
+`crates/cairn-git/src/ops`, `crates/cairn-git/src/process` or
+`crates/cairn-git/src/reads` module (its `.rs` file and its directory) changed, neither
 `crates/cairn-model/src/consequence.rs` nor `crates/cairn-model/src/confirm.rs`
 changed, no file on the guard's `CONFIRMATION_SURFACES` roster changed, and no
 changed file constructs a `Confirmed` or a `WriteAuthority`, or calls into

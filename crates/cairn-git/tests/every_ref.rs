@@ -3,6 +3,7 @@
 //! `git rev-list --branches --remotes --tags HEAD`, `git log --decorate=full`, `git stash
 //! list` — and every walk is paged to its end, so each comparison covers the whole history.
 
+#[path = "support/fixtures.rs"]
 mod fixtures;
 
 use std::collections::{BTreeSet, HashMap};

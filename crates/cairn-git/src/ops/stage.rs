@@ -268,7 +268,7 @@ fn files(count: usize) -> String {
 /// Against a `git` that records what it was given and runs the real one (C9's argv,
 /// environment and stdin for each verb here, since the runner is crate-private). What the
 /// verbs do to a repository is pinned against real git alone in
-/// `crates/cairn-git/tests/diff/write_verbs.rs`.
+/// `crates/cairn-git/tests/diff_engine/diff/write_verbs.rs`.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -568,7 +568,7 @@ fn the_file_list_is_sorted_by_path_and_never_shuffles() {
 /// R2.9 from outside the crate: a query already superseded answers that it was cancelled
 /// and starts no process. Superseding one while `git` runs, and the process ending, is
 /// `a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it` in
-/// `crates/cairn-git/src/reads/mod.rs`, where the command log can be read.
+/// `crates/cairn-git/src/reads.rs`, where the command log can be read.
 #[test]
 fn a_cancelled_changes_query_answers_cancelled() {
     let repo = repositories::rewrites(&[]);

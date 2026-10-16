@@ -10,6 +10,7 @@
 //! slimmed, which is never rewritten. Every row of both, and of the Cairn checkout from
 //! `HEAD`, is also checked against the details query, which reads the commit afresh.
 
+#[path = "support/fixtures.rs"]
 mod fixtures;
 
 use std::io::Write as _;

@@ -8,6 +8,7 @@
 //! `diffs::expected_result`, which reads the selection straight off the changed ranges with
 //! no hunks, headers, context or counts involved. Three ways of saying it, one answer.
 
+#[path = "support/diffs.rs"]
 mod diffs;
 
 use cairn_model::{

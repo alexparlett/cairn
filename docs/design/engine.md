@@ -305,7 +305,7 @@ live in one application, and they can disagree. Three obligations follow.
    its `Performed`), and the worker acts on it (`concurrency.md`). Get this wrong
    and the UI shows the pre-write state, which reads to the user as "the
    operation failed". The contract is documented in
-   `crates/cairn-git/src/ops/mod.rs` and summarised in
+   `crates/cairn-git/src/ops.rs` and summarised in
    `docs/systems/credentials.md`.
 2. **Filters affect reads, not only writes** — the next section.
 3. **Edge cases can diverge.** A gix read against git's under sparse checkout,

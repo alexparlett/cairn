@@ -49,7 +49,7 @@ skip discovery and read one repository whatever directory it runs in, are
 ignored BY DESIGN: Cairn's open never reads them, so no tab opens a repository
 other than the one at its path
 (`the_launch_environments_git_dir_and_work_tree_are_ignored_by_design`,
-`crates/cairn-git/tests/diff/bare_discovery.rs`, with git following the
+`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`, with git following the
 variable as its oracle). Neither kind is on the roster a `git` child inherits
 ("The environment"): the open decides once which repository is meant and
 whether it may open, and every child is then named that repository with
@@ -261,7 +261,7 @@ drops what it writes to stdout. The probe is built as a read
 one line is all `git --version` prints.
 
 From outside the crate nothing is nameable. The `compile_fail` doctests in
-`crates/cairn-git/src/ops/mod.rs` each add one line to a passing scaffold:
+`crates/cairn-git/src/ops.rs` each add one line to a passing scaffold:
 naming a `WriteAuthority`, calling its constructor, calling either builder, and
 calling `GitEnvironment::command`. Every argument is `unreachable!()`, so no
 block can fail on its arguments. Stable `rustdoc` checks that a block fails,
@@ -352,7 +352,7 @@ Why each variable is there, with its evidence, is beside it in
   commit>`, in `reads/stash_changes.rs`, which lists what a stash changed with
   its untracked files paired as git pairs them, git reading
   `stash.showIncludeUntracked` itself (2026-10-07) — as the module's own docs say
-  (`reads/mod.rs`, "What a read may run"); all four are pinned by
+  (`reads.rs`, "What a read may run"); all four are pinned by
   `the_porcelain_reads_are_the_named_queries`, and
   `destructive-ops-reviewer` check 10 names them.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
@@ -360,7 +360,7 @@ Why each variable is there, with its evidence, is beside it in
   `diff-tree`, `diff-index`, `diff-files` and `check-attr` run the hook as they
   read the index of a repository with a working tree (reproduced on 2.30.9
   through 2.56.0), as the user's own `git diff` does; no flag of theirs turns it
-  off, and the user decided to allow it as parity (`reads/mod.rs`, "What a read
+  off, and the user decided to allow it as parity (`reads.rs`, "What a read
   may run"; `the_content_query_writes_nothing_and_runs_nothing`). Under
   `core.fsmonitor=true` the same four start git's own fsmonitor daemon instead,
   if none is running (git 2.36 and later; reproduced on 2.56.0; `diff
@@ -400,7 +400,7 @@ Why each variable is there, with its evidence, is beside it in
   token, it fails closed only where the promisor needs a prompt; one a
   configured credential helper or the ssh agent answers fetches. The user decided on
   2026-10-02 to keep the floor and set the variable; the reads `diff-engine`
-  adds design around the older-git case (`reads/mod.rs`).
+  adds design around the older-git case (`reads.rs`).
 
 Pinned:
 
@@ -506,14 +506,14 @@ second time, asks git for the remote's configuration instead
 would not — a command-line `safe.directory`, `.`, a normalised entry — has
 its `remote.<name>.mirror` seen and the fetch refused
 (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
-`tests/fetch.rs`, in a user namespace with a second uid its root may give
+`tests/fetch/main.rs`, in a user namespace with a second uid its root may give
 a file to; required by the gate wherever `unshare --map-root-user
 --map-auto chown 1:1` succeeds, `CAIRN_REQUIRE_SECOND_OWNER`, and skipped,
 with the gate's note, on GitHub's Ubuntu 24.04 runners, whose AppArmor
 `unprivileged_userns` profile refuses that `chown`). Pinned also in `process/cli.rs` by
 `every_repository_is_named_to_git_whatever_trust_gix_gave_it`. Pinned against git
 itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
-(`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
+(`crates/cairn-git/tests/diff_engine/diff/ownership.rs`, every shape under every
 spelling of the setting with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, so it
 runs against the floors' gits in `git-floor` too); through every open's
 wiring by `a_repository_someone_else_owns_is_refused_at_open_unless_safe_directory_names_it`
@@ -523,7 +523,7 @@ directory opened must be the one judged, or `Error::RepositoryReplaced`), in
 `repository.rs`; and each band by the unit tests in `ownership.rs`. The real
 second owner needs root, so that case is a privileged review step:
 `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`,
-`#[ignore]`d in `crates/cairn-git/tests/diff/ownership.rs`, run as root.
+`#[ignore]`d in `crates/cairn-git/tests/diff_engine/diff/ownership.rs`, run as root.
 
 Naming the git directory is also the explicit spelling git never refuses, so
 the one check git makes on a repository it found by searching — a bare one,
@@ -590,7 +590,7 @@ stops. Both are read for this search alone and are not on the roster a
 child inherits. Pinned against the git in use by
 `a_ceiling_stops_cairns_search_exactly_where_it_stops_gits` and
 `the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`
-(`crates/cairn-git/tests/diff/bare_discovery.rs`; the second mounts a
+(`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`; the second mounts a
 `tmpfs` in a user and mount namespace, required by the gate wherever one can
 be made (`CAIRN_REQUIRE_MOUNT_NAMESPACE`, its own probe, `unshare
 --map-root-user --mount`, so the fetch test's stronger need never skips it)
@@ -621,9 +621,9 @@ Pinned: `a_trusted_repository_is_named_to_git_ahead_of_the_verb` (a stub
 `process/cli.rs`; against real git,
 `a_repository_whose_working_tree_sits_inside_another_is_the_one_asked` and
 `a_bare_repository_is_answered_under_safe_bare_repository_explicit`
-(`crates/cairn-git/tests/diff/changes.rs`), and
+(`crates/cairn-git/tests/diff_engine/diff/changes.rs`), and
 `a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another`
-(`crates/cairn-git/tests/fetch.rs`), each of which fails with the options
+(`crates/cairn-git/tests/fetch/main.rs`), each of which fails with the options
 removed. The open's check is pinned against the git in use by
 `a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it` —
 every shape (the planted repository and a directory inside it, a `.git`
@@ -640,7 +640,7 @@ run again with a recording `git` first on `PATH` and no
 `a_planted_bare_repository_is_refused_at_open_and_runs_nothing` (the planted
 `core.fsmonitor` runs on a read without the setting, as it does under git,
 and never under it; skipped before 2.38), in
-`crates/cairn-git/tests/diff/bare_discovery.rs`; the version bands by
+`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`; the version bands by
 `which_bare_repositories_are_implicit_follows_the_version_of_git` and the
 command line's parsing by
 `command_line_parameters_are_read_as_git_reads_them` and

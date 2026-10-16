@@ -4,7 +4,7 @@
 //! The `#[ignore]`d reporter does the same over every ref of a named repository and
 //! measures what compact, slim rows cost (C15's find time, C16's retained bytes).
 
-#[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
+#[path = "../../cairn-model/tests/support/layout_before_compaction.rs"]
 mod layout_before_compaction;
 
 use std::time::{Duration, Instant};

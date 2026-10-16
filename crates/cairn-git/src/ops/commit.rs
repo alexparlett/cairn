@@ -6,7 +6,7 @@
 //! default for a message given with `-F` (`whitespace`: trailing spaces and blank lines go,
 //! `#` lines stay) decide what is stored, exactly as the user's `git commit -F <file>` would
 //! store it — compared byte for byte under every value on git 2.30.9, 2.32.7 and the host's
-//! (`crates/cairn-git/tests/diff/commit.rs`). The message never reaches `argv`, so neither
+//! (`crates/cairn-git/tests/diff_engine/diff/commit.rs`). The message never reaches `argv`, so neither
 //! the process table nor the command log holds it. A non-UTF-8 `i18n.commitEncoding` — as
 //! `git config` answers it (`crate::reads::commit_encoding`, R6.11), a linked worktree's
 //! `includeIf` included — is refused before git runs: git stores the bytes it is given under

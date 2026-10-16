@@ -6,7 +6,7 @@
 //!
 //! Query plumbing: it reads configuration, and for `@{-N}` the reflog, and writes nothing,
 //! takes no lock and runs nothing (`checking_a_branch_name_writes_nothing`,
-//! `crates/cairn-git/tests/diff/branch.rs`). The name is the argument after `--branch` and is
+//! `crates/cairn-git/tests/diff_engine/diff/branch.rs`). The name is the argument after `--branch` and is
 //! read by git as the name whatever it begins with.
 
 use crate::ops::GitBinary;

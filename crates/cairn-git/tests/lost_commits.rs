@@ -9,6 +9,7 @@
 //! commit only a lost commit reaches, and a commit a tag reaches that is in a reflog too.
 //! Every walk is paged to its end, held and cold, at several page sizes and windows.
 
+#[path = "support/fixtures.rs"]
 mod fixtures;
 
 use std::collections::BTreeSet;

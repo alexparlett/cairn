@@ -584,7 +584,7 @@ typed, the arrows are the editor's.
   `an_amend_says_why_it_is_confirmed_in_fixed_sentences`,
   `only_an_amend_git_logs_and_no_remote_has_runs_unconfirmed`; the engine:
   `a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent`
-  (`crates/cairn-git/tests/diff/working_tree.rs`); the table:
+  (`crates/cairn-git/tests/diff_engine/diff/working_tree.rs`); the table:
   `only_a_bare_arrow_steps_through_the_recent_messages`.
 - Layout (`crates/cairn-model/src/local_changes.rs`):
   `each_path_is_in_the_lists_its_changes_put_it_in_ordered_by_name`,
@@ -694,7 +694,7 @@ typed, the arrows are the editor's.
   whole-file action names, `a_whole_file_action_names_each_rows_path_and_a_renames_source`
   (`cairn-model`); and against real git,
   `a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`
-  (`crates/cairn-git/tests/diff/write_verbs.rs`).
+  (`crates/cairn-git/tests/diff_engine/diff/write_verbs.rs`).
 - Drawing (`crates/cairn-ui/tests/local_changes.rs`):
   `both_lists_draw_their_paths_with_their_badges`, `each_list_is_in_its_paths_order`,
   `a_press_and_the_arrows_choose_a_row_of_its_list`, `the_filter_says_what_it_leaves`,

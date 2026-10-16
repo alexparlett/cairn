@@ -73,6 +73,7 @@ unimplemented = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 print_stdout = "deny"
+mod_module_files = "deny"
 
 [profile.dev]
 opt-level = 1

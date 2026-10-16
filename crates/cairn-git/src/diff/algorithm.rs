@@ -195,7 +195,7 @@ mod tests {
     /// A driver counts only from git 2.40, only with a value git parses, by its exact name,
     /// the last value winning. Caught by: honouring drivers on a git that ignores them, or a
     /// value git ignores when it diffs. Which path a driver applies to is git's answer,
-    /// decided against real git in `crates/cairn-git/tests/diff/content.rs`.
+    /// decided against real git in `crates/cairn-git/tests/diff_engine/diff/content.rs`.
     #[test]
     fn a_drivers_algorithm_counts_from_git_2_40_when_git_can_use_it() {
         let config = "[diff \"pat\"]\n\talgorithm = minimal\n[diff \"pat\"]\n\talgorithm = Patience\n\

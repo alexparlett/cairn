@@ -695,7 +695,7 @@ mod stub_tests {
     /// log records the verb and its arguments, as it always has. Caught by: a
     /// repository left to git's discovery, which finds an enclosing repository or
     /// refuses a bare one under `safe.bareRepository=explicit` (both against real
-    /// git in `tests/diff/changes.rs` and `tests/fetch.rs`), or the location put
+    /// git in `tests/diff_engine/diff/changes.rs` and `tests/fetch/main.rs`), or the location put
     /// after the verb, where git reads it as the verb's own option.
     #[test]
     fn a_trusted_repository_is_named_to_git_ahead_of_the_verb() {
@@ -752,7 +752,7 @@ mod stub_tests {
     /// home are empty. Caught by: the location withheld for a reduced repository,
     /// which leaves the `git` Cairn runs to discover from the working tree — none
     /// at all from `/` — with an environment that carries none of the launch
-    /// environment's `safe.directory` (end to end in `tests/diff/ownership.rs`).
+    /// environment's `safe.directory` (end to end in `tests/diff_engine/diff/ownership.rs`).
     #[test]
     fn every_repository_is_named_to_git_whatever_trust_gix_gave_it() {
         use std::os::unix::fs::MetadataExt as _;

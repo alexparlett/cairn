@@ -56,8 +56,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    Conventional Commits with a body. If the diff touches the enforcement layer
    itself (guard checks, hooks, gate script, CI workflows, reviewer/skill
    definitions), dispatch pointer: `gate-integrity-reviewer`.
-7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`,
-   `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
+7. **Destructive operations** (any diff to the `crates/cairn-git/src/ops`,
+   `process` or `reads` module — `ops.rs` and `ops/` alike — or a new
    call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt `Consequence::prompt` renders for the `Consequence` handed
    to `Confirmed::by_user` names the actual consequence (what is lost, how much,
@@ -159,8 +159,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     (`every_chord_resolves_to_its_action_in_its_scope_only`,
     `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`) pin the resolver; and
     whether a new chord is right for each platform and clear of the desktop's and Fork's.
-12. **Scrubbing git's diagnostic output** (any diff under `crates/cairn-git/src/process/`,
-    `crates/cairn-git/src/ops/` or `crates/cairn-git/src/error.rs`, any diff naming
+12. **Scrubbing git's diagnostic output** (any diff to the `crates/cairn-git/src/process` or
+    `crates/cairn-git/src/ops` module — its `.rs` file and its directory — or `crates/cairn-git/src/error.rs`, any diff naming
     `ScrubbedLines`, `ScrubbedLine`, `Scrubber`, `strip_ansi` or `Error::shown`, or any new
     `Update` or engine surface carrying git's words): the invariant "git's diagnostic output
     reaches the application only scrubbed" is held by the type, so what it cannot see is yours

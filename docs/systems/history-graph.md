@@ -236,7 +236,7 @@ assigner's own output and the window's kept rows.
 
 The derived edges are the edges the assigner drew before rows were compacted, row
 for row and in order, repaints included. The oracle is that assigner itself, kept
-verbatim as test code (`crates/cairn-model/tests/layout_before_compaction/mod.rs`,
+verbatim as test code (`crates/cairn-model/tests/support/layout_before_compaction.rs`,
 never edited, its code pinned by a fingerprint in
 `the_reference_assigner_is_the_one_compact_rows_were_checked_against`): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
 (`crates/cairn-model/tests/lane_assignment.rs`) over the crafted fixtures and

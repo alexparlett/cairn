@@ -32,7 +32,7 @@
 //! in an editor session — the help lines and the status, which under `whitespace` and `verbatim`
 //! the person removes by hand (`git help config`, `commit.cleanup`) — is not the message's, and
 //! the commit box shows none. Each setting is checked against `git commit` with an editor on git
-//! 2.30.9, 2.32.7 and the host's (`tests/diff/commit.rs`).
+//! 2.30.9, 2.32.7 and the host's (`tests/diff_engine/diff/commit.rs`).
 //!
 //! **What it runs and writes.** Nothing: `stripspace` reads its stdin and the configuration,
 //! takes no lock, reads no index or object, starts no filter, textconv, external diff or hook

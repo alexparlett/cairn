@@ -159,7 +159,7 @@ impl FetchCancel {
 
 /// Against a stub `git`, since the runner is crate-private: what the process is
 /// actually given. The behaviour the arguments buy is pinned end to end by the
-/// pruning tests in `tests/fetch.rs`.
+/// pruning tests in `tests/fetch/main.rs`.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

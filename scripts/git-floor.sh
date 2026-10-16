@@ -69,12 +69,12 @@ fi
 # the run's count when it was set (154, 220, 18 and 5), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
 # recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
-# `--test diff_engine` holds the write verbs' effects too (`tests/diff/write_verbs.rs`, and
-# C3 through the verbs in `tests/diff/staging.rs`), and commit and amend's against real git
-# (`tests/diff/commit.rs`, phase 05). `--test status` is the working tree's status
+# `--test diff_engine` holds the write verbs' effects too (`tests/diff_engine/diff/write_verbs.rs`, and
+# C3 through the verbs in `tests/diff_engine/diff/staging.rs`), and commit and amend's against real git
+# (`tests/diff_engine/diff/commit.rs`, phase 05). `--test status` is the working tree's status
 # against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
 # in use as much as the diff tests do; `--test diff_engine` holds a stash's list against
-# `git stash show` (C7, `tests/diff/stash.rs`), whose untracked half git 2.30.9 does not read
+# `git stash show` (C7, `tests/diff_engine/diff/stash.rs`), whose untracked half git 2.30.9 does not read
 # and 2.32.7 does. `--test lost_commits` is Show Lost Commits against `git rev-list --reflog`
 # (C20, staging-and-commit phase 10), whose fixtures write their reflogs with the git in use,
 # and whose oracle that git reads.

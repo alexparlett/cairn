@@ -1,7 +1,7 @@
 //! Repositories built by running real `git`, with real content in them.
 //!
 //! Only the diff tests declare this module, so everything here is theirs; the shared
-//! `tests/fixtures` builds histories of empty commits, which decides nothing about a diff.
+//! `tests/support/fixtures.rs` builds histories of empty commits, which decides nothing about a diff.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

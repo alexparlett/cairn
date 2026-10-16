@@ -377,7 +377,7 @@ git runs and pairs nothing in, which is where `>` and `>=` part. The gits that l
 on a developer's machine and on CI's gate are new, so CI's `git floor` job
 (`scripts/git-floor.sh`) builds git 2.30 — the floor — and 2.32 — the last before
 2.33 — from source and runs these tests, and the rest of
-`crates/cairn-git/tests/diff/`, against each: every version branch above is decided
+`crates/cairn-git/tests/diff_engine/diff/`, against each: every version branch above is decided
 against the git it is for.
 
 **Cancellation ends the process.** `cancel` is polled by the runner on every tick
@@ -389,7 +389,7 @@ starts no process. Pinned by
 exhaustive rename search with no limit, over enough dissimilar deletions and
 additions that git is still searching when the epoch moves; the log's `cancelled` is
 what a cancel that lost the race to git's own exit never says) and `a_changes_query_superseded_before_it_starts_runs_nothing`, both in
-`crates/cairn-git/src/reads/mod.rs`, and `a_cancelled_changes_query_answers_cancelled`
+`crates/cairn-git/src/reads.rs`, and `a_cancelled_changes_query_answers_cancelled`
 from outside the crate.
 
 **It writes nothing.** `the_changes_query_writes_nothing` holds the whole git
@@ -426,7 +426,7 @@ trees, since its source is absent from the untracked commit — the same two blo
 same lines. Expand All's pages ask such files alone, as they ask any file a page's run did
 not hold as the change set does.
 
-Pinned against git (`crates/cairn-git/tests/diff/stash.rs`, run under the host's git and
+Pinned against git (`crates/cairn-git/tests/diff_engine/diff/stash.rs`, run under the host's git and
 both floors): `a_stash_lists_what_git_stash_show_lists_with_the_setting_off_and_on`
 (against `git stash show --name-status`, the pairing across the two halves required on
 2.32 and later), `each_file_of_a_stash_is_read_from_the_side_it_is_on` (alone and through
@@ -569,7 +569,7 @@ its `git` and answers `Error::ContentCancelled`; one already superseded starts
 nothing (`a_content_read_superseded_by_a_newer_epoch_stops_git_and_reports_it`,
 over a `minimal` diff of two 60,000-line files that takes git seconds, and
 `a_content_read_superseded_before_it_starts_runs_nothing`, both in
-`crates/cairn-git/src/reads/mod.rs`). Which flags the read passes is pinned on its
+`crates/cairn-git/src/reads.rs`). Which flags the read passes is pinned on its
 argument vector (`a_file_read_is_diff_tree_with_a_patch_and_never_runs_a_program`,
 `the_read_is_check_attr_of_diff_with_its_paths_on_stdin`), and that it writes
 nothing and runs nothing but the repository's `core.fsmonitor` by the outcome:
@@ -682,7 +682,7 @@ with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>
 `diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>` — `<path>`
 relative to the top of the working tree, and `./-` for the path `-` — porcelain,
 the one exception to a read's plumbing-only rule (accepted by the user, with the
-evidence in `crates/cairn-git/src/reads/mod.rs`). Being porcelain it reads the user's
+evidence in `crates/cairn-git/src/reads.rs`). Being porcelain it reads the user's
 presentation settings, so the `--no-index` read also sets each back to git's default
 with `-c` (`NO_INDEX_PRESENTATION` in `reads/working_tree.rs`: `diff.noprefix`,
 `diff.mnemonicPrefix`, `diff.srcPrefix`, `diff.dstPrefix`, `core.quotePath`,
@@ -876,7 +876,7 @@ both arms by `in_a_partial_clone_a_staged_pairing_fails_rather_than_fetching`, a
 status read's is.
 
 Pinned by C7, `the_staged_diff_pairs_renames_and_copies_as_git_diff_cached_does`
-(`crates/cairn-git/tests/diff/staged_renames.rs`): under `diff.renames` unset, `true`,
+(`crates/cairn-git/tests/diff_engine/diff/staged_renames.rs`): under `diff.renames` unset, `true`,
 `false`, `copies`, and a `diff.renameLimit` that cuts the search short, every path of
 a fixture holding a rename with an edit, a copy of an edited source, a deleted empty
 file beside an intent-to-add one, a plain edit and an unrelated addition answers
@@ -922,7 +922,7 @@ pairs reuses two allocations.
 ### What decides the engine, and what it decides against
 
 Real `git`, never the model against itself. The tests live in
-`crates/cairn-git/tests/diff/` and every apply runs with `GIT_INDEX_FILE`,
+`crates/cairn-git/tests/diff_engine/diff/` and every apply runs with `GIT_INDEX_FILE`,
 `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` pointed at a scratch
 directory, so the repository under test — including this checkout — is only ever
 read.
@@ -963,7 +963,7 @@ read.
   equals porcelain `git log --raw`'s and its `needed_limit` equals git's warning;
   `a_configuration_git_refuses_is_refused` holds a value git refuses to
   `Error::InvalidConfig`.
-- **C6** (`crates/cairn-git/tests/diff/parity.rs`) compares the unified projection,
+- **C6** (`crates/cairn-git/tests/diff_engine/diff/parity.rs`) compares the unified projection,
   each header with its function context, with the user's own porcelain `git diff`
   for the file's paths and the detection that pairs them (a type change against
   `git diff` of its two blobs, since git prints it as two files): the crafted
@@ -1208,7 +1208,7 @@ path it now has** (R2.6): the patch names the new path on both sides and
 carries no `rename from`, so the index keeps the rename and the lines go back.
 `unstaging_lines_of_a_rename_or_a_copy_changes_content_at_its_new_path`.
 
-**C3 and C4 against real git** (`crates/cairn-git/tests/diff/staging.rs`, on the
+**C3 and C4 against real git** (`crates/cairn-git/tests/diff_engine/diff/staging.rs`, on the
 host's git and, through `git-floor`, 2.30.9 and 2.32.7): for a modification, an
 untracked file, an intent-to-add file, CRLF under `core.autocrlf=true`, a clean
 filter driver (rot13 both ways, `required`), an unborn branch, a mode change beside
@@ -1262,7 +1262,7 @@ here changes that. A later phase may put them behind `#[doc(hidden)]` or a
 test-support feature once there is a caller to gate against.
 
 The round-trip tests judge the emitter against *two* other paths: the applier, and
-`diffs::expected_result` in `crates/cairn-model/tests/diffs/mod.rs`, which states
+`diffs::expected_result` in `crates/cairn-model/tests/support/diffs.rs`, which states
 the selection rule with no hunks, headers, context or counts in it at all.
 `a_patch_gives_what_the_selection_means_over_every_awkward_case` runs a seeded
 sweep of selections over a corpus covering a missing final newline on each side and
@@ -1475,7 +1475,7 @@ sizing helper: the trees are compared by `git diff-tree`, so gix walks no tree h
 for that cache to pay for.
 
 **The window keeps an answer only for its selection**
-(`crates/cairn-app/src/diff/state/mod.rs`). `DiffState` holds the comparison
+(`crates/cairn-app/src/diff/state.rs`). `DiffState` holds the comparison
 selected and the file selected, each with its `Answer` — waiting, ready or failed — and
 the files opened in place for that comparison (below), and `session::apply` stores an
 answer only when `DiffState` says it names what is selected now. Selecting a comparison
@@ -2144,7 +2144,7 @@ GitHub release `@ibm/plex-mono@2.5.0`; the font file's SHA-256 is
 `7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`, the licence's
 (`LICENSE.txt` in the package) `7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da`.
 
-**Git parity, pinned against `git diff`** (`crates/cairn-git/tests/diff/parity.rs`). The
+**Git parity, pinned against `git diff`** (`crates/cairn-git/tests/diff_engine/diff/parity.rs`). The
 parity tests read the view's own projection (`UnifiedRows::shown`), not a copy of it:
 header, function context, every line with the side it is printed from, and the
 end-of-file marker, against `git diff -U<n>` and `git diff -w -U<n>` at one, three and

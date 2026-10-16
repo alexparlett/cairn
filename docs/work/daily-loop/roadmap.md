@@ -68,7 +68,7 @@ command log as data. Design: `docs/design/processes.md`; the write lanes in
 
 **Leaves on the doorstep:** for 3, a read invocation the diff thread can run and
 cancel by epoch (proven against what shipped by `diff_engine_path_forward` in
-`crates/cairn-git/src/reads/mod.rs`); for 5, stdin, the local write lane's
+`crates/cairn-git/src/reads.rs`); for 5, stdin, the local write lane's
 design, and the write-verb policies it must decide before its first verb
 (issue #45, with #44 on lock lists); for 6, the network lane push joins.
 Left as issues: #41-#49, and #25's remainder.

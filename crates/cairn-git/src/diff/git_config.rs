@@ -170,7 +170,7 @@ mod tests {
 
     /// `git_config_bool` over each shape: the bare key, the empty value, the words in any
     /// case, numbers, and what git refuses. Real git reading the same values is
-    /// `the_root_commit_is_shown_as_log_show_root_says`, in `tests/diff/changes.rs`.
+    /// `the_root_commit_is_shown_as_log_show_root_says`, in `tests/diff_engine/diff/changes.rs`.
     #[test]
     fn a_boolean_reads_the_way_git_config_bool_does() {
         assert_eq!(parse_bool(None), Some(true), "the bare key");

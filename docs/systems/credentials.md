@@ -171,9 +171,9 @@ never enters `cairn-git` and never enters application state.
   the last look and the `SIGTERM` is reported cancelled. A failed fetch
   names the lock files present under the git directory, as every failed
   write does (`a_failed_fetch_names_the_lock_files_present_and_only_those`
-  in `tests/fetch.rs`). What fetch adds is only its arguments and its
+  in `tests/fetch/main.rs`). What fetch adds is only its arguments and its
   outcome. Pinned end to end by
-  `crates/cairn-git/tests/fetch.rs` (below), every one of whose cancels is
+  `crates/cairn-git/tests/fetch/main.rs` (below), every one of whose cancels is
   bounded under two seconds, which only a git that acted on the `SIGTERM`
   meets.
 
@@ -193,7 +193,7 @@ never enters `cairn-git` and never enters application state.
   instant, so the words around the paths say what was found and that
   removing one is safe only when no other git is running there. End to end,
   `a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those`
-  in `tests/fetch.rs` cancels a real git hung on a remote that never answers,
+  in `tests/fetch/main.rs` cancels a real git hung on a remote that never answers,
   with locks planted as a crash would leave them, and reads back exactly
   those — then none once they are gone; that the search runs after the reap
   rather than before is pinned on the runner, against a stub that takes
@@ -229,7 +229,7 @@ never enters `cairn-git` and never enters application state.
   `fetch_prune_unset_keeps_a_stale_remote_tracking_ref_as_git_does`,
   `remote_prune_overrides_fetch_prune_both_ways_as_git_does` and
   `a_local_tag_survives_whatever_prune_tags_says` (where the control deletes
-  the tag) in `tests/fetch.rs`; the arguments themselves by
+  the tag) in `tests/fetch/main.rs`; the arguments themselves by
   `the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options`.
   What the flag cannot cover is a configured refspec that writes where a
   fetch from a button never may: `ops/refspec_policy.rs` asks git for the
@@ -314,7 +314,7 @@ never enters `cairn-git` and never enters application state.
   refusal reaches the window as a failed fetch whose one line is the
   engine's sentence. Pruning that says what will go, as a confirmed
   operation, and a setting for it, are issue #17's remainder.
-- **The cache-invalidation contract** (`crates/cairn-git/src/ops/mod.rs`,
+- **The cache-invalidation contract** (`crates/cairn-git/src/ops.rs`,
   module docs; `ops::Invalidated`, `ops::Performed`). D1 puts two
   implementations of git semantics in one process, so after a `git` subprocess
   writes, the gitoxide handle the worker holds may be looking at a repository
@@ -339,7 +339,7 @@ never enters `cairn-git` and never enters application state.
   The refresh after a fetch reads the refs snapshot through the handle the
   worker already holds (`Repository::refs`, `docs/systems/refs.md`); that it
   follows what git writes — a ref made, a ref moved — is
-  `a_refs_read_follows_the_refs_git_writes` in `tests/fetch.rs`, over a
+  `a_refs_read_follows_the_refs_git_writes` in `tests/fetch/main.rs`, over a
   fixture, since a CI checkout is detached with no local branch and its own
   refs decide nothing.
 - **The dialog** (`crates/cairn-ui/src/dialogs/credential_prompt.rs`,
@@ -455,14 +455,14 @@ never enters `cairn-git` and never enters application state.
 
 ## End to end, against real remotes
 
-`crates/cairn-git/tests/fetch.rs` stands up the remotes the PRD's criteria
+`crates/cairn-git/tests/fetch/main.rs` stands up the remotes the PRD's criteria
 need, all std-only and all generating their credentials per run:
-`tests/remotes/http.rs` is an HTTP/1.1 server in the test process fronting
-`git http-backend` behind Basic auth, and `tests/remotes/ssh.rs` an
+`tests/fetch/remotes/http.rs` is an HTTP/1.1 server in the test process fronting
+`git http-backend` behind Basic auth, and `tests/fetch/remotes/ssh.rs` an
 unprivileged `sshd` on a loopback port with a passphrase-protected key from
 `ssh-keygen`, reached through the repository's `core.sshCommand` because ssh
 reads its per-user configuration from the passwd home, not `$HOME`;
-`tests/remotes/askpass.rs` answers a real `Channel` from a thread and locates
+`tests/fetch/remotes/askpass.rs` answers a real `Channel` from a thread and locates
 the built helper. The tests are the criteria:
 
 - **B3** — `a_fetch_over_http_prompts_for_each_half_of_the_credential_and_succeeds`
@@ -509,7 +509,7 @@ that needed a prompt fails with a message naming the build command. The gate
 and `cargo test --workspace` build it before any test runs. `cairn-app`'s
 tests fail with the same instruction when it is absent rather than building
 it, since that crate's tests may not run a `Command`; `cairn-git`'s fetch
-tests build it themselves (`tests/remotes/askpass.rs`, `--release` when the
+tests build it themselves (`tests/fetch/remotes/askpass.rs`, `--release` when the
 profile directory is).
 
 ## The invariant this leaves behind

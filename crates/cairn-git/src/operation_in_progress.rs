@@ -32,7 +32,7 @@
 //!
 //! A commit concludes a merge, a single cherry-pick or a single revert as `git commit` does — the
 //! picked commit's author kept, `CHERRY_PICK_HEAD` or `REVERT_HEAD` removed by git
-//! (`tests/diff/commit.rs`, on git 2.30.9, 2.32.7 and the host's). A detached `HEAD` is no
+//! (`tests/diff_engine/diff/commit.rs`, on git 2.30.9, 2.32.7 and the host's). A detached `HEAD` is no
 //! operation: the refs snapshot reports it (`HeadState::Detached`), and a commit there is made
 //! on no branch, refused by nothing (C8).
 
@@ -158,7 +158,7 @@ mod tests {
     /// The precedence git's own checks imply, each case a git directory as git leaves it:
     /// a refusing operation answers ahead of a merge or a single pick, a sequence ahead of the
     /// single pick it stopped on, and `CHERRY_PICK_HEAD` beside a merge is the merge's, as `git
-    /// status` reads it. The real states are made by real git in `tests/diff/commit.rs`; this
+    /// status` reads it. The real states are made by real git in `tests/diff_engine/diff/commit.rs`; this
     /// holds the combinations git rarely leaves. Caught by: a merge answered while a rebase
     /// replays it, a sequence's stopped pick concluded as a single one, or gix's order.
     #[test]

@@ -84,7 +84,7 @@
 //!
 //! The real case needs a second owner, so it is a privileged run rather than a gate step:
 //! `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`, an
-//! `#[ignore]`d test in `crates/cairn-git/tests/diff/ownership.rs`, run as root by whoever
+//! `#[ignore]`d test in `crates/cairn-git/tests/diff_engine/diff/ownership.rs`, run as root by whoever
 //! reviews a change here. Every other case is decided without one: by
 //! `GIT_TEST_ASSUME_DIFFERENT_OWNER` against git itself, and by an [`Identity`] whose
 //! effective uid is not the owner's in `SharedRepository`'s own tests.

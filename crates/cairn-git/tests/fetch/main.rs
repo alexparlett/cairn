@@ -10,9 +10,10 @@
 
 #![cfg(unix)]
 
-#[path = "support/write_executable.rs"]
+#[path = "../support/write_executable.rs"]
 mod write_executable;
 
+#[path = "../support/fixtures.rs"]
 mod fixtures;
 mod remotes;
 

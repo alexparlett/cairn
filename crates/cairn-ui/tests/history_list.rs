@@ -1,6 +1,6 @@
 //! Headless component tests for `HistoryList`.
 
-#[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
+#[path = "../../cairn-model/tests/support/layout_before_compaction.rs"]
 mod layout_before_compaction;
 
 use std::cell::RefCell;

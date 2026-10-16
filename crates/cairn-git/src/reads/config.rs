@@ -40,7 +40,7 @@
 //! git will not parse as a boolean or a configuration file it cannot read (128), is
 //! [`Error::GitFailed`], and the caller refuses on it, as git would then die on the same value.
 //! It writes nothing: `git config` in query form takes no lock and reads no index
-//! (`the_refspec_checks_reads_write_nothing`, in `crates/cairn-git/tests/fetch.rs`, holds the
+//! (`the_refspec_checks_reads_write_nothing`, in `crates/cairn-git/tests/fetch/main.rs`, holds the
 //! git directory byte-identical), and it runs no program. As a read it runs with
 //! `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and carries no askpass token, neither of
 //! which `git config` has a use for.

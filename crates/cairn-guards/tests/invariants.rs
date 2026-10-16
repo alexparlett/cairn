@@ -1009,17 +1009,131 @@ const READS_DIR: &str = "crates/cairn-git/src/reads";
 /// The engine's source: the one crate that links `gix` and the runner.
 const ENGINE_SOURCE_DIR: &str = "crates/cairn-git/src";
 
+/// Whether `path` is one of the module `dir`'s files: under its directory, or the file that
+/// assembles it beside that directory (`ops.rs` for `ops/`) — the workspace's one module form,
+/// held by clippy's `mod_module_files`, so a module is its directory and its own file.
+fn in_module(path: &Path, dir: &str) -> bool {
+    path.starts_with(dir) || path == Path::new(dir).with_extension("rs")
+}
+
+/// The module `dir`'s sources, as [`rust_sources`] reads them: its directory's files and the
+/// file that assembles it, which sits beside the directory and is not under it.
+fn module_sources(dir: &str) -> Vec<(std::path::PathBuf, String)> {
+    let mut sources = rust_sources(dir);
+    let assembly = Path::new(dir).with_extension("rs");
+    let source = std::fs::read_to_string(repo_root().join(&assembly)).unwrap_or_else(|e| {
+        panic!(
+            "{} is gone ({e}): move the guard with the module",
+            assembly.display()
+        )
+    });
+    sources.insert(0, (assembly, source));
+    sources
+}
+
+/// The module matcher's self-test: the guards that exempt or require a module by path see its
+/// own file as its, and nothing that merely shares a prefix with it.
+#[test]
+fn a_module_is_its_directory_and_its_own_file() {
+    for inside in [
+        "crates/cairn-git/src/ops.rs",
+        "crates/cairn-git/src/ops/fetch.rs",
+        "crates/cairn-git/src/ops/nested/deeper.rs",
+    ] {
+        assert!(
+            in_module(Path::new(inside), OPS_DIR),
+            "{inside} not seen as ops'"
+        );
+    }
+    for outside in [
+        "crates/cairn-git/src/ops_tests.rs",
+        "crates/cairn-git/src/opsx.rs",
+        "crates/cairn-git/src/opsx/fetch.rs",
+        "crates/cairn-git/src/ops.rs.orig",
+        "crates/cairn-git/src/reads.rs",
+        "crates/cairn-git/ops.rs",
+        "crates/x/src/ops.rs",
+    ] {
+        assert!(
+            !in_module(Path::new(outside), OPS_DIR),
+            "{outside} seen as ops'"
+        );
+    }
+    let reads = module_sources(READS_DIR);
+    assert!(
+        reads
+            .iter()
+            .any(|(path, _)| path == &Path::new(READS_DIR).with_extension("rs")),
+        "the reads module's own file was not read"
+    );
+    assert!(
+        reads.iter().any(|(path, _)| path.starts_with(READS_DIR)),
+        "the reads module's directory was not read"
+    );
+}
+
+/// The `mod.rs` files among `paths` that sit in a crate's `tests/` tree. clippy's
+/// `mod_module_files` holds the workspace's one module form at the compiler tier but does not
+/// lint an integration test's modules, so this is the form's twin there alone.
+fn test_mod_rs_files<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Path> {
+    paths
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "mod.rs"))
+        .filter(|path| path.components().any(|part| part.as_os_str() == "tests"))
+        .collect()
+}
+
+#[test]
+fn no_test_module_is_a_mod_rs_file() {
+    let sources = rust_sources("crates");
+    let tests = sources
+        .iter()
+        .filter(|(path, _)| path.components().any(|part| part.as_os_str() == "tests"))
+        .count();
+    assert!(
+        tests > 0,
+        "the module-form guard found no file under any crate's tests/; did the crates move?"
+    );
+    let found = test_mod_rs_files(sources.iter().map(|(path, _)| path.as_path()));
+    assert!(
+        found.is_empty(),
+        "{found:?} is a `mod.rs`. The workspace has one module form, `name.rs` beside `name/` \
+         (CLAUDE.md, Conventions): a test binary with modules is `tests/<name>/main.rs`, and a \
+         helper shared by test binaries sits in `tests/support/`, reached by `#[path]`."
+    );
+}
+
+#[test]
+fn the_test_mod_rs_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        "crates/x/tests/fixtures/mod.rs",
+        "crates/x/tests/target_dir/nested/mod.rs",
+    ];
+    let ignored = [
+        "crates/x/tests/support/fixtures.rs",
+        "crates/x/tests/fetch/main.rs",
+        "crates/x/tests/mod_rs.rs",
+        "crates/x/tests/remotes/mod.rs.orig",
+        "crates/x/src/ops/mod.rs",
+    ];
+    let paths: Vec<&Path> = caught.iter().chain(&ignored).map(Path::new).collect();
+    let found = test_mod_rs_files(paths);
+    assert_eq!(
+        found,
+        caught.iter().map(Path::new).collect::<Vec<_>>(),
+        "the test mod.rs matcher misread a path"
+    );
+}
+
 #[test]
 fn only_the_ops_module_mutates_a_repository() {
-    let ops = Path::new(OPS_DIR);
-    let process = Path::new(PROCESS_DIR);
     let mut scanned = 0usize;
 
     for dir in PRODUCT_SOURCE_DIRS {
         for (path, source) in rust_sources(dir) {
             // `process/` runs the `git` binary by design; whether what it runs may write is
             // the write seal's (`the_runner_is_named_only_by_ops_and_reads`).
-            if path.starts_with(ops) || path.starts_with(process) {
+            if in_module(&path, OPS_DIR) || in_module(&path, PROCESS_DIR) {
                 continue;
             }
             scanned += 1;
@@ -1044,7 +1158,7 @@ fn only_the_ops_module_mutates_a_repository() {
     // that way). Test modules are scanned too: a fixture is built by running real git.
     let mut engine_files = 0usize;
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
-        if path.starts_with(ops) {
+        if in_module(&path, OPS_DIR) {
             continue;
         }
         engine_files += 1;
@@ -1131,7 +1245,6 @@ fn production_of(source: &str) -> String {
 /// parent declares under `#[cfg(test)]` or `#[cfg(all(test, unix))]` — may write what it likes.
 #[test]
 fn only_the_ops_module_changes_the_filesystem() {
-    let ops = Path::new(OPS_DIR);
     let mut scanned = 0usize;
     let mut excused = BTreeSet::new();
     let mut ops_mutates = false;
@@ -1169,7 +1282,7 @@ fn only_the_ops_module_changes_the_filesystem() {
                     .flat_map(|(_, kinds)| kinds.iter().map(|kind| (*kind).to_owned()))
                     .collect()
             };
-            if path.starts_with(ops) {
+            if in_module(path, OPS_DIR) {
                 ops_mutates |= !found.is_empty();
                 let rows = allowed(OPS_FILESYSTEM_WRITES);
                 assert_eq!(
@@ -1467,13 +1580,12 @@ const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
 /// mapping cannot be bypassed with the built environment in hand.
 #[test]
 fn only_the_process_module_builds_or_runs_a_process() {
-    let process = Path::new(PROCESS_DIR);
     let (mut outside, mut inside) = (0usize, 0usize);
     let mut module = String::new();
 
     for dir in PRODUCT_SOURCE_DIRS {
         for (path, source) in rust_sources(dir) {
-            if path.starts_with(process) {
+            if in_module(&path, PROCESS_DIR) {
                 inside += 1;
                 module.push_str(&code_without_test_modules(&code_without_strings(&source)));
                 module.push('\n');
@@ -1735,7 +1847,7 @@ fn the_retired_runner_is_gone() {
     let mut other_starts = Vec::new();
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
-        if path.starts_with(PROCESS_DIR) {
+        if in_module(&path, PROCESS_DIR) {
             for _ in 0..process_spawns(&source) {
                 spawns.push(path.display().to_string());
             }
@@ -1957,9 +2069,9 @@ const WRITE_AUTHORITY_FILE: &str = "crates/cairn-git/src/ops/authority.rs";
 fn runner_violations(path: &Path, source: &str) -> Vec<String> {
     let code = code_without_strings(source);
     let at = |line: usize| format!("{}:{line}", path.display());
-    let in_ops = path.starts_with(OPS_DIR);
-    let in_process = path.starts_with(PROCESS_DIR);
-    let in_reads = path.starts_with(READS_DIR);
+    let in_ops = in_module(path, OPS_DIR);
+    let in_process = in_module(path, PROCESS_DIR);
+    let in_reads = in_module(path, READS_DIR);
     let mut found = Vec::new();
     if !(in_ops || in_process || in_reads) {
         for name in RUNNER_NAMES {
@@ -2521,7 +2633,7 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         }
         if path == Path::new(WRITE_AUTHORITY_FILE) {
             authority_file = Some(source);
-        } else if path == Path::new(OPS_DIR).join("mod.rs") {
+        } else if path == Path::new(OPS_DIR).with_extension("rs") {
             ops_docs = Some(source);
         } else if path == Path::new(ENGINE_SOURCE_DIR).join("lib.rs") {
             library = Some(source);
@@ -2537,8 +2649,9 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     );
     for dir in [OPS_DIR, PROCESS_DIR, READS_DIR] {
         assert!(
-            repo_root().join(dir).is_dir(),
-            "{dir} is gone, and this guard exempts it by path: move the guard with the module"
+            repo_root().join(dir).is_dir() && repo_root().join(dir).with_extension("rs").is_file(),
+            "{dir} or {dir}.rs is gone, and this guard exempts the module by path: move the guard \
+             with the module"
         );
     }
 
@@ -2618,10 +2731,10 @@ fn the_runner_is_named_only_by_ops_and_reads() {
 
     // The public half of the seal: the doctests in ops' module docs, each a one-line difference
     // from a passing scaffold (stable rustdoc checks that a block fails, not why).
-    let docs = ops_docs.unwrap_or_else(|| panic!("{OPS_DIR}/mod.rs is gone"));
+    let docs = ops_docs.unwrap_or_else(|| panic!("{OPS_DIR}.rs is gone"));
     assert!(
         docs.contains("//! ```\n//! fn scaffold(git: &cairn_git::ops::GitBinary) {"),
-        "{OPS_DIR}/mod.rs lost the passing scaffold of its compile-fail doctests; without it the \
+        "{OPS_DIR}.rs lost the passing scaffold of its compile-fail doctests; without it the \
          refused blocks could all fail for a reason unrelated to the seal"
     );
     // Each refused block is exactly the scaffold plus its one line, so none can fail on a typo
@@ -2644,7 +2757,7 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         );
         assert!(
             refused_blocks.contains(&expected.as_str()),
-            "{OPS_DIR}/mod.rs no longer pins `{refused}` in a compile_fail doctest that is the \
+            "{OPS_DIR}.rs no longer pins `{refused}` in a compile_fail doctest that is the \
              passing scaffold plus that one line; from outside cairn-git, no write and no \
              WriteAuthority can be named or built (process-manager G1)"
         );
@@ -3038,7 +3151,7 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 /// reviewer's.
 #[test]
 fn the_porcelain_reads_are_the_named_queries() {
-    let sources = rust_sources(READS_DIR);
+    let sources = module_sources(READS_DIR);
     for home in [
         PORCELAIN_READ_FILE,
         CONFIG_READ_FILE,
@@ -3700,7 +3813,7 @@ const SCRATCH_FILE: &str = "crates/cairn-git/src/history/scratch.rs";
 fn verdict(path: &str, source: &str) -> Vec<String> {
     let path = Path::new(path);
     let mut found = runner_violations(path, source);
-    if !path.starts_with(PROCESS_DIR) {
+    if !in_module(path, PROCESS_DIR) {
         found.extend(process_violations(path, source));
     }
     found
@@ -5937,11 +6050,8 @@ const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
 /// token, quoting its prompt (`Performed::destructive`, R1.6) — by file, the type whose inherent
 /// impl declares it, and its name, so no other function of that name is excused. It takes the
 /// token by value too.
-const CONFIRMED_RECORD: (&str, &str, &str) = (
-    "crates/cairn-git/src/ops/mod.rs",
-    "Performed",
-    "destructive",
-);
+const CONFIRMED_RECORD: (&str, &str, &str) =
+    ("crates/cairn-git/src/ops.rs", "Performed", "destructive");
 
 /// The types, each by its production file and its name, that may hold a `Confirmed` in a
 /// field: a token held in a type (`struct Pending { confirmed: Option<Confirmed> }`) can be
@@ -6581,7 +6691,7 @@ fn destructive_roster_violations(
         for signature in cairn_guards::function_signatures(code) {
             let names_token = !mentions_crate(&signature.text, CONFIRMED_TYPE).is_empty();
             if names_token {
-                if !path.starts_with(OPS_DIR) {
+                if !in_module(path, OPS_DIR) {
                     found.push(format!(
                         "{}:{} `{}` names `{CONFIRMED_TYPE}` outside {OPS_DIR}: every destructive \
                          operation is a mutation, and only ops/ mutates",
@@ -6619,7 +6729,7 @@ fn destructive_roster_violations(
                 .parameters
                 .iter()
                 .any(|parameter| !mentions_crate(parameter, "Consequence").is_empty());
-            if signature.public && takes_consequence && path.starts_with(OPS_DIR) {
+            if signature.public && takes_consequence && in_module(path, OPS_DIR) {
                 found.push(format!(
                     "{}:{} public `{}` takes a `Consequence` without a `{CONFIRMED_TYPE}`: an \
                      operation acting on what it would destroy, with nobody's confirmation",
@@ -6801,7 +6911,7 @@ fn destructive_operations_are_sealed_behind_the_confirmation_token() {
         .copied()
         .collect();
     assert!(
-        engine.iter().any(|(path, _)| path.starts_with(OPS_DIR)),
+        engine.iter().any(|(path, _)| in_module(path, OPS_DIR)),
         "the destructive-operation roster scanned no file of {OPS_DIR}"
     );
     assert!(
@@ -7087,7 +7197,7 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
     // The destructive-operation roster: every broken fixture breaks one rule, and is reported
     // once, by that rule.
     let ops = |name: &str| format!("{OPS_DIR}/{name}");
-    let record_file = ops("mod.rs");
+    let record_file = format!("{OPS_DIR}.rs");
     let record_source = "impl Performed {\n    pub(crate) fn destructive(d: String, confirmed: Confirmed) -> Self {}\n}\n";
     let discard_file = ops("discard.rs");
     let roster: &[(&str, &str)] = &[(&discard_file, "discard_files")];
@@ -8319,7 +8429,7 @@ fn the_partial_clone_pin_is_required_in_ci() {
     );
 }
 
-/// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
+/// The ssh acceptance criteria (`crates/cairn-git/tests/fetch/main.rs`) skip where the fixture's
 /// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
 /// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it
 /// installs the server) in the `gate` job's own `env:`, which every step of that job sees,
@@ -8335,7 +8445,7 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     };
     let ci = read(".github/workflows/ci.yml");
     let gate = read("scripts/gate.sh");
-    let fixture = read("crates/cairn-git/tests/remotes/ssh.rs");
+    let fixture = read("crates/cairn-git/tests/fetch/remotes/ssh.rs");
 
     assert!(
         job_env_entries(&ci, "gate")
@@ -8391,7 +8501,7 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     }
 }
 
-/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff/fsmonitor.rs`) skips where
+/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs`) skips where
 /// git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr
 /// is hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
 /// Pinned here: the test's skip branch fails when the variable is set; `scripts/gate.sh`'s
@@ -8412,7 +8522,7 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     };
     let gate = read("scripts/gate.sh");
     let floor = read("scripts/git-floor.sh");
-    let test = read("crates/cairn-git/tests/diff/fsmonitor.rs");
+    let test = read("crates/cairn-git/tests/diff_engine/diff/fsmonitor.rs");
 
     let body = test
         .split("fn a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files()")
@@ -8622,8 +8732,8 @@ fn the_required_skip_matcher_catches_the_shapes_it_claims() {
 }
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns
-/// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
-/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where their namespace cannot be
+/// (`crates/cairn-git/tests/fetch/main.rs`) and git's search across a filesystem boundary
+/// (`crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs`) — skip where their namespace cannot be
 /// made, and a passing test's stderr is hidden, so a variable of each one's own turns its
 /// skip into a failure: `CAIRN_REQUIRE_SECOND_OWNER` and `CAIRN_REQUIRE_MOUNT_NAMESPACE`.
 /// They need different things — a second uid that the namespace's root may give a file to
@@ -8649,14 +8759,14 @@ fn the_user_namespace_tests_are_required_wherever_they_can_run() {
         .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
     for (file, test, variable, availability, gate_probe) in [
         (
-            "crates/cairn-git/tests/fetch.rs",
+            "crates/cairn-git/tests/fetch/main.rs",
             "fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git()",
             "CAIRN_REQUIRE_SECOND_OWNER",
             r#".args(["--map-root-user", "--map-auto", "chown", "1:1"])"#,
             "unshare --map-root-user --map-auto chown 1:1 \"$probe/owned\"",
         ),
         (
-            "crates/cairn-git/tests/diff/bare_discovery.rs",
+            "crates/cairn-git/tests/diff_engine/diff/bare_discovery.rs",
             "fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it()",
             "CAIRN_REQUIRE_MOUNT_NAMESPACE",
             r#".args(["--map-root-user", "--mount", "true"])"#,

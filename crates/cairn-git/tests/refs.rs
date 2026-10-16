@@ -10,6 +10,7 @@
 //! fixture's own configuration (`pin_configuration_read`), and both sides read the same
 //! value.
 
+#[path = "support/fixtures.rs"]
 mod fixtures;
 
 use std::cell::Cell;

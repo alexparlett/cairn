@@ -52,9 +52,9 @@ runs the real one (`ops/recording_stub.rs`):
 environment with no read pin and no `GIT_LITERAL_PATHSPECS` (C9). What each does
 is pinned against real git on the host's git and, through
 `scripts/git-floor.sh`, on 2.30.9 and 2.32.7: C3 runs every case of
-`crates/cairn-git/tests/diff/staging.rs` through `stage_lines`,
+`crates/cairn-git/tests/diff_engine/diff/staging.rs` through `stage_lines`,
 `unstage_lines` and `discard_lines`, and
-`crates/cairn-git/tests/diff/write_verbs.rs` holds the rest.
+`crates/cairn-git/tests/diff_engine/diff/write_verbs.rs` holds the rest.
 
 - **Never `-R`, `--recount`, `--3way`, `--unidiff-zero`, `-C` or
   `--allow-overlap`.** The patch is the model's, built from the exact diff the
@@ -94,7 +94,7 @@ is pinned against real git on the host's git and, through
   `git branch` says, nothing written; the branch it makes is the one `git branch` makes,
   logged with the same message (`create_branch_here_makes_the_branch_git_branch_makes`,
   `a_name_git_refuses_is_refused_with_its_reason_and_nothing_written`,
-  `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
+  `crates/cairn-git/tests/diff_engine/diff/branch.rs`). It invalidates the refs, so the lane reads
   everything again after it, however it ended. Whether git takes a name is asked first, by
   `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), the
   oracle `git branch` and `git checkout -b` agree with: both verbs resolve a name in `@{-N}`'s
@@ -286,7 +286,7 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
   of `#` and `;` lines, CRLF endings, trailing spaces and blank lines, a scissors
   line and non-ASCII text, by commit and by amend, on the host's git and both
   floors (`a_message_is_stored_as_git_commit_f_stores_it_under_every_cleanup`,
-  `crates/cairn-git/tests/diff/commit.rs`). The message never reaches `argv`, so
+  `crates/cairn-git/tests/diff_engine/diff/commit.rs`). The message never reaches `argv`, so
   neither the process table nor the command log holds it.
 - **A non-UTF-8 `i18n.commitEncoding`** is refused before git runs
   (`Error::CommitRefused`, `CommitRefusal::CommitEncoding`): the setting as `git config`

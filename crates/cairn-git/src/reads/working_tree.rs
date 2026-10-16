@@ -82,7 +82,7 @@
 //! since git pairs no modified path as a destination without `-B` and a copy's source keeps
 //! its own record (`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`). Reproduced with git 2.30.9, 2.32.7
 //! and 2.56.0 against `git diff --cached --raw` under `diff.renames` unset, `false` and
-//! `copies` (C7, `crates/cairn-git/tests/diff/staged_renames.rs`). The unstaged side needs no
+//! `copies` (C7, `crates/cairn-git/tests/diff_engine/diff/staged_renames.rs`). The unstaged side needs no
 //! pairing: `git diff` pairs nothing between the index and the working tree but an
 //! intent-to-add entry, whose own diff is its addition.
 //!

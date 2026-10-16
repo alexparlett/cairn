@@ -52,6 +52,10 @@ impl Repo {
             borrowed: false,
         };
         repo.git(&["init", "--quiet", "--initial-branch=main", "."]);
+        // A commit can start git's auto-maintenance in the background, which writes
+        // `objects/maintenance.lock` while a test is looking at what a read left behind.
+        repo.git(&["config", "maintenance.auto", "false"]);
+        repo.git(&["config", "gc.auto", "0"]);
         repo
     }
 

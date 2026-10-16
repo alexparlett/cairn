@@ -1072,6 +1072,51 @@ fn a_module_is_its_directory_and_its_own_file() {
     );
 }
 
+/// Whether `path` is an integration test's file: under the `tests/` directly beneath its crate
+/// (`crates/<crate>/tests/..`). A `tests/` anywhere deeper — a module's directory in `src/`,
+/// such as `local_changes/actions/tests/` — is not, and its files are scanned as the
+/// module's. A guard that skips or counts integration tests asks this, never whether a path has
+/// a `tests` component somewhere.
+fn is_integration_test(path: &Path) -> bool {
+    let mut parts = path.components().map(|part| part.as_os_str());
+    parts.next().is_some_and(|part| part == "crates")
+        && parts.next().is_some()
+        && parts.next().is_some_and(|part| part == "tests")
+        && parts.next().is_some()
+}
+
+/// The integration-test matcher's self-test: a crate's own `tests/` tree is one, and a `tests`
+/// directory or file inside `src/` — a module's — is scanned as the module's.
+#[test]
+fn the_integration_test_matcher_catches_the_shapes_it_claims() {
+    for integration in [
+        "crates/x/tests/b.rs",
+        "crates/x/tests/support/fixtures.rs",
+        "crates/x/tests/fetch/main.rs",
+        "crates/x/tests/fetch/remotes/ssh.rs",
+    ] {
+        assert!(
+            is_integration_test(Path::new(integration)),
+            "{integration} not seen as an integration test"
+        );
+    }
+    for scanned in [
+        "crates/x/src/a/tests/b.rs",
+        "crates/x/src/a/tests.rs",
+        "crates/x/src/tests.rs",
+        "crates/x/src/tests/b.rs",
+        "crates/tests/src/lib.rs",
+        "crates/x/benches/tests/b.rs",
+        "tests/b.rs",
+        "crates/x/tests",
+    ] {
+        assert!(
+            !is_integration_test(Path::new(scanned)),
+            "{scanned} seen as an integration test, and so skipped"
+        );
+    }
+}
+
 /// The `mod.rs` files among `paths` that sit in a crate's `tests/` tree. clippy's
 /// `mod_module_files` holds the workspace's one module form at the compiler tier but does not
 /// lint an integration test's modules, so this is the form's twin there alone.
@@ -1079,7 +1124,7 @@ fn test_mod_rs_files<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a P
     paths
         .into_iter()
         .filter(|path| path.file_name().is_some_and(|name| name == "mod.rs"))
-        .filter(|path| path.components().any(|part| part.as_os_str() == "tests"))
+        .filter(|path| is_integration_test(path))
         .collect()
 }
 
@@ -1088,7 +1133,7 @@ fn no_test_module_is_a_mod_rs_file() {
     let sources = rust_sources("crates");
     let tests = sources
         .iter()
-        .filter(|(path, _)| path.components().any(|part| part.as_os_str() == "tests"))
+        .filter(|(path, _)| is_integration_test(path))
         .count();
     assert!(
         tests > 0,
@@ -1115,6 +1160,7 @@ fn the_test_mod_rs_matcher_catches_the_shapes_it_claims() {
         "crates/x/tests/mod_rs.rs",
         "crates/x/tests/remotes/mod.rs.orig",
         "crates/x/src/ops/mod.rs",
+        "crates/x/src/a/tests/mod.rs",
     ];
     let paths: Vec<&Path> = caught.iter().chain(&ignored).map(Path::new).collect();
     let found = test_mod_rs_files(paths);
@@ -7972,7 +8018,7 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
             );
         }
 
-        if !path.starts_with("crates") || path.components().any(|c| c.as_os_str() == "tests") {
+        if !path.starts_with("crates") || is_integration_test(path) {
             continue;
         }
         let production = code_without_test_modules(&code_without_strings(source));

@@ -3,6 +3,17 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-17 — history-topo-order planned
+
+Packet 5c planned with `/feature-plan` (PRD `docs/prd/history-topo-order.md`, work dir
+`docs/work/history-topo-order/`, evidence `docs/research/history-topo-order/`). The user chose
+`git log --date-order` (Fork's default) over `--topo-order`; Cairn's own walk of git's algorithm
+over gitoxide's commit graph, since gitoxide's date order breaks ties arbitrarily; to accept the
+whole-history opening pass a repository without a commit-graph needs, visibly; and a history
+thread of its own. The research found gitoxide 0.87.1 does have a topological walk, which the
+history-graph research had said it lacked, and that 14% of the bench's rows are reordered by
+repaints today.
+
 ## 2026-10-16 — fork-alignment planned; 5c-5h inserted
 
 The UI review the user planned after packet 5 was run as `/feature-plan` with the

@@ -27,11 +27,15 @@ free, because some work is pinned. A scroll keeps one gitoxide walk alive
 (`history-graph.md`); that walk borrows the repository and is not `Send`, so every
 page of it runs on the thread that owns the handle. History has its thread; diffs
 — commit, comparison and working-tree — have another, so a long history page never
-queues a diff behind it. The refs snapshot is read on the history thread, which
-reopens the walk from it. Status — a `git` read that rehashes every stat-dirty
-file — and ahead/behind — two walks a branch, as long as the branch has
-diverged — run on a third thread, so neither a page nor a diff queues behind a
-refresh.
+queues a diff behind it, and nothing else runs on the history thread: an open
+that reads the whole history first, on a repository without a commit-graph,
+never holds up anything but the history. The repository thread reads the refs
+snapshot, keeps the one the history was opened from, and asks the history thread
+to reopen when a refresh finds the refs moved — a reopen that supersedes a pass
+still running — and answers the filters, the sidebar's rows and the freeing of
+old answers. Status — a `git` read that rehashes every stat-dirty file — and
+ahead/behind — two walks a branch, as long as the branch has diverged — run on a
+refresh thread, so neither a page nor a diff queues behind a refresh.
 
 ## Lanes and epochs
 

@@ -15,7 +15,7 @@ nuance that run must not lose.
 | 4 | `refs-and-status` | **shipped** | 1, 2a (O2 picked `git status`), 3 |
 | 5 | `staging-and-commit` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 2, 2a, 3, 4 |
 | 5b | `stash-and-ignore` | brief only | 5, 5d |
-| 5c | `history-topo-order` | brief only — **next** | 1 |
+| 5c | `history-topo-order` | **planned** — next (`docs/prd/history-topo-order.md`, `docs/work/history-topo-order/`) | 1 |
 | 5d | `fork-alignment` | **planned** (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
 | 5e | `file-tree-view` | brief only | 5d |
 | 5f | `quick-launch` | brief only | 5d |
@@ -286,27 +286,16 @@ Activity Manager a drop's prompt is quoted in. For the intent-to-add bullet abov
 packet 5 discards an intent-to-add file by emptying it, as git does, keeping its entry
 (`an_intent_to_add_files_discard_empties_it_and_says_so`).
 
-## 5c. history-topo-order — brief
+## 5c. history-topo-order — planned
 
-**Fixes:** with equal commit times the history draws a parent above its child — the
-dashed edges running up the graph — where `git log --graph` and Fork never do
-(`docs/research/ui-review/fork-window-survey-2-2026-10-16.md` §6, with Fork's "Sort
-commits: By date"; `cairn-window-survey-2026-10-16.md` (a)). Rebased and scripted
-history puts many commits in one second, so real repositories hit it. A git-parity bug
-in the walk (`docs/design/history-graph.md`, "Lanes are assigned incrementally": gix has
-no topological walk, and the assigner tolerates out-of-order arrival).
-
-**Must:** emit no commit before every child of it the walk will emit, as `git log
---graph` (git's `--topo-order` with its date tie-break) does, while a page stays O(page)
-on the bench repository — so a design that reads the whole history first is ruled out.
-**Research first:** git's incremental topo-order (`revision.c`'s indegree walk over
-generation numbers), whether gix reads the commit-graph's generation data and what it
-costs without one, and Show Lost Commits' reflog tips (`history/reach.rs`), which the
-same order must serve. **Acceptance:** row order equal to `git log --graph --all
---format=%H` (with `--reflog` for lost commits) on fixture repositories with tied times,
-merges, stashes and a missing commit-graph, at the floor's gits; the bench's paging cost
-measured against `docs/research/history-graph/scroll-memory-model.md`. fork-alignment's
-greyed rows (`HEAD`'s reach, #67) and stash lane rely on this order.
+`docs/prd/history-topo-order.md`, `docs/work/history-topo-order/`, evidence
+`docs/research/history-topo-order/`. The history drawn in `git log --date-order`'s order,
+Fork's default — no commit above its children, ties in git's order — by git's own walk written
+in `cairn-git` over gitoxide's commit graph (gitoxide's own date order breaks ties arbitrarily),
+pinned against git on fixtures at every supported git. The history gets a thread of its own, so
+the whole-history pass a repository without a commit-graph needs before its first page (1.3 s on
+the bench, as in git and Fork) never holds up a filter, and the window says it is reading.
+fork-alignment's greyed rows (`HEAD`'s reach, #67) and stash lane rely on this order.
 
 ## 5d. fork-alignment — planned
 

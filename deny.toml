@@ -16,6 +16,14 @@ ignore = [
     # Unmaintained proc-macro reached through the Skia and Android stacks.
     # Compile-time only: it emits no code into the shipped binary.
     { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time proc-macro under freya-skia, nothing of it ships" },
+    # Unmaintained as standalone crates since zbus 6 merged them into itself, reached
+    # through Freya's AccessKit Linux adapter: freya-winit → accesskit_winit →
+    # accesskit_unix → atspi / zbus 5. The newest accesskit_unix (0.24) and atspi (0.30)
+    # still require zbus 5, so no upgrade exists from here. Revisit when accesskit moves
+    # to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6); transitive through accesskit_unix's zbus 5, no upgrade path from here" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6); transitive through accesskit_unix's zbus 5, no upgrade path from here" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6); transitive through accesskit_unix's zbus 5, no upgrade path from here" },
 ]
 
 [bans]

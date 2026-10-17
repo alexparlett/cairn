@@ -11,9 +11,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         ask if it has not) in its own worktree and push it.
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-ui/src (every file that sets a font size or a colour), crates/cairn-app/src/main.rs (the launch theme), crates/cairn-ui/src/diff/palette.rs, history/lane_palette.rs, the vendored Freya theme and focus APIs (~/.cargo/git/checkouts/freya-*/caa46f8/), crates/cairn-guards/src/lib.rs and tests/invariants.rs (how a roster guard with a self-test is written), deny.toml; do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-ui/src (every file that sets a font size or a colour), crates/cairn-app/src/main.rs (the launch theme), crates/cairn-ui/src/diff/palette.rs, history/lane_palette.rs, the vendored Freya theme and focus APIs (~/.cargo/git/checkouts/freya-*/caa46f8/), crates/cairn-guards/src/lib.rs and tests/invariants.rs (how a roster guard with a self-test is written), deny.toml; read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. `cairn_ui::style` (`style.rs` + `style/metrics.rs`, `style/tones.rs`,
            `style/icons.rs`) holding PRD R1.2's metrics and R1.3's tones exactly; the launch

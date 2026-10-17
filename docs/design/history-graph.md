@@ -47,14 +47,15 @@ its colour alone.
 A stash is a commit with two or three parents — the commit it was made on, a
 commit holding the index, and one holding untracked files — and walking it as a
 tip would put those inner commits in the graph, while hiding them would hide
-their ancestors, which are the real history. So a stash is not a tip: each stash
-is a row of its own kind, merged into the stream by its commit time but never
-after the commit it was made on, with one edge, to that commit, and a
-`stash@{n}` chip before its message. It is drawn on that commit's lane, above it,
-as a commit whose one parent is the stash's base would be, so a stash sits on its
-branch, as Fork for Windows draws it. A stash is drawn only on a commit the ref
-walk reaches: nothing about a stash seeds the walk, so a stash whose base no ref
-reaches — its branch deleted, its commit rebased away — has no row, and is
+their ancestors, which are the real history. So a stash is a tip of its own
+kind: the walk is given it, after the refs and `HEAD`, as a commit whose one
+parent is the commit it was made on, as `git log --date-order` orders a stash
+grafted onto its base — so it is placed by its date among the commits, never after
+its base, and its base waits for it as for any child. Its row has one edge, to
+that commit, and a `stash@{n}` chip before its message, and it is drawn on that
+commit's lane, above it, so a stash sits on its branch, as Fork for Windows draws
+it. A stash is a tip only when the refs reach its base, so a stash whose base no
+ref reaches — its branch deleted, its commit rebased away — has no row, and is
 listed in the sidebar's Stashes alone, where pressing it still shows its
 changes. This is Fork's rendering, and it keeps commits only a stash reaches out
 of the graph. Selecting one shows what it changed against that
@@ -68,26 +69,42 @@ Every row of the graph is a commit or a stash.
 
 ## Lanes are assigned incrementally, in the engine
 
-The walk runs newest-first. The assigner keeps a vector of active lanes, each
+The walk runs in `git log --date-order`'s order, the order Fork's "Sort commits: By
+date" shows: no commit before every child of it the walk shows, and otherwise
+newest first by commit time, ties kept in the order git queues them. It is git's
+own algorithm, written over gitoxide's commit graph: gitoxide's walks either
+order by commit time alone, which puts a parent above its child when times tie or
+the clock was skewed, or break ties differently from git. Like git's, the walk
+reads ahead until it knows a commit's children are all out — down to the lowest
+generation number of its tips where the repository has a commit-graph file, and
+through the whole history where it has none. So the first page of a large
+repository without a commit-graph waits for that pass, as `git log --date-order`
+and Fork wait for it; the window says it is reading meanwhile, a newer open
+supersedes it, and the pages after it cost a page each. Evidence:
+`docs/research/history-topo-order/`.
+
+The assigner keeps a vector of active lanes, each
 holding the commit id it is waiting for. A commit takes the leftmost lane waiting
 for it; that lane then waits for the commit's first parent, and further parents
 take new or joined lanes. Each row carries its lane and the lanes that change
 at it; the edges crossing it are derived when it is drawn ("What a row keeps",
 below).
 
-gix offers no `--topo-order` equivalent: its sortings are `BreadthFirst`,
-`ByCommitTime` and `ByCommitTimeCutoff`, and commit-time order emits a parent
-before its child under clock skew, which is common in rebased and imported
-history. So the assigner is correct under out-of-order arrival rather than
-trusting the walk. It holds a bounded window of recent rows, so that a line to a
-parent arriving late has a row to repaint. A lane index, once emitted, is final;
-an edge segment inside the window is not. Skew deeper than the window is a stated
-blind spot. Evidence: `docs/research/history-graph/gix-revwalk-ordering.md`.
+The assigner does not rely on that order: it is correct under any arrival order,
+because other walks feed it too — commit-time order, which the recent-messages
+read keeps for `git log`'s parity — and because it is public vocabulary that
+cannot know its caller. It holds a bounded window of recent rows, so that a line
+to a parent arriving late has a row to repaint. A lane index, once emitted, is
+final; an edge segment inside the window is not; beyond the window, a parent
+arriving late is drawn only as far as the rows the window still remembers — a
+blind spot of the other orders. Under the history's own order no parent arrives
+late. Evidence: `docs/research/history-graph/gix-revwalk-ordering.md`,
+`docs/research/history-topo-order/walk-as-built.md`.
 
 The cost is amortised constant work per commit and the assigner's own state
 proportional to the window times the lanes across it, never to history length.
 Lane width varies widely: single digits on most repositories, a hundred and more
-on rust-lang/rust in commit-time order. Because appending never renumbers an emitted
+on rust-lang/rust. Because appending never renumbers an emitted
 lane, rows stream into a virtualised list. Evidence:
 `docs/research/history-graph/scroll-memory-model.md`.
 
@@ -104,15 +121,20 @@ gitoxide's walk cannot be resumed from a value, so resuming from a cursor means
 replaying, and page *k* would cost *k* × the page size. A scroll therefore holds
 its walk for its whole life, making each page cost one page; the cursor remains
 as the cold-restart path. The held walk is what pins history to one worker thread
-(`concurrency.md`). Only a viewport's worth of rows is ever built, however long
+(`concurrency.md`). What it keeps is the assigner's window plus the ordering's
+state for each commit it has read ahead — on a repository without a commit-graph,
+every commit, about a hundred bytes each, some tens of mebibytes for
+rust-lang/rust — so the memory a scroll retains grows with the history the walk
+has read, never with what the view draws. Only a viewport's worth of rows is ever built, however long
 the history. Finding a ref's commit that is not loaded yet pages the held walk
 forward until it arrives; it is history work, so the next scroll or press
 supersedes it like any page. There is no cap on how deep it goes, unlike Fork,
 which holds only its newest commits and does nothing for a ref past them: a
 history is however long the repository is, and a ref in it is findable. When
 the refs move — a fetch, a commit or checkout made in a terminal, a new stash —
-the walk is reopened from the new snapshot, and a refresh that leaves the refs
-and `HEAD` as they were reopens nothing. Specs: `docs/prd/history-graph.md`,
+the walk is reopened from the new snapshot, the old rows drawn and usable until
+the new first page replaces them, and a refresh that leaves the refs and `HEAD`
+as they were reopens nothing. Specs: `docs/prd/history-graph.md`,
 `docs/prd/refs-and-status.md`.
 
 ## What a row keeps
@@ -129,8 +151,9 @@ changes — Fork's layout of the visible area. Nor does a row carry what the lis
 never draws or can fetch: it keeps its commit id once, a parent count rather
 than its parents, its subject in a text store the history shares, its author as
 an index into an author table, and no email; no row allocates on its own, and
-the stores grow in fixed chunks rather than by doubling. So what scrolling and
-finding retain grows with the rows passed, at a small fixed cost each — tens of
-mebibytes for the whole of rust-lang/rust — and never with the graph's width. Evidence:
+the stores grow in fixed chunks rather than by doubling. So the rows scrolling
+and finding retain grow with the rows passed, at a small fixed cost each — tens of
+mebibytes for the whole of rust-lang/rust — and never with the graph's width;
+beside them the walk keeps its ordering state ("A scroll keeps its walk open"). Evidence:
 `docs/research/refs-and-status/deep-find-measured.md`,
 `docs/research/refs-and-status/fork-deep-history.md`.

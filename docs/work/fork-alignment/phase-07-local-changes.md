@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-ui/src/local_changes/ (list.rs, selection.rs, drag.rs, menu.rs), crates/cairn-ui/src/commit_box.rs, crates/cairn-app/src/local_changes/ and commit_box/, crates/cairn-ui/tests/local_changes*.rs and commit_box.rs, docs/systems/local-changes.md, the evidence FS1 §7, FS2 §1c, §2 (shots uv12, uv12a-c, uw6, uw34-uw36); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-ui/src/local_changes/ (list.rs, selection.rs, drag.rs, menu.rs), crates/cairn-ui/src/commit_box.rs, crates/cairn-app/src/local_changes/ and commit_box/, crates/cairn-ui/tests/local_changes*.rs and commit_box.rs, docs/systems/local-changes.md, the evidence FS1 §7, FS2 §1c, §2 (shots uv12, uv12a-c, uw6, uw34-uw36); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. The bar over both lists (R8.1): the filter, ⌄⌄ Stage All, the side-by-side eye, View
            Mode offering List alone; the Unstaged heading's chevron removed.

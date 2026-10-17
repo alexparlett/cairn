@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-app/src/window.rs (the title row), crates/cairn-ui/src/title_bar.rs and title_bar/ (status_box.rs, lock_banner.rs, activity_popover.rs), crates/cairn-app/src/operations/ (the fetch wiring), crates/cairn-app/src/detail/pane.rs (the splitter, Collapse), docs/systems/git-processes.md (the status box and banners as built); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-app/src/window.rs (the title row), crates/cairn-ui/src/title_bar.rs and title_bar/ (status_box.rs, lock_banner.rs, activity_popover.rs), crates/cairn-app/src/operations/ (the fetch wiring), crates/cairn-app/src/detail/pane.rs (the splitter, Collapse), docs/systems/git-processes.md (the status box and banners as built); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. The toolbar (R3.1, R3.2): Fork's buttons in order, icon over label, the greyed ones
            disabled with their "Comes with <feature>." tooltips, Fetch and Branch working, the

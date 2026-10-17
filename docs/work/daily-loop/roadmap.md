@@ -1,6 +1,7 @@
 # Roadmap — daily-loop
 
-Build order for the ten packets that reach D7. Order lives here, never in the
+Build order for the ten packets that reach D7, the two inserted before the rest of them
+(5c, 5d), and four that follow the alignment (5e-5h), which are not D7's. Order lives here, never in the
 design spine. Each packet gets its own `/feature-plan` run when it starts, writing
 its PRD and phases against then-current code — the briefs below carry the design
 nuance that run must not lose.
@@ -13,10 +14,16 @@ nuance that run must not lose.
 | 3 | `diff-engine` | **shipped** | 1, 2a |
 | 4 | `refs-and-status` | **shipped** | 1, 2a (O2 picked `git status`), 3 |
 | 5 | `staging-and-commit` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 2, 2a, 3, 4 |
-| 5b | `stash-and-ignore` | brief only | 5 |
-| 6 | `remote-sync` | brief only | 2, 2a, 4 |
-| 7 | `branch-ops` | brief only | 2a, 4 |
-| 8 | `worktrees` | brief only | 2a, 4 |
+| 5b | `stash-and-ignore` | brief only | 5, 5d |
+| 5c | `history-topo-order` | brief only — **next** | 1 |
+| 5d | `fork-alignment` | **planned** (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
+| 5e | `file-tree-view` | brief only | 5d |
+| 5f | `quick-launch` | brief only | 5d |
+| 5g | `preferences` | brief only | 5d |
+| 5h | `repository-manager` | brief only | 5d, 5g |
+| 6 | `remote-sync` | brief only | 2, 2a, 4, 5d |
+| 7 | `branch-ops` | brief only | 2a, 4, 5d |
+| 8 | `worktrees` | brief only | 2a, 4, 5d |
 
 2a depends on 2. 3 depends on 2a, and 4 on 1, 2a (O2 sent status to `git`) and
 3 (whose working-tree query its Local Changes view opens). Every packet that
@@ -25,7 +32,10 @@ seal and activity popover it builds on. 6, 7 and 8 are independent of each other
 The local write lane is built by 5, which 7 then uses. The critical path to D7 is
 1 → 2 → 2a → 3 → 5, with 4 needed before 5. 2a was inserted on 2026-10-02 and 5b on
 2026-10-07 (staging-and-commit's L1, L21), each numbered so the other packets keep
-theirs.
+theirs. 5c-5h were inserted on 2026-10-16 by fork-alignment's planning (its brainstorm
+S3-S5): 5c first, because it fixes a git-parity bug in the graph the alignment draws on;
+5d before 6, 7, 8 and 5b, so they put their buttons and menu items into chrome that
+already matches Fork; 5e-5h after 5d, in an order the user sets when each starts.
 
 ---
 
@@ -216,6 +226,12 @@ scrubbed at the runner), #47, #48, #66 and #87 (measured inside C21's margin).
 
 ## 5b. stash-and-ignore — brief
 
+**Fills fork-alignment's shell** (`docs/research/ui-review/fork-window-survey-2026-10-16.md`
+§8-9, `-2-` §2): the toolbar's Stash and its ⌄ (Recent Stashes, Save Snapshot…),
+Repository › Save Stash…, the stash row's menu (Apply…, Rename…, Save as Patch…,
+Delete…), the file menus' Ignore › and Stash N Files…, and View › Hide Stashes in Commit
+List.
+
 **Builds:** stash create through Fork's dialog (a message, and `Stage new files`,
 which stages untracked files so the stash includes them); `Save Snapshot…`, a stash
 that leaves the changes in place; apply through Fork's `Apply Stash` dialog, whose
@@ -270,12 +286,86 @@ Activity Manager a drop's prompt is quoted in. For the intent-to-add bullet abov
 packet 5 discards an intent-to-add file by emptying it, as git does, keeping its entry
 (`an_intent_to_add_files_discard_empties_it_and_says_so`).
 
+## 5c. history-topo-order — brief
+
+**Fixes:** with equal commit times the history draws a parent above its child — the
+dashed edges running up the graph — where `git log --graph` and Fork never do
+(`docs/research/ui-review/fork-window-survey-2-2026-10-16.md` §6, with Fork's "Sort
+commits: By date"; `cairn-window-survey-2026-10-16.md` (a)). Rebased and scripted
+history puts many commits in one second, so real repositories hit it. A git-parity bug
+in the walk (`docs/design/history-graph.md`, "Lanes are assigned incrementally": gix has
+no topological walk, and the assigner tolerates out-of-order arrival).
+
+**Must:** emit no commit before every child of it the walk will emit, as `git log
+--graph` (git's `--topo-order` with its date tie-break) does, while a page stays O(page)
+on the bench repository — so a design that reads the whole history first is ruled out.
+**Research first:** git's incremental topo-order (`revision.c`'s indegree walk over
+generation numbers), whether gix reads the commit-graph's generation data and what it
+costs without one, and Show Lost Commits' reflog tips (`history/reach.rs`), which the
+same order must serve. **Acceptance:** row order equal to `git log --graph --all
+--format=%H` (with `--reflog` for lost commits) on fixture repositories with tied times,
+merges, stashes and a missing commit-graph, at the floor's gits; the bench's paging cost
+measured against `docs/research/history-graph/scroll-memory-model.md`. fork-alignment's
+greyed rows (`HEAD`'s reach, #67) and stash lane rely on this order.
+
+## 5d. fork-alignment — planned
+
+`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`, evidence
+`docs/research/ui-review/`. Cairn's window drawn as Fork for Windows': its caption row and
+menu bar, toolbar and status box, sidebar, history, detail pane and Local Changes at
+Fork's density and in Fork Dark's tones, every context menu, Fork's keys. The shell is
+built now; the toolbar greys what a later packet owns ("Comes with <feature>."), and the
+menus list only what works, so each later packet below adds its items into Fork's groups.
+
+## 5e. file-tree-view — brief
+
+**Builds:** Fork's View Mode — Tree, List and Combined List — for the Changes tab and
+Local Changes (`fork-window-survey-2-2026-10-16.md` §2), Tree the default as in Fork, the
+View Mode button fork-alignment draws offering List alone until then. **Must re-decide:**
+what a selection is when a folder is selected (its files), the one rule for where a
+selection goes after an action and a refresh (`next_selection`), dragging a folder between
+the lists, Stage All under a filter, and the virtualized lists' rows (a tree is a list of
+visible rows, every twin still one viewport). Closes #36, #71.
+
+## 5f. quick-launch — brief
+
+**Builds:** Fork's Quick Launch (Ctrl+P): a palette of recent repositories, once the
+Repository Manager keeps any, and every command, alphabetical, filtered as typed
+(`fork-window-survey-2-2026-10-16.md` §2: about 620×370, placeholder "Command", 33
+commands). Its commands are the accelerator table's actions and the menus' items, so the
+palette never lists an action the window lacks. Its field is built by
+`cairn_ui::text_field`. Enables the toolbar's greyed Quick Launch.
+
+## 5g. preferences — brief
+
+**Builds:** the first persisted settings store (#89: its file a row of the
+filesystem-mutation guard's exceptions, written outside any repository) and Fork's
+Preferences dialog (File › Preferences…, Ctrl+,; `fork-window-survey-2026-10-16.md` §10:
+General, Commit, Git, … and one Close, settings applied as made) for what Cairn has: the
+diff's font size and settings (#29), "Sort commits", the commit message's limits and page
+guide (#95), "Check out after create", the sidebar's disclosure (#72); and Fork's
+Appearance menu — a light theme with its own diff palette (`ui.md`, "Open") and the detail
+pane to the right (#30). Enables the toolbar's greyed Appearance.
+
+## 5h. repository-manager — brief
+
+**Builds:** several repositories in one window, each with its own worker pool and
+`SharedRepository`, behind Fork's tab strip (`fork-window-survey-2026-10-16.md` §1, §11:
+equal-width tabs, a "+", a dot marking uncommitted changes, tabs named apart by their
+folder when two share a name); Fork's Repository Manager tab (Recent and Repositories, a
+summary of the one selected), File's Open Repository…, New Tab, Close Tab, Restore Closed
+Tab, Clone and Init, and Window's tab switching. Needs 5g's store for the recent list.
+Cairn opens one repository from its command line until then (root `CLAUDE.md`).
+
 ## 6. remote-sync — brief
 
 **Builds:** pull and push. Upstream tracking. Remote add, edit and remove.
 Force push with `--force-with-lease` as the default and plain `--force` made hard
 to reach. Push and delete tags. Prune. **Commit and Push**, Fork's commit-box
-gesture, left out of packet 5 to be designed with push: it is this packet's.
+gesture, left out of packet 5 to be designed with push: it is this packet's — the split
+Commit button's ⌄ that fork-alignment drew greyed. It also enables the toolbar's Pull and
+Push (their badges already drawn), adds Pull…, Push… and Fork's Fetch dialog to the
+Repository menu (#23), and the branch menus' Pull, Push, Fast-Forward and Tracking.
 
 **Also builds the forge links (D9), and they are not a footnote.** "Create pull
 request for this branch" is one of the most-used context-menu commands in Fork, so
@@ -312,6 +402,13 @@ contradict D2.
 
 ## 7. branch-ops — brief
 
+**Fills fork-alignment's shell** (`docs/research/ui-review/fork-window-survey-2026-10-16.md`
+§8, `-2-` §5): the commit, branch and tag rows' Checkout…, Merge, Rebase, Rename… (F2),
+Delete… (Delete), Tracking › and New Tag… (Ctrl+Shift+G), and a double press on a commit
+or a branch, which opens Fork's Checkout Commit or Checkout Branch dialog. Fork's oddities
+there are not copied: Checkout… on the branch already checked out, Fast-Forward offered
+while ahead.
+
 **Builds:** create, rename and delete branches. Checkout and switch. Create and
 delete tags. Packet 5's Create Branch — Fork's full dialog from `New Branch…` on any commit
 row, with "Check out after create" and "Local changes:" (`ops::create_branch`,
@@ -330,6 +427,8 @@ the interaction.
 **Out:** anything in Tier 4.
 
 ## 8. worktrees — brief
+
+**Fills fork-alignment's shell:** New Worktree… in Branch's ⌄ and the Repository menu.
 
 **Builds:** list worktrees, show which one holds a given branch, switch between
 them, remove them. Decision D8 makes this first-class rather than incidental.
@@ -355,8 +454,7 @@ the disabled checkout.)
 Not planned, not ordered, and not a commitment. Recorded so the packets above do
 not accidentally foreclose them: merge with structured conflict resolution (D6),
 rebase, cherry-pick, revert, reset, blame, file history, commit search, image
-diffs, submodules, LFS verification, the repository manager, and interactive
-rebase as its own program; and Cairn's first persisted settings store, whose first user is
-Create Branch's "Check out after create", sticky for the session until then (the user's decision
-1, 2026-10-09; issue #89 — the filesystem-mutation guard will need an exceptions-roster row for
-its file).
+diffs, submodules, LFS verification, and interactive rebase as its own program; and Open
+in and Console, which start programs other than git and need a design under the process
+guards. The repository manager and the first persisted settings store are briefs now, 5h
+and 5g.

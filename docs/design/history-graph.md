@@ -8,9 +8,13 @@ Spine: `docs/design/cairn.md`, where lane assignment is decision **D4**.
 The graph is the main view when a repository opens, and it stays readable at
 scale: an actual graph that stays legible across a repository with many
 long-lived branches, not a list of commits with a decorative gutter, and it stays
-interactive while it loads. Columns: lanes, subject with ref labels, author,
-short id, date. Lane identity never depends on colour alone; the column position
-carries it (`ui.md`).
+interactive while it loads. Columns, as Fork's, under no header: lanes, subject
+with ref labels, the author after an avatar of their initials, short id, and the
+date in local time. Lane identity never depends on colour alone; the column
+position carries it (`ui.md`). A commit `HEAD` does not reach is drawn greyed —
+its subject, author, id and date — as Fork draws it, so what the checkout holds
+reads at a glance; the walk marks what `HEAD` reaches as it goes, so the mark costs
+nothing per row beyond the walk.
 
 ## What it walks
 
@@ -30,7 +34,7 @@ Commits"). Turning it on or off reopens the walk like any other change of tips.
 
 Each ref pointing at a commit is drawn on that commit's row as Fork draws it: an
 outlined chip between the graph and the subject, tinted with the row's lane
-colour, a tag indigo with a tag glyph, a remote-tracking ref with a remote glyph
+colour, a tag lavender with a tag glyph and a stash grey, as Fork tones them, a remote-tracking ref with a remote glyph
 — a forge's own icon once the forge is known (`forge-links.md`) — and the current
 branch marked ✓, and the subject of `HEAD`'s commit bold. A remote-tracking ref at the same commit
 as the branch tracking it shrinks to its glyph in front of the branch's chip,
@@ -46,7 +50,9 @@ tip would put those inner commits in the graph, while hiding them would hide
 their ancestors, which are the real history. So a stash is not a tip: each stash
 is a row of its own kind, merged into the stream by its commit time but never
 after the commit it was made on, with one edge, to that commit, and a
-`stash@{n}` chip before its message. A stash is drawn only on a commit the ref
+`stash@{n}` chip before its message. It is drawn on that commit's lane, above it,
+as a commit whose one parent is the stash's base would be, so a stash sits on its
+branch, as Fork for Windows draws it. A stash is drawn only on a commit the ref
 walk reaches: nothing about a stash seeds the walk, so a stash whose base no ref
 reaches — its branch deleted, its commit rebased away — has no row, and is
 listed in the sidebar's Stashes alone, where pressing it still shows its
@@ -88,8 +94,9 @@ lane, rows stream into a virtualised list. Evidence:
 Lanes belong in `cairn-git`, not `cairn-ui`: the lane is part of the answer, so it
 is `cairn-model` vocabulary. A component that computed lanes would need the whole
 history in memory, which is the failure this design exists to avoid. A stash row
-takes a lane like a commit does, and its one edge joins the lane of the commit it
-was made on.
+takes the lane a commit with its base as its one parent would take — the base's
+lane, while that lane waits for the base — and a new lane only where another commit
+has taken it.
 
 ## A scroll keeps its walk open
 
@@ -111,7 +118,8 @@ and `HEAD` as they were reopens nothing. Specs: `docs/prd/history-graph.md`,
 ## What a row keeps
 
 A row keeps only what it cannot derive: its commit's id, parents, subject,
-author and date, its lane, and the lanes that start, end, merge or fork at it.
+author and date, whether `HEAD` reaches it, its lane, and the lanes that start,
+end, merge or fork at it.
 It never keeps every lane passing through it. On a wide history that would be
 most of the cost: a hundred and more lanes cross each row of rust-lang/rust, and
 storing them per row would make a row several kilobytes and the whole history

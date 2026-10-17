@@ -9,7 +9,10 @@ The cross-session cheat sheet. Every session updates this before ending.
 request, merged by the user. The critical path is built; D7 still needs 6
 (`remote-sync`, its pull and push) and 7 (`branch-ops`, its branch operations), which are
 independent of each other, beside 5b (`stash-and-ignore`, which builds on 5) and 8; all
-four are briefs.**
+four are briefs. Inserted 2026-10-16 ahead of them: 5c (`history-topo-order`, a brief, next)
+and 5d (`fork-alignment`, planned: `docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`),
+with 5e-5h (`file-tree-view`, `quick-launch`, `preferences`, `repository-manager`) briefs after
+5d (`roadmap.md`).**
 
 ## The milestone
 

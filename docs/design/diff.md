@@ -118,11 +118,15 @@ side-by-side change what is drawn and never what the emitter reads. Spec:
   components never assume their width.
 - Two tabs: **Commit**, the default, and **Changes**; the last one used is kept
   for the session. Fork's third tab, File Tree, is issue #31.
-- **Commit** shows author and committer with full timestamps, the full commit id,
-  parents as links, the message and chips for the refs pointing at the commit;
-  then the changed files, whose diffs expand in place from collapsed, with an
-  Expand All bounded by a line budget. No avatars: Cairn makes no network call
-  for the pane.
+- **Commit** shows the author, with an avatar of their initials, their email and
+  the full timestamp in local time; the committer only where it differs, as Fork
+  shows it; the full commit id, parents as links, the message and chips for the
+  refs pointing at the commit; then the changed files, whose diffs expand in place
+  from collapsed, at the diff's own row height, with an Expand All bounded by a
+  line budget. Avatars are initials: Cairn makes no network call for the pane.
+- The pane and the history share the main region's height, half each to begin
+  with, and grow together; Fork's Hide Commit Details — its chord, the View menu
+  and the icon at the right of the tab strip — collapses the pane to its tabs.
 - **Changes** shows a one-line summary, the changed files on the left with a
   filter, and one file's diff on the right.
 - Selecting a second commit with a modifier-click compares the two, tip against
@@ -137,7 +141,7 @@ side-by-side change what is drawn and never what the emitter reads. Spec:
   The patch model is independent of either.
 - The header carries previous and next change, the path with its filename
   emphasised, and toggles for ignore whitespace, fewer lines, more lines, entire
-  file and side-by-side, each a button with no chord, as in Fork; previous and
+  file and side-by-side, each a glyph with Fork's tooltip and no chord, as in Fork; previous and
   next change also answer Fork's chords while the diff pane has focus. Context
   starts where the user's own `git diff` starts it — `diff.context`, three by
   default — and moves one line per click, never below one; hunks are grouped as
@@ -152,8 +156,8 @@ side-by-side change what is drawn and never what the emitter reads. Spec:
   with no band and no buttons; staging acts on a selection, not on the header
   (`ui.md`, "Staging gestures").
 - Intra-line highlighting is word-level (token granularity) and always on.
-- Colours are **solid tints**, starting from Fork's measured dark values and
-  retuned to Cairn's palette; intra-line ranges take stronger tints. As in Fork,
+- Colours are **solid tints**, Fork Dark's (`ui.md`, "Palette and type");
+  intra-line ranges take stronger tints. As in Fork,
   there is no plus-and-minus column, and the line-number gutters are Fork's: small
   numbers with a gap either side of the separator. In unified the tint starts at
   the separator, and which number is blank still says removed or added without

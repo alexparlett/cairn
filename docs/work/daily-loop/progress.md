@@ -3,6 +3,21 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-16 — fork-alignment planned; 5c-5h inserted
+
+The UI review the user planned after packet 5 was run as `/feature-plan` with the
+`/observe-fork` skill: two first-hand surveys of Fork for Windows 2.23.2 (light and dark)
+and one of Cairn's window, over one fixture, plus a code inventory, an audit of the earlier
+Fork evidence and a Freya API check (`docs/research/ui-review/`). Packet 5d,
+`fork-alignment`, is planned (PRD `docs/prd/fork-alignment.md`, work dir
+`docs/work/fork-alignment/`, decisions S1-S5 and L1-L9 in its brainstorm), with
+`docs/design/ui.md`, `history-graph.md` and `diff.md` rewritten to its end state. The
+surveys found a git-parity bug — a parent drawn above its child when commit times tie —
+which the user made its own packet, 5c `history-topo-order`, to run first. The user split
+the file tree, Quick Launch, Preferences and the repository manager into packets of their
+own, 5e-5h, all briefs. Fork for Windows in the VM is now 2.23.2 and runs its own git
+2.50.1, not the 2.21.1 the earlier observations record.
+
 ## 2026-10-14 — staging-and-commit shipped and torn down
 
 Packet 5 passed its merge bar (every C1-C35 met, C21 within its bars on three fresh bench

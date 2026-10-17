@@ -29,9 +29,14 @@ that holds up as the UI grows. The cost is maturity
 — Freya 0.5 is a release candidate whose API replaced the previous one wholesale.
 Accepted deliberately: the alternatives either bring a browser or bring C++.
 
-The chrome is Linux-native (`ui.md`).
+The chrome is Fork for Windows' on Linux: Cairn draws its own caption row, with the
+menus, the title and the window's controls, and owns dragging, maximizing and the
+resize edges (`ui.md`, "The caption row, the menus and the toolbar"). macOS keeps its
+native frame and draws the same menus as a row inside the window. Freya attaches a
+native menu bar on macOS alone, through `muda`, whose Linux build needs GTK and
+libxdo; Cairn does not use it.
 
 ## Open
 
-- The menu bar on both platforms — a Freya capability question to answer before
-  promising anything.
+- **macOS's native menu bar**, which needs `muda` as a dependency (Freya attaches it
+  on macOS alone).

@@ -116,5 +116,5 @@ cite by number; each lives in the document that designs it.
   the largest UI surface: its own program, not a packet.
 - **Syntax highlighting in diffs**, and whether the diff and conflict views share
   a component (`diff.md`).
-- **The menu bar on both platforms** (`platform.md`).
+- **macOS's native menu bar** (`platform.md`).
 - **A light theme** (`ui.md`).

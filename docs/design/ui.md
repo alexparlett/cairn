@@ -14,11 +14,13 @@ taste — every deviation below names the document that drives it.
 
 ## The layout model, kept from Fork
 
-Three regions, always:
+A caption row and a toolbar over three regions, always:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ toolbar: Fetch · Pull · Push · Stash │ repo · branch │ actions │
+│ File  View  Repository  Window  Help      Cairn       –  □  ✕ │
+│ ◧ ▸  Fetch Pull Push Stash▾  │ repo / branch │  Branch▾  Appearance▾ │
+│ tabs: one per open repository                                  │
 ├───────────┬──────────────────────────────────────────────────┤
 │ sidebar   │ main: history graph  OR  local changes           │
 │ refs      ├──────────────────────────────────────────────────┤
@@ -35,7 +37,7 @@ Kept, and why:
   file, and the commit box, without navigating away.
 - **Stashes appear inline in the commit list**, as well as in the sidebar: each
   stash made on a commit the graph shows is a row of its own, placed by date, on
-  a short lane joined to that commit (`history-graph.md`); one whose commit no
+  that commit's lane above it, as Fork for Windows draws it (`history-graph.md`); one whose commit no
   ref reaches is in the sidebar alone, and pressing it shows its changes. Fork's feature list calls this out for a
   reason.
 - **Repository tabs** across the top. The manager behind them is open
@@ -57,63 +59,95 @@ Kept, and why:
 
 | Change | Driven by |
 | --- | --- |
-| An operation that cannot be undone, or that rewrites history someone else may have, always gets the **one confirmation dialog**, whichever route asked — button or chord — and an operation that can be recovered from asks nothing. Its words are rendered from what the engine computed at the press and are the `Confirmed` prompt. | `cairn.md`, what Cairn is; `engine.md`, "The confirmation seal" |
+| An operation that cannot be undone, or that rewrites history someone else may have, always gets the **one confirmation dialog**, whichever route asked — button or chord — but for Create Branch's Discard, whose deliberate choice and press are the confirmation, as in Fork ("Create Branch", below); an operation that can be recovered from asks nothing. Its words are rendered from what the engine computed at the press and are the `Confirmed` prompt. | `cairn.md`, what Cairn is; `engine.md`, "The confirmation seal" |
 | Every confirmation starts with focus on **Cancel**, and Escape goes back one step. Fork's discard dialog focuses its Discard button, and its own tracker asks for Cancel (Tracker #1080). | `cairn.md`, what Cairn is |
 | A confirmation's prompt is **one short sentence frame** — the question naming what is discarded, the worst loss only when it is worse than changes, and "You can't undo this." — with the per-file detail behind **Show files**, where Fork asks without detail. Titles and buttons are in Title Case on both platforms, where Fork for Windows writes "Discard changes". | `engine.md`, "The confirmation seal" |
 | A discard over a selection that mixes discardable files with a submodule or a conflicted file **discards what it can** and says in one line what is left; Fork asks twice. | `engine.md`, the write verbs |
-| **Each kind of message has one home**: progress in the title bar's status box, a git failure in Fork's Git Error dialog, a refusal found while running in the same dialog titled "Couldn't <name>" with one sentence and no Error Details, a refusal known in advance as a greyed control with its reason beside it; success says nothing, a cancel opens no dialog, and nothing is drawn under the file lists. Fork calls every failure "unexpected", its own refusals included. | `concurrency.md`, "Operations"; `processes.md`, "Cancellation" |
+| **Each kind of message has one home**: progress in the toolbar's status box, a git failure in Fork's Git Error dialog, a refusal found while running in the same dialog titled "Couldn't <name>" with one sentence and no Error Details, a refusal known in advance as a greyed control with its reason beside it; success says nothing, a cancel opens no dialog, and nothing is drawn under the file lists. Fork calls every failure "unexpected", its own refusals included. | `concurrency.md`, "Operations"; `processes.md`, "Cancellation" |
 | **No text a person needs is cut.** A sentence that could run long is made short instead — it names only the exception and never repeats what is on screen — and per-file detail goes behind Show files. | `cairn.md`, what Cairn is |
-| The **activity popover**, Fork's Activity Manager, also quotes the prompt an operation confirmed, whole, gives each entry its duration, and offers "Show in Lost Commits" for an amend's old commit. Its times are UTC, since local time needs a timezone dependency; Fork's are local. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
+| The **activity popover**, Fork's Activity Manager, also quotes the prompt an operation confirmed, whole, gives each entry its duration, and offers "Show in Lost Commits" for an amend's old commit. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | **Ignore Whitespace is disabled in Local Changes**, so every change drawn there is one a gesture can stage. Fork offers it there. | `diff.md`, "Selections and patches" |
-| A **visible double chevron in each list's header** — Stage All in Unstaged, Unstage All in Staged — beside the held key; Fork for Windows shows Unstage All only while Shift is held. | `platform.md` — keyboard-first, every action reachable |
+| A **visible Unstage All** — a double chevron on the Staged heading — beside Fork's Stage All in the bar over both lists; Fork for Windows offers Unstage All only in the menu and while Shift is held. | `platform.md` — keyboard-first, every action reachable |
 | A finished **line selection survives a refresh** whose re-read draws the same text — switching to the editor and back — and is cleared, with one notice, when the text changed; Fork drops it silently. | `concurrency.md` — a refresh is frequent and must cost the person nothing |
 | The floating actions **stay at the list's top** while the chunk's top is scrolled above it, so a tall chunk's actions stay in reach; Fork's sit at the chunk's top right. | `cairn.md`, what Cairn is |
 | A press without a drag, or Escape, **lets a line selection go**, and the window losing focus cancels a drag; the selection's discard reads `Discard 2 Lines…`, its ellipsis saying it confirms. | `diff.md`, "Selections and patches" |
-| An amend **asks first** — in the one dialog — exactly when a remote already has the commit or git keeps no reflog to recover it from; the button reads Fork's "Amend Last Commit". Fork for Windows notes a pushed amend beside the check box and amends at once, Fork for macOS says nothing. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
-| A running commit has **Cancel beside it** in the box, so a hung hook is stopped where it was started; Fork's cancel is only in the Activity Manager. | `processes.md`, "Cancellation" |
+| An amend **asks first** — in the one dialog — exactly when a remote already has the commit or git keeps no reflog to recover it from; the button reads Fork's "Amend Last Commit". Fork for Windows notes a pushed amend beside the check box and amends at once. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
+| A running commit has **Cancel beside it** in the box, so a hung hook is stopped where it was started; Fork's cancel is in the Activity Manager and the status box. | `processes.md`, "Cancellation" |
 | A failed commit or amend always offers **Skip pre-commit hooks and commit**, where Fork offers it where it finds a hook; hooks git finds by configuration Fork misses (Tracker #948). | `engine.md`, D1 — git decides, Cairn does not model it |
 | A merge message is shown **as git's editor would leave it** — comment lines stripped by git — so what is shown is what is committed; Fork commits git's `# Conflicts:` lines, its open bug (Tracker #180). | `engine.md`, D1 |
 | A leftover `index.lock` is **a state of the repository**: a banner while the file exists, no `git` of Cairn's runs and it is older than a few seconds, offering its removal — which, from there or from a Git Error, is confirmed. Fork offers the removal only in the failure, and removes unasked. | `processes.md`, "Cancellation"; `engine.md`, D1's one deletion made without `git` |
 | A nested repository among the untracked rows is never touched — left as it is, a line in the dialog saying so, as a submodule is — since deleting it deletes history no prompt can count; Fork deletes it as an untracked folder. | `engine.md`, the write verbs |
 | A submodule row's discard is greyed and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
-| During a rebase, `git am` or a sequence of cherry-picks or reverts the commit box is disabled and names git's own command to continue or abort; Fork pre-fills and commits. Continuing those operations is their own design. A single cherry-pick or revert is concluded by Commit, as in Fork. | `cairn.md`, the milestone — rewrites are the second lap |
-| **Show Lost Commits has a control in the history's toolbar area** — a check box at the right end of the "Graph and subject" heading's cell, its tooltip the chord — as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
+| During a rebase, `git am` or a sequence of cherry-picks or reverts the commit box is disabled and names git's own command to continue or abort, where Fork offers its commit box as usual. Continuing those operations is their own design. A single cherry-pick or revert is concluded by Commit, as in Fork. | `cairn.md`, the milestone — rewrites are the second lap |
+| While **Show Lost Commits** is on, a strip under the toolbar names the mode and turns it off; Fork shows no sign of the mode in the window itself. | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
 | Create Branch's **"Stash and reapply" is drawn greyed**, saying it comes with stashing, where Fork's acts. | `feature-inventory.md` — stash is its own feature |
 | Show Lost Commits reaches the commits `HEAD`'s and the local branches' reflogs hold; Fork's mode reaches every reflog, as `git log --all --reflog` does (TrackerWin #1307). | `history-graph.md`, "What it walks" |
-| **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree carries a chip as in Fork — and, unlike Fork, a disabled checkout. | `worktrees.md` |
+| **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree is marked, as Fork marks it in its sidebar — and, unlike Fork, its checkout is disabled. | `worktrees.md` |
 | Pressing a ref finds its commit however deep it is; Fork holds only its newest 50,000 or 100,000 commits and does nothing for a ref past them. | `history-graph.md` — a history is however long the repository is |
-| Remote-tracking labels carry a generic remote glyph wherever the forge is not known; Fork shows a forge icon on every one. | `forge-links.md` — a forge is identified only where it can be |
 | Branch and commit context menus carry **forge links**: create pull request, open on the forge, copy permalink. After a push, the toast offers *Create pull request* directly. | `forge-links.md` |
-| **Conflict resolution is three-way and region-level**, with *edit in your editor* as the escape hatch. Fork resolves per file and opens a resolver for the rest. | `conflicts.md` |
-| The toolbar drops Fork's Appearance / Workspace / Feedback and adds *Open in terminal / editor* and a command palette. | `feature-inventory.md`, Tier 7 |
+| **Conflict resolution is three-way and region-level**, with *edit in your editor* as the escape hatch, where Fork works a file at a time. | `conflicts.md` |
+| The toolbar has no Workspaces and no feedback face, and the menus no Git Flow, Git LFS, bisect, statistics, treemap, benchmark, accounts or SSH keys, and Cairn draws neither Fork's detached detail window nor its suggestion banners. **Fetch acts at once** on the default remote, where Fork's Fetch… opens a dialog; choosing the remote is issue #23. *Open in* and *Console* start programs other than git, so they are designed under the process guards before they are drawn. | `feature-inventory.md`, Tier 7 and "Explicitly out of scope"; `processes.md` |
+| **Avatars are initials**, coloured from the name; Cairn fetches no gravatar. | `diff.md`, "The detail pane" — no network call for a view |
+| Lanes keep **Cairn's colour-vision-safe set**, where Fork Dark's are orange and yellow. | "Palette and type", below |
+| **Every Tab stop shows focus** — a list by its selection's tone, any other control by a ring; Fork shows only the selection's tone, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
+| The window has a **minimum size** at which nothing is cut; Fork clips its content below about 600 px. | `cairn.md`, what Cairn is — no text a person needs is cut |
 | No Accounts section in any sidebar. | `credentials.md` — Cairn holds no credential |
 | A visible **loading state** distinct from an empty repository. | `concurrency.md` — every query is assumed slow |
-| Linux-native chrome: no traffic lights, client-side decorations with controls at the right, keyboard-first throughout. | `platform.md` |
 
-## The sidebar, the toolbar and Local Changes
+## The caption row, the menus and the toolbar
 
-The sidebar is Fork's, top to bottom: **Local Changes** with its count (the
-number of distinct paths `git status` reports, absent when there are none),
-**All Commits**, a filter box, then Worktrees, Branches, Remotes, Tags, Stashes
-and Submodules. Branches and remotes are folders split at `/`; the current
-branch is ✓ and bold; a branch shows its ahead and behind counts against its
-upstream, or that the upstream is gone. Pressing a ref selects its commit in the
+On Linux the window is Fork for Windows': Cairn draws its own caption row — the
+menus at the left, "Cairn" centred, minimize, maximize and close at the right —
+and owns what a frame does: a drag on its empty space moves the window, a double
+press maximizes it, a secondary press opens the compositor's window menu, and every
+edge resizes. On macOS the window keeps its native frame and draws the same menus
+as a row of their own at its top; the native menu bar is not used. The window's own title, for the taskbar, names the repository.
+
+The menus are Fork's — File, View, Repository, Window, Help — each item in Fork's
+order and groups, with its chord beside it from the accelerator table: View holds
+Show Uncommitted Changes, Show All Commits, Hide Commit Details, Show HEAD and Show
+Lost Commits (Reflog); Repository holds Refresh, Fetch and the branch, tag, stash
+and worktree verbs; Window the zoom. Every context menu is the same component:
+groups split by rules, chords right-aligned, a greyed item's reason as its tooltip,
+and on every row Fork's verbs for it, Copy (Ctrl+C) and Copy Full (Ctrl+Shift+C)
+taking what that row names.
+
+Under it is Fork's toolbar, each button an icon over its label: the sidebar toggle,
+Quick Launch, Fetch, Pull and Push — the commits ahead a badge on Push and those
+behind on Pull, as Fork draws them — Stash with its menu, the status box in the
+middle, Branch with its menu, and Appearance. The **status box** names the
+repository over the current branch (a detached or unborn `HEAD` in git's words, a
+gone upstream said there), and its glyph opens the activity popover.
+
+The banners stand under the toolbar, across the window, as Fork's do.
+
+## The sidebar and Local Changes
+
+The sidebar is Fork's, top to bottom: a header with the repository's name and a
+gear whose menu copies the repository's path; **Local Changes** with its count (the
+number of distinct paths `git status` reports, absent when there are none) and
+**All Commits**, each with its icon; a filter box; then Worktrees, Branches,
+Remotes, Tags, Stashes and Submodules, each heading with its chevron and no count.
+Each level indents; branches and remotes are folders split at `/`, each row its
+leaf name; folders and Tags start closed; tags are newest first; a stash reads its
+message as git wrote it after `On <branch>: `. The current branch is ✓ and bold; a
+branch shows its ahead and behind counts against its upstream, or that the
+upstream is gone. Pressing a ref selects its commit in the
 graph and scrolls to it, finding it if it is not loaded yet; it never filters.
 Every section is a virtualized list, since a repository can carry tens of
 thousands of tags.
 
-The title bar names the repository — marked `*` while the working tree has
-changes — the current branch, and its behind and ahead counts, as Fork's central
-status box does. While an operation runs, the status box shows it instead: a
+While an operation runs, the status box shows it instead of the repository: a
 spinner and the operation's name, once it has run a quarter of a second, so a fast
 stage shows nothing, and how many wait behind it; a fetch adds git's progress line,
-and Fetch is greyed while one runs. Pressing the box opens the activity popover.
+and Fetch is greyed while one runs.
 
 Pressing Local Changes puts the staging screen in the main region, as Fork lays it
-out: a filter over Unstaged above Staged, each a list of paths with Fork's badges
-under a header carrying its list's `Stage` or `Unstage` button and a small double
-chevron — Stage All in Unstaged, Unstage All in Staged — and beside them, on the
-right, the diff of the selected file with the staging gesture on it and the commit
+out: a bar across both lists — the filter, Stage All's double chevron, the
+side-by-side eye and View Mode — over Unstaged above Staged, each a list of paths
+with Fork's badges under a heading carrying its list's bordered `Stage` or
+`Unstage` button, the Staged heading also a small double chevron for Unstage All;
+and beside them, on the right, the diff of the selected file with the staging gesture on it and the commit
 box under it ("Staging", "The commit box", below). As built:
 `docs/systems/local-changes.md`.
 
@@ -125,16 +159,16 @@ system. Fork's standing complaint — that each refresh holds `index.lock` for
 seconds on a large tree — does not carry over, because Cairn's reads take no
 lock (`engine.md`).
 
-Two banners can stand under the title bar, both about the repository or the window
-rather than an operation: a leftover `index.lock` ("The leftover lock", below), and
-a close waiting on a write — "Closing after Commit finishes. Close again to quit
-now."
+Three banners can stand under the toolbar, each about the repository or the window
+rather than an operation: a leftover `index.lock` ("The leftover lock", below), a
+close waiting on a write — "Closing after Commit finishes. Close again to quit
+now." — and Show Lost Commits while it is on ("Show Lost Commits", below).
 
 ## Messages
 
 Each kind of message has one home, and each operation one name — Fork's
-imperative, "Stage 2 files", "Commit", "Create branch 'topic'" — used everywhere
-the operation is named: the status box, "Waiting for Stage 2 files" on a control a
+imperative, "Stage 2 Files", "Commit", "Create branch 'topic'" — used everywhere
+the operation is named: the status box, "Waiting for Stage 2 Files" on a control a
 queued write holds, the closing banner, a dialog's title and the activity popover.
 
 - **Progress** is the status box's.
@@ -176,17 +210,20 @@ list, Ctrl+S or Ctrl+Shift+S on Linux, as Fork for Windows — which from the di
 with no lines selected, stages the whole selection, while Return there does nothing,
 as in Fork; a drag from one list to the other; the list header's `Stage` or
 `Unstage` button, greyed while the selection is in the other list; and the context
-menu, which carries Stage or Unstage, Discard Changes…, Stage All and Copy Path.
+menu, which carries Stage or Unstage, Discard Changes…, Stage All or Unstage All,
+Copy Path and Copy Full Path.
 Holding Shift on Linux — Fork for Windows' key, which no window manager takes with a
-click — or ⌥ on macOS turns both headers' buttons into Stage All and Unstage All,
-enabled whatever is selected; the double chevrons reach the same with nothing held,
+click — or ⌥ on macOS turns both headings' buttons into Stage All and Unstage All,
+enabled whatever is selected; the double chevrons — Stage All's in the bar over
+both lists, Unstage All's on the Staged heading — reach the same with nothing held,
 kept small, as Fork keeps its own, because changes are meant to be read before they
 are staged. With a filter on, the selection keeps only the rows the filter shows,
 and Stage All and Unstage All take the shown rows and no others, so nothing hidden
 is ever acted on. Each list is one drop zone, never a zone per row: the virtualized
 list unmounts rows mid-drag, and a row-held drag would be left holding a stale
 payload; a drag near an edge scrolls the list. Discard is ⌫ or ⇧⌘D on macOS,
-Backspace, Delete or Ctrl+Shift+D on Linux.
+Backspace or Delete on Linux, the key Fork for Windows' menu names; Ctrl+Shift+D
+there is Fork's Hide Commit Details.
 
 One rule says where the selection goes, after an action and after any refresh
 alike, whoever moved the files — a stage, a commit made in a terminal, a filter:
@@ -197,7 +234,7 @@ Fork's does (Tracker #514; Fork fixed a jump to the first row in 1.0.57).
 
 An action answers every chord Fork gives it, each heard only in its own scope:
 stage, unstage and discard while a file list or the diff in Local Changes has
-focus, commit in the commit box, Show Lost Commits in the history, so typing in the
+focus, commit in the commit box, Show Lost Commits anywhere in the window, so typing in the
 commit box fires nothing but commit. Bare Enter is heard only from Local Changes'
 file lists, bare Backspace and Delete from those lists and the diff, never while a
 text field has focus; everywhere else a chord without a modifier is a function key
@@ -274,10 +311,12 @@ as in Fork (`feature-inventory.md`, "Recovery").
 
 ### The commit box
 
-Fork's, under the diff: a subject field with a characters-left counter — grey down
-to Fork's soft limit of 50, then negative, red past 70 — and a Recent Commit
-Messages menu at its right; a multi-line description with a ruler at column 72;
-`Amend` at the left; and `Commit N Files` at the right, which ⌘Return or Ctrl+Enter
+Fork's, under the diff: one bordered field of two parts — the subject, with a
+characters-left counter shown once it has text, grey down to Fork's soft limit of
+50, then negative, red past 70, and a Recent Commit Messages menu at its right
+end; and under a rule a multi-line description with a ruler at column 72 —
+`Amend` at the left; and at the right Fork's split button, `Commit N Files` with
+its ⌄ for the commit's options, which ⌘Return or Ctrl+Enter
 presses from either field without typing a newline, disabled with an empty
 subject, as Fork's is, and while nothing is staged unless amending or concluding an
 operation in progress. The limits are Fork's defaults; a configurable limit is
@@ -331,9 +370,10 @@ with push, and is designed with it. Spec: `docs/prd/staging-and-commit.md` R10. 
 
 ### Show Lost Commits
 
-Fork's reflog view is a mode of the graph, not a list. Its toggle — ⌘⇧. or
-Ctrl+Shift+., and a check box, "Show Lost Commits", at the right end of the "Graph and
-subject" heading's cell, its tooltip naming the chord, which Fork does not have — adds the old
+Fork's reflog view is a mode of the graph, not a list. Its toggle — View › "Show Lost
+Commits (Reflog)", ticked while on, and ⌘⇧. or Ctrl+Shift+., as in Fork, with a strip
+under the toolbar naming the mode and turning it off while it is on, which Fork does
+not have — adds the old
 and the new id of every entry of `HEAD`'s reflog and of each local branch's to the walk's tips
 and draws the commits no ref reaches dimmed, as Fork dims them: their subject, author, id and
 date in a lighter grey, their lanes, edges and chips in their own colours
@@ -370,7 +410,7 @@ built: `docs/systems/history-graph.md`, "Create Branch".
 
 ### Activity
 
-Fork's Activity Manager, opened from the title bar's status box: one entry per
+Fork's Activity Manager, opened from the status box's glyph: one entry per
 operation of the session, newest first and bounded, each row its name, Fork's
 result line under it — "staged", "Switched to branch 'topic'", "Already up to date"
 — its start time and ⚠ on a failure. The selected entry shows its name, one of four
@@ -389,7 +429,7 @@ popover".
 A leftover `index.lock` is a state of the repository, decided by whether the file
 exists now: while it does, no `git` of Cairn's is running or waiting there, and it
 is older than a few seconds — so a commit in a terminal with its editor open raises
-no alarm — a banner under the title bar says "index.lock is in this repository, so
+no alarm — a banner under the toolbar says "index.lock is in this repository, so
 git can't change the index. If no other git program is running, it was left
 behind." and offers `Remove index.lock…`. It goes when the file does, however it
 went. A write that fails on the lock is retried after about a second, once or
@@ -402,20 +442,31 @@ write. Spec: `docs/prd/staging-and-commit.md` R12.4. As built: `docs/systems/git
 
 ## Palette and type
 
-Dark-first, because the application launches with Freya's `dark_theme`. Cool
-graphite neutrals with a slight blue bias, so the ground reads as chosen rather
-than default. One accent — a desaturated steel blue — for HEAD, selection and the
-primary action, chosen because red and green are already spoken for by diffs and
-must stay semantic. Lane colours are a six-step set that stays distinguishable
-under common colour-vision deficiencies, and lane identity never depends on
-colour alone: the column position carries it.
+Fork Dark's tones, because Fork is the standard and the application is dark-first:
+graded greys that tell the regions apart — the caption row and toolbar darkest, the
+sidebar, the history and the detail pane each a step of their own — with rules and
+splitters one grey. The selection is how a list says it has focus, as in Fork: a
+solid blue with white bold text while its list has focus, a grey when not. Menus,
+dialogs and buttons take Fork Dark's tones, a dialog bordered in the accent, a
+focused field in Fork's blue. The diff's bands are Fork Dark's green and red.
 
-Type is IBM Plex — Sans for the interface, Mono for ids, paths and diffs. One
-family, so the UI and its data read as one instrument. `tabular-nums` wherever
-digits align.
+Lane colours stay Cairn's own: an eight-step set that stays distinguishable under
+common colour-vision deficiencies, where Fork's are orange and yellow, and lane
+identity never depends on colour alone — the column position carries it. Chips are
+toned as Fork tones them: a branch's and a remote's by its row's lane — bordered in
+the lane's colour and filled with a dark shade of it — and a tag's and a stash's by
+kind.
+
+Type is the platform's sans, as Fork uses Segoe UI on Windows — on Linux the first
+of Ubuntu, Adwaita Sans and Noto Sans the system has — at Fork's sizes, 12 px for
+the body; IBM Plex Mono for ids, paths and diffs. Icons are Lucide's, drawn as
+Fork's are, each over its label in the toolbar. Every size, tone and icon comes from
+one place, so the window reads as one instrument. `tabular-nums` wherever digits
+align.
 
 A light theme is a real obligation, not a toggle: a diff palette that works on a
-dark ground does not survive inversion, so it needs its own design (Open, below).
+dark ground does not survive inversion, so it needs its own design (Open, below),
+and Fork's Appearance menu, which switches it, needs somewhere to keep the choice.
 
 ## The screens
 

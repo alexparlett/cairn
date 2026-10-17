@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-ui/src/detail/ (commit_tab.rs, changes_list.rs, expansion.rs), crates/cairn-app/src/detail/ (pane.rs, changes_tab.rs), crates/cairn-ui/src/diff/ (header.rs, toggle_glyphs.rs, palette.rs, view.rs), docs/systems/diff.md, the evidence FS1 §5-6 and FS2 §1b (shots uv2f, uv8, uv9z, uv10, uw5); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-ui/src/detail/ (commit_tab.rs, changes_list.rs, expansion.rs), crates/cairn-app/src/detail/ (pane.rs, changes_tab.rs), crates/cairn-ui/src/diff/ (header.rs, toggle_glyphs.rs, palette.rs, view.rs), docs/systems/diff.md, the evidence FS1 §5-6 and FS2 §1b (shots uv2f, uv8, uv9z, uv10, uw5); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. The tab strip (R7.1) with the hide-details icon on the right (03's action).
         2. The Commit tab (R7.2): the author block with its 42 px avatar, name, email and date;

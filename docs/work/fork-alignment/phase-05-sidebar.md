@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-ui/src/sidebar.rs, crates/cairn-app/src/sidebar/ (state.rs, pane.rs), crates/cairn-model/src/sidebar_rows.rs, crates/cairn-ui/tests/sidebar.rs, docs/systems/sidebar.md, the evidence FS1 §3 and FS2 §2 (shots uv2c, uv4z, uv5all, uw27); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-ui/src/sidebar.rs, crates/cairn-app/src/sidebar/ (state.rs, pane.rs), crates/cairn-model/src/sidebar_rows.rs, crates/cairn-ui/tests/sidebar.rs, docs/systems/sidebar.md, the evidence FS1 §3 and FS2 §2 (shots uv2c, uv4z, uv5all, uw27); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. The header row with the repository's name and the gear's menu (Copy Repository Path)
            (R6.2); Local Changes and All Commits with their icons, the rounded selected band, the

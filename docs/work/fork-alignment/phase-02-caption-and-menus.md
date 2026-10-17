@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-app/src/main.rs, window.rs, modal.rs, shortcuts.rs, crates/cairn-ui/src/accelerators.rs (and chord_names.rs), the existing context menus (crates/cairn-ui/src/history/list.rs, local_changes/menu.rs, commit_box.rs), the vendored Freya Menu/SubMenu/MenuButton/ContextMenu, titlebar, window_drag and BorderlessPlugin sources (FA §1, §2, §5); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-app/src/main.rs, window.rs, modal.rs, shortcuts.rs, crates/cairn-ui/src/accelerators.rs (and chord_names.rs), the existing context menus (crates/cairn-ui/src/history/list.rs, local_changes/menu.rs, commit_box.rs), the vendored Freya Menu/SubMenu/MenuButton/ContextMenu, titlebar, window_drag and BorderlessPlugin sources (FA §1, §2, §5); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. `cairn_ui::menu`: one component drawing a menu from data — groups with separators,
            a right-aligned chord column from `accelerators::chord_name`, greyed items with their

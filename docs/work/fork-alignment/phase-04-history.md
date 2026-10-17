@@ -10,9 +10,8 @@ STEP 0  Pre-flight: read docs/work/fork-alignment/state.md and this file, nothin
         validation table, `git log feature/fork-alignment`).
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over crates/cairn-ui/src/history/ (commit_row.rs, date_text.rs, graph_cell.rs, graph_geometry.rs, ref_chips.rs, list.rs), crates/cairn-model/src/lane_assignment.rs (push_stash) and the drawn-lane tests (crates/cairn-ui/tests/drawn_lanes.rs, drawn_rows.rs), crates/cairn-git/src/history/ (stream.rs, reach.rs, walk.rs), the vendored jiff 0.2.37 tz API, docs/systems/history-graph.md, the evidence FS1 §4 and FS2 §1a, §6 (and the shots uv2, uv7, uw3); do not read the planning docs beyond
-        state.md and this file directly (the PRD sections and evidence named below are the
-        exception: read those).
+STEP 1  Load context via an Explore agent over crates/cairn-ui/src/history/ (commit_row.rs, date_text.rs, graph_cell.rs, graph_geometry.rs, ref_chips.rs, list.rs), crates/cairn-model/src/lane_assignment.rs (push_stash) and the drawn-lane tests (crates/cairn-ui/tests/drawn_lanes.rs, drawn_rows.rs), crates/cairn-git/src/history/ (stream.rs, reach.rs, walk.rs), the vendored jiff 0.2.37 tz API, docs/systems/history-graph.md, the evidence FS1 §4 and FS2 §1a, §6 (and the shots uv2, uv7, uw3); read state.md, this file, implementation-plan.md and
+        the PRD sections and evidence named below directly; nothing else of the planning docs.
 STEP 2  Implement:
         1. The row (R5.1-R5.3, R5.5): no header row, 23 px, the columns in Fork's order,
            initials avatars (also in the Commit tab and the Changes summary, if cheaper here

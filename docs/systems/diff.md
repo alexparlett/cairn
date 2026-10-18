@@ -1342,8 +1342,9 @@ epoch is no longer current.
 asks which of a change set's files hold `text` in a path; `files` is the window's own
 change set, an `Arc` shared with `DiffState` rather than copied. It is numbered in a
 fourth lane, `QueryLane::FileFilter`, which supersedes itself and nothing else, and is
-routed to the repository thread, whose work between jobs is a bounded page, so a
-keystroke never waits behind a diff. There `ChangeSet::files_matching` makes one pass
+routed to the repository thread, which walks no history — an opening pass and every page
+run on the history thread — and whose other jobs are a refresh's refs, the other filters and
+the freeing of old answers, so a keystroke never waits behind a diff or an open. There `ChangeSet::files_matching` makes one pass
 over the paths, asking the epoch every few thousand files, and answers
 `Update::FilteredFiles { of, text, files }`, the matching indices in order; a filter
 superseded by the next keystroke stops and sends nothing

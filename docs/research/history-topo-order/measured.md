@@ -151,3 +151,64 @@ After its opening pass the date-order walk holds every commit's parents and date
 page reads only the commits it draws (`summary_of_commit`), where commit-time order's walk
 read each commit to step and again to draw it. A marker was touched before each run and `find
 ~/Development/bench/rust/.git -newer <marker>` was empty after each, exit 0, nothing on stderr.
+
+## The history thread and the window during an opening pass
+
+Measured when the history lane first ran on a thread of its own (`cairn-history`), the refs,
+the filters and the freeing of old answers left on the repository thread; what the section
+"What this record does not settle" left open (R6.3, R6.5). Same repository, machine and bench
+rule: a marker touched before the first command (2026-10-18 10:33:21 +0100), `find
+~/Development/bench/rust/.git -newer <marker>` empty after the runs, exit 0, nothing on stderr;
+every `git` on the bench under `GIT_OPTIONAL_LOCKS=0`. The copy with a commit-graph was made
+afresh in the session's scratchpad (tmpfs) as above: `cp -r` of the `.git`, `core.bare true`,
+`gc.auto 0`, `maintenance.auto false`, then `git commit-graph write --reachable` (git 2.56.0,
+1.5 s, 20,734,804 bytes); no alternates.
+
+**Through the worker boundary** (`cargo test --release -p cairn-app --bin cairn
+measures_the_history_thread_against_a_named_repository -- --ignored --nocapture`, with
+`CAIRN_BENCH_REPO` and `CAIRN_BENCH_ORACLE`): a refresh's refs, then the walk opened from them
+on the history thread to its first `PAGE_ROWS` (64) rows, its pass included, seven times after a
+warm-up, each a reopen; then the other figures below.
+
+| | Bench, no commit-graph | Copy with a commit-graph |
+| --- | --- | --- |
+| git `rev-list --date-order --max-count=64 --branches --remotes --tags HEAD`, median of seven (two rounds) | 1,270 ms, 1,259 ms | 88 ms, 87 ms |
+| Cairn, the history thread's open to its first 64 rows, median of seven (two runs) | 1,174 ms [1,170-1,182], 1,206 ms [1,196-1,229] | 115 ms [113-120], 113 ms [111-115] |
+| "Reading history… N commits": counts told | 9-10 per open, the first at 308-309 ms (75-79 thousand commits read), the least gap 100 ms | none: the pass is shorter than 250 ms |
+| a page of 64 after the opening pass, median of seven | 0.40 ms | 0.47-0.48 ms |
+| the sidebar's filter over the 175 refs, alone, median of seven | 0.03-0.05 ms | 0.05 ms |
+| the same, asked a quarter of the way into an opening pass (301 ms; 28 ms), median of seven | 0.09 ms [0.05-0.12], before the first page each time | 0.08 ms [0.05-0.10] |
+| a close asked a quarter of the way into an opening pass, to the end of the update stream, median of seven | 29.3-29.4 ms [29.0-29.7] | 26.6 ms [26.5-26.9] |
+| a close with nothing running | 37.5-38.0 ms | 37.2 ms |
+
+R6.1's bar (git's median plus 10%, about 1,390 ms) is met by the history thread's whole open,
+refs snapshot to first page: 1,174-1,206 ms. With a commit-graph the open is 25-28 ms over
+git's: the walk's own 95 ms measured above, plus opening the session and laying out and reading
+the first page. A close during an opening pass is no slower than one with nothing running: the
+pass ends at its next commit, and what a close costs is its reaps and the threads it joins.
+
+**The order, through the history.** With `CAIRN_BENCH_ORACLE` naming git's own `git log
+--date-order --format=%H --branches --remotes --tags HEAD` (345,545 lines; the bench has no
+stash), the whole history opened through the worker boundary as one page equals it row for row
+on the bench and on the copy with a commit-graph ("first difference at None", 345,545 rows
+each).
+
+**What the lane assigner repaints** (R7.1). `measures_compact_rows_over_a_named_repository`
+(`CAIRN_C15_MODE=equivalence`, `CAIRN_FIND_SEED=refs`) over the history from every ref in date
+order: 345,545 rows, 0 repainted, 0 late lines. `measures_layout_over_every_ref_of_a_named_repository`
+over the 165 commit-bearing tips: in date order 0 rows carry an out-of-order segment (0.000%); in
+commit-time order 49,609 rows (14.357%, 64,698 segments), the figure the PRD opens with.
+
+**The window during an opening pass** (`cargo test --release -p cairn-app --bin cairn
+opening_pass_check -- --ignored --nocapture`, 1440x900 at scale 1, headless, the UI thread's
+work per frame timed as the window check times it):
+
+| | |
+| --- | --- |
+| the first open, launch to the refs, the first page, the sidebar's rows and the status drawn | 1,213-1,229 ms; the first count told after 304-306 ms; 103-104 frames, max 6.7 ms, none over 16.7 ms |
+| a reopen with 3,000 rows drawn, scrolled up 60 px every frame until the new walk's first page replaced them | first page after 1,195-1,220 ms; 82 frames, median 0.68 ms, max 2.68 ms, none over 16.7 ms |
+| a filter keystroke 20 frames into that pass, to its rows drawn (the frame they arrive in included) | 18.3 ms |
+| the same keystroke with nothing opening | 17.2 ms |
+
+R4.5 (no frame over 16.7 ms while an opening pass runs) holds in both. The keystroke's rows are
+drawn a frame after it whether a pass runs or not: the filter waits on no open.

@@ -82,7 +82,8 @@ Typing in the filter asks a worker which rows hold the text in a path or a sourc
 Changes tab's rule, case ignored (`LocalChanges::matching`) — as
 `Request::FilterLocalChanges { changes, text }`, `changes` the window's own lists, shared. It
 is numbered in a lane of its own (`QueryLane::LocalChangesFilter`), routed to the repository
-thread, and superseded by the next keystroke or by a newer status's ask, nothing else; a pass
+thread — which walks no history, so a keystroke never waits on an open of it — and superseded
+by the next keystroke or by a newer status's ask, nothing else; a pass
 superseded mid-way stops within a few thousand paths and sends nothing. Its answer,
 `Update::FilteredLocalChanges { changes, text, rows }`, is kept only for the newest lists and
 the text as it is (`LocalChangesState::filtered`). With a filter on, a new status is not drawn

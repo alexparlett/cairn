@@ -152,9 +152,10 @@ On the application's side, in `crates/cairn-app/src/`:
   worker/local/lane.rs    the local write lane's loop: LocalWrite, OperationId, WriteEnding,
                           ReadAgain, LaneState — the write clock, a commit's quiet, a cancel by
                           id, a commit's cancel installed as git starts
-  worker/pool.rs          the repository thread: serves the history lane, Request::Close and
-                          Request::CommandLog, spawns the cairn-diff and cairn-network
-                          threads, Threads::drop
+  worker/pool.rs          the repository thread: serves a refresh's refs, the filters,
+                          Request::Close and Request::CommandLog, spawns the cairn-history,
+                          cairn-diff and cairn-network threads, Threads::drop
+  worker/history/lane.rs  the history thread's loop: the history lane, which runs no git
   worker/routing.rs       the routing table: which thread serves each request, applied as it
                           is submitted
   worker/epoch.rs         epochs numbered per query lane, each a read's Cancel
@@ -1455,7 +1456,7 @@ which is a length of time, is waited out.
 
 - **Reached directly, in order** (R4.1, R4.2). `Request::Write { id, write }`
   is routed by `submit` straight to the lane's queue — never through the
-  repository thread, where it would wait behind a page or a find
+  repository thread, where it would wait behind a filter or a refresh's refs
   (`every_query_is_served_on_the_thread_its_lane_is_routed_to`) — and the lane
   runs one at a time, first in, first out; a write asked while another runs is
   queued, never refused. The window names each write with an `OperationId` it
@@ -1644,10 +1645,15 @@ runs on the UI thread:
 1. The window's close hook (`WindowConfig::with_on_close`, `main.rs`) calls
    `Closing::requested` (`closing.rs`). The first time, it submits
    `Request::Close` and keeps the window open. `RepositoryHandle::submit`
-   stops the epochs — an atomic store, so a page being walked is abandoned at
-   its next poll and a diff's read is ended at the runner's next tick — and
-   queues the close, which `serve` breaks on.
-2. On the repository thread, `Threads::drop` tells the diff thread to stop
+   stops the epochs — an atomic store, so a page being walked, or a walk's opening
+   pass, is abandoned at its next poll and a diff's read is ended at the runner's next
+   tick — and queues the close, which `serve` breaks on.
+2. On the repository thread, `Threads::drop` stops the epochs (again, or for the
+   first time when every handle went rather than a close being asked), tells the
+   history thread to stop and joins it — its walk polls the epochs between the commits
+   it reads, so a close during an opening pass waits on no more than one commit's read
+   (`a_close_during_an_opening_pass_does_not_wait_for_it`), and the history thread runs
+   no `git` — then tells the diff thread to stop
    (the window's handles hold its queue open, so it is told rather than left
    to see the queue close), closes the network lane's queue, cancels the fetch
    in flight at once through `FetchControl`, as `CancelFetch` does — so a fetch

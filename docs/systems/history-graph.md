@@ -22,10 +22,11 @@ repository picker.
 remote-tracking ref and tag that identifies a commit, and `HEAD` — labels each row
 with the refs pointing at its commit, and draws each stash whose base the walk
 reaches as a row of its own ("From every ref, labelled, with stash rows" below).
-The window opens its history from the snapshot its first refresh reads on the history
-thread, and reopens it whenever a later refresh — on focus, after a fetch, on the
-Refresh action — finds what the graph draws changed ("Refresh", under the worker
-boundary below). Each row draws its refs as Fork's chips between the graph and the
+The window opens its history from the snapshot its first refresh reads on the repository
+thread, walked on a history thread of its own, and reopens it whenever a later refresh — on
+focus, after a fetch, on the Refresh action — finds what the graph draws changed, the old rows
+drawn and usable until the new walk's first page replaces them ("Refresh" and "The opening
+pass in the window", under the worker boundary below). Each row draws its refs as Fork's chips between the graph and the
 subject, a stash's row its `stash@{n}` chip, and `HEAD`'s subject bold ("Chips on a
 row", under the view below); the title bar names the repository, its branch and how
 far that branch is from its upstream ("The title bar", there too).
@@ -39,8 +40,9 @@ One commit crosses four crates and changes shape three times.
    and keeps it for the life of a scroll. Each step yields an id and its parent
    ids, read from the walk rather than from a decoded object — the parents git
    shows, which in a shallow clone are not always the ones the object names
-   (see "A shallow clone" below). A walk from a refs snapshot merges each stash's
-   row into those steps (`crates/cairn-git/src/history/stream.rs`).
+   (see "A shallow clone" below). In git's date order a refs snapshot's stashes are
+   tips of the walk, each stepped as a row of its own; in the other orders
+   `crates/cairn-git/src/history/stream.rs` puts each directly above its base.
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
    order and produces a `GraphRow`: the commit's `Lane` and only the lane changes
@@ -123,11 +125,15 @@ order kept, one leaked lane reservation per event.
 
 What IS measured on real repositories is the opposite case, the one the window
 catches: rows carrying an `out_of_order` segment, i.e. a late parent the
-assigner still held and repainted a line to. In the order Cairn walks that is
-0-0.2% of rows (0.197% at the highest, and zero on four of the seven); in
-`GraphOrder` it is most rows, by construction. That rate bounds the blind spot
-from above without measuring it, since a parent must arrive late at all before
-it can arrive too late.
+assigner still held and repainted a line to. In git's date order, the history's, no
+parent ever arrives before a child, so there is none: on rust-lang/rust from every ref,
+0 of 345,545 rows carry one, and the frozen assigner's comparison counts 0 rows repainted
+and 0 late lines (`measures_layout_over_every_ref_of_a_named_repository`,
+`measures_compact_rows_over_a_named_repository`; `docs/research/history-topo-order/measured.md`).
+In commit-time order, which the same reporter still walks, the skew there makes it 49,609
+rows (14.4%, 64,698 segments); in `GraphOrder` it is most rows, by construction. That rate
+bounds the blind spot from above without measuring it, since a parent must arrive late at
+all before it can arrive too late.
 
 **A stash's row is laid out with one line, in a lane of its own**
 (`LaneAssigner::push_stash`). The stash commit is pushed as the row's id with its
@@ -531,9 +537,13 @@ stashes from a graft file outside the repository (`GIT_GRAFT_FILE`).
 warm, median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`;
 `docs/research/history-topo-order/measured.md`): the first page from every ref pays git's own
 opening pass, 1.19-1.20 s against git's `rev-list --date-order --max-count=64` at 1.25-1.26 s,
-and 95 ms in a copy with a commit-graph against git's 82-84 ms; after it, a find of the oldest
-commit through the worker boundary takes 1,952 ms, every page appended to one history
-(`measures_a_find_through_the_boundary`). In commit-time order
+and 95 ms in a copy with a commit-graph against git's 82-84 ms; through the worker boundary
+the history thread's whole open, refs snapshot to its first 64 rows, is 1,174-1,206 ms against
+git's 1,259-1,270 ms, and 113-115 ms with a commit-graph against git's 87-88 ms; a page after
+the opening pass costs 0.4 ms, and a find of the oldest commit 1,952 ms, every page appended to
+one history (`measures_the_history_thread_against_a_named_repository`,
+`measures_a_find_through_the_boundary`). The whole history opened through the boundary equals
+git's `git log --date-order` row for row, with and without the commit-graph. In commit-time order
 (`measures_the_first_page_from_every_ref`, `#[ignore]`d) the first page of 64 rows from
 `HEAD` is 7.7 ms, from every ref 7.3 ms with the snapshot already read and 8.6 ms with its
 read, each laying out 1,088 rows, and the same find 3,829 ms.
@@ -555,7 +565,8 @@ FILE, and it is a guard, not a convention — see below.
   `cairn_git::SharedRepository` is gitoxide's `ThreadSafeRepository` with the
   paths cached, and `SharedRepository::to_worker()` is the `Repository` a worker
   runs on. Each thread that reads calls it **once, at the top of the thread** —
-  `serve` on the repository thread, `serve_diffs` on the diff thread: a
+  `serve` on the repository thread, `serve_history` on the history thread,
+  `serve_diffs` on the diff thread: a
   per-request conversion compiles and passes every test while rebuilding the
   object cache and the pack snapshot each time, which is why the call site
   carries a comment rather than being left to look obvious.
@@ -600,7 +611,12 @@ FILE, and it is a guard, not a convention — see below.
   sidebar and its stop are numbered in, and its walk lane, which only an open
   moves and every page of rows is answered under — so a page a superseded find had
   laid out still arrives, and a reopen's replaced walk's pages do not
-  (`docs/systems/sidebar.md`, "Pressing an entry").
+  (`docs/systems/sidebar.md`, "Pressing an entry"). An open's opening pass and its first
+  page run under the walk lane's number, not the query lane's: a find or its stop asked
+  while a walk opens leaves the pass running and is served once the first page is out,
+  and only the next open — a reopen — or a close stops it
+  (`an_opening_pass_is_superseded_by_the_next_walk_alone`, on the lane;
+  `a_find_or_its_stop_never_supersedes_a_walk_still_opening`, through the boundary).
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
   implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
   superseding a request stops its walk at the next commit rather than
@@ -646,16 +662,27 @@ FILE, and it is a guard, not a convention — see below.
   bounded (`network::tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
 - **An explicit routing table names the thread for each lane**
-  (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
-  refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
-  thread's handle across turns and is not `Send`, so it never moves
-  (`worker/history/lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
-  changes and file-diff lanes, commits, comparisons and the working tree alike, on
-  `cairn-diff` (`worker/diff/lane.rs`); and status and ahead/behind on
-  `cairn-refresh` (`worker/refresh/lane.rs`), so neither a page nor a diff queues
-  behind a slow status. `route` applies it to every request as it is
-  submitted and hands each thread its own job type, so neither thread forwards
-  the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
+  (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane — opens,
+  pages, finds and their stops — on `cairn-history`, which owns the live walk — it borrows
+  that thread's handle across turns and is not `Send`, so it never moves
+  (`worker/history/lane.rs`) — and runs nothing else, so an opening pass that reads the
+  whole history holds up only the history; a refresh's refs (`worker/history/refs.rs`),
+  the Changes tab's, the sidebar's and Local Changes' filters, the freeing of old answers
+  and the operations' front door on `cairn-repository`; the changes and file-diff lanes,
+  commits, comparisons and the working tree alike, on `cairn-diff`
+  (`worker/diff/lane.rs`); and status and ahead/behind on `cairn-refresh`
+  (`worker/refresh/lane.rs`), so neither a page nor a diff queues behind a slow status.
+  `route` applies it to every request as it is submitted and hands each thread its own job
+  type, so no thread forwards another's work
+  (`every_query_is_served_on_the_thread_its_lane_is_routed_to`). A filter asked a quarter of
+  the way into an opening pass is answered before its first page, in a sliver of the pass
+  (`a_filter_is_answered_while_the_history_opens`; on rust-lang/rust 0.09 ms against 0.03-0.05
+  ms with nothing opening, and in the window drawn a frame after the keystroke either way,
+  `opening_pass_check`). The repository thread stops the epochs and joins the history thread
+  as the repository closes, before it waits on any reap, so a close during an opening pass
+  ends the pass at its next commit and the update stream in what a close with nothing running
+  takes (`a_close_during_an_opening_pass_does_not_wait_for_it`; on rust-lang/rust 29 ms
+  against 38 ms idle).
   A second thread costs the first almost nothing: measured by
   `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
   concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
@@ -705,9 +732,12 @@ ending every `git` in the repository's registry, either of which ends it
 thread.
 
 **What a refresh costs, as built.** The refs are read on the repository thread (R11.2,
-kept by the user's decision of 2026-10-07), so a scroll page asked while a refresh reads
+kept by the user's decision of 2026-10-07), so a filter or a free asked while a refresh reads
 them waits behind one refs read — about 28 ms for the snapshot of a 10,001-ref
-fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most once per trigger; a refresh never cancels the page. A status, once
+fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most
+once per trigger. A page never waits on it, being the history thread's, and a refresh never
+waits on an open: asked a quarter of the way into an opening pass, its refs are answered while
+the pass runs (`a_refresh_supersedes_an_open_still_reading`); a refresh never cancels a page. A status, once
 started, runs to its end whatever refreshes arrive, so a window switched faster than a
 status takes still gets one, followed by at most one more; each status is a full stat of
 the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while one runs
@@ -724,19 +754,24 @@ F5 on Linux and ⌘R on macOS in the accelerator table
 what opens the history: there is no walk yet to compare with. Nothing watches the
 file system (R10.2).
 
-**What reopens the history.** The repository thread keeps, beside the walk
-(`HistoryLane`), the snapshot the walk began from and the snapshot the last refresh
-read. A refresh compares the refs it reads with the first by
-`RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
-the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
-the snapshot (`refresh/state.rs`, which the history's chips, the title bar, the sidebar
-and the Commit tab's REFS row read) and, on `reopen`,
-reopens: the old `History` is moved out, a new one is built with
-`History::with_author_capacity` of the old one's author count, the history is asked
-for again and then the old one handed to the repository thread to free as a
-`Request::Retire` (#52, R11.3) — in that order, so the new first page is not queued
-behind the free — and the selection is left as it is, drawn again when its row arrives
-(R10.5). A chosen commit that never arrives again — its branch deleted, nothing else
+**What reopens the history.** The repository thread and the history thread share the
+snapshot the walk began from and the snapshot the last refresh read (`WalkedRefs`,
+`worker/history/refs.rs`, a lock held for a pointer's clone or assignment). A refresh compares
+the refs it reads with the first by `RefsSnapshot::walks_as` — the same refs naming the same
+objects, the same `HEAD`, the same stash list — and answers `Update::Refs { snapshot, reopen
+}`. The history thread names a snapshot the one the walk began from as it takes it to open,
+so a refresh while that walk is still opening compares with what it will draw and reopens
+nothing when nothing moved (`a_refresh_during_an_open_compares_with_the_refs_the_open_took`).
+The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the title bar,
+the sidebar and the Commit tab's REFS row read) and, on `reopen`, asks the history thread for
+the new walk (`session::reopen_history`), whose number supersedes a walk still opening there,
+its pass ending at its next commit. The old rows stay drawn and usable — selected, scrolled,
+their details and diffs asked — and page no further, since their walk is gone
+(`Progress::reopen`); the new walk's first page replaces them: the old `History` is moved out,
+a new one is built with `History::with_author_capacity` of the old one's author count, the
+page appended to it, and the old one handed to the repository thread to free as a
+`Request::Retire` (#52, R11.3); the selection is left as it is, drawn again when its row
+arrives (R10.5). A chosen commit that never arrives again — its branch deleted, nothing else
 reaching it — stays chosen: no row is drawn chosen, and the detail pane keeps the
 answer it holds for it until another row is chosen. A stash pushed, a checkout that moves no ref and a moved ref each reopen; a
 refresh that finds nothing changed does not, and neither does an upstream's
@@ -744,14 +779,14 @@ configuration alone (`a_walk_is_the_same_unless_what_it_draws_changed`, in the m
 (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`,
 counting the window's reopens through the real boundary;
 `focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`, headless
-with focus set; `a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection`).
+with focus set; `a_reopen_keeps_the_old_rows_until_the_new_page`).
 The fetch's own before-and-after comparison of the refs, and `session::reload_if`
 that acted on it, are gone.
 
 **What an open walks from.** `OpenHistory` walks from the snapshot the last refresh
 read, so a reopen reads the refs once. With none read — a test that opens without a
 refresh, or after a failed open, which forgets them — the open reads its own and
-answers it as `Update::Refs { reopen: false }` in the history lane before its first
+answers it as `Update::Refs { reopen: false }` under the walk's number before its first
 page. A snapshot with no ref and an unborn `HEAD` walks nothing and answers the empty,
 complete page an unborn repository always answered
 (`a_freshly_initialised_repository_reaches_the_view_as_an_empty_history`). A ref whose
@@ -789,6 +824,39 @@ reader to scroll. Pinned by
 `a_failed_request_is_answered_when_it_is_asked_again`
 (`crates/cairn-app/src/worker/pool.rs`) for the worker recovering, and by
 `a_stream_that_has_ended_stops_asking_for_good` for the worker-gone case.
+
+### The opening pass in the window
+
+In git's date order a walk with no commit-graph git would use reads every commit the tips
+reach before its first row ("git's date order", above): about 1.2 s on rust-lang/rust. The
+history thread runs that pass and nothing else waits on it — a filter, a refresh's refs, a
+free and a diff each run on another thread — and the window says it is reading.
+
+- **The count is the worker's to pace.** The walk reports how many commits its pass has read
+  at most once per `READING_EVERY` (100 ms, the interval `HistorySession::open_walk` is
+  given); the history thread tells the window none of them until the pass has run
+  `READING_AFTER` (250 ms), then each at most once per 100 ms (`ReadingPace`,
+  `worker/history/reading.rs`; `the_count_is_told_once_the_pass_has_run_250_ms_then_at_most_every_100_ms`),
+  as `Update::Reading { commits }` under the walk's number, so a superseded walk's count is
+  never drawn (`the_window_is_told_how_far_an_opening_pass_has_read`). The window keeps the
+  number in `Progress` (`Progress::reading`) and keeps no timer: a pass shorter than 250 ms
+  says nothing. On rust-lang/rust the first count is told at 304-309 ms, nine or ten times an
+  open.
+- **A first open** draws the opening sentence in the list's place, "Reading history…", and
+  "Reading history… N commits" once a count is told (`status_text::placeholder`).
+- **A reopen keeps the rows** (`Progress::reopen`, "What reopens the history" above): drawn
+  and usable until the new first page replaces them, under a strip over the list reading
+  "Reading history… N commits" once a count is told (`status_text::reading_strip`, drawn by
+  `window.rs`; `the_history_says_it_is_reading_during_a_long_open`,
+  `a_reopen_draws_the_old_rows_under_the_reading_strip`). Over no rows — a reopen of an empty
+  history — the count takes the placeholder's place instead. A find or its stop asked
+  meanwhile leaves the reopen waiting for its first page, never letting the old rows page
+  (`a_reopen_keeps_the_rows_and_asks_for_none_of_them_until_its_first_page`); a failed reopen
+  keeps the rows and is asked again as a failed page is.
+- **Frames.** On rust-lang/rust no frame took over 16.7 ms during the first open (max 6.7 ms)
+  or during a reopen with 3,000 rows drawn and scrolled every frame (max 2.7 ms), and a
+  filter keystroke made during the pass was drawn 18 ms after it, as one made with nothing
+  opening was (`opening_pass_check`, `docs/research/history-topo-order/measured.md`).
 
 ## The view (`cairn-ui`)
 
@@ -1036,9 +1104,8 @@ every heading stays over its column and no row loses width — ticked while on, 
 chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
 `accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
 `the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
-keeps the keyboard through the reopen: it gives way to the opening sentence until the reopened
-walk's first page arrives, and takes focus again as it is drawn, so the chord is heard again
-with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
+keeps the keyboard through the reopen: its old rows stay drawn until the reopened walk's first
+page replaces them, so the chord is heard again with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
 author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
 its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
 `a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
@@ -1236,6 +1303,11 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 - **Opening a walk from every ref reads a commit per tip**: about 0.1 s at 50,000
   tags on one line of history, cancellable between tips (above), and a reopen pays
   it again.
+- **A reopen pays the whole opening pass again.** Without a commit-graph a reopen — every
+  refresh that moves a ref, Show Lost Commits toggled — reads every commit the tips reach
+  before its first row, as the first open did, however little moved (about 1.2 s on
+  rust-lang/rust); the old rows stay drawn meanwhile, and nothing else waits on it. The
+  walk's state is not kept across a reopen to pay only for what changed.
 - **Layout and drawing grow with open lanes, and every ref can open one.** The
   assigner scans every open lane twice per row laid out (`LaneAssigner::push`), a
   snapshot holds one bit per lane, and deriving a drawn row's edges walks the lines
@@ -1268,8 +1340,7 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   default), and from then on the walk no longer has it. Only `HEAD`'s and the local
   branches' logs are read, where Fork's mode reads every reflog (`git log --all --reflog`):
   a remote-tracking ref's log, a deleted branch's leftover log and another worktree's
-  `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
-  so a press of the chord in that moment is not heard.
+  `HEAD` are not.
 - **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
   residual): the open checks each distinct reflog id once — from a commit-graph where one
   holds it — and the walk reads it as a tip, and without a commit-graph those reads from the

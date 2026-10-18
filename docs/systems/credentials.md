@@ -391,7 +391,8 @@ never enters `cairn-git` and never enters application state.
   nor a fetch a scroll. The token is retired before the outcome goes out, so
   a helper orphaned by a killed git is refused at the channel rather than
   accepted afterwards. On shutdown — the window's `Request::Close`, or every
-  handle gone — the repository thread closes the network lane's queue, ends
+  handle gone — the repository thread stops and joins the history thread, which runs
+  no `git`, closes the network lane's queue, ends
   and reaps every `git` running in the repository through its registry
   (`docs/systems/git-processes.md`, "Closing"), and wakes the
   acceptor by connecting to its own socket (the one thing that returns a

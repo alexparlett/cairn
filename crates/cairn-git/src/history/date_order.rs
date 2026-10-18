@@ -1107,8 +1107,9 @@ mod tests {
 
     /// A history session's walk opens under a cancel of its own (`HistorySession::open_walk`):
     /// a cancelled open keeps nothing; an open that runs hands its pass's count to its listener,
-    /// on the interval it is given — here none, so every chance is taken — and no rows; the page after it walks only what the page needs, polling no pass; and a
-    /// second open opens nothing. Caught by: the report left unthreaded from the session to the
+    /// on the interval it is given — here none, so every chance is taken — and no rows; the
+    /// page after it walks only what the page needs, polling no pass; and a second open opens
+    /// nothing. Caught by: the report left unthreaded from the session to the
     /// walk (no count), an open that runs the pass again on the first page (that page's cancel
     /// polled once per commit read), or one that lets a cancelled open stand.
     #[test]

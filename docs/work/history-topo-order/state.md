@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: planned, 2026-10-17. Not started.** Its base is `main`. It runs before `fork-alignment`.
+**Status: phase 01 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -33,13 +33,39 @@ The cross-session cheat sheet. Every session updates it before ending.
 
 ## Interfaces introduced so far
 
-None yet.
+Phase 01 (`crates/cairn-git`):
+- `HistoryOrder::DateOrder` — git's `--date-order`; `HistoryRequest::with_order` accepts it on
+  every start, and the stream still merges stash rows by date over it (phase 02 replaces that
+  with the walk's own stash tips). `HistoryOrder::default()` is still `CommitTime`.
+- `history/date_order.rs`: `DateOrder<'repo>` (crate-internal) — `open(repo, Tips { refs,
+  stashes: &[(stash, base)], reflogs }, cancel, report: &mut dyn FnMut(usize), every)` →
+  `Ok(None)` when cancelled; `next(cancel)` → `Popped::{Commit { info, stash: Option<usize> },
+  End, Cancelled}` (a cancelled step changes nothing); `read()`, `read_from_graph()`,
+  `walked()`, `retained()`. `REPORT_EVERY` = 100 ms. Stashes are decided lazily (see
+  `decide`); with reflog tips, before they join.
+- Public: `Repository::date_order(&DateOrderTips, cancel, read) -> DateOrderWalk`
+  (`DateOrderTips::new(refs).with_stashes(..).with_reflog_tips(..)`, `DateOrderWalk::next`
+  → `DateOrdered { id, parents, stash }`, `commits_read`, `read_from_graph`, `walked`,
+  `retained_bytes`) — for the parity tests and reporters; phase 02 is expected to drive the
+  internal `DateOrder` from `open_stream` instead.
+- `walk::CommitWalk` is now an enum (`Simple` | `DateOrder`) stepped by `next(cancel)` →
+  `walk::Step::{Commit, End, Cancelled}`; `Stream::pull` maps `Cancelled` to `Next::Cancelled`.
+- Substitutions as git reads them, for every walk: `src/grafts.rs` (`Grafts`: shallow file +
+  `info/grafts`, replacing `src/shallow.rs`), `src/replacements.rs` (`Replacements`:
+  `refs/replace/`, because gix 0.87.1 reads `core.useReplaceRefs` inverted and applies none by
+  default), `walk::Substitutions`, `walk::Grafted::{new, uncached}` (owns a handle clone with
+  gix's replacements off), and `walk::commit_graph(repo, &substitutions)`, the one graph
+  eligibility rule (used by the walks, Show Lost Commits' tip dates and the amend's pushed
+  check). A missing replacement is an error (`walk::ReplacementMissing`), as git dies.
+- `crates/cairn-git/tests/date_order.rs` holds the oracle helpers phase 02's history-level
+  parity tests can reuse (`oracle`, `tips_for`, `ref_tips`, `stash_tips`, `reflog_tips`); its
+  oracle grafts only stashes whose base the refs reach and whose commit they do not.
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
-| 01 | not started | — | — |
+| 01 | done; C1, C2, C3, C10, C8 opening pass met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, fixes landed, dismissals and pending decisions in progress.md |
 | 02 | not started | — | — |
 | 03 | not started | — | — |
 | 04 | not started | — | — |

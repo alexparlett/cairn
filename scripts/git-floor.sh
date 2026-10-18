@@ -79,8 +79,8 @@ fi
 # (C20, staging-and-commit phase 10), whose fixtures write their reflogs with the git in use,
 # and whose oracle that git reads. `--test date_order` is the history's date-order walk, and the
 # history itself on every route a window pages — stashes and Show Lost Commits included — against
-# `git log --date-order` (C2, C4 and C10 of the history-topo-order packet), whose fixtures each
-# git in use builds and whose commit-graph it writes, v1 generations at the floor.
+# `git log --date-order`, whose fixtures each git in use builds and whose commit-graph it writes,
+# v1 generations at the floor.
 RUNS=(
   "--lib|diff:: reads:: ops::|153"
   "--test diff_engine||219"

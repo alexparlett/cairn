@@ -53,15 +53,33 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         } => {
             // Count before handing the rows over; afterwards it rereads the whole history.
             let widest = state::widest_lane(&page);
-            let (loaded, held) = {
+            // The first page of a walk replacing the rows held: it replaces them, in a history
+            // sized for the authors they named, so its first pages do not rehash their way back
+            // up; they go to a worker to free (#52).
+            let reopened = progress.peek().is_reopening();
+            let (loaded, held, replaced) = {
                 let mut history = rows.write();
+                let replaced = reopened.then(|| {
+                    let sized = cairn_model::History::with_author_capacity(history.author_count());
+                    std::mem::replace(&mut *history, sized)
+                });
                 let held = history.append(page);
-                (history.len(), held)
+                (history.len(), held, replaced)
             };
+            if reopened {
+                progress.set(Progress::opening());
+            }
             progress.write().appended(widest, complete, loaded, held);
+            if let Some(replaced) = replaced
+                && !worker.closing
+            {
+                (worker.submit)(Request::Retire(Retired::history(replaced)));
+            }
             // A find in the sidebar looks through the rows that arrived.
             crate::history::ref_find::pages_arrived(view, Some(worker.submit));
         }
+        // How far the walk being opened has read: drawn as "Reading history… N commits".
+        Update::Reading { commits } => progress.write().reading(commits),
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
             crate::history::ref_find::failed(view);
@@ -263,7 +281,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 crate::commit_box::pane::refs_arrived(view, worker.submit);
             }
             if reopen && !worker.closing {
-                reopen_history(rows, progress, *view.show_lost.peek(), worker.submit);
+                reopen_history(progress, *view.show_lost.peek(), worker.submit);
                 // A find looking in the history it replaced looks in the new one.
                 crate::history::ref_find::reopened(view, Some(worker.submit));
             }
@@ -449,31 +467,18 @@ fn refresh_after_an_operation(worker: &Worker<'_>) {
     }
 }
 
-/// The refs draw another history than the one on screen: it is reopened from them. The rows
-/// it held are handed to a worker to free rather than freed here (#52), the new
-/// history is sized for as many authors as the old named so its first pages do not rehash
-/// their way back up, and the selection is left as it is — it is drawn again when its row
-/// arrives. With `lost`, the walk is Show Lost Commits': a reopen like any other, off the UI
-/// thread.
-pub fn reopen_history(
-    mut rows: State<cairn_model::History>,
-    mut progress: State<Progress>,
-    lost: bool,
-    submit: &dyn Fn(Request),
-) {
-    let replaced = {
-        let mut history = rows.write();
-        let sized = cairn_model::History::with_author_capacity(history.author_count());
-        std::mem::replace(&mut *history, sized)
-    };
-    progress.set(Progress::opening());
-    // The new history asked first, so its first page is not queued behind the free of the
-    // old one on the repository thread.
+/// The refs draw another history than the one on screen: it is reopened from them, on the
+/// history thread, superseding a walk still opening there. The rows held stay drawn and
+/// usable, paging no further, until the new walk's first page replaces them (`apply`'s
+/// `Update::Rows`), when they are handed to a worker to free; the selection is left as it is
+/// — it is drawn again when its row arrives. With `lost`, the walk is Show Lost Commits': a
+/// reopen like any other, off the UI thread.
+pub fn reopen_history(mut progress: State<Progress>, lost: bool, submit: &dyn Fn(Request)) {
+    progress.write().reopen();
     submit(Request::OpenHistory {
         rows: PAGE_ROWS,
         lost,
     });
-    submit(Request::Retire(Retired::history(replaced)));
 }
 
 /// Takes down a dialog whose fetch or write has ended, refusing the prompt so the
@@ -1419,15 +1424,19 @@ mod tests {
         })
     }
 
-    /// The window's half of #52: refs that draw another history reopen
-    /// it — the old rows handed to a worker to free as one `Request::Retire`, never freed on
-    /// the UI thread, the new history sized for the authors the old one named, the history
-    /// asked for again, and the selection left as it was; refs that draw the same history
-    /// leave it, handing back only the snapshot they replace. Caught by: the old rows
-    /// replaced in place (no retirement), a reopen with `History::new` (an index with no
-    /// room), the selection cleared, or a reopen on a refresh that said not to.
+    /// A reopen keeps the old rows drawn and usable until the new walk's first page replaces
+    /// them: refs that draw another history ask for the new walk alone, the rows, their status
+    /// and the selection kept and no page of them asked; the walk's count, once told, is kept
+    /// for the strip; its first page replaces them — the old rows handed to a worker to free as
+    /// one `Request::Retire` (#52), never freed on the UI thread, the new history sized for the
+    /// authors the old one named — and the selection is left as it was; refs that draw the same
+    /// history leave it, handing back only the snapshot they replace. Caught by: rows emptied or
+    /// retired at the ask ("Reading history…" in place of the list), a first page appended to
+    /// the old rows, the old rows replaced in place (no retirement), a reopen with
+    /// `History::new` (an index with no room), the selection cleared, or a reopen on a refresh
+    /// that said not to.
     #[test]
-    fn a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection() {
+    fn a_reopen_keeps_the_old_rows_until_the_new_page() {
         use crate::history::state::Status;
 
         let (test, mut view, asked) = launch(FetchStatus::Idle);
@@ -1448,15 +1457,58 @@ mod tests {
             [
                 Request::FilterRefs { .. },
                 Request::OpenHistory { rows, lost: false },
-                Request::Retire(retired),
-            ] => {
-                assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
-                assert_eq!(*rows, PAGE_ROWS);
-            }
-            other => panic!("expected the old rows retired and the history asked, got {other:?}"),
+            ] => assert_eq!(*rows, PAGE_ROWS),
+            other => panic!("expected the history asked and nothing retired, got {other:?}"),
         }
-        assert!(view.rows.read().is_empty(), "the old rows are still drawn");
-        assert_eq!(view.progress.read().status(), &Status::Loading);
+        assert_eq!(
+            view.rows.read().len(),
+            3,
+            "the old rows were dropped at the ask"
+        );
+        assert_eq!(view.progress.read().status(), &Status::Ready);
+        assert!(
+            !view.progress.read().wants_more(),
+            "the rows being replaced asked for a page"
+        );
+        assert_eq!(*view.selected.read(), chosen);
+
+        applying(&test, view, &asked, Update::Reading { commits: 51_200 });
+        assert_eq!(view.progress.read().read_so_far(), Some(51_200));
+        assert_eq!(view.rows.read().len(), 3);
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Rows {
+                rows: page(5..7, "Grace"),
+                complete: false,
+            },
+        );
+        let ids: Vec<Oid> = view.rows.read().rows().map(|row| row.id().oid()).collect();
+        assert_eq!(
+            ids,
+            vec![oid(5), oid(6)],
+            "the first page did not replace the old rows"
+        );
+        match asked
+            .submitted
+            .borrow_mut()
+            .drain(..)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [Request::Retire(retired)] => {
+                assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
+            }
+            other => panic!("expected the old rows retired, got {other:?}"),
+        }
+        assert!(!view.progress.read().is_reopening());
+        assert_eq!(view.progress.read().read_so_far(), None);
+        assert!(
+            view.progress.read().wants_more(),
+            "the new walk is not paged"
+        );
         assert_eq!(
             *view.selected.read(),
             chosen,
@@ -1466,6 +1518,18 @@ mod tests {
             view.rows.read().retained().authors > History::new().retained().authors,
             "the new history was not sized for the authors the old one named"
         );
+        // The next page is the new walk's second, appended.
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Rows {
+                rows: page(7..8, "Grace"),
+                complete: true,
+            },
+        );
+        assert_eq!(view.rows.read().len(), 3);
+        assert!(asked.submitted.borrow().is_empty());
 
         // The same history drawn: the rows stay, and the snapshot replaced goes to a worker.
         let first = snapshot_naming(oid(2));

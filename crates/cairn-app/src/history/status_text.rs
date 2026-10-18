@@ -2,13 +2,37 @@
 
 use crate::history::state::{Progress, Status};
 
-/// What fills the list's place, or `None` when the list itself is what to draw.
-pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
-    match status {
-        Status::Loading => Some("Reading history…".to_owned()),
+/// What fills the list's place, or `None` when the list itself is what to draw: while a walk
+/// opens with no rows to draw, its sentence — "Reading history… N commits" once the worker has
+/// said how far it has read.
+pub fn placeholder(progress: &Progress) -> Option<String> {
+    let has_rows = progress.has_rows();
+    let reading = progress.read_so_far();
+    match progress.status() {
+        Status::Loading => Some(reading_text(reading)),
+        Status::Empty | Status::Failed(_) if !has_rows && reading.is_some() => {
+            Some(reading_text(reading))
+        }
         Status::Empty => Some("No commits yet.".to_owned()),
         Status::Failed(message) if !has_rows => Some(message.clone()),
         Status::Failed(_) | Status::Ready => None,
+    }
+}
+
+/// The strip over the rows while a walk replacing them reads ("Reading history… N commits"),
+/// once the worker has said how far it has read; `None` with no rows drawn, where the
+/// placeholder says it instead.
+pub fn reading_strip(progress: &Progress) -> Option<String> {
+    let reading = progress.read_so_far()?;
+    progress.has_rows().then(|| reading_text(Some(reading)))
+}
+
+/// "Reading history…", and how many commits once that is known.
+fn reading_text(reading: Option<usize>) -> String {
+    match reading {
+        None => "Reading history…".to_owned(),
+        Some(1) => "Reading history… 1 commit".to_owned(),
+        Some(commits) => format!("Reading history… {commits} commits"),
     }
 }
 
@@ -29,11 +53,26 @@ pub fn loaded_count(progress: &Progress) -> String {
 mod tests {
     use super::*;
 
+    /// A progress in `status`, with `loaded` rows held where the status holds any.
+    fn at(status: &Status, loaded: usize) -> Progress {
+        let mut progress = Progress::opening();
+        match status {
+            Status::Loading => {}
+            Status::Empty => progress.received(1, true, 0),
+            Status::Ready => progress.received(1, false, loaded.max(1)),
+            Status::Failed(message) => {
+                progress.received(1, false, loaded);
+                progress.failed(message.clone());
+            }
+        }
+        progress
+    }
+
     /// Caught by: giving both states the same words.
     #[test]
     fn loading_and_an_empty_repository_do_not_say_the_same_thing() {
-        let loading = placeholder(&Status::Loading, false);
-        let empty = placeholder(&Status::Empty, false);
+        let loading = placeholder(&at(&Status::Loading, 0));
+        let empty = placeholder(&at(&Status::Empty, 0));
 
         assert!(loading.is_some(), "a loading list said nothing at all");
         assert!(empty.is_some(), "an empty repository said nothing at all");
@@ -48,7 +87,7 @@ mod tests {
     fn a_failure_with_nothing_loaded_shows_its_own_sentence() {
         let message = "no git repository at /tmp/nowhere";
         assert_eq!(
-            placeholder(&Status::Failed(message.to_owned()), false),
+            placeholder(&at(&Status::Failed(message.to_owned()), 0)),
             Some(message.to_owned())
         );
     }
@@ -56,20 +95,62 @@ mod tests {
     #[test]
     fn a_failure_with_rows_loaded_leaves_the_list_showing() {
         assert_eq!(
-            placeholder(
+            placeholder(&at(
                 &Status::Failed("failed to read commit abc".to_owned()),
-                true
-            ),
+                40
+            )),
             None
         );
-        assert_eq!(placeholder(&Status::Ready, true), None);
+        assert_eq!(placeholder(&at(&Status::Ready, 40)), None);
     }
 
-    /// Caught by: showing the list once anything has arrived.
+    /// A first open says it is reading, and how far once the worker has said — only then,
+    /// since the worker says nothing of a pass shorter than 250 ms; a reopen over rows draws them
+    /// under a strip saying the same, and over none says it in their place. Caught by: a count
+    /// shown nowhere, a count drawn in place of the rows a reopen keeps, or "1 commits".
     #[test]
-    fn loading_and_empty_are_placeholders_regardless_of_what_arrived_before() {
-        assert!(placeholder(&Status::Loading, true).is_some());
-        assert!(placeholder(&Status::Empty, true).is_some());
+    fn the_history_says_it_is_reading_during_a_long_open() {
+        let mut opening = Progress::opening();
+        assert_eq!(placeholder(&opening), Some("Reading history…".to_owned()));
+        assert_eq!(reading_strip(&opening), None);
+        opening.reading(1);
+        assert_eq!(
+            placeholder(&opening),
+            Some("Reading history… 1 commit".to_owned())
+        );
+        opening.reading(204_800);
+        assert_eq!(
+            placeholder(&opening),
+            Some("Reading history… 204800 commits".to_owned())
+        );
+
+        let mut reopening = at(&Status::Ready, 40);
+        reopening.reopen();
+        assert_eq!(placeholder(&reopening), None, "the rows kept were hidden");
+        assert_eq!(
+            reading_strip(&reopening),
+            None,
+            "a short reopen said it was reading"
+        );
+        reopening.reading(51_200);
+        assert_eq!(placeholder(&reopening), None, "the rows kept were hidden");
+        assert_eq!(
+            reading_strip(&reopening),
+            Some("Reading history… 51200 commits".to_owned())
+        );
+
+        let mut over_nothing = at(&Status::Empty, 0);
+        over_nothing.reopen();
+        assert_eq!(
+            placeholder(&over_nothing),
+            Some("No commits yet.".to_owned())
+        );
+        over_nothing.reading(300);
+        assert_eq!(
+            placeholder(&over_nothing),
+            Some("Reading history… 300 commits".to_owned())
+        );
+        assert_eq!(reading_strip(&over_nothing), None);
     }
 
     #[test]

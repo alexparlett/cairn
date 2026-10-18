@@ -201,11 +201,11 @@ fn the_pages_a_find_laid_out_before_it_was_stopped_still_arrive() {
 }
 
 /// A stop alone — what a scroll or a row chosen asks, with nothing asked after it —
-/// ends the find: once an operation queued behind the stop on the same thread is answered,
-/// no page of the find arrives, and the next page asked continues the walk where the find
-/// left it. Over a line of commits written for it, one row a find page, so a find left
-/// running would still be paging long after. Caught by: a stop numbered in no lane or not
-/// routed to the history lane (the find pages on to the end of the line).
+/// ends the find: the page it was laying out may still arrive, then nothing more, and the
+/// next page asked continues the walk where the find left it. Over a line of commits written
+/// for it, one row a find page, so a find left running would page on to the end of the line
+/// before the stream fell quiet. Caught by: a stop numbered in no lane or not routed to the
+/// history lane (the find pages on to the end of the line).
 #[test]
 fn a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood() {
     let line = crate::worker::written_repository::WrittenRepository::linear(
@@ -227,20 +227,10 @@ fn a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood() {
         matches!(u, Update::Rows { .. })
     }));
     handle.submit(Request::StopFinding);
-    // Behind the stop on the repository thread: answered only once the stop was taken.
-    handle.submit(Request::ListRemotes);
-    seen.extend(collect_until(&mut updates, |u| {
-        matches!(u, Update::Remotes { .. })
-    }));
-    let mut late = Vec::new();
+    // The page the find was laying out may still come; then the stream falls quiet.
     while let Some(update) = poll_for(&mut updates, Duration::from_millis(200)) {
-        late.push(update);
+        seen.push(update);
     }
-    assert!(
-        !late.iter().any(|u| matches!(u, Update::Rows { .. })),
-        "the find paged on after its stop: {} more updates",
-        late.len()
-    );
     assert!(
         !seen
             .iter()
@@ -288,7 +278,7 @@ fn a_find_for_a_row_the_walk_never_reaches_ends_with_the_walk() {
     assert_eq!(rows_of(&seen), walk, "the find did not page the whole walk");
 }
 
-fn many_refs(count: usize) -> Arc<RefsSnapshot> {
+pub(super) fn many_refs(count: usize) -> Arc<RefsSnapshot> {
     let id = Oid::from_bytes(&[3; 20]).unwrap_or_else(|error| panic!("{error}"));
     Arc::new(RefsSnapshot {
         refs: (0..count)
@@ -492,7 +482,7 @@ fn find_through_the_boundary(
 }
 
 /// Measures a find of a commit deep in a named
-/// repository through the real boundary — the repository thread paging the held walk, every
+/// repository through the real boundary — the history thread paging the held walk, every
 /// page appended to one history as the window appends it — timed (median of seven after a
 /// warm-up) and its retained memory read; then a find stopped halfway, as a scroll stops
 /// one, with how many rows arrived after the stop and how long after, and the next page asked
@@ -669,7 +659,7 @@ fn measures_a_find_through_the_boundary() {
 }
 
 /// The next update within `quiet`, or `None` when nothing came.
-fn poll_for(updates: &mut Updates, quiet: Duration) -> Option<Update> {
+pub(super) fn poll_for(updates: &mut Updates, quiet: Duration) -> Option<Update> {
     use std::task::{Context, Poll, Wake, Waker};
     struct Unpark(std::thread::Thread);
     impl Wake for Unpark {

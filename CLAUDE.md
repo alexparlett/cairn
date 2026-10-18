@@ -69,11 +69,17 @@ row; selecting a stash lists what `git stash show` lists, untracked files includ
 the user's `stash.showIncludeUntracked` says so; and the title bar names the repository,
 starred while status lists a change, the current branch and how far it is behind and
 ahead of its upstream, or that the upstream is gone, a detached or unborn `HEAD` in
-git's words. It refreshes — the refs on the history thread,
+git's words. It refreshes — the refs on the repository thread,
 status and ahead/behind on a refresh thread of their own, the refs and ahead/behind
 superseding the refresh before them and a running status left to finish, one follow-up
 behind it — when it gains focus, when a fetch ends and on the Refresh action (F5, ⌘R on macOS), reopening
-the history only when what it draws changed, its old rows freed on a worker.
+the history only when what it draws changed. The history is walked on a thread of its own,
+so an open that reads the whole history first — git's date order on a repository without a
+commit-graph — holds up no filter, refresh or free: a reopen keeps the old rows drawn and
+usable, under a strip reading "Reading history… N commits" once its pass has run 250 ms
+(the opening sentence says it on a first open), until the new walk's first page replaces
+them and they are freed on a worker; a reopen supersedes a walk still opening, a find or its
+stop never does, and a close ends it at its next commit.
 Left of the history, behind a draggable splitter, is Fork's sidebar
 (`docs/systems/sidebar.md`): Local Changes with its count of distinct paths and All Commits,
 which switch the main region; a filter; and
@@ -156,7 +162,7 @@ staging-and-commit R4.10, R12.2) — and `Secret`, the one type that holds a cre
 the cancel's shape, the selected one's word, time, duration, sentence and prompt above its lines,
 its operations and the selected one's lines each through a virtualizing view of fixed rows;
 `src/dialogs/create_branch.rs` Fork's Create Branch dialog — a confirmation surface: with Discard chosen its Create and Checkout, or Return, builds the token from the `Consequence` the engine computed, and it words the engine's refusals (`name_refusal`, `discard_refusal`) — opened by `New Branch…` on a commit row (`HistoryList::on_new_branch`) or at `HEAD` by Fork's New Branch chord (`Action::NewBranch`). Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. The window's shell sits at `src/`'s root (`main.rs`, `window.rs`, `session.rs`, `modal.rs`, `shortcuts.rs`, `closing.rs`); each feature is a directory beside the file that only assembles it (`history.rs` for `history/`) — `history/`, `sidebar/`, `detail/`, `diff/`, `local_changes/`, `commit_box/`, `operations/`, `refresh/` — and each worker lane a directory of `worker/` (`history/`, `diff/`, `refresh/`, `network/`, `local/`). `src/worker/` is everything that may wait (`src/worker.rs`, its assembly file, holds declarations and re-exports alone, and sits on the render side of the UI-thread guard): `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the history lane's walk, the refs it walks from and a find's pages (`worker/history/lane.rs`), the refresh thread's status and ahead/behind (`worker/refresh/lane.rs`), the diff thread (`worker/diff/lane.rs`) and Expand All's line budget (`worker/diff/expand_all.rs`), the network lane (`worker/network/lane.rs`), the local write lane (`worker/local/lane.rs`: every write to the index, the working tree and a local ref, one at a time in the order asked, each under an `OperationId` and with an askpass token of its own, the write clock a status read across a write is dropped by, refreshes kept back while a commit runs, the close that waits on the write running, and, in the lane's order, what a discard would lose and what the commit box reads — its reads and amend's staged list, each numbered in a lane of its own, never an amend's cost; a confirmed amend's unspent token carried to the window on its ending, `Unspent`; `docs/systems/git-processes.md`, "The local write lane") and the askpass acceptor; `worker/ending_words.rs` the one sentence each ending carries, worded on the worker from the engine's typed error, every path through `cairn_model::shown_path`; `src/operations/local_writes.rs` the local writes as the window keeps them — queued, running and since when, each by its one name, and the write a close waits on and the line the window says meanwhile (`closing_line`); `src/operations/ending_dialog.rs` where every ending goes — nothing for a success or a cancel, the Git Error or "Couldn't <name>" dialog for the rest, kept oldest first (`Endings`); `src/modal.rs` the one modal state — which of a credential prompt, a confirmation, a Git Error, Create Branch and the popover is on top, the only one drawn, and what `shortcuts::keys_inert` reads; `src/operations/leftover_lock.rs` the leftover lock as the window keeps it — the last stat, the banner, and `Remove index.lock…`'s ask, answer and "Remove Stale Lock" confirmation; `src/refresh/focus.rs` asks for a refresh when the window gains focus and `src/refresh/state.rs` keeps what the last refresh answered; `src/sidebar/state.rs` the sidebar's rows as the window keeps them, what is open and the entry pressed, `src/sidebar/pane.rs` draws it and `src/history/ref_find.rs` is what a press does — its row selected, or found by paging the walk; `src/local_changes/state.rs` Local Changes' lists as the window keeps them, the filter's rows and the selection — its alone — moved by `src/local_changes/next_selection.rs`, the one pure rule for where it goes after an action and as each status and filter's rows arrive, `src/local_changes/pane.rs` draws the view and asks the primary's diff as it is shown, `src/commit_box/state.rs` the commit box as the window keeps it — the draft (`LocalChangesView::commit`) and whether the person touched it, Amend and the draft it set aside, what was read for it, the commit asked, its output's bounded tail in a state of its own no render reads (`StreamedOutput`) and the Git Error dialog, with the token a confirmed amend's failure handed back for its skip (`GitError`) — and `src/commit_box/pane.rs` draws it and is what its presses and its updates do, opening the confirmation dialog on an amend at the press that must be confirmed; `src/local_changes/actions.rs` is what the lists' intents and the diff's gesture do — the selection's presses, the writes each route asks on the selection, the selection moved on by the rule, a discard's consequence asked and its confirmation opened, lines staged, unstaged and discarded, and nothing said under the lists — and `src/diff/state/working.rs` is the primary's working-tree diff in the diff selection, asked by `diff::actions::show_primary` alone; `src/diff/state.rs` is the diff selection and the answers kept for it, and who holds the file-diff lane — one value (`LaneHolder`: the Changes tab's file, the primary or the files opened in place) taken by one call; `src/history/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail/row_finder.rs` finds the selected row once per history, for the Commit tab's REFS row; `src/detail/pane.rs` draws the pane for the selection now and `src/detail/changes_tab.rs` its Changes tab; `src/detail/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff/actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does — nothing while the one modal state names a dialog or the popover; `src/operations/create_branch.rs` Create Branch as the window keeps it — the dialog, its name asked of the engine, the sticky check box, what Discard would be confirmed as asked for the name shown, the dialog kept open while its write runs and beneath a failure's dialog; `src/operations/activity.rs` the activity popover as the window keeps it (`ActivityView`: the log and whether it is open, two states; `ActivityLog`: the session's operations, whole oldest ones let go of past `LOG_BYTES`, each its result line, one of four words, its sentence, its prompt once it ran, its way back and one append-only bounded tail of its `git` and what it said, read by the popover as a snapshot; `ActivityLayer`, the popover as a child of the window, the one reader of the log) and `src/operations/shown_output.rs` git's output as the window draws it, escape
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. The window's shell sits at `src/`'s root (`main.rs`, `window.rs`, `session.rs`, `modal.rs`, `shortcuts.rs`, `closing.rs`); each feature is a directory beside the file that only assembles it (`history.rs` for `history/`) — `history/`, `sidebar/`, `detail/`, `diff/`, `local_changes/`, `commit_box/`, `operations/`, `refresh/` — and each worker lane a directory of `worker/` (`history/`, `diff/`, `refresh/`, `network/`, `local/`). `src/worker/` is everything that may wait (`src/worker.rs`, its assembly file, holds declarations and re-exports alone, and sits on the render side of the UI-thread guard): `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the history thread's walk and a find's pages (`worker/history/lane.rs`), the refs it walks from, read on the repository thread and shared with it (`worker/history/refs.rs`), and when the window is told how far an opening pass has read (`worker/history/reading.rs`), the refresh thread's status and ahead/behind (`worker/refresh/lane.rs`), the diff thread (`worker/diff/lane.rs`) and Expand All's line budget (`worker/diff/expand_all.rs`), the network lane (`worker/network/lane.rs`), the local write lane (`worker/local/lane.rs`: every write to the index, the working tree and a local ref, one at a time in the order asked, each under an `OperationId` and with an askpass token of its own, the write clock a status read across a write is dropped by, refreshes kept back while a commit runs, the close that waits on the write running, and, in the lane's order, what a discard would lose and what the commit box reads — its reads and amend's staged list, each numbered in a lane of its own, never an amend's cost; a confirmed amend's unspent token carried to the window on its ending, `Unspent`; `docs/systems/git-processes.md`, "The local write lane") and the askpass acceptor; `worker/ending_words.rs` the one sentence each ending carries, worded on the worker from the engine's typed error, every path through `cairn_model::shown_path`; `src/operations/local_writes.rs` the local writes as the window keeps them — queued, running and since when, each by its one name, and the write a close waits on and the line the window says meanwhile (`closing_line`); `src/operations/ending_dialog.rs` where every ending goes — nothing for a success or a cancel, the Git Error or "Couldn't <name>" dialog for the rest, kept oldest first (`Endings`); `src/modal.rs` the one modal state — which of a credential prompt, a confirmation, a Git Error, Create Branch and the popover is on top, the only one drawn, and what `shortcuts::keys_inert` reads; `src/operations/leftover_lock.rs` the leftover lock as the window keeps it — the last stat, the banner, and `Remove index.lock…`'s ask, answer and "Remove Stale Lock" confirmation; `src/refresh/focus.rs` asks for a refresh when the window gains focus and `src/refresh/state.rs` keeps what the last refresh answered; `src/sidebar/state.rs` the sidebar's rows as the window keeps them, what is open and the entry pressed, `src/sidebar/pane.rs` draws it and `src/history/ref_find.rs` is what a press does — its row selected, or found by paging the walk; `src/local_changes/state.rs` Local Changes' lists as the window keeps them, the filter's rows and the selection — its alone — moved by `src/local_changes/next_selection.rs`, the one pure rule for where it goes after an action and as each status and filter's rows arrive, `src/local_changes/pane.rs` draws the view and asks the primary's diff as it is shown, `src/commit_box/state.rs` the commit box as the window keeps it — the draft (`LocalChangesView::commit`) and whether the person touched it, Amend and the draft it set aside, what was read for it, the commit asked, its output's bounded tail in a state of its own no render reads (`StreamedOutput`) and the Git Error dialog, with the token a confirmed amend's failure handed back for its skip (`GitError`) — and `src/commit_box/pane.rs` draws it and is what its presses and its updates do, opening the confirmation dialog on an amend at the press that must be confirmed; `src/local_changes/actions.rs` is what the lists' intents and the diff's gesture do — the selection's presses, the writes each route asks on the selection, the selection moved on by the rule, a discard's consequence asked and its confirmation opened, lines staged, unstaged and discarded, and nothing said under the lists — and `src/diff/state/working.rs` is the primary's working-tree diff in the diff selection, asked by `diff::actions::show_primary` alone; `src/diff/state.rs` is the diff selection and the answers kept for it, and who holds the file-diff lane — one value (`LaneHolder`: the Changes tab's file, the primary or the files opened in place) taken by one call; `src/history/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail/row_finder.rs` finds the selected row once per history, for the Commit tab's REFS row; `src/detail/pane.rs` draws the pane for the selection now and `src/detail/changes_tab.rs` its Changes tab; `src/detail/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff/actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does — nothing while the one modal state names a dialog or the popover; `src/operations/create_branch.rs` Create Branch as the window keeps it — the dialog, its name asked of the engine, the sticky check box, what Discard would be confirmed as asked for the name shown, the dialog kept open while its write runs and beneath a failure's dialog; `src/operations/activity.rs` the activity popover as the window keeps it (`ActivityView`: the log and whether it is open, two states; `ActivityLog`: the session's operations, whole oldest ones let go of past `LOG_BYTES`, each its result line, one of four words, its sentence, its prompt once it ran, its way back and one append-only bounded tail of its `git` and what it said, read by the popover as a snapshot; `ActivityLayer`, the popover as a child of the window, the one reader of the log) and `src/operations/shown_output.rs` git's output as the window draws it, escape
 sequences stripped — the one thing the window does to it, the engine having scrubbed it; `src/operations/output_tail.rs`
 the one bounded tail of git's output (`OutputTail`, `OUTPUT_LINES`, `OUTPUT_BYTES`) every holder
 uses — the lanes' taps, the commit box's output and each activity entry's lines — and
@@ -389,10 +395,14 @@ copy is a different version from the fork that links.
   `ThreadSafeRepository` — per repository, each worker thread taking its
   thread-local handle once, routed to by an explicit table — the history lane
   (with a find in the sidebar, which pages the same walk, every page answered under
-  the walk's own number so a superseded find's pages still arrive), the sidebar's rows
-  and a refresh's refs on the repository thread that owns the live walk, the
-  changes and file-diff lanes on a diff thread of their own, status and
-  ahead/behind on a refresh thread of their own — and every QUERY carrying an epoch
+  the walk's own number so a superseded find's pages still arrive) on a history thread
+  that owns the live walk and runs nothing else, its opening pass and first page
+  cancelled by the walk's own number, which only the next open moves; a refresh's refs,
+  the sidebar's rows, the filters and the freeing of old answers on the repository
+  thread, which says whether a refresh's refs reopen the history and lets the window
+  ask the reopen of the history thread; the changes and file-diff lanes on a diff
+  thread of their own, status and ahead/behind on a refresh thread of their own — and
+  every QUERY carrying an epoch
   numbered in its lane, so a superseded query is abandoned rather than
   rendered; a query supersedes only its own lane, except that a changes query
   also supersedes the file diff, and an operation such as fetch carries none,
@@ -963,7 +973,9 @@ Project invariants:
   thread to free, among them) only send over one, whose `Request::Refresh`
   arm bumps two lanes' counters, reads a third's, and sends once to the
   repository thread and once to the refresh thread, whose `Request::OpenHistory`
-  arm bumps the history and walk lanes' counters and sends once, and whose
+  arm bumps the history and walk lanes' counters and sends once to the history thread,
+  as its `Request::MoreHistory`, `Request::FindRow` and `Request::StopFinding` arms each
+  bump the history lane's and send it one page, and whose
   `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; whose `Request::Write` arm boxes the write and sends it
   straight to the local write lane's thread, as its `Request::DiscardConsequence`
@@ -1008,8 +1020,9 @@ Project invariants:
   `Closing::when_requested` was given, which writes the window's
   `LocalWrites` state), that what waits for the reaps
   (`SharedRepository::end_invocations`, in `Threads::drop`) runs on the
-  repository thread — after it has joined the local lane, which waits on the
-  write it runs however long that takes (staging-and-commit R4.9) — that the
+  repository thread — after it has stopped the epochs and joined the history thread,
+  whose walk polls them between the commits it reads, and joined the local lane, which
+  waits on the write it runs however long that takes (staging-and-commit R4.9) — that the
   window closes on the update stream's end, or
   on a second request after `worker::CLOSE_PATIENCE`, never by waiting, and
   that the stream's end still depends on the window refusing a prompt left
@@ -1303,12 +1316,17 @@ Project invariants:
     effect on the toolkit's focus state), after a fetch ends, on the Refresh chord —
     and a refresh's answers are kept by moving them in (`RefreshState`), the one
     each replaces handed to the repository thread to free (`Request::Retire`). A
-    reopen (`session::apply`'s `reopen_history`) moves the loaded `History` out,
+    reopen (`session::reopen_history`) asks the new walk and leaves the loaded
+    `History` drawn, marking it to be replaced (`Progress::reopen`); the new walk's
+    first page (`session::apply`'s `Update::Rows`) moves the loaded `History` out,
     builds an empty one whose author index is allocated for the old one's author
     count (`History::with_author_capacity`: one allocation, proportional to the
     history's distinct authors, so its first pages do not rehash through every
     doubling), and hands the old one to the repository thread to free, every row of
-    it (#52) — the selection kept as an id, never searched for. A history row is read through the history's stores as the list builds
+    it (#52) — the selection kept as an id, never searched for. While the walk opens
+    the window is told its count at most once per 100 ms (`Update::Reading`, held back
+    by the worker until the pass has run 250 ms, `worker/history/reading.rs`), each a
+    number written into `Progress` and one strip or sentence drawn from it. A history row is read through the history's stores as the list builds
     it (`render_of`, in `HistoryList`'s `build_row`): its subject and author copied
     out, and its edges derived — one lane snapshot copied and advanced through at
     most `LaneAssigner::SNAPSHOT_EVERY - 1` rows of lane changes per drawn row,
@@ -1338,8 +1356,8 @@ Project invariants:
     One free still happens on the UI thread rather than through
     `Request::Retire`: `Updates::next`
     (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
-    `Update::into_retired` does not retire — a page of rows, a filter's index
-    list, a failure, or a superseded consequence or commit-box read (a discard's
+    `Update::into_retired` does not retire — a page of rows, an opening pass's count, a
+    filter's index list, a failure, or a superseded consequence or commit-box read (a discard's
     bounded by the selection's paths) — each bounded by a page, by the change
     set's file list or the refs snapshot's ref list, or by the selection it was
     asked for, once per supersede and never per frame. (`session::reload_if`, which freed the whole
@@ -1521,7 +1539,8 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   down when the work merges.
 - `docs/systems/` — as-built descriptions, written when a system exists.
   `history-graph.md`: how the history view reads, lays out and draws a
-  repository today, with the twin that pins each rule, and Show Lost Commits and
+  repository today — git's date order, the history thread, the opening pass in the
+  window — with the twin that pins each rule, and Show Lost Commits and
   Create Branch. `credentials.md`: the
   askpass helper and its channel, fetch end to end, and the decisions the
   packet locked. `git-processes.md`: where every `git` process is built, the

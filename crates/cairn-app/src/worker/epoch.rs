@@ -16,7 +16,8 @@
 //! lane moves only when a walk is opened: every page of rows is answered under the walk's
 //! number, never the query's, because a page a superseded find has already laid out is still
 //! the next page of the same walk — dropping it would leave a hole in the history the next page
-//! is appended after.
+//! is appended after. An open's opening pass, which may read the whole history, runs under the
+//! walk's number too, so a find or a stop asked while it runs never starts it again.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,7 +31,9 @@ pub enum QueryLane {
     History,
     /// The walk the history's pages come from: moved by an open alone (`Request::OpenHistory`),
     /// so a page is dropped when the walk it belongs to was replaced, and never because a
-    /// scroll or a find superseded the query that asked for it.
+    /// scroll or a find superseded the query that asked for it; and what cancels an open's
+    /// opening pass and first page, so only the next open — never a find or its stop — ends
+    /// them.
     Walk,
     /// What a commit, or a pair of commits, changed.
     Changes,
@@ -39,7 +42,7 @@ pub enum QueryLane {
     /// Which of a change set's files a filter's text leaves: a list operation, numbered so a
     /// keystroke supersedes the filter of the one before it, and nothing else.
     FileFilter,
-    /// The refs snapshot a refresh reads, on the history thread.
+    /// The refs snapshot a refresh reads, on the repository thread.
     Refs,
     /// How far each branch and its upstream have gone apart, for the snapshot a refresh read.
     AheadBehind,

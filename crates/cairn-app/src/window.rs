@@ -130,6 +130,8 @@ pub fn window(
     let lanes = view.progress.read().lanes();
     let has_rows = view.progress.read().has_rows();
     let counted = status_text::loaded_count(&view.progress.read());
+    let placeholder = status_text::placeholder(&view.progress.read());
+    let reading = status_text::reading_strip(&view.progress.read());
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
     let confirming = view.confirming.read().clone();
@@ -180,7 +182,9 @@ pub fn window(
                 crate::history::lost_commits::toggle(view, toggling.as_deref());
             })
         })
-        .child(match status_text::placeholder(&status, has_rows) {
+        // A reopen's walk reading, over the rows it will replace: they stay drawn and usable.
+        .maybe_child(reading.map(reading_strip))
+        .child(match placeholder {
             Some(message) => notice(message, opened),
             None => history(view, lanes, submit.clone()),
         })
@@ -626,6 +630,26 @@ fn banner(message: String) -> Element {
         .width(Size::fill())
         .cross_align(Alignment::center())
         .padding(Gaps::new(6., 12., 6., 12.))
+        .background(colours.read().colors().surface_tertiary)
+        .child(
+            label()
+                .text(message)
+                .font_size(13.)
+                .width(Size::fill())
+                .color(colours.read().colors().text_secondary),
+        )
+        .into()
+}
+
+/// The strip over the history's rows while a walk replacing them reads: "Reading history… N
+/// commits".
+fn reading_strip(message: String) -> Element {
+    let colours = get_theme_or_default();
+    rect()
+        .width(Size::fill())
+        .min_height(Size::px(ROW_HEIGHT))
+        .cross_align(Alignment::center())
+        .padding(Gaps::new(0., 12., 0., 12.))
         .background(colours.read().colors().surface_tertiary)
         .child(
             label()
@@ -1884,12 +1908,12 @@ pub(crate) mod tests {
     }
 
     /// Show Lost Commits' chord, heard on the history list, turns it on and reopens the history
-    /// from every reflog entry — the old rows handed to a worker to free, after the open is
-    /// asked — and again turns it off and reopens the plain walk — the list keeping the
-    /// keyboard through each reopen, so the chord is heard again with no click. Caught by: the
-    /// chord left unheard, a toggle that asks no reopen (the list keeps drawing the walk it had), a
-    /// reopen that keeps walking as before, or a list that loses the keyboard while the reopened
-    /// walk's first page is on its way.
+    /// from every reflog entry, and again turns it off and reopens the plain walk — the old rows
+    /// drawn until the reopened walk's first page replaces them, and handed to a worker to free
+    /// then — the list keeping the keyboard through each reopen, so the chord is heard again with
+    /// no click. Caught by: the chord left unheard, a toggle that asks no reopen (the list keeps
+    /// drawing the walk it had), a reopen that keeps walking as before, rows dropped at the ask,
+    /// or a list that loses the keyboard while the reopened walk's first page is on its way.
     #[test]
     fn the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -1902,29 +1926,106 @@ pub(crate) mod tests {
             assert_eq!(*view.show_lost.read(), turned);
             let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
             match asked.as_slice() {
-                [Request::OpenHistory { lost, .. }, Request::Retire(retired)] => {
+                [Request::OpenHistory { lost, .. }] => {
                     assert_eq!(*lost, turned, "the reopen walks as the toggle says");
-                    assert_eq!(retired.replaced_rows(), Some(10), "the rows replaced");
                 }
                 other => panic!("the toggle asked {other:?}"),
             }
             assert_eq!(
                 view.rows.read().len(),
-                0,
-                "the old rows are no longer drawn"
+                10,
+                "the old rows were dropped at the ask"
             );
-            // The reopened walk's first page arrives, and the list is drawn again.
-            let (mut rows, mut progress) = (view.rows, view.progress);
-            test.run_in(|| {
-                hold(&mut rows.write(), (0..10).map(row).collect());
-                progress.set(received(10, true));
-            });
-            test.sync_and_update();
-            test.sync_and_update();
+            // The reopened walk's first page arrives and replaces them.
+            first_page_arrives(&mut test, view, &submitted, 10);
             // No click: the list keeps the keyboard through the reopen, so the next press of
             // the chord is heard.
             submitted.borrow_mut().clear();
         }
+    }
+
+    /// A reopen keeps the old rows drawn and usable while the new walk reads: once the worker
+    /// says how far it has read, a strip over the list says "Reading history… N commits" above
+    /// the rows, which a press still selects; the new walk's first page replaces the rows and
+    /// takes the strip down, the selection kept. Caught by: the rows replaced by the open's
+    /// sentence ("Reading history…" in their place), the count drawn nowhere, rows that no
+    /// longer answer a press, or a strip left up over the new walk's rows.
+    #[test]
+    fn a_reopen_draws_the_old_rows_under_the_reading_strip() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        press_chord(&mut test, Action::ShowLostCommits);
+        let reading = crate::worker::Update::Reading { commits: 51_200 };
+        test.run_in(|| {
+            crate::session::apply(
+                reading,
+                view,
+                &crate::session::Worker {
+                    submit: &|_| {},
+                    refuse: &|_| {},
+                    closing: false,
+                },
+            );
+        });
+        test.sync_and_update();
+        let drawn = texts(&test);
+        let strip = drawn
+            .iter()
+            .position(|text| text == "Reading history… 51200 commits");
+        let first_row = drawn.iter().position(|text| text == "commit 0");
+        assert!(
+            matches!((strip, first_row), (Some(strip), Some(row)) if strip < row),
+            "no strip over the rows kept: {drawn:?}"
+        );
+        click_row(&mut test, 3);
+        assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(3))));
+
+        first_page_arrives(&mut test, view, &submitted, 10);
+        assert!(
+            !texts(&test)
+                .iter()
+                .any(|text| text.starts_with("Reading history")),
+            "the strip outlived the first page"
+        );
+        assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(3))));
+    }
+
+    /// The first page of a reopened walk, `rows` rows, applied as the worker's answer: it
+    /// replaces the rows held, which are handed to a worker to free.
+    fn first_page_arrives(
+        test: &mut TestingRunner,
+        view: View,
+        submitted: &Submitted,
+        rows: usize,
+    ) {
+        let page = crate::worker::Update::Rows {
+            rows: page_of((0..rows).map(row).collect()),
+            complete: true,
+        };
+        let record = {
+            let submitted = submitted.clone();
+            move |request| submitted.borrow_mut().push(request)
+        };
+        test.run_in(|| {
+            crate::session::apply(
+                page,
+                view,
+                &crate::session::Worker {
+                    submit: &record,
+                    refuse: &|_| {},
+                    closing: false,
+                },
+            );
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        let retired = submitted.borrow().iter().any(|request| {
+            matches!(request, Request::Retire(retired) if retired.replaced_rows() == Some(rows))
+        });
+        assert!(
+            retired,
+            "the rows replaced were not handed to a worker: {:?}",
+            submitted.borrow()
+        );
     }
 
     /// Show Lost Commits' check box flips the toggle as the chord does — a reopen walking from
@@ -1941,19 +2042,11 @@ pub(crate) mod tests {
         assert!(*view.show_lost.read(), "the box turned it on");
         let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
         assert!(
-            matches!(
-                asked.as_slice(),
-                [Request::OpenHistory { lost: true, .. }, Request::Retire(_)]
-            ),
+            matches!(asked.as_slice(), [Request::OpenHistory { lost: true, .. }]),
             "{asked:?}"
         );
-        let (mut rows, mut progress) = (view.rows, view.progress);
-        test.run_in(|| {
-            hold(&mut rows.write(), (0..10).map(row).collect());
-            progress.set(received(10, true));
-        });
-        test.sync_and_update();
-        test.sync_and_update();
+        first_page_arrives(&mut test, view, &submitted, 10);
+        submitted.borrow_mut().clear();
         press_chord(&mut test, Action::ShowLostCommits);
         assert!(
             !*view.show_lost.read(),
@@ -1962,7 +2055,7 @@ pub(crate) mod tests {
         assert!(
             matches!(
                 submitted.borrow().as_slice(),
-                [Request::OpenHistory { lost: false, .. }, Request::Retire(_)]
+                [Request::OpenHistory { lost: false, .. }]
             ),
             "{:?}",
             submitted.borrow()
@@ -4705,9 +4798,10 @@ pub(crate) mod tests {
                 test.sync_and_update();
             }
         };
+        // Rows drawn, and no reopen waiting on its first page to replace them.
         let loaded = |view: View| {
             let progress = view.progress.peek();
-            progress.has_rows() && *progress.status() == Status::Ready
+            progress.has_rows() && *progress.status() == Status::Ready && !progress.is_reopening()
         };
 
         submitted.borrow_mut().push(Request::Refresh);

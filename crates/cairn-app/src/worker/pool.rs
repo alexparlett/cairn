@@ -1,16 +1,19 @@
 //! The repository worker pool: the threads that touch the repository, and the
 //! values that cross back to the window.
 //!
-//! Six threads per open repository, started by the first, each with its own
+//! Seven threads per open repository, started by the first, each with its own
 //! [`Outbox`] so the update stream ends only when every one of them has gone:
 //!
 //! - `cairn-repository` (this file): takes the `git` the application found as
 //!   it started ([`Discovery`]), opens the repository and its askpass channel,
-//!   serves the history lane and a refresh's refs (`history/lane.rs`), the
-//!   filters and the command log, forwards each operation to its write lane,
-//!   and on its way out closes the repository — every `git` in it ended and
-//!   reaped, up to `CLOSE_BOUND`, once the write the local lane is running has
-//!   ended — and stops the other five.
+//!   serves a refresh's refs (`history/refs.rs`), the filters, the freeing of old
+//!   answers and the command log, forwards each operation to its write lane, and
+//!   on its way out closes the repository — the history thread stopped and
+//!   joined, then every `git` in it ended and reaped, up to `CLOSE_BOUND`, once
+//!   the write the local lane is running has ended — and stops the other six.
+//! - `cairn-history` (`history/lane.rs`): the history lane — the walk held open
+//!   across pages, a find's pages — and nothing else, so an opening pass that
+//!   reads the whole history holds up no filter, refresh or free.
 //! - `cairn-diff` (`diff/lane.rs`): the changes and file-diff lanes, so a
 //!   page and a diff never queue behind each other.
 //! - `cairn-refresh` (`refresh/lane.rs`): status and ahead/behind, so neither
@@ -43,12 +46,13 @@ use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
 use super::diff::lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
-use super::history::lane::{Answering, Finding, HistoryLane};
+use super::history::lane::{Answering, serve_history};
+use super::history::refs::{self, WalkedRefs};
 use super::local::lane::{LaneState, Local, LocalJob, serve_local_lane};
 use super::network::lane::{FetchControl, Lane, Operation, serve_network_lane};
 use super::refresh::lane::{RefreshJob, Refreshing, serve_refreshes};
 use super::request::{MOST_LANES, Request, Update};
-use super::routing::{Page, RepositoryJob, Routed, route};
+use super::routing::{HistoryJob, Page, RepositoryJob, Routed, route};
 use super::startup::{Backend, Startup};
 use super::wake::{Wake, Woken};
 
@@ -85,8 +89,10 @@ pub fn open(
     let discovery = git.clone();
 
     let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
-    // Created here, on the caller's thread, so a diff is routed straight to the diff
-    // thread rather than forwarded by the repository thread behind a page.
+    // Created here, on the caller's thread, so a page is routed straight to the history
+    // thread, never queued behind a filter or a free on the repository thread.
+    let (history_jobs, history_incoming) = channel::<HistoryJob>();
+    // Likewise the diff thread's: a diff is routed straight to it.
     let (diff_jobs, diff_incoming) = channel::<DiffJob>();
     // Likewise the refresh thread's: a status is asked of it directly.
     let (refresh_jobs, refresh_incoming) = channel::<RefreshJob>();
@@ -112,6 +118,15 @@ pub fn open(
     let acceptor_outbox = Outbox {
         updates: Some(outgoing.clone()),
         wake: Arc::clone(&wake),
+    };
+    let history = HistoryThread {
+        jobs: history_incoming,
+        stop: history_jobs.clone(),
+        outbox: Outbox {
+            updates: Some(outgoing.clone()),
+            wake: Arc::clone(&wake),
+        },
+        epochs: epochs.clone(),
     };
     let diff = DiffThread {
         jobs: diff_incoming,
@@ -202,16 +217,24 @@ pub fn open(
             );
             // This repository's channel, and git pointed at it.
             let backend = Backend::open(discovery.startup(), &git);
+            // Read here, walked from on the history thread.
+            let walked = WalkedRefs::default();
             let threads = Threads::start(
                 backend,
                 Arc::clone(&shared),
                 answered,
                 (network_outbox, acceptor_outbox),
-                (diff, refresh, local),
-                &worker_wake,
+                (history, diff, refresh, local),
+                (&walked, &worker_wake),
                 worker_control,
             );
-            serve(&shared, incoming, outbox, worker_epochs, &threads);
+            serve(
+                &shared,
+                incoming,
+                outbox,
+                worker_epochs,
+                (&threads, &walked),
+            );
             // However serve ended — a close, every handle gone — the repository closes.
             threads.stop();
         })
@@ -225,6 +248,7 @@ pub fn open(
     Ok((
         RepositoryHandle {
             jobs,
+            history: history_jobs,
             diff: diff_jobs,
             refresh: refresh_jobs,
             local: local_jobs,
@@ -267,6 +291,16 @@ pub(super) fn open_with(
     open(path, &Discovery::new(startup))
 }
 
+/// What the history thread is started with: its queue, which `open` made so the handle
+/// reaches it directly, a sender of the repository thread's own to stop it with, its outbox
+/// and the epochs it is cancelled by.
+struct HistoryThread {
+    jobs: Receiver<HistoryJob>,
+    stop: Sender<HistoryJob>,
+    outbox: Outbox,
+    epochs: Epochs,
+}
+
 /// What the diff thread is started with: its queue, which `open` made so the
 /// handle reaches it directly, a sender of the repository thread's own to
 /// stop it with, how the launching environment is read (which opening the
@@ -302,9 +336,17 @@ struct LocalThread {
     lane: LaneState,
 }
 
-/// The five threads the repository thread starts, how it reaches them, and
+/// The six threads the repository thread starts, how it reaches them, and
 /// the repository they run `git` in, which stopping them closes.
 struct Threads {
+    /// The history thread's queue, to stop it with as the repository closes.
+    history: Sender<HistoryJob>,
+    /// The history thread, joined as the repository closes: its walk polls the epochs, which
+    /// the close has stopped, between commits.
+    history_thread: Option<JoinHandle<()>>,
+    /// Stopped as the repository closes, so a walk still opening ends at its next commit
+    /// however the close came.
+    epochs: Epochs,
     /// The network lane's queue; one lane per [`Lane`], one lane so far.
     network: Option<Sender<Operation>>,
     /// Told to stop as the repository closes: the handles hold the diff
@@ -330,8 +372,8 @@ impl Threads {
         shared: Arc<SharedRepository>,
         answered: Receiver<Reply>,
         (network_outbox, acceptor_outbox): (Outbox, Outbox),
-        (diff, refresh, local): (DiffThread, RefreshThread, LocalThread),
-        wake: &Arc<Wake>,
+        (history, diff, refresh, local): (HistoryThread, DiffThread, RefreshThread, LocalThread),
+        (walked, wake): (&WalkedRefs, &Arc<Wake>),
         control: FetchControl,
     ) -> Self {
         let (network, queued) = channel::<Operation>();
@@ -366,6 +408,37 @@ impl Threads {
             }
             stop
         });
+
+        let HistoryThread {
+            jobs: history_jobs,
+            stop: history_stop,
+            outbox: history_outbox,
+            epochs: history_epochs,
+        } = history;
+        let history_exit = WorkerExit {
+            outbox: Some(history_outbox),
+            wake: Arc::clone(wake),
+        };
+        let history_shared = Arc::clone(&shared);
+        let history_refs = walked.clone();
+        let closing_epochs = history_epochs.clone();
+        // As the diff thread: one that cannot be started ends its part of the stream, and a
+        // page asked of it is never answered.
+        let history_thread = std::thread::Builder::new()
+            .name("cairn-history".to_owned())
+            .spawn(move || {
+                if let Some(outbox) = history_exit.outbox.as_ref() {
+                    let serving = super::history::lane::Serving {
+                        epochs: &history_epochs,
+                        jobs: &history_jobs,
+                        outbox,
+                        refs: history_refs,
+                    };
+                    serve_history(&history_shared, &serving);
+                }
+                drop(history_exit);
+            })
+            .ok();
 
         let DiffThread {
             jobs: diff_jobs,
@@ -493,6 +566,9 @@ impl Threads {
             });
 
         Self {
+            history: history_stop,
+            history_thread,
+            epochs: closing_epochs,
             network: Some(network),
             diff: diff_stop,
             refresh: refresh_queue,
@@ -537,8 +613,9 @@ impl Threads {
 }
 
 impl Drop for Threads {
-    /// Closes the repository: the diff thread is told to stop and
-    /// the network lane's queue is closed; the fetch in flight, if any, is
+    /// Closes the repository: the epochs are stopped and the history thread is told to stop
+    /// and joined, its walk ending at the next commit it reads; the diff thread is told to stop
+    /// and the network lane's queue is closed; the fetch in flight, if any, is
     /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the
     /// local lane is waited for next and a fetch must not run on for as long
     /// as a commit's hooks do; then the local lane is marked closing and
@@ -557,7 +634,15 @@ impl Drop for Threads {
     /// a prompt still waiting is withdrawn by the window when its fetch's or
     /// write's outcome arrives) and on unwinding alike.
     fn drop(&mut self) {
-        // First, so the diff thread takes up nothing more; what it is running is
+        // The history thread first: the epochs stopped — as a close stopped them already, and
+        // as every handle gone may not have — so a walk still opening ends at its next commit,
+        // and joined, here on the repository thread, before anything waits on a reap.
+        self.epochs.stop();
+        let _ = self.history.send(HistoryJob::Stop);
+        if let Some(history) = self.history_thread.take() {
+            let _ = history.join();
+        }
+        // Then, so the diff thread takes up nothing more; what it is running is
         // ended with the rest below, or by its epoch if the close stopped them.
         let _ = self.diff.send(DiffJob::Stop);
         let _ = self.refresh.send(RefreshJob::Stop);
@@ -587,8 +672,10 @@ impl Drop for Threads {
 
 #[derive(Debug, Clone)]
 pub struct RepositoryHandle {
-    /// The repository thread's queue: the history lane and the operations.
+    /// The repository thread's queue: the refs, the filters and the operations.
     jobs: Sender<(Option<Epoch>, RepositoryJob)>,
+    /// The history thread's queue: the history lane.
+    history: Sender<HistoryJob>,
     /// The diff thread's queue: the changes and file-diff lanes.
     diff: Sender<DiffJob>,
     /// The refresh thread's queue: a refresh's status.
@@ -656,10 +743,15 @@ impl RepositoryHandle {
             }
             Routed::OpenHistory { rows, lost } => {
                 if let (Some(epoch), Some(walk)) = (epoch, epoch_of(QueryLane::Walk)) {
-                    let _ = self.jobs.send((
-                        Some(epoch),
-                        RepositoryJob::History(Page::Open { rows, walk, lost }),
-                    ));
+                    let _ = self.history.send(HistoryJob::Page {
+                        epoch,
+                        page: Page::Open { rows, walk, lost },
+                    });
+                }
+            }
+            Routed::History(page) => {
+                if let Some(epoch) = epoch {
+                    let _ = self.history.send(HistoryJob::Page { epoch, page });
                 }
             }
             Routed::CancelFetch => self.control.cancel(),
@@ -775,13 +867,14 @@ impl RepositoryHandle {
 }
 
 /// A handle with no worker behind it, and what has been sent through it
-/// since last asked — the repository thread's queue, then the diff
+/// since last asked — the history thread's queue, the repository thread's, then the diff
 /// thread's: for a test of the window's side alone.
 #[cfg(test)]
 pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
     use super::routing::unroute;
 
     let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
+    let (history, history_incoming) = channel::<HistoryJob>();
     let (diff, diff_incoming) = channel::<DiffJob>();
     // A refresh's status is read back as a status alone: a refresh's own is read back, from
     // the repository thread's queue.
@@ -789,6 +882,7 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
     let (local, local_incoming) = channel::<LocalJob>();
     let handle = RepositoryHandle {
         jobs,
+        history,
         diff,
         refresh,
         local,
@@ -797,6 +891,10 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
         control: FetchControl::default(),
     };
     (handle, move || {
+        let histories = history_incoming.try_iter().filter_map(|job| match job {
+            HistoryJob::Page { page, .. } => Some(unroute(Routed::History(page))),
+            HistoryJob::Stop => None,
+        });
         let repository = incoming
             .try_iter()
             .map(|(_, job)| unroute(Routed::Repository(job)));
@@ -805,7 +903,7 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             DiffJob::ConfiguredContext => Some(unroute(Routed::ConfiguredContext)),
             DiffJob::Stop => None,
         });
-        let asked: Vec<Request> = repository.chain(diffs).collect();
+        let asked: Vec<Request> = histories.chain(repository).chain(diffs).collect();
         // Only a status asked alone: a refresh's own was read back from its refs above.
         let statuses = refresh_incoming.try_iter().count();
         let refreshes = asked
@@ -1000,74 +1098,29 @@ fn serve(
     jobs: Receiver<(Option<Epoch>, RepositoryJob)>,
     outbox: &Outbox,
     epochs: Epochs,
-    threads: &Threads,
+    (threads, walked): (&Threads, &WalkedRefs),
 ) {
     let repo = shared.to_worker();
-    // Once, outside the loop: the scroll's session borrows `repo` across turns, so moving
-    // this inside fails to compile.
-    let mut history = HistoryLane::default();
     let answering = Answering {
         epochs: &epochs,
         outbox,
     };
-
-    // A find in progress: one page of it is walked whenever no other job is waiting, so
-    // a filter, a refresh or a free asked meanwhile is served between its pages, and the
-    // next page or find — whose number supersedes it — ends it.
-    let mut finding: Option<(Epoch, Finding)> = None;
-    loop {
-        let next = match finding {
-            Some((epoch, find)) => match jobs.try_recv() {
-                Ok(job) => job,
-                Err(TryRecvError::Empty) => {
-                    finding = (!epochs.is_stopping()
-                        && epochs.is_current(epoch)
-                        && history.find_page(&repo, find, epoch, &answering))
-                    .then_some((epoch, find));
-                    continue;
-                }
-                Err(TryRecvError::Disconnected) => break,
-            },
-            None => match jobs.recv() {
-                Ok(job) => job,
-                Err(_) => break,
-            },
-        };
-        let (epoch, job) = next;
+    while let Ok((epoch, job)) = jobs.recv() {
         if epochs.is_stopping() {
             break;
         }
         match job {
-            RepositoryJob::History(Page::Find { target, rows }) => match epoch {
-                Some(epoch) if epochs.is_current(epoch) => {
-                    finding = Some((epoch, Finding { target, rows }));
-                }
-                // Superseded before it was picked up.
-                _ => {}
-            },
-            // Its number superseded the find; there is nothing to walk.
-            RepositoryJob::History(Page::Stop) => finding = None,
-            // An open whose walk is still the window's, superseded in the history lane by a
-            // find or a stop asked straight after it: the walk it replaces is let go of all
-            // the same, so what is asked next pages the new walk, never the old one.
-            RepositoryJob::History(Page::Open { walk, lost, .. })
-                if epochs.is_current(walk) && !epoch.is_some_and(|e| epochs.is_current(e)) =>
-            {
-                history.replace_walk(walk, lost);
-            }
-            RepositoryJob::History(page) => match epoch {
-                Some(epoch) if epochs.is_current(epoch) => {
-                    history.page(&repo, page, epoch, &answering);
-                }
-                // Superseded before it was picked up, and never started. (Every page is
-                // numbered: `submit` numbers what is in a lane.)
-                _ => {}
-            },
             // Kept back while a commit runs: its ending reads everything again.
             RepositoryJob::Refs { .. } if threads.lane.defer_refresh() => {}
             RepositoryJob::Refs { ahead_behind } => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
-                    history.refresh(&repo, epoch, ahead_behind, &threads.refresh, &answering);
+                    refs::refresh(
+                        &repo,
+                        walked,
+                        (epoch, ahead_behind),
+                        &threads.refresh,
+                        &answering,
+                    );
                 }
                 // Superseded by the next refresh before it was picked up.
                 _ => {}
@@ -1699,10 +1752,10 @@ mod tests {
         let queue_the_rest = |handle: &RepositoryHandle| {
             // Posted under its own number, as `submit` would, but held to one page of the rest.
             let epoch = handle.epochs.bump(QueryLane::History);
-            let queued = handle.jobs.send((
-                Some(epoch),
-                RepositoryJob::History(Page::More { rows: whole }),
-            ));
+            let queued = handle.history.send(HistoryJob::Page {
+                epoch,
+                page: Page::More { rows: whole },
+            });
             assert!(queued.is_ok(), "the worker went away");
         };
 
@@ -2198,13 +2251,11 @@ mod tests {
                         break Err(format!("{asked} answers arrived without ever waking"));
                     }
                     asked += 1;
-                    asking.submit(Request::OpenHistory {
-                        rows: 1,
-                        lost: false,
-                    });
+                    // Answered on the repository thread itself, inside `serve`.
+                    asking.submit(Request::ListRemotes);
                 }
                 match woken_by(&waker, updates.next()) {
-                    Some(Update::Rows { .. } | Update::Refs { .. }) => {}
+                    Some(Update::Remotes { .. }) => {}
                     Some(Update::WorkerLost { message }) => break Ok(message),
                     other => {
                         break Err(format!(
@@ -2414,13 +2465,21 @@ mod tests {
     #[test]
     fn submitting_returns_immediately_even_with_nobody_serving() {
         let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
+        let (history, history_incoming) = channel::<HistoryJob>();
         let (diff, diff_incoming) = channel::<DiffJob>();
         let (refresh, refresh_incoming) = channel::<RefreshJob>();
         let (local, local_incoming) = channel::<LocalJob>();
-        drop((incoming, diff_incoming, refresh_incoming, local_incoming));
+        drop((
+            incoming,
+            history_incoming,
+            diff_incoming,
+            refresh_incoming,
+            local_incoming,
+        ));
         let epochs = Epochs::new();
         let handle = RepositoryHandle {
             jobs,
+            history,
             diff,
             refresh,
             local,

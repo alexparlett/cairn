@@ -28,7 +28,7 @@ pub fn toggle(view: View, submit: Option<&dyn Fn(Request)>) {
     let mut showing = view.show_lost;
     let lost = !*showing.peek();
     showing.set(lost);
-    crate::session::reopen_history(view.rows, view.progress, lost, submit);
+    crate::session::reopen_history(view.progress, lost, submit);
     // A find looking in the history it replaced looks in the new one.
     crate::history::ref_find::reopened(view, Some(submit));
 }

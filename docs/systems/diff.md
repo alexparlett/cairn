@@ -2365,7 +2365,10 @@ each with a name, an email and a `Timestamp` that keeps its own offset; the whol
 message, with `subject()` and `body()` reading it; and the parents in git's order,
 none for a shallow clone's boundary commit, whose parents the clone lacks, and a graft's
 for a commit the graft file grafts — read by `crates/cairn-git/src/grafts.rs`, as the
-history walk reads them.
+history walk reads them. A replace ref is not applied here: the commit is read through
+gitoxide's own handle, and gitoxide 0.87.1 reads `core.useReplaceRefs` the wrong way round,
+so a replaced commit's details are the original's where `git show` gives the replacement's
+— a divergence from git the history walk does not share (`crates/cairn-git/src/replacements.rs`).
 It sits beside the history's rows rather than replacing them — a kept row holds a
 subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
 keeps"), and carrying every parent, both addresses, a committer, an offset and a whole

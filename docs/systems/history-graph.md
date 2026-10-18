@@ -364,7 +364,14 @@ routes, with the graph required to be the one git's parents lay out
 `crates/cairn-git/tests/history.rs`); against `git log --date-order` with a replace ref,
 a graft, a shallow file and a shallow clone over a history with a commit-graph, each laid
 out so that the graph's parents would give another order
-(`the_commit_graph_is_used_only_where_git_uses_it`, `crates/cairn-git/tests/date_order.rs`);
+(`the_commit_graph_is_used_only_where_git_uses_it`, `crates/cairn-git/tests/date_order.rs`,
+with and without a graph written, for the refs and for Show Lost Commits' reflog ids, and
+with `core.useReplaceRefs` off, and the shallow file beating a graft for one commit); the
+commit-time and graph-order routes, Show Lost Commits' reflog dates, ahead and behind, and
+a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`;
+the details under a graft and a shallow boundary — they read through gitoxide's own handle,
+which applies no replace ref); a replace ref whose replacement is missing failing the walk
+as git dies (`a_replacement_that_is_not_there_fails_the_walk`);
 the pushed check's graph stepping aside under each
 (`the_graph_does_not_answer_where_git_would_not_read_it`); the header rewrite by
 `only_the_headers_parent_lines_are_removed` and `a_grafts_parents_replace_the_commits_own`;
@@ -413,7 +420,9 @@ listener at most once per 100 ms (`date_order/pace.rs`).
 A stash is a tip whose one parent is its base, as `git replace --graft <stash> <stash>^1`
 makes it for git; its own parents are never read. It is seeded only when the refs reach
 its base, as the in-degree walk decides once it is down to the base's generation, and
-dropped when they do not, or when the refs reach the stash's commit itself. It is decided
+dropped when they do not, or when the refs reach the stash's commit itself — a branch
+built on it — which is then that commit's row with the parents it was made with, its index
+commit among them, as the user's own `git log` shows it (the "a branch at a stash" fixture). It is decided
 no sooner than the walk needs it — once the walk is that deep anyway, before the commit
 it would pop ahead of, or before its base is counted down — holding meanwhile the place
 among git's tips it was given, so a stash made on an old commit costs the first page
@@ -433,7 +442,8 @@ the lazy stash decisions by `a_stash_is_decided_no_sooner_than_the_walk_needs_it
 ties and parents by `ties_pop_in_the_order_they_were_put` and
 `parents_are_queued_in_gits_order`; cancellation and the count by
 `an_opening_pass_stops_when_superseded`, `a_cancelled_step_leaves_the_walk_as_it_was` and
-`an_opening_pass_reports_how_far_it_has_read`. On rust-lang/rust from every ref the whole
+`an_opening_pass_reports_how_far_it_has_read` and, through the public open,
+`the_public_walk_reports_its_count_every_100_ms`. On rust-lang/rust from every ref the whole
 walk equals git's `--date-order` row for row; the opening pass costs a little under git's
 own time without a commit-graph (1.19-1.20 s against 1.25-1.26 s) and a little over with
 one (95 ms against 82-84 ms), keeping about 170 bytes per commit (`docs/research/history-topo-order/measured.md`,

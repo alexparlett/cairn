@@ -9,9 +9,9 @@
 //! setting as off, and false as on), so its object database is told to read none
 //! (`walk::Grafted`) and the replacements are read here, as git reads them: every ref under
 //! `refs/replace/` whose name ends, after its last `/`, in an id of the repository's hash
-//! (`register_replace_ref`), the first of two for one object kept. `GIT_NO_REPLACE_OBJECTS`
-//! and `GIT_REPLACE_REF_BASE` in Cairn's own environment are not honoured, as no other
-//! variable naming a repository's state is.
+//! (`register_replace_ref`), a symbolic one resolved, and two for one object refused as git
+//! refuses them. `GIT_NO_REPLACE_OBJECTS` and `GIT_REPLACE_REF_BASE` in Cairn's own
+//! environment are not honoured, as no other variable naming a repository's state is.
 
 use std::collections::HashMap;
 
@@ -29,6 +29,37 @@ pub(crate) struct Replacements {
 #[error("replace depth too high for object {0}")]
 pub(crate) struct TooDeep(gix::ObjectId);
 
+/// What two replace refs for one object fail with, as git dies on them
+/// (`register_replace_ref`, "duplicate replace ref").
+#[derive(Debug, thiserror::Error)]
+#[error("duplicate replace ref: {0}")]
+struct Duplicate(gix::bstr::BString);
+
+/// What a symbolic replace ref that never reaches an object fails with.
+#[derive(Debug, thiserror::Error)]
+#[error("the replace ref {0} names no object")]
+struct Unresolved(gix::bstr::BString);
+
+/// The object a replace ref names as git reads it (`ref->oid`): a symbolic ref resolved to the
+/// ref it names, as far as git follows one (`SYMREF_MAXDEPTH`, five), and an annotated tag
+/// never peeled.
+fn resolved(
+    reference: gix::Reference<'_>,
+) -> Result<gix::ObjectId, Box<dyn std::error::Error + Send + Sync>> {
+    let name = reference.name().as_bstr().to_owned();
+    let mut current = reference;
+    for _ in 0..=5 {
+        if let Some(id) = current.target().try_id() {
+            return Ok(id.to_owned());
+        }
+        current = match current.follow() {
+            Some(next) => next?,
+            None => break,
+        };
+    }
+    Err(Box::new(Unresolved(name)))
+}
+
 impl Replacements {
     pub(crate) fn read(
         repo: &gix::Repository,
@@ -42,21 +73,22 @@ impl Replacements {
             let hex = repo.object_hash().len_in_hex();
             let platform = repo.references()?;
             for reference in platform.prefixed("refs/replace/")? {
-                let Ok(reference) = reference else {
-                    continue;
-                };
+                // git lists a broken ref too (`DO_FOR_EACH_INCLUDE_BROKEN`) and dies where it
+                // is used; one that cannot be read at all is refused here.
+                let reference = reference?;
                 let name = reference.name().as_bstr().to_vec();
                 let tail = name.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
-                let original = match tail.get(..hex) {
-                    Some(id) if tail.len() == hex => gix::ObjectId::from_hex(id).ok(),
-                    _ => None,
-                };
-                // The object the ref names, as git reads it (`ref->oid`), never peeled.
-                let target = reference.target();
-                let (Some(original), Some(replacement)) = (original, target.try_id()) else {
+                // `get_oid_hex` reads the first id's worth of the name and nothing after it.
+                let Some(original) = tail
+                    .get(..hex)
+                    .and_then(|id| gix::ObjectId::from_hex(id).ok())
+                else {
                     continue;
                 };
-                by.entry(original).or_insert(replacement.to_owned());
+                let replacement = resolved(reference)?;
+                if by.insert(original, replacement).is_some() {
+                    return Err(Box::new(Duplicate(name.into())));
+                }
             }
         }
         Ok(Self { by })

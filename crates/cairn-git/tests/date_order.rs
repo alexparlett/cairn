@@ -28,8 +28,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cairn_git::{CancelSignal, DateOrderTips, Repository};
-use cairn_model::Oid;
+use cairn_git::{CancelSignal, DateOrderTips, HistoryOrder, HistoryRequest, Repository};
+use cairn_model::{History, Oid, RowContent};
 
 fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
     match result {
@@ -342,6 +342,27 @@ fn reflogs() -> Fixture {
     t
 }
 
+/// A stash a branch is built on, so the refs reach the stash's commit itself: git's own log
+/// shows it with both the parents it was made with, its index commit among them, and so must
+/// the walk, giving it no row of its own on its base.
+fn branch_at_a_stash() -> Fixture {
+    let t = Fixture::new("branch-at-a-stash");
+    t.write("f", "a");
+    t.commit_all("root");
+    t.write("f", "b");
+    t.commit_all("second");
+    t.write("f", "c");
+    t.git(&["stash", "push", "-qm", "wip"]);
+    t.git(&["branch", "on-the-stash", "stash@{0}"]);
+    // And one built on it, so a ref reaches the stash's commit as a parent, not as a tip.
+    t.git(&["checkout", "-q", "-b", "after-the-stash", "stash@{0}"]);
+    t.write("f", "d");
+    t.commit_all("after the stash");
+    t.git(&["checkout", "-q", "main"]);
+    t.git(&["branch", "-q", "-D", "on-the-stash"]);
+    t
+}
+
 /// What a walk starts from, as git is given it.
 struct Tips {
     refs: Vec<String>,
@@ -438,8 +459,9 @@ fn tips_for(fixture: &Fixture, reading: Reading) -> Tips {
     }
 }
 
-/// git's order for `tips`: each stash whose base the refs reach grafted onto it in a copy,
-/// then `git log --date-order` with the stashes and the reflog ids on stdin.
+/// git's order for `tips`: each stash whose base the refs reach, and whose commit they do
+/// not, grafted onto its base in a copy, then `git log --date-order` with those stashes and
+/// the reflog ids on stdin.
 fn oracle(fixture: &Fixture, tips: &Tips) -> Vec<String> {
     let reached: HashSet<String> = fixture
         .git(&["rev-list", "--branches", "--remotes", "--tags", "HEAD"])
@@ -449,7 +471,9 @@ fn oracle(fixture: &Fixture, tips: &Tips) -> Vec<String> {
     let stashes: Vec<&String> = tips
         .stashes
         .iter()
-        .filter(|(_, base)| reached.contains(base))
+        // A stash whose commit a ref reaches is that commit, with the parents it was made
+        // with, in git's own log; only one no ref reaches is a row of its own on its base.
+        .filter(|(stash, base)| reached.contains(base) && !reached.contains(stash))
         .map(|(stash, _)| stash)
         .collect();
     let copy = (!stashes.is_empty()).then(|| fixture.copy("oracle"));
@@ -566,12 +590,13 @@ fn the_walk_is_in_git_date_order() {
     let all = [Reading::Refs, Reading::Stashes, Reading::LostCommits];
     let mut found = Vec::new();
     for graph in [false, true] {
-        let build: [(&str, Build); 5] = [
+        let build: [(&str, Build); 6] = [
             ("tied", || with_remote(tied())),
             ("recipe", || with_remote(recipe("recipe"))),
             ("two stashes", || with_remote(two_stashes())),
             ("skew", || (skew(), None)),
             ("reflogs", || (reflogs(), None)),
+            ("a branch at a stash", || (branch_at_a_stash(), None)),
         ];
         for (name, make) in build {
             // The remote outlives the reading: the fixture's remote-tracking refs name it.
@@ -703,10 +728,11 @@ fn a_stash_is_decided_no_sooner_than_the_walk_needs_it() {
     );
 }
 
-/// A history whose commit-graph names the parents its commits were made with — `A`, `B`, `C`,
-/// `D` on `main` and `S1` on `side` from `A`, `A` dated after the rest — then one of three
-/// substitutions git makes and the graph does not know.
-fn substituted(name: &str) -> (Fixture, [String; 5]) {
+/// A history — `A`, `B`, `C`, `D` on `main` and `S1` on `side` from `A`, `A` dated after
+/// the rest, each commit in `HEAD`'s reflog — with a commit-graph naming the parents its
+/// commits were made with when `graph`, before one of the substitutions git makes and the
+/// graph does not know. `main`'s upstream is `side`.
+fn substituted(name: &str, graph: bool) -> (Fixture, [String; 5]) {
     let t = Fixture::new(name);
     let commit = |at: i64, message: &str| -> String {
         t.write("f", message);
@@ -721,40 +747,116 @@ fn substituted(name: &str) -> (Fixture, [String; 5]) {
     t.git(&["checkout", "-qb", "side", &a]);
     let s1 = commit(5000, "S1");
     t.git(&["checkout", "-q", "main"]);
-    t.write_commit_graph();
+    t.git(&["config", "branch.main.remote", "."]);
+    t.git(&["config", "branch.main.merge", "refs/heads/side"]);
+    if graph {
+        t.write_commit_graph();
+    }
     (t, [a, b, c, d, s1])
 }
 
-/// The walk reads the commit-graph only where git does: not under a replace ref, a graft or a
-/// shallow boundary, each of which gives a commit parents the graph does not hold — and each
-/// fixture laid out so that the graph's parents give another order. Where git does read it,
-/// so does the walk. Caught by: `commit_graph_if_enabled` taken alone, as gix decides, which
-/// reads the original parents and walks to the graph's generations.
+/// What one substitution does to [`substituted`]'s history.
+type Substitution = fn(&Fixture, &[String; 5]);
+
+/// Each substitution, by name, and whether git still reads the commit-graph under it.
+fn substitutions() -> [(&'static str, Substitution, bool); 7] {
+    [
+        ("no substitution", |_, _| {}, true),
+        // `C`'s parent replaced by `S1`: `B` is no longer reached, and `S1` waits for `C`.
+        (
+            "replace ref",
+            |t, [_, _, c, _, s1]| {
+                t.git(&["replace", "--graft", c, s1]);
+            },
+            false,
+        ),
+        // `C` replaced by a commit of its own on `S1`, dated after everything, so a tip naming
+        // `C` — its reflog entry — sorts by the replacement's date, as git dates it.
+        (
+            "replace ref with another date",
+            |t, [_, _, c, _, s1]| {
+                let tree = t.rev(&format!("{c}^{{tree}}"));
+                let replacement = t.git_at(
+                    20_000,
+                    &["commit-tree", "-p", s1, "-m", "C, replaced", &tree],
+                );
+                t.git(&["replace", c, replacement.trim()]);
+            },
+            false,
+        ),
+        // A replace ref git does not read: the graph is read, and `C` keeps its parents.
+        (
+            "replace ref with core.useReplaceRefs false",
+            |t, [_, _, c, _, s1]| {
+                t.git(&["replace", "--graft", c, s1]);
+                t.git(&["config", "core.useReplaceRefs", "false"]);
+            },
+            true,
+        ),
+        // The same substitution through the graft file.
+        (
+            "graft",
+            |t, [_, _, c, _, s1]| {
+                t.write(".git/info/grafts", &format!("{c} {s1}\n"));
+            },
+            false,
+        ),
+        // `B` a shallow boundary: `A`, dated after the rest, waits only for `S1`.
+        (
+            "shallow boundary",
+            |t, [_, b, ..]| {
+                t.write(".git/shallow", &format!("{b}\n"));
+            },
+            false,
+        ),
+        // `B` both shallow and grafted onto `S1`: the shallow file wins, as in git.
+        (
+            "shallow boundary over a graft",
+            |t, [_, b, _, _, s1]| {
+                t.write(".git/info/grafts", &format!("{b} {s1}\n"));
+                t.write(".git/shallow", &format!("{b}\n"));
+            },
+            false,
+        ),
+    ]
+}
+
+/// The walk reads the commit-graph only where git does: not under a replace ref git reads, a
+/// graft or a shallow boundary, each of which gives a commit parents the graph does not hold —
+/// each fixture laid out so that the graph's parents give another order — and with and
+/// without a graph written, for the refs and for Show Lost Commits' reflog ids, whose dates
+/// are the replacements'. Where git does read it, so does the walk. Caught by:
+/// `commit_graph_if_enabled` taken alone, as gix decides, which reads the original parents
+/// and walks to the graph's generations; replace refs read whatever `core.useReplaceRefs`
+/// says; or the shallow file losing to a graft.
 #[test]
 fn the_commit_graph_is_used_only_where_git_uses_it() {
-    let refs = [Reading::Refs];
+    let readings = [Reading::Refs, Reading::LostCommits];
     let mut found = Vec::new();
-
-    let (plain, _) = substituted("plain");
-    found.extend(mismatches("no substitution", &plain, true, &refs));
-
-    // `C`'s parent replaced by `S1`: `B` is no longer reached, and `S1` waits for `C`.
-    let (replaced, [_, _, c, _, s1]) = substituted("replace");
-    replaced.git(&["replace", "--graft", &c, &s1]);
-    found.extend(mismatches("replace ref", &replaced, false, &refs));
-
-    // The same through the graft file.
-    let (grafted, [_, _, c, _, s1]) = substituted("graft");
-    grafted.write(".git/info/grafts", &format!("{c} {s1}\n"));
-    found.extend(mismatches("graft", &grafted, false, &refs));
-
-    // `B` a shallow boundary: `A`, dated after the rest, waits only for `S1`.
-    let (shallow, [_, b, ..]) = substituted("shallow");
-    shallow.write(".git/shallow", &format!("{b}\n"));
-    found.extend(mismatches("shallow boundary", &shallow, false, &refs));
+    for graph in [false, true] {
+        let mut plain_order = Vec::new();
+        for (name, substitute, git_reads_the_graph) in substitutions() {
+            let (fixture, commits) = substituted(&name.replace(' ', "-"), graph);
+            substitute(&fixture, &commits);
+            found.extend(mismatches(
+                name,
+                &fixture,
+                graph && git_reads_the_graph,
+                &readings,
+            ));
+            // Each substitution git reads changes the order it gives, so reading the graph's
+            // parents could not have passed by chance.
+            let order = oracle(&fixture, &tips_for(&fixture, Reading::Refs));
+            match (name, git_reads_the_graph) {
+                ("no substitution", _) => plain_order = order,
+                (_, true) => assert_eq!(order, plain_order, "{name}: git read it after all"),
+                (_, false) => assert_ne!(order, plain_order, "{name}: git ignored it"),
+            }
+        }
+    }
 
     // A real shallow clone of `main`, two commits deep, beside the source's commit-graph.
-    let (source, _) = substituted("shallow-source");
+    let (source, _) = substituted("shallow-source", true);
     let clone = Fixture {
         path: scratch("shallow-clone"),
     };
@@ -771,6 +873,7 @@ fn the_commit_graph_is_used_only_where_git_uses_it() {
         ],
         "",
     );
+    found.extend(mismatches("shallow clone", &clone, false, &[Reading::Refs]));
     let info = clone.path.join(".git/objects/info");
     ok(std::fs::create_dir_all(&info), "making a directory");
     ok(
@@ -780,14 +883,246 @@ fn the_commit_graph_is_used_only_where_git_uses_it() {
         ),
         "copying the commit-graph",
     );
-    found.extend(mismatches("shallow clone", &clone, false, &refs));
+    found.extend(mismatches(
+        "shallow clone beside a commit-graph",
+        &clone,
+        false,
+        &[Reading::Refs],
+    ));
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
 
-    // Each substitution changes the order git gives, so reading the graph's parents could not
-    // have passed by chance.
-    let plain_order = oracle(&plain, &tips_for(&plain, Reading::Refs));
-    for substituted in [&replaced, &grafted, &shallow] {
-        let order = oracle(substituted, &tips_for(substituted, Reading::Refs));
-        assert_ne!(order, plain_order, "a substitution git ignored");
+/// The routes that walk in gitoxide's own orders, and the counts and details beside them, see
+/// the same substitutions git does, with and without a commit-graph: commit-time and graph
+/// order list the commits git lists, each with the parents git shows; Show Lost Commits in
+/// commit-time order is `git log`'s order over the same reflog ids, each dated as git dates
+/// it; a branch's ahead and behind are `git rev-list --left-right --count`'s; and a commit's
+/// details carry `git log --format=%P`'s parents under a graft and a shallow boundary.
+/// Caught by: a route reading the objects as stored, or the graph where git reads none.
+#[test]
+fn every_route_sees_the_substitutions_git_sees() {
+    let mut found = Vec::new();
+    for (graph, (name, substitute, _)) in [false, true]
+        .into_iter()
+        .flat_map(|graph| substitutions().map(|substitution| (graph, substitution)))
+    {
+        // The Commit tab reads through gitoxide's own handle, which applies no replace ref;
+        // the replace-ref cases are held to the walks and the counts alone.
+        let details_too = !name.starts_with("replace ref");
+        let name = format!("{name}, commit-graph {graph}");
+        let (fixture, commits) = substituted(&name.replace([' ', ','], "-"), graph);
+        substitute(&fixture, &commits);
+        let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+        let listed = fixture.git(&[
+            "log",
+            "--format=%H %P",
+            "--branches",
+            "--remotes",
+            "--tags",
+            "HEAD",
+        ]);
+        let mut git_parents: Vec<(String, usize)> = listed
+            .lines()
+            .map(|line| {
+                let mut ids = line.split(' ').filter(|id| !id.is_empty());
+                let id = ids.next().unwrap_or_default().to_owned();
+                (id, ids.count())
+            })
+            .collect();
+        git_parents.sort();
+        let tips: Vec<Oid> = ref_tips(&fixture)
+            .iter()
+            .map(|hex| ok(Oid::parse(hex), "an id"))
+            .collect();
+        for order in [HistoryOrder::CommitTime, HistoryOrder::GraphOrder] {
+            let request = HistoryRequest::from_commits(tips.clone(), 1000).with_order(order);
+            let page = ok(repo.history(&request, &CancelSignal::new()), "a page");
+            let mut history = History::new();
+            ok(history.append(page.rows), "holding the page");
+            let mut ours: Vec<(String, usize)> = history
+                .rows()
+                .map(|row| match row.content() {
+                    RowContent::Commit(commit) => (commit.id.to_string(), commit.parent_count),
+                    RowContent::Stash(stash) => (format!("stash {stash:?}"), 0),
+                })
+                .collect();
+            ours.sort();
+            if ours != git_parents {
+                found.push(format!(
+                    "{name}, {order:?}:\n  git:   {git_parents:?}\n  cairn: {ours:?}"
+                ));
+            }
+        }
+        let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+        // Show Lost Commits in commit-time order, its reflog ids dated as git dates them — a
+        // replaced commit by its replacement — against git's own commit-time order.
+        let lost = HistoryRequest::from_refs(&snapshot, 1000).with_lost_commits();
+        let page = ok(repo.history(&lost, &CancelSignal::new()), "a page");
+        let ours: Vec<String> = page.rows.ids().map(|id| id.to_string()).collect();
+        let mut input = String::new();
+        for id in reflog_tips(&fixture) {
+            input.push_str(&id);
+            input.push('\n');
+        }
+        let theirs: Vec<String> = git_in(
+            &fixture.path,
+            TIED,
+            &[
+                "log",
+                "--format=%H",
+                "--branches",
+                "--remotes",
+                "--tags",
+                "HEAD",
+                "--stdin",
+            ],
+            &input,
+        )
+        .lines()
+        .map(str::to_owned)
+        .collect();
+        if ours != theirs {
+            found.push(format!(
+                "{name}, Show Lost Commits:\n  git:   {}\n  cairn: {}",
+                short(&theirs),
+                short(&ours)
+            ));
+        }
+        let counts = ok(
+            repo.ahead_behind(&snapshot, &CancelSignal::new()),
+            "ahead and behind",
+        );
+        let theirs = fixture.git(&["rev-list", "--left-right", "--count", "main...side"]);
+        let ours = counts
+            .counts
+            .iter()
+            .find(|(branch, _)| branch.as_str() == "refs/heads/main")
+            .map(|(_, count)| format!("{}\t{}", count.ahead, count.behind));
+        if ours.as_deref() != Some(theirs.trim()) {
+            found.push(format!(
+                "{name}, ahead and behind: git {theirs:?}, cairn {ours:?}"
+            ));
+        }
+        if details_too {
+            for commit in &commits {
+                let details = ok(
+                    repo.commit_details(&ok(Oid::parse(commit), "an id")),
+                    "details",
+                );
+                let ours: Vec<String> = details.parents.iter().map(Oid::to_string).collect();
+                let theirs: Vec<String> = fixture
+                    .git(&["log", "-1", "--format=%P", commit])
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect();
+                if ours != theirs {
+                    found.push(format!(
+                        "{name}, {commit}'s parents: git {theirs:?}, cairn {ours:?}"
+                    ));
+                }
+            }
+        }
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+/// A replace ref whose replacement is not there fails the walk, as git dies ("replacement ...
+/// not found"), rather than reading the replaced commit as missing — which would stop a walk
+/// short, and a hiding walk answer that a tip is not reached. Caught by: the missing
+/// replacement read as a missing object.
+#[test]
+fn a_replacement_that_is_not_there_fails_the_walk() {
+    let (fixture, [_, _, c, ..]) = substituted("missing-replacement", false);
+    let missing = "1234567890123456789012345678901234567890";
+    // Written as a file: git will not write a ref naming an object it does not have.
+    fixture.write(&format!(".git/refs/replace/{c}"), &format!("{missing}\n"));
+    assert!(
+        Command::new("git")
+            .current_dir(&fixture.path)
+            .args(["log", "--format=%H", "main"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .is_ok_and(|output| !output.status.success()),
+        "git itself walked past the missing replacement"
+    );
+    let tips = tips_for(&fixture, Reading::Refs);
+    let request = DateOrderTips::new(tips.refs.iter().map(|hex| ok(Oid::parse(hex), "an id")));
+    let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+    let walked = repo
+        .date_order(&request, &CancelSignal::new(), &mut |_| {})
+        .and_then(|mut walk| {
+            let mut ids = Vec::new();
+            while let Some(commit) = walk.next(&CancelSignal::new())? {
+                ids.push(commit.id);
+            }
+            Ok(ids)
+        });
+    assert!(
+        walked.is_err(),
+        "walked past a missing replacement: {walked:?}"
+    );
+    let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+    assert!(
+        repo.ahead_behind(&snapshot, &CancelSignal::new()).is_err(),
+        "counted past a missing replacement"
+    );
+}
+
+/// A cancel that takes a fifth of a millisecond to answer, so an opening pass is slow enough
+/// to report, and reaches its 256th commit — where the pass first looks at the clock — well
+/// before 100 ms.
+struct Slow;
+
+impl cairn_git::Cancel for Slow {
+    fn is_cancelled(&self) -> bool {
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        false
+    }
+}
+
+/// `Repository::date_order` hands its listener the count at most once per 100 ms, the first
+/// once 100 ms have passed: over a pass slowed to a fifth of a millisecond a commit, it says
+/// how far it has read, never sooner than 100 ms after the open began, never twice within
+/// 100 ms (less the time to record a count), and never past what it read. Caught by: the
+/// public open given another interval, or none.
+#[test]
+fn the_public_walk_reports_its_count_every_100_ms() {
+    let fixture = Fixture::new("count");
+    let mut stream = String::new();
+    for n in 1..=1500 {
+        stream.push_str(&format!(
+            "commit refs/heads/main\nmark :{n}\ncommitter C <c@example.com> {} +0000\ndata 0\n",
+            1_500_000_000 + n
+        ));
+        if n > 1 {
+            stream.push_str(&format!("from :{}\n", n - 1));
+        }
+        stream.push('\n');
+    }
+    git_in(&fixture.path, TIED, &["fast-import", "--quiet"], &stream);
+    let head = ok(Oid::parse(fixture.rev("main").as_str()), "an id");
+    let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+    let started = std::time::Instant::now();
+    let mut reports = Vec::new();
+    let walk = ok(
+        repo.date_order(&DateOrderTips::new([head]), &Slow, &mut |read| {
+            reports.push((started.elapsed(), read));
+        }),
+        "opening the walk",
+    );
+    let elapsed = started.elapsed();
+    let every = std::time::Duration::from_millis(100);
+    assert!(!reports.is_empty(), "no count over {elapsed:?}");
+    assert!(reports.iter().all(|&(at, _)| at >= every), "{reports:?}");
+    assert!(
+        reports
+            .windows(2)
+            .all(|pair| pair[1].0 - pair[0].0 >= every),
+        "{reports:?}"
+    );
+    assert!(
+        reports.iter().all(|&(_, read)| read <= walk.commits_read()),
+        "{reports:?}"
+    );
 }

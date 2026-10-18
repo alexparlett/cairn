@@ -36,6 +36,7 @@ mod tests {
     /// the next interval measured from the start rather than from the last count.
     #[test]
     fn a_count_is_due_at_most_once_per_interval() {
+        assert_eq!(REPORT_EVERY, Duration::from_millis(100));
         let start = Instant::now();
         let at = |millis: u64| start + Duration::from_millis(millis);
         let mut pace = Pace::starting(start, REPORT_EVERY);

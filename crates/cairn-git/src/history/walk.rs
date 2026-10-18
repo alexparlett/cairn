@@ -417,10 +417,23 @@ impl gix::objs::Find for Grafted<'_> {
         buffer: &'a mut Vec<u8>,
     ) -> Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
         let stored = self.replacements.of(id).map_err(Box::new)?;
+        let replaced = stored != id;
         let Some(parents) = self.grafts.of(id) else {
-            return self.objects.try_find(&stored, buffer);
+            return match self.objects.try_find(&stored, buffer)? {
+                None if replaced => Err(Box::new(ReplacementMissing {
+                    original: id.to_owned(),
+                    replacement: stored,
+                })),
+                found => Ok(found),
+            };
         };
         let (kind, object_hash, bytes) = match self.objects.try_find(&stored, buffer)? {
+            None if replaced => {
+                return Err(Box::new(ReplacementMissing {
+                    original: id.to_owned(),
+                    replacement: stored,
+                }));
+            }
             None => return Ok(None),
             Some(found) if found.kind == gix::objs::Kind::Commit => (
                 found.kind,
@@ -436,6 +449,17 @@ impl gix::objs::Find for Grafted<'_> {
             data: buffer.as_slice(),
         }))
     }
+}
+
+/// What reading a replaced object fails with when its replacement is not there: git dies
+/// rather than read the object as missing (`read_object_file_extended`, "replacement %s not
+/// found for %s"), and a walk that read it as missing would stop short — a hiding walk then
+/// answering that a tip is not reached where git answers nothing.
+#[derive(Debug, thiserror::Error)]
+#[error("replacement {replacement} not found for {original}")]
+struct ReplacementMissing {
+    original: gix::ObjectId,
+    replacement: gix::ObjectId,
 }
 
 /// A commit object's bytes with every `parent` line of its header replaced by one per id of

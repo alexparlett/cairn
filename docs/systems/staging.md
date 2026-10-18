@@ -482,7 +482,12 @@ remote tips through the graph's parents that never descends below `HEAD`'s gener
 own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for that detached
 `HEAD` 20,000 commits behind on the bench clone with a graph written, against 1.2 s by the
 object walk and git's 10 ms
-(`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
+(`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Both routes see the
+history as git's `git branch -r --contains` sees it, replace refs and grafts applied: a local
+replace ref or graft that cuts a remote's history short of `HEAD` answers `HEAD` unpublished
+though the remote holds it — and an amend git logs then runs without asking, its old commit
+kept in the reflog — and a replace ref whose replacement is missing fails the check, as git
+dies on it, rather than answering (`a_replacement_that_is_not_there_fails_the_walk`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
 at the press, again in a confirmed amend's re-check, and again once an amend at the press is
 made (C35) — never on a status (with `HEAD` at a remote tip the consequence costs 0.14 ms,

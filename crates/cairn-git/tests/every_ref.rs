@@ -14,7 +14,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::cell::Cell;
 
 use cairn_git::{Cancel, CancelSignal, Error, HistoryOrder, HistoryRequest, Repository};
-use cairn_model::{EdgeKind, History, HistoryRow, Lane, RefKind, RowContent, RowId, StashSummary};
+use cairn_model::{
+    EdgeKind, History, HistoryRow, Lane, Oid, RefKind, RowContent, RowId, StashSummary,
+};
 
 use date_order_oracle::{git_date_order, stash_tips};
 use fixtures::Fixture;
@@ -723,8 +725,9 @@ fn a_detached_head_no_ref_reaches_is_walked_and_labelled() {
 }
 
 /// A stash commit a branch reaches is a commit's row, labelled by the branch, and no
-/// stash's; its index commit is a commit's row too, as git walks it. Caught by: the
-/// stash's row drawn as well, the commit then having two rows.
+/// stash's; its index commit is a commit's row too, as git walks it — in date order, whose
+/// walk decides the stash, and in commit-time and graph order, whose stream does. Caught by:
+/// the stash's row drawn as well, the commit then having two rows.
 #[test]
 fn a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs() {
     let fixture = fixtures::unborn();
@@ -739,17 +742,25 @@ fn a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs() {
     let stash = rev_parse(&fixture, "stash@{0}");
     fixture.git(&["branch", "keep", &stash]);
     let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
-    let rows = page_all(&repo, &snapshot_request(&repo, 2), 2);
-    let (commits, stashes) = index(&rows);
-    assert!(
-        stashes.is_empty(),
-        "the reached stash also drew a stash's row"
-    );
-    assert_eq!(
-        commits.keys().cloned().collect::<BTreeSet<_>>(),
-        rev_list(&fixture)
-    );
-    assert!(commits.contains_key(&stash));
+    for order in [
+        HistoryOrder::DateOrder,
+        HistoryOrder::CommitTime,
+        HistoryOrder::GraphOrder,
+    ] {
+        let request = snapshot_request(&repo, 2).with_order(order);
+        let rows = page_all(&repo, &request, 2);
+        let (commits, stashes) = index(&rows);
+        assert!(
+            stashes.is_empty(),
+            "{order:?}: the reached stash also drew a stash's row"
+        );
+        assert_eq!(
+            commits.keys().cloned().collect::<BTreeSet<_>>(),
+            rev_list(&fixture),
+            "{order:?}"
+        );
+        assert!(commits.contains_key(&stash), "{order:?}");
+    }
 }
 
 /// A braided history of merges, two branches and no stash: from every ref, git's commits
@@ -1186,8 +1197,9 @@ fn a_stash_commit_filed_twice_is_one_row_its_newest_entrys() {
 /// Opening a walk from every ref reads each tip, and polls the cancel before each, on both
 /// routes: cancelled at its sixth poll, a walk from fifty tags stops having read five tips and
 /// laid nothing out, and a session cancelled there pages, once asked again, the rows one never
-/// cancelled does. Caught by: the open reading every tip without a poll, which lays rows out
-/// before the cancel lands.
+/// cancelled does. Given five tags' commits and then an id naming nothing, the cancel at the
+/// sixth poll lands before the missing tip is read, which would fail the walk. Caught by: the
+/// open reading every tip without a poll between them.
 #[test]
 fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
     let fixture = fixtures::unborn();
@@ -1212,6 +1224,21 @@ fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
         other => panic!("expected a cancellation, got {other:?}"),
     }
     assert_eq!(cancel.polls.get(), stop_at + 1, "the open kept polling");
+
+    let mut tips: Vec<Oid> = (0..stop_at)
+        .map(|n| ok(Oid::parse(&rev_parse(&fixture, &format!("t{n}"))), "an id"))
+        .collect();
+    tips.push(ok(Oid::parse(&"0123456789abcdef".repeat(3)[..40]), "an id"));
+    let request = HistoryRequest::from_commits(tips, 10);
+    let cancel = StopAfter::new(stop_at);
+    match repo.history(&request, &cancel) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation before the missing tip, got {other:?}"),
+    }
+    match repo.history(&request, &CancelSignal::new()) {
+        Err(Error::Walk { .. }) => {}
+        other => panic!("expected the missing tip to fail the walk, got {other:?}"),
+    }
 
     let already = CancelSignal::new();
     already.cancel();

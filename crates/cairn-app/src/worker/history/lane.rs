@@ -671,12 +671,12 @@ mod tests {
         );
     }
 
-    /// A stop ends a running find within a page: between its pages the history thread takes up
-    /// what was asked, so after a stop is queued at most the page being walked and one sent as
-    /// it was queued arrive, and the walk does not end. Over a line long enough that a find of
-    /// one row a page would page on for a measurable while. Caught by: a find that takes up its
-    /// queue only now and then, or runs on after its number was superseded (more pages arrive
-    /// after the stop, and the walk ends).
+    /// A stop ends a running find within a page: once the stop's number has superseded the
+    /// find — what was sent until then read — at most the page being walked and one sent as the
+    /// stop was queued arrive, and the walk does not end. Over a line long enough that a find of
+    /// one row a page would page on for a measurable while. Caught by: a find that runs on after
+    /// its number was superseded — heeding neither that number before each page, nor its page's
+    /// cancel, nor the stop it is sent (more pages arrive, and the walk ends).
     #[test]
     fn a_stop_ends_a_running_find_within_a_page() {
         let line = crate::worker::written_repository::WrittenRepository::packed(
@@ -713,8 +713,8 @@ mod tests {
                 Err(error) => panic!("no page came: {error}"),
             }
         }
-        before.extend(sent.try_iter().map(|sent| sent.opened()));
         let stopped = epochs.bump(QueryLane::History);
+        before.extend(sent.try_iter().map(|sent| sent.opened()));
         sender
             .send(HistoryJob::Page {
                 epoch: stopped,

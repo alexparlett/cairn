@@ -639,8 +639,8 @@ impl Threads {
 }
 
 impl Drop for Threads {
-    /// Closes the repository: the epochs are stopped; the history and diff threads are told
-    /// to stop and the network lane's queue is closed; the fetch in flight, if any, is
+    /// Closes the repository: the epochs are stopped; the history, diff and refresh threads
+    /// are told to stop and the network lane's queue is closed; the fetch in flight, if any, is
     /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the history thread —
     /// its walk ending at the next commit it reads — and then the local lane are waited for
     /// next and a fetch must not run on for as long

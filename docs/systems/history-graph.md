@@ -678,11 +678,12 @@ FILE, and it is a guard, not a convention — see below.
   (`worker/refresh/lane.rs`), so neither a page nor a diff queues behind a slow status.
   `route` applies it to every request as it is submitted and hands each thread its own job
   type, so no thread forwards another's work
-  (`every_query_is_served_on_the_thread_its_lane_is_routed_to`). A filter asked a quarter of
-  the way into an opening pass is answered before its first page, in a sliver of the pass
-  (`a_filter_is_answered_while_the_history_opens`; on rust-lang/rust 0.09 ms against 0.03-0.05
-  ms with nothing opening, and in the window drawn a frame after the keystroke either way,
-  `opening_pass_check`). The repository thread stops the epochs, tells every thread to stop
+  (`every_query_is_served_on_the_thread_its_lane_is_routed_to`). A filter asked while an
+  opening pass runs is answered before its first page
+  (`a_filter_is_answered_while_the_history_opens`, asked once the pass has told its first
+  count); on rust-lang/rust, asked a quarter of the way into the pass, in 0.09 ms against
+  0.03-0.05 ms with nothing opening, and in the window drawn a frame after the keystroke either
+  way (`measures_the_history_thread_against_a_named_repository`, `opening_pass_check`). The repository thread stops the epochs, tells every thread to stop
   and cancels a fetch, then joins the history thread as the repository closes, before it waits
   on any reap, so a close during an opening pass ends the pass at its next commit and the
   update stream in what a close with nothing running takes
@@ -741,8 +742,9 @@ kept by the user's decision of 2026-10-07), so a filter or a free asked while a 
 them waits behind one refs read — about 28 ms for the snapshot of a 10,001-ref
 fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most
 once per trigger. A page never waits on it, being the history thread's, and a refresh never
-waits on an open: asked a quarter of the way into an opening pass, its refs are answered while
-the pass runs (`a_refresh_supersedes_an_open_still_reading`); a refresh never cancels a page. A status, once
+waits on an open: asked while an opening pass runs, its refs are answered before the pass's
+first page — reopening nothing when nothing moved, reopening when a ref did
+(`a_refresh_supersedes_an_open_still_reading`); a refresh never cancels a page. A status, once
 started, runs to its end whatever refreshes arrive, so a window switched faster than a
 status takes still gets one, followed by at most one more; each status is a full stat of
 the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while one runs

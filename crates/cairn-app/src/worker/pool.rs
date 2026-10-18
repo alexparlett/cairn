@@ -47,6 +47,7 @@ use super::diff::lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
 use super::history::lane::{Answering, serve_history};
+use super::history::reading::Pacing;
 use super::history::refs::{self, WalkedRefs};
 use super::local::lane::{LaneState, Local, LocalJob, serve_local_lane};
 use super::network::lane::{FetchControl, Lane, Operation, serve_network_lane};
@@ -84,6 +85,15 @@ const _: () = assert!(
 pub fn open(
     path: impl AsRef<Path>,
     git: &Discovery,
+) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
+    open_paced(path, git, Pacing::default())
+}
+
+/// [`open`], the window told how far an opening pass has read on `pacing`.
+fn open_paced(
+    path: impl AsRef<Path>,
+    git: &Discovery,
+    pacing: Pacing,
 ) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
     let path = path.as_ref().to_owned();
     let discovery = git.clone();
@@ -127,6 +137,7 @@ pub fn open(
             wake: Arc::clone(&wake),
         },
         epochs: epochs.clone(),
+        pacing,
     };
     let diff = DiffThread {
         jobs: diff_incoming,
@@ -291,14 +302,27 @@ pub(super) fn open_with(
     open(path, &Discovery::new(startup))
 }
 
+/// [`open_with`], the window told how far an opening pass has read on `pacing` — with no
+/// hold-back and no interval, every count the walk can report — so a test knows a pass is
+/// running from the worker rather than from a clock.
+#[cfg(test)]
+pub(super) fn open_paced_with(
+    path: impl AsRef<Path>,
+    startup: Startup,
+    pacing: Pacing,
+) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
+    open_paced(path, &Discovery::new(startup), pacing)
+}
+
 /// What the history thread is started with: its queue, which `open` made so the handle
-/// reaches it directly, a sender of the repository thread's own to stop it with, its outbox
-/// and the epochs it is cancelled by.
+/// reaches it directly, a sender of the repository thread's own to stop it with, its outbox,
+/// the epochs it is cancelled by, and the pace it tells the window an opening pass's count on.
 struct HistoryThread {
     jobs: Receiver<HistoryJob>,
     stop: Sender<HistoryJob>,
     outbox: Outbox,
     epochs: Epochs,
+    pacing: Pacing,
 }
 
 /// What the diff thread is started with: its queue, which `open` made so the
@@ -414,6 +438,7 @@ impl Threads {
             stop: history_stop,
             outbox: history_outbox,
             epochs: history_epochs,
+            pacing: history_pacing,
         } = history;
         let history_exit = WorkerExit {
             outbox: Some(history_outbox),
@@ -433,6 +458,7 @@ impl Threads {
                         jobs: &history_jobs,
                         outbox,
                         refs: history_refs,
+                        pacing: history_pacing,
                     };
                     serve_history(&history_shared, &serving);
                 }
@@ -2203,32 +2229,44 @@ mod tests {
         }
     }
 
-    /// Caught by: `open` not installing a [`WorkerExit`] around [`serve`].
-    /// The waker panics exactly once; a second panic while sending the notice would abort.
-    #[test]
-    fn a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it() {
+    /// A waker that panics the first time it is woken — on whichever worker thread sends
+    /// first — and unparks the thread waiting on it either way.
+    struct GivesWayOnce {
+        waiting: std::thread::Thread,
+        spent: std::sync::atomic::AtomicBool,
+    }
+
+    impl std::task::Wake for GivesWayOnce {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            use std::sync::atomic::Ordering;
+            // `spent` first, then the unpark, then the panic: the waiting thread must be woken either way.
+            let first = !self.spent.swap(true, Ordering::SeqCst);
+            self.waiting.unpark();
+            if first {
+                panic!("the window's waker gave way mid-answer");
+            }
+        }
+    }
+
+    /// Asks `ask` of the Cairn checkout until an answer's wake panics the worker thread that
+    /// sent it, and answers what was announced: the notice, once `answered` updates have gone
+    /// by — and, when `ends`, the stream ended after it — or why not. Bounded: ten seconds.
+    fn announced_after_a_panic(
+        ask: fn() -> Request,
+        answered: fn(&Update) -> bool,
+        ends: bool,
+    ) -> Result<String, String> {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        struct GivesWayOnce {
-            waiting: std::thread::Thread,
-            spent: AtomicBool,
-        }
-
-        impl std::task::Wake for GivesWayOnce {
-            fn wake(self: Arc<Self>) {
-                self.wake_by_ref();
-            }
-
-            fn wake_by_ref(self: &Arc<Self>) {
-                // `spent` first, then the unpark, then the panic: the waiting thread must be woken either way.
-                let first = !self.spent.swap(true, Ordering::SeqCst);
-                self.waiting.unpark();
-                if first {
-                    panic!("the window's waker gave way mid-answer");
-                }
-            }
-        }
-
+        // The panic hook is the process's: one test at a time silences it and puts it back.
+        static SILENCED: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _silenced = SILENCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (handle, updates) = cairn();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -2252,44 +2290,79 @@ mod tests {
                         break Err(format!("{asked} answers arrived without ever waking"));
                     }
                     asked += 1;
-                    // Answered on the repository thread itself, inside `serve`.
-                    asking.submit(Request::ListRemotes);
+                    asking.submit(ask());
                 }
                 match woken_by(&waker, updates.next()) {
-                    Some(Update::Remotes { .. }) => {}
                     Some(Update::WorkerLost { message }) => break Ok(message),
+                    Some(update) if answered(&update) => {}
                     other => {
-                        break Err(format!(
-                            "a worker that panicked inside `serve` announced {other:?}"
-                        ));
+                        break Err(format!("a worker that panicked announced {other:?}"));
                     }
                 }
             };
-            let _ = told.send(
-                announced.and_then(|message| match block_on(updates.next()) {
+            let _ = told.send(announced.and_then(|message| {
+                if !ends {
+                    return Ok(message);
+                }
+                match block_on(updates.next()) {
                     None => Ok(message),
                     left => Err(format!(
                         "the stream outlived the worker that panicked inside it: {left:?}"
                     )),
-                }),
-            );
+                }
+            }));
         });
 
         // Redden rather than hang the suite.
         let waited = verdict.recv_timeout(std::time::Duration::from_secs(10));
         std::panic::set_hook(previous);
-
+        drop(handle);
         match waited {
-            Ok(Ok(message)) => {
-                assert!(!message.is_empty(), "an empty notice tells nobody anything");
-            }
-            Ok(Err(why)) => panic!("{why}"),
-            Err(_) => panic!(
-                "ten seconds after a panic inside `serve`, the stream had neither announced \
-                 the worker nor ended: whoever drives `Updates` is parked with nothing coming"
+            Ok(announced) => announced,
+            Err(_) => Err(
+                "ten seconds after the panic, the stream had neither announced the \
+                           worker nor ended: whoever drives `Updates` is parked with nothing \
+                           coming"
+                    .to_owned(),
             ),
         }
-        drop(handle);
+    }
+
+    /// Caught by: `open` not installing a [`WorkerExit`] around [`serve`].
+    /// The waker panics exactly once; a second panic while sending the notice would abort.
+    #[test]
+    fn a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it() {
+        // Answered on the repository thread itself, inside `serve`.
+        let announced = announced_after_a_panic(
+            || Request::ListRemotes,
+            |update| matches!(update, Update::Remotes { .. }),
+            true,
+        );
+        match announced {
+            Ok(message) => assert!(!message.is_empty(), "an empty notice tells nobody anything"),
+            Err(why) => panic!("{why}"),
+        }
+    }
+
+    /// A panic on the history thread — an open's answer waking a waker that gives way — is
+    /// announced as the worker lost, so the window says so rather than waiting on a first page
+    /// that never comes; the other threads serve on. Caught by: the history thread started
+    /// without a [`WorkerExit`] around `serve_history`, or one whose outbox is taken before it
+    /// can announce.
+    #[test]
+    fn a_panic_on_the_history_thread_is_announced() {
+        let announced = announced_after_a_panic(
+            || Request::OpenHistory {
+                rows: 1,
+                lost: false,
+            },
+            |update| matches!(update, Update::Rows { .. } | Update::Refs { .. }),
+            false,
+        );
+        match announced {
+            Ok(message) => assert!(!message.is_empty(), "an empty notice tells nobody anything"),
+            Err(why) => panic!("{why}"),
+        }
     }
 
     /// The negative for the two above.

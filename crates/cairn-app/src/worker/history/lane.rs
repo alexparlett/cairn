@@ -79,12 +79,14 @@ pub(crate) struct Answering<'a> {
 }
 
 /// What the history thread is handed to serve with: the epochs it is cancelled by, its queue,
-/// its outbox, and the refs it shares with the repository thread.
+/// its outbox, the refs it shares with the repository thread, and the pace it tells the window
+/// an opening pass's count on.
 pub(crate) struct Serving<'a> {
     pub epochs: &'a Epochs,
     pub jobs: &'a Receiver<HistoryJob>,
     pub outbox: &'a Outbox,
     pub refs: WalkedRefs,
+    pub pacing: Pacing,
 }
 
 /// Serves the history lane until told to stop, or until every sender has gone. A find in
@@ -95,6 +97,7 @@ pub(crate) fn serve_history(shared: &SharedRepository, serving: &Serving<'_>) {
     let repo = shared.to_worker();
     // Once, outside the loop: the scroll's session borrows `repo` across turns.
     let mut lane = HistoryLane::new(serving.refs.clone());
+    lane.pacing = serving.pacing;
     let answering = Answering {
         epochs,
         outbox: serving.outbox,
@@ -557,6 +560,179 @@ mod tests {
         assert!(
             stopped < pass / 10,
             "a superseded open took {stopped:?} of a {pass:?} pass"
+        );
+    }
+
+    /// The history thread over `path`, started with `jobs` already queued and the epochs as the
+    /// caller left them, so nothing it does races what was asked; it serves until `sender` —
+    /// handed back — is dropped. What it sends is read raw, beneath the epoch filter.
+    fn serving(
+        path: &std::path::Path,
+        epochs: &Epochs,
+        jobs: Vec<HistoryJob>,
+    ) -> (
+        std::sync::mpsc::Sender<HistoryJob>,
+        std::sync::mpsc::Receiver<crate::worker::pool::Envelope>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let shared = cairn_git::SharedRepository::discover(path)
+            .unwrap_or_else(|error| panic!("opening {}: {error}", path.display()));
+        let (sender, queue) = std::sync::mpsc::channel();
+        for job in jobs {
+            sender
+                .send(job)
+                .unwrap_or_else(|error| panic!("queueing: {error}"));
+        }
+        let (outbox, sent) = Outbox::watched();
+        let epochs = epochs.clone();
+        let thread = std::thread::spawn(move || {
+            let serving = Serving {
+                epochs: &epochs,
+                jobs: &queue,
+                outbox: &outbox,
+                refs: WalkedRefs::default(),
+                pacing: Pacing::default(),
+            };
+            serve_history(&shared, &serving);
+        });
+        (sender, sent, thread)
+    }
+
+    /// The rows each page sent carried, page by page, and whether any page said the walk ended.
+    fn pages_of(sent: &[(Option<Epoch>, Update)]) -> (Vec<Vec<Oid>>, bool) {
+        let mut ended = false;
+        let pages = sent
+            .iter()
+            .filter_map(|(_, update)| match update {
+                Update::Rows { rows, complete } => {
+                    ended |= complete;
+                    Some(rows.ids().collect())
+                }
+                _ => None,
+            })
+            .collect();
+        (pages, ended)
+    }
+
+    /// An open whose walk is still the window's runs — its pass and its first page — whatever
+    /// the history lane asked after it: here a find and its stop, queued behind it and numbered
+    /// past it before the history thread starts, so no ordering of threads decides it. The
+    /// find, superseded by its stop before it was taken up, walks nothing. Caught by: an open
+    /// that heeds the history lane's number (dropped, no first page — the window waits on it for
+    /// good), or a find walked though its number was superseded.
+    #[test]
+    fn an_open_runs_whatever_the_history_lane_asked_after_it() {
+        let line =
+            crate::worker::written_repository::WrittenRepository::linear("cairn-open-runs", 50);
+        let epochs = Epochs::new();
+        let opened = epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        let found = epochs.bump(QueryLane::History);
+        let stopped = epochs.bump(QueryLane::History);
+        let jobs = vec![
+            HistoryJob::Page {
+                epoch: opened,
+                page: Page::Open {
+                    rows: 3,
+                    walk,
+                    lost: false,
+                },
+            },
+            HistoryJob::Page {
+                epoch: found,
+                page: Page::Find {
+                    target: Oid::from_bytes(&[0x11; 20]).unwrap_or_else(|error| panic!("{error}")),
+                    rows: 1,
+                },
+            },
+            HistoryJob::Page {
+                epoch: stopped,
+                page: Page::Stop,
+            },
+        ];
+        let (sender, sent, thread) = serving(line.path(), &epochs, jobs);
+        drop(sender);
+        thread
+            .join()
+            .unwrap_or_else(|_| panic!("the history thread panicked"));
+        let sent: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let (pages, _) = pages_of(&sent);
+        assert_eq!(
+            pages,
+            vec![line.commits[..3].to_vec()],
+            "not the open's first page alone"
+        );
+        assert!(
+            sent.iter()
+                .filter(|(_, update)| matches!(update, Update::Rows { .. }))
+                .all(|(epoch, _)| *epoch == Some(walk)),
+            "a page answered under another number than the walk's"
+        );
+    }
+
+    /// A stop ends a running find within a page: between its pages the history thread takes up
+    /// what was asked, so after a stop is queued at most the page being walked and one sent as
+    /// it was queued arrive, and the walk does not end. Over a line long enough that a find of
+    /// one row a page would page on for a measurable while. Caught by: a find that takes up its
+    /// queue only now and then, or runs on after its number was superseded (more pages arrive
+    /// after the stop, and the walk ends).
+    #[test]
+    fn a_stop_ends_a_running_find_within_a_page() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-stop-ends-find",
+            100_000,
+        );
+        let epochs = Epochs::new();
+        let opened = epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        let found = epochs.bump(QueryLane::History);
+        let jobs = vec![
+            HistoryJob::Page {
+                epoch: opened,
+                page: Page::Open {
+                    rows: 1,
+                    walk,
+                    lost: false,
+                },
+            },
+            HistoryJob::Page {
+                epoch: found,
+                page: Page::Find {
+                    target: Oid::from_bytes(&[0x11; 20]).unwrap_or_else(|error| panic!("{error}")),
+                    rows: 1,
+                },
+            },
+        ];
+        let (sender, sent, thread) = serving(line.path(), &epochs, jobs);
+        // The open's page and the find's first: the find is paging.
+        let mut before = Vec::new();
+        while pages_of(&before).0.len() < 2 {
+            match sent.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(envelope) => before.push(envelope.opened()),
+                Err(error) => panic!("no page came: {error}"),
+            }
+        }
+        before.extend(sent.try_iter().map(|sent| sent.opened()));
+        let stopped = epochs.bump(QueryLane::History);
+        sender
+            .send(HistoryJob::Page {
+                epoch: stopped,
+                page: Page::Stop,
+            })
+            .unwrap_or_else(|error| panic!("queueing the stop: {error}"));
+        drop(sender);
+        thread
+            .join()
+            .unwrap_or_else(|_| panic!("the history thread panicked"));
+        let after: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let (late, ended) = pages_of(&after);
+        assert!(!ended, "the find walked to the end of the line");
+        assert!(
+            late.len() <= 2,
+            "{} pages arrived after the stop was queued",
+            late.len()
         );
     }
 

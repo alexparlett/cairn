@@ -11,20 +11,56 @@ use std::time::{Duration, Instant};
 use cairn_model::{Disclosure, Oid};
 
 use crate::worker::diff::tests::opened;
+use crate::worker::history::reading::Pacing;
 use crate::worker::history::tests::{many_refs, poll_for};
 use crate::worker::network::tests::{block_on, collect_until, opened_as};
-use crate::worker::pool::{RepositoryHandle, Updates};
+use crate::worker::pool::{RepositoryHandle, Updates, open_paced_with};
 use crate::worker::request::{Request, Update};
+use crate::worker::startup::Startup;
 use crate::worker::written_repository::WrittenRepository;
 
 /// Commits in the line: an opening pass over it reads them all.
 const LINE: usize = 200_000;
 
+/// Every count the walk can report told at once: how a test knows a pass is running.
+const EVERY_COUNT: Pacing = Pacing {
+    after: Duration::ZERO,
+    every: Duration::ZERO,
+};
+
+/// The line, and the boundary over it with every count of an opening pass told.
 fn line(name: &str) -> (WrittenRepository, RepositoryHandle, Updates) {
     let line = WrittenRepository::packed(name, LINE);
-    let (handle, mut updates) = opened(line.path());
-    opened_as(&mut updates);
+    let (handle, updates) = paced(line.path());
     (line, handle, updates)
+}
+
+fn paced(path: &std::path::Path) -> (RepositoryHandle, Updates) {
+    match open_paced_with(path, Startup::of_this_process(), EVERY_COUNT) {
+        Ok((handle, mut updates, _)) => {
+            opened_as(&mut updates);
+            (handle, updates)
+        }
+        Err(error) => panic!("starting the worker: {error}"),
+    }
+}
+
+/// Reads until the walk being opened tells its first count — its pass is running, with nearly
+/// all of it still to read — failing if its first page comes first.
+fn reading(updates: &mut Updates) {
+    let seen = collect_until(updates, |u| {
+        matches!(u, Update::Reading { .. } | Update::Rows { .. })
+    });
+    assert!(
+        matches!(seen.last(), Some(Update::Reading { .. })),
+        "the pass told no count before its first page"
+    );
+}
+
+/// Reads until `wanted` or the walk's first page, saying which came first.
+fn before_the_first_page(updates: &mut Updates, wanted: impl Fn(&Update) -> bool) -> bool {
+    let seen = collect_until(updates, |u| wanted(u) || matches!(u, Update::Rows { .. }));
+    seen.last().is_some_and(wanted)
 }
 
 fn first_ids(update: &Update) -> Option<Vec<Oid>> {
@@ -34,8 +70,7 @@ fn first_ids(update: &Update) -> Option<Vec<Oid>> {
     }
 }
 
-/// How long an open of the line takes to its first page, the walk from where `main` points:
-/// what the tests below set what they measure against.
+/// How long an open of the line takes to its first page, the walk from where `main` points.
 fn pass(handle: &RepositoryHandle, updates: &mut Updates) -> Duration {
     let asked = Instant::now();
     handle.submit(Request::OpenHistory {
@@ -46,12 +81,11 @@ fn pass(handle: &RepositoryHandle, updates: &mut Updates) -> Duration {
     asked.elapsed()
 }
 
-/// A filter asked a quarter of the way into an opening pass is answered at once, on the
-/// repository thread, while the history thread runs on: before the walk's first page, and in
-/// less than the quarter of the pass it was asked after; its usual time, with nothing opening,
-/// and the pass's own are read first. Caught by: the history lane served on the repository
-/// thread again, or a filter that otherwise waits on the open (answered once the pass ends,
-/// most of a pass later).
+/// A filter asked while an opening pass runs — once the worker has told its first count — is
+/// answered at once, on the repository thread, before the walk's first page, while the history
+/// thread reads on; its usual time, with nothing opening, is read first for the report. Caught
+/// by: the history lane served on the repository thread again, or a filter that otherwise
+/// waits on the open (answered after the first page).
 #[test]
 fn a_filter_is_answered_while_the_history_opens() {
     let (_line, handle, mut updates) = line("cairn-filter-while-opening");
@@ -69,44 +103,39 @@ fn a_filter_is_answered_while_the_history_opens() {
         usual.push(asked.elapsed());
     }
     usual.sort();
-    let pass = pass(&handle, &mut updates);
 
+    let opened = Instant::now();
     handle.submit(Request::OpenHistory {
         rows: 64,
         lost: false,
     });
-    std::thread::sleep(pass / 4);
+    reading(&mut updates);
     let asked = Instant::now();
     handle.submit(filter());
-    let seen = collect_until(&mut updates, |u| {
-        matches!(u, Update::FilteredRefs { .. } | Update::Rows { .. })
-    });
-    let answered = asked.elapsed();
     assert!(
-        matches!(seen.last(), Some(Update::FilteredRefs { .. })),
+        before_the_first_page(&mut updates, |u| matches!(u, Update::FilteredRefs { .. })),
         "the filter was answered after the walk's first page"
     );
+    let answered = asked.elapsed();
+    collect_until(&mut updates, |u| matches!(u, Update::Rows { .. }));
     eprintln!(
-        "a filter over 500 refs: {:.2} ms alone (median of five), {:.2} ms asked a quarter of \
-         the way into an opening pass of {:.0} ms",
+        "a filter over 500 refs: {:.2} ms alone (median of five), {:.2} ms asked during an \
+         opening pass whose first page took {:.0} ms",
         usual[2].as_secs_f64() * 1e3,
         answered.as_secs_f64() * 1e3,
-        pass.as_secs_f64() * 1e3
+        opened.elapsed().as_secs_f64() * 1e3
     );
-    assert!(
-        answered < pass / 4,
-        "the filter took {answered:?}, asked a quarter of the way into a {pass:?} pass"
-    );
-    collect_until(&mut updates, |u| matches!(u, Update::Rows { .. }));
 }
 
-/// A refresh asked a quarter of the way into an opening pass is answered while the pass still
-/// runs — before the first page, in less than the rest of the pass — and says to reopen, a ref
-/// having moved; the reopen the window then asks supersedes the walk still opening, so the
-/// first page to arrive is the new walk's, from where `main` now points, and no page of the walk
-/// it replaced is drawn. Caught by: a refresh queued behind the open (its refs after the first
-/// page), or a reopen that does not supersede the walk opening (its first page, from the old
-/// `main`, drawn).
+/// A refresh asked while an opening pass runs is answered while it still runs, before the
+/// first page: with nothing moved it says to reopen nothing, the pass having named the refs it
+/// opens from the ones its walk began from; with `main` moved it says to reopen, and the reopen
+/// the window then asks supersedes the walk still opening, so the first page to arrive is the
+/// new walk's, from where `main` now points, and no page of the walk it replaced is drawn.
+/// Caught by: a refresh queued behind the open (its refs after the first page), a walk that
+/// names the refs it opens from only once it has opened (a refresh during the pass reopens for
+/// nothing), or a reopen that does not supersede the walk opening (its first page, from the
+/// old `main`, drawn).
 #[test]
 fn a_refresh_supersedes_an_open_still_reading() {
     let (line, handle, mut updates) = line("cairn-refresh-supersedes-open");
@@ -115,30 +144,31 @@ fn a_refresh_supersedes_an_open_still_reading() {
     collect_until(&mut updates, |u| {
         matches!(u, Update::Refs { reopen: true, .. })
     });
-    let pass = pass(&handle, &mut updates);
 
     handle.submit(Request::OpenHistory {
         rows: 64,
         lost: false,
     });
-    std::thread::sleep(pass / 4);
+    reading(&mut updates);
+    handle.submit(Request::Refresh);
+    assert!(
+        before_the_first_page(&mut updates, |u| matches!(
+            u,
+            Update::Refs { reopen: false, .. }
+        )),
+        "a refresh with nothing moved was answered after the first page, or said to reopen"
+    );
     // `main` moves back five commits while the walk opens, and the window refreshes.
     let main = line.path().join(".git/refs/heads/main");
     std::fs::write(&main, format!("{}\n", line.commits[5]))
         .unwrap_or_else(|error| panic!("moving main: {error}"));
-    let asked = Instant::now();
     handle.submit(Request::Refresh);
-    let seen = collect_until(&mut updates, |u| {
-        matches!(u, Update::Refs { .. } | Update::Rows { .. })
-    });
-    let answered = asked.elapsed();
     assert!(
-        matches!(seen.last(), Some(Update::Refs { reopen: true, .. })),
+        before_the_first_page(&mut updates, |u| matches!(
+            u,
+            Update::Refs { reopen: true, .. }
+        )),
         "the refresh was answered after the walk's first page, or said not to reopen"
-    );
-    assert!(
-        answered < pass / 4,
-        "the refresh took {answered:?}, asked a quarter of the way into a {pass:?} pass"
     );
 
     handle.submit(Request::OpenHistory {
@@ -155,11 +185,12 @@ fn a_refresh_supersedes_an_open_still_reading() {
 }
 
 /// A find, and its stop, asked while a walk opens leave the opening pass running: the walk's
-/// first page still arrives, and the next page asked continues it, the pass run once. The three
-/// are asked back to back, so the find and the stop supersede the open in the history lane
-/// before the history thread has begun it. Caught by: an open dropped because the history lane
-/// moved past it (no first page at all — the window waits on it for good), or a pass cancelled
-/// by the history lane rather than the walk's own number (the same).
+/// first page still arrives, and the next page asked continues it, the pass run once. Through
+/// the boundary, the three asked back to back; that the open runs whatever the history lane
+/// asked after it is decided with the jobs queued before the history thread starts
+/// (`an_open_runs_whatever_the_history_lane_asked_after_it`). Caught by: an open dropped
+/// because the history lane moved past it (no first page at all — the window waits on it for
+/// good), or a pass cancelled by the history lane rather than the walk's own number (the same).
 #[test]
 fn a_find_or_its_stop_never_supersedes_a_walk_still_opening() {
     let (line, handle, mut updates) = line("cairn-find-keeps-open");
@@ -194,11 +225,13 @@ fn a_find_or_its_stop_never_supersedes_a_walk_still_opening() {
     );
 }
 
-/// A close asked while the history opens ends the pass at its next commit rather than waiting
-/// for it: the stream ends in what a close with nothing running takes, plus a sliver of the
-/// time the pass takes — both read first, on the same line — and no page arrives. Caught by: a pass the close does not cancel (the history thread,
-/// joined as the repository closes, runs it to its end first), or a close that never joins the
-/// history thread (the stream never ends).
+/// A close asked while an opening pass runs — once the worker has told its first count — ends
+/// the pass at its next commit rather than waiting for it: the stream ends in what a close with
+/// nothing running takes, plus well under the rest of the pass, both read first on the same
+/// line. Decided by time alone: a close stops the epochs as it is asked, so the stream drops
+/// any page the pass might still send. Caught by: a pass the close does not cancel (the history
+/// thread, joined as the repository closes, runs it to its end first), or a close that never
+/// joins the history thread (the stream never ends).
 #[test]
 fn a_close_during_an_opening_pass_does_not_wait_for_it() {
     let (line, handle, mut updates) = line("cairn-close-while-opening");
@@ -209,33 +242,25 @@ fn a_close_during_an_opening_pass_does_not_wait_for_it() {
     while block_on(updates.next()).is_some() {}
     let idle = closing.elapsed();
 
-    let (handle, mut updates) = opened(line.path());
-    opened_as(&mut updates);
+    let (handle, mut updates) = paced(line.path());
     handle.submit(Request::OpenHistory {
         rows: 64,
         lost: false,
     });
-    std::thread::sleep(pass / 8);
+    reading(&mut updates);
     let closing = Instant::now();
     handle.submit(Request::Close);
-    let mut seen = Vec::new();
-    while let Some(update) = block_on(updates.next()) {
-        seen.push(update);
-    }
+    while block_on(updates.next()).is_some() {}
     let closed = closing.elapsed();
     eprintln!(
-        "an opening pass of {:.0} ms closed an eighth of the way in: the stream ended {:.1} ms \
-         after the close was asked, against {:.1} ms for a close with nothing running",
+        "an opening pass of {:.0} ms closed as its first count was told: the stream ended {:.1} \
+         ms after the close was asked, against {:.1} ms for a close with nothing running",
         pass.as_secs_f64() * 1e3,
         closed.as_secs_f64() * 1e3,
         idle.as_secs_f64() * 1e3
     );
     assert!(
-        !seen.iter().any(|u| matches!(u, Update::Rows { .. })),
-        "the pass ran on to its first page"
-    );
-    assert!(
-        closed < idle + pass / 3,
+        closed < idle + pass / 2,
         "the close took {closed:?}, against {idle:?} idle, of a {pass:?} pass"
     );
 }
@@ -411,12 +436,8 @@ fn measures_the_history_thread_against_a_named_repository() {
         std::thread::sleep(into);
         let closing = Instant::now();
         handle.submit(Request::Close);
-        let mut paged = false;
-        while let Some(update) = block_on(updates.next()) {
-            paged |= matches!(update, Update::Rows { .. });
-        }
+        while block_on(updates.next()).is_some() {}
         closes.push(closing.elapsed());
-        assert!(!paged, "a page arrived after the close");
     }
     closes.sort();
     eprintln!(

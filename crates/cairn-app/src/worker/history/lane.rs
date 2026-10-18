@@ -235,7 +235,9 @@ impl<'repo> HistoryLane<'repo> {
                 },
                 None => return self.open(repo, rows, target, answering),
             }
-            match self.open_pass(answering) {
+            // Rows are drawn already: the strip says a walk replacing them reads, and this one
+            // replaces nothing, so the window is told no count.
+            match self.open_pass(answering, false) {
                 Ok(()) => {}
                 Err(Error::Cancelled { .. }) => return None,
                 Err(error) => {
@@ -359,13 +361,14 @@ impl<'repo> HistoryLane<'repo> {
             request
         };
         self.session = Some(repo.history_session(&request)?);
-        self.open_pass(answering)?;
+        self.open_pass(answering, true)?;
         self.next_page(rows, cancel)
     }
 
-    /// The session's opening pass, under the walk's number, the window told how far it has read
-    /// on the pace `reading.rs` sets. Any failure but a cancel drops the session.
-    fn open_pass(&mut self, answering: &Answering<'_>) -> Result<(), Error> {
+    /// The session's opening pass, under the walk's number — the window told how far it has
+    /// read on the pace `reading.rs` sets when `told`, as for a walk its first page will open.
+    /// Any failure but a cancel drops the session.
+    fn open_pass(&mut self, answering: &Answering<'_>, told: bool) -> Result<(), Error> {
         let walk = self.walk(answering);
         let cancel = answering.epochs.watch(walk);
         let mut pace = ReadingPace::starting(Instant::now(), self.pacing);
@@ -373,7 +376,7 @@ impl<'repo> HistoryLane<'repo> {
             return Ok(());
         };
         let opened = session.open_walk(&cancel, self.pacing.every, &mut |commits| {
-            if pace.due(Instant::now()) {
+            if told && pace.due(Instant::now()) {
                 answering
                     .outbox
                     .send(Some(walk), Update::Reading { commits });
@@ -554,6 +557,66 @@ mod tests {
         assert!(
             stopped < pass / 10,
             "a superseded open took {stopped:?} of a {pass:?} pass"
+        );
+    }
+
+    /// A cold restart — the walk dropped by a failed page, the next resumed from the last good
+    /// page's cursor — runs its opening pass again but tells the window no count: its rows are
+    /// drawn already, and the strip says a walk replacing them reads. Here on a pace with no
+    /// hold-back and no interval, on which the open before it told its counts. Caught by: a cold
+    /// restart that tells its pass's counts (the strip drawn over rows nothing is replacing).
+    #[test]
+    fn a_cold_restart_tells_the_window_no_count() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-cold-restart",
+            20_000,
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::new(WalkedRefs::default());
+        lane.pacing = Pacing {
+            after: std::time::Duration::ZERO,
+            every: std::time::Duration::ZERO,
+        };
+        let walk = epochs.bump(QueryLane::Walk);
+        lane.open_walk(&repo, 3, walk, false, &answering);
+        let opening: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
+        assert!(
+            opening
+                .iter()
+                .any(|update| matches!(update, Update::Reading { .. })),
+            "the open told no count"
+        );
+
+        // As a failed page leaves it: the walk dropped, its cursor kept.
+        lane.session = None;
+        let more = epochs.bump(QueryLane::History);
+        lane.more(&repo, 2, more, &answering);
+        let resumed: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
+        assert!(
+            !resumed
+                .iter()
+                .any(|update| matches!(update, Update::Reading { .. })),
+            "a cold restart told its count"
+        );
+        let rows: Vec<Oid> = resumed
+            .iter()
+            .filter_map(|update| match update {
+                Update::Rows { rows, .. } => Some(rows.ids().collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(
+            rows,
+            line.commits[3..5],
+            "the restart did not take the walk up"
         );
     }
 

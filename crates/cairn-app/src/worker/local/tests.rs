@@ -31,7 +31,7 @@ use crate::worker::local::lane::{
 use crate::worker::network::tests::{
     Home, RuntimeDir, UnbornRepository, WAIT, built_helper, collect_until, next_by, with_origin,
 };
-use crate::worker::pool::{Replier, RepositoryHandle, Updates, open};
+use crate::worker::pool::{Replier, RepositoryHandle, Updates, open_untold};
 use crate::worker::request::{CheckoutRefused, RanBy, Request, Update};
 use crate::worker::startup::Startup;
 use crate::worker::tests::StubGit;
@@ -185,7 +185,7 @@ fn boundary(
     stub: &StubGit,
     around: (&Home, &RuntimeDir),
 ) -> (RepositoryHandle, Updates, Replier) {
-    match open(repository, &Discovery::new(stub.startup(Some(around)))) {
+    match open_untold(repository, &Discovery::new(stub.startup(Some(around)))) {
         Ok((handle, mut updates, reply)) => {
             crate::worker::network::tests::opened_as(&mut updates);
             (handle, updates, reply)
@@ -221,7 +221,7 @@ fn real_open(
         },
         built_helper(),
     );
-    match open(repository, &Discovery::new(startup)) {
+    match open_untold(repository, &Discovery::new(startup)) {
         Ok(opened) => opened,
         Err(error) => panic!("starting the worker: {error}"),
     }

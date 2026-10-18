@@ -22,7 +22,7 @@ use super::discovery::Discovery;
 use super::network::tests::{
     Home, RuntimeDir, UnbornRepository, WAIT, built_helper, collect_until, next_by, with_origin,
 };
-use super::pool::{RepositoryHandle, Updates, open};
+use super::pool::{RepositoryHandle, Updates, open_untold};
 use super::request::{Request, Update};
 use super::startup::Startup;
 
@@ -225,7 +225,7 @@ pub(super) fn alive_in_group(group: i32) -> Vec<i32> {
 
 /// The whole boundary over `repository`, `git` coming from `discovery`.
 fn opened(repository: &Path, discovery: &Discovery) -> (RepositoryHandle, Updates) {
-    match open(repository, discovery) {
+    match open_untold(repository, discovery) {
         Ok((handle, updates, _reply)) => (handle, updates),
         Err(error) => panic!("starting the worker: {error}"),
     }

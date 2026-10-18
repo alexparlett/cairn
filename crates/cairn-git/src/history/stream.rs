@@ -40,7 +40,7 @@ use cairn_model::Oid;
 
 use super::reach::Reach;
 use super::seeds::Decoration;
-use super::walk::CommitWalk;
+use super::walk::{CommitWalk, Step};
 use crate::{Cancel, Error};
 
 /// How many commits the stream pulls ahead of the one it hands on next, looking for a
@@ -63,8 +63,8 @@ pub(super) enum Entry {
 pub(super) enum Next {
     Entry(Entry),
     End,
-    /// `cancel` fired while the stream looked ahead; nothing was lost, and the next call
-    /// carries on.
+    /// `cancel` fired while the stream looked ahead, or within the walk's step; nothing was
+    /// lost, and the next call carries on.
     Cancelled,
 }
 
@@ -186,8 +186,9 @@ impl<'repo> Stream<'repo> {
     }
 
     /// The next entry. The caller polls `cancel` before asking for one; the stream polls it
-    /// again before each commit it pulls to look ahead for a stash's base. Each entry is the
-    /// next row.
+    /// again before each commit it pulls to look ahead for a stash's base, and the walk
+    /// polls it within a step that reads commits to know the next one (date order). Each
+    /// entry is the next row.
     pub(super) fn next(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
         let next = self.next_entry(cancel)?;
         if let Next::Entry(entry) = &next {
@@ -201,8 +202,11 @@ impl<'repo> Stream<'repo> {
     }
 
     fn next_entry(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
-        if self.ahead.is_empty() && !self.exhausted {
-            self.pull()?;
+        if self.ahead.is_empty()
+            && !self.exhausted
+            && matches!(self.pull(cancel)?, Pulled::Cancelled)
+        {
+            return Ok(Next::Cancelled);
         }
         let Some(front) = self.ahead.front() else {
             // The walk is over: a stash still waiting had a base it never reached.
@@ -310,8 +314,10 @@ impl<'repo> Stream<'repo> {
             if cancel.is_cancelled() {
                 return Ok(Ahead::Cancelled);
             }
-            let Some(walked) = self.pull()? else {
-                break;
+            let walked = match self.pull(cancel)? {
+                Pulled::Commit(walked) => walked,
+                Pulled::End => break,
+                Pulled::Cancelled => return Ok(Ahead::Cancelled),
             };
             if walked.id == id {
                 return Ok(Ahead::WalkedItself);
@@ -342,14 +348,15 @@ impl<'repo> Stream<'repo> {
     }
 
     /// Pulls one commit off the walk to the back of what is ahead, or notes the walk's end.
-    fn pull(&mut self) -> Result<Option<&Walked>, Error> {
-        let Some(next) = self.walk.next() else {
-            self.exhausted = true;
-            return Ok(None);
+    fn pull(&mut self, cancel: &impl Cancel) -> Result<Pulled<'_>, Error> {
+        let info = match self.walk.next(cancel)? {
+            Step::Commit(info) => info,
+            Step::End => {
+                self.exhausted = true;
+                return Ok(Pulled::End);
+            }
+            Step::Cancelled => return Ok(Pulled::Cancelled),
         };
-        let info = next.map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
         let walked = Walked {
             id: crate::object_id::model_id(&info.id)?,
             parents: super::parents_of(&info)?,
@@ -360,8 +367,16 @@ impl<'repo> Stream<'repo> {
             reach.pulled(walked.id, &walked.parents);
         }
         self.ahead.push_back(walked);
-        Ok(self.ahead.back())
+        Ok(self.ahead.back().map_or(Pulled::End, Pulled::Commit))
     }
+}
+
+/// What [`Stream::pull`] found.
+enum Pulled<'a> {
+    Commit(&'a Walked),
+    End,
+    /// `cancel` fired within the walk's step; nothing was pulled.
+    Cancelled,
 }
 
 /// What looking ahead for a stash's base found.

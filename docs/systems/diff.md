@@ -2363,8 +2363,9 @@ list scrolling, which pointer moves alone could not
 `CommitDetails` is R1.8: the author and the committer as separate `Signature`s,
 each with a name, an email and a `Timestamp` that keeps its own offset; the whole
 message, with `subject()` and `body()` reading it; and the parents in git's order,
-none for a shallow clone's boundary commit, whose parents the clone lacks — read from
-the shallow file by `crates/cairn-git/src/shallow.rs`, as the history walk reads it.
+none for a shallow clone's boundary commit, whose parents the clone lacks, and a graft's
+for a commit the graft file grafts — read by `crates/cairn-git/src/grafts.rs`, as the
+history walk reads them.
 It sits beside the history's rows rather than replacing them — a kept row holds a
 subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
 keeps"), and carrying every parent, both addresses, a committer, an offset and a whole

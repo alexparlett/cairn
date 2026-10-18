@@ -148,7 +148,8 @@ refs.
 
 Each count is a gix walk from one side that hides the other
 (`history::walk::hiding`, `gix::traverse::commit::Simple::hide`), over the commits git's
-walk sees — a shallow clone's boundary grafted, as the history walk grafts it. Every
+walk sees — a shallow clone's boundary and the graft file's commits grafted and a replace
+ref's object read in place of the one it replaces, as the history walk reads them. Every
 object read goes through `Polled`, which fails once `cancel` says so: the frontier gix
 paints before a hiding walk's first commit is one long call, and a refused read is what
 stops it. So no commit-graph is used (a commit read from one never reaches `Polled`),

@@ -475,7 +475,8 @@ new commit with no upstream, 91-99 ms; a detached `HEAD` at a commit 2,000 or
 tip — 1.1-1.3 s, which is git's own walk without a commit-graph (`git -c
 core.commitGraph=false rev-list -1 HEAD --not --remotes`, 1.14 s; 0.08 s with the
 graph, which the walk does not read so it can be cancelled at every object). Where the
-repository has a commit-graph holding `HEAD` and every remote tip the check reads, the graph
+repository has a commit-graph git would read — no replace ref, graft or shallow boundary
+(`walk::commit_graph`) — holding `HEAD` and every remote tip the check reads, the graph
 answers alone (`crate::history::walk::reaches_through_graph`): a walk down from the
 remote tips through the graph's parents that never descends below `HEAD`'s generation, as git's
 own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for that detached

@@ -3,8 +3,8 @@
 use cairn_model::{CommitDetails, Oid, Signature, Timestamp};
 
 use crate::commit_encoding::CommitEncoding;
+use crate::grafts::Grafts;
 use crate::object_id::object_id;
-use crate::shallow::ShallowBoundary;
 use crate::{Error, Repository};
 
 impl Repository {
@@ -31,14 +31,15 @@ impl Repository {
 ///
 /// The parents are the ones git shows: a shallow clone's boundary commit names parents
 /// the clone does not have, and git's own `git log` reads the shallow file and shows
-/// none (`%P` is empty), so neither does this (`crate::shallow`).
+/// none (`%P` is empty), so neither does this; and a commit the graft file grafts shows
+/// the graft's parents (`crate::grafts`).
 pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDetails, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
     let named: Vec<gix::ObjectId> = commit.parent_ids().map(|parent| parent.detach()).collect();
-    let parents = ShallowBoundary::read(commit.repo)
+    let parents = Grafts::read(commit.repo)
         .map_err(|e| read(Box::new(e)))?
         .parents_of(&commit.id, named.iter().map(|parent| parent.as_ref()))?;
     let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;

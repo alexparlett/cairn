@@ -58,12 +58,12 @@ pub(super) fn reflog_tips(
             }
         }
     }
-    // A shallow repository's graph is not read, as the walk reads none there.
-    let graph = if repo.is_shallow() {
-        None
-    } else {
-        repo.commit_graph_if_enabled().ok().flatten()
-    };
+    // The graph is read only where the walk reads one (`walk::commit_graph`): not under a
+    // replace ref, a graft or a shallow boundary, whose commits' dates it may not hold.
+    let substitutions = super::walk::Substitutions::read(repo)?;
+    let graph = super::walk::commit_graph(repo, &substitutions)?;
+    // Read as the walk reads them: a replaced commit's date is its replacement's.
+    let objects = super::walk::Grafted::new(&repo.objects, substitutions);
     let mut commits = Vec::with_capacity(ids.len());
     for id in ids {
         if cancel.is_cancelled() {
@@ -77,8 +77,7 @@ pub(super) fn reflog_tips(
             continue;
         }
         // Missing, or not a commit (`find_commit_iter` refuses another kind): skipped.
-        let date = repo
-            .objects
+        let date = objects
             .find_commit_iter(&id, &mut buffer)
             .ok()
             .and_then(|commit| commit.committer().ok().map(|committer| committer.seconds()));

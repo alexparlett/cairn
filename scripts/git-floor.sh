@@ -66,7 +66,7 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (154, 220, 18 and 5), so a filter that silently matches less
+# the run's count when it was set (154, 220, 18, 5 and 4), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
 # recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
 # `--test diff_engine` holds the write verbs' effects too (`tests/diff_engine/diff/write_verbs.rs`, and
@@ -77,12 +77,15 @@ fi
 # `git stash show` (C7, `tests/diff_engine/diff/stash.rs`), whose untracked half git 2.30.9 does not read
 # and 2.32.7 does. `--test lost_commits` is Show Lost Commits against `git rev-list --reflog`
 # (C20, staging-and-commit phase 10), whose fixtures write their reflogs with the git in use,
-# and whose oracle that git reads.
+# and whose oracle that git reads. `--test date_order` is the history's date-order walk against
+# `git log --date-order` (C2 and C10 of the history-topo-order packet), whose fixtures each git
+# in use builds and whose commit-graph it writes, v1 generations at the floor.
 RUNS=(
   "--lib|diff:: reads:: ops::|153"
   "--test diff_engine||219"
   "--test status||17"
   "--test lost_commits||4"
+  "--test date_order||3"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

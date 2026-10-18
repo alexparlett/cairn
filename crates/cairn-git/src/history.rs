@@ -4,6 +4,7 @@
 //! remote-tracking ref, tag and `HEAD` — whose rows then carry the refs that label them and
 //! whose stashes are rows of their own (`stream`).
 
+mod date_order;
 mod reach;
 mod reflogs;
 mod seeds;
@@ -17,6 +18,7 @@ use cairn_model::{
     GraphRow, LaneAssigner, Oid, PagedCommit, PagedStash, RefName, RefsSnapshot, RowsPage,
 };
 
+pub use date_order::{DateOrderTips, DateOrderWalk, DateOrdered};
 pub use session::HistorySession;
 
 use reach::Reach;
@@ -27,13 +29,17 @@ use crate::commit_encoding::CommitEncoding;
 use crate::object_id::{model_id, object_id};
 use crate::{Cancel, Error, Repository};
 
-/// Neither order is topological: a parent can arrive before its child.
+/// The order a walk yields its commits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryOrder {
-    /// Newest committer date first.
+    /// Newest committer date first; not topological: a parent can arrive before its child.
     CommitTime,
-    /// Unsorted, as the commit graph mentions them; branches interleave.
+    /// Unsorted, as the commit graph mentions them; branches interleave, and a parent can
+    /// arrive before its child.
     GraphOrder,
+    /// `git log --date-order`'s: no commit before all of its children, otherwise newest
+    /// committer date first, ties in the order git queues them (`date_order`).
+    DateOrder,
 }
 
 impl Default for HistoryOrder {
@@ -44,11 +50,13 @@ impl Default for HistoryOrder {
 }
 
 impl HistoryOrder {
-    fn sorting(self) -> gix::traverse::commit::simple::Sorting {
+    /// gitoxide's sorting for its own traversal; `None` for date order, which is Cairn's.
+    fn sorting(self) -> Option<gix::traverse::commit::simple::Sorting> {
         use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
         match self {
-            Self::CommitTime => Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
-            Self::GraphOrder => Sorting::BreadthFirst,
+            Self::CommitTime => Some(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst)),
+            Self::GraphOrder => Some(Sorting::BreadthFirst),
+            Self::DateOrder => None,
         }
     }
 }
@@ -759,8 +767,10 @@ mod tests {
                         .expect("an uncancelled open was cancelled");
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
-                        let Some(next) = walk.next() else { break };
-                        let info = next.unwrap();
+                        let walk::Step::Commit(info) = walk.next(&CancelSignal::new()).unwrap()
+                        else {
+                            break;
+                        };
                         let id = model_id(&info.id).unwrap();
                         let parents: Vec<Oid> = parents_of(&info).unwrap();
                         if lay_out {

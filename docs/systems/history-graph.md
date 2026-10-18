@@ -330,38 +330,115 @@ cancelled cold query reports how far it got and discards the page; a cancelled
 (`a_cancelled_query_stops_walking_and_says_where`,
 `cancelling_a_session_stops_the_walk_and_keeps_its_progress`).
 
-**A shallow clone is walked as git walks it.** A boundary commit — one the
-clone's `shallow` file lists — names parents in its object that the clone does
-not have, and git reads the file as grafts: the commit has no parents, so `git
-log --format=%P` prints nothing for it and `--graph` draws it as a root, while
-a parent the clone DOES have, reached through another branch, is still shown.
-gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
-over with the parents its object names, and skips the next appearance of each
-of those ids whichever commit names it — so a merge-shaped history cloned with
-`--depth` loses a commit its sibling branch reaches, and the lane assigner holds
-a lane open for a parent that never arrives. Both routes therefore walk through
-`crates/cairn-git/src/history/walk.rs`: gitoxide's `Simple` traversal itself,
-reading every commit through a `Grafted` object source that serves a boundary
-commit with its `parent` header lines removed — git's graft, applied where the
-object is read — and with no commit-graph in a shallow repository, which git
-does not read there either (`commit_graph_compatible`). The shallow file is
-read once per walk (`crates/cairn-git/src/shallow.rs`, which
-`Repository::commit_details` reads too). With no parents a boundary commit is a
-root to the assigner, so its line ends there and no lane stays reserved below
-it. Pinned against `git log --format='%H %P'` at four depths of one history — a
-lone tip, a merge cut at the boundary, two boundaries on two branches, and a
-boundary whose parent the clone has through a sibling — on both routes, with
-the graph required to be the one git's parents lay out
+**A shallow clone, a graft and a replace ref are walked as git walks them.** A
+boundary commit — one the clone's `shallow` file lists — names parents in its object
+that the clone does not have, and git reads the file as grafts: the commit has no
+parents, so `git log --format=%P` prints nothing for it and `--graph` draws it as a
+root, while a parent the clone DOES have, reached through another branch, is still
+shown. gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
+over with the parents its object names, and skips the next appearance of each of
+those ids whichever commit names it — so a merge-shaped history cloned with
+`--depth` loses a commit its sibling branch reaches, and the lane assigner holds a
+lane open for a parent that never arrives. git also reads `<common dir>/info/grafts`,
+each line giving a commit the parents git shows in place of its own, which gix does not
+read at all; and `refs/replace/<id>`, reading the object the ref names wherever `<id>`
+is read, which gix 0.87.1 reads with `core.useReplaceRefs` the wrong way round — off
+when unset or true — so it applies none by default. Every walk therefore goes through
+`crates/cairn-git/src/history/walk.rs`, reading each commit through a `Grafted` object
+source over a handle of its own, told to apply no replacement of gix's: an object a
+replace ref replaces reads as its replacement, followed as git follows it
+(`crates/cairn-git/src/replacements.rs`), and a grafted commit — shallow, or from the
+graft file, the shallow file winning for one commit as in git — reads with its `parent`
+header lines replaced by the graft's, found by the commit's own id
+(`crates/cairn-git/src/grafts.rs`, which `Repository::commit_details` reads too). git
+reads no commit-graph where any of these applies (`commit_graph_compatible`: a replace
+ref, a graft, a shallow repository), since the graph holds each commit's own parents and
+generations computed over them; nor does any graph read of Cairn's — the walk's, Show
+Lost Commits' tip dates and the amend's pushed check (`walk::commit_graph`). Each is read
+once per walk. With no parents a boundary commit is a root to the assigner, so its line
+ends there and no lane stays reserved below it. Pinned against `git log --format='%H %P'`
+at four depths of one history — a lone tip, a merge cut at the boundary, two boundaries
+on two branches, and a boundary whose parent the clone has through a sibling — on both
+routes, with the graph required to be the one git's parents lay out
 (`a_shallow_clones_boundary_commits_have_the_parents_git_log_shows`,
-`crates/cairn-git/tests/history.rs`); the header rewrite by
-`only_the_headers_parent_lines_are_removed`.
+`crates/cairn-git/tests/history.rs`); against `git log --date-order` with a replace ref,
+a graft, a shallow file and a shallow clone over a history with a commit-graph, each laid
+out so that the graph's parents would give another order
+(`the_commit_graph_is_used_only_where_git_uses_it`, `crates/cairn-git/tests/date_order.rs`);
+the pushed check's graph stepping aside under each
+(`the_graph_does_not_answer_where_git_would_not_read_it`); the header rewrite by
+`only_the_headers_parent_lines_are_removed` and `a_grafts_parents_replace_the_commits_own`;
+the graft file's reading by `a_graft_file_is_read_as_git_reads_it`; and a replacement's
+depth by `a_replacement_is_followed_as_far_as_git_follows_it`. A replace ref added after the
+repository was opened is read, since each walk reads the refs afresh.
 
 Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
 it nor `GraphOrder` is topological, which is why the assigner must be total over
-arrival order. The measurement (`measures_both_orders_against_a_named_repository`,
+arrival order. A request may also ask for `HistoryOrder::DateOrder`, git's date order
+(below), which is topological; its stash rows are still placed by the stream as in
+commit-time order. The measurement (`measures_both_orders_against_a_named_repository`,
 `#[ignore]`d): walking *and laying out* 50k commits took 129 ms in commit-time
 order against 196 ms in graph order, which leaves far more lanes open per row.
 Walking alone is the other way round.
+
+### git's date order
+
+`HistoryOrder::DateOrder` (`crates/cairn-git/src/history/date_order.rs`) is
+`git log --date-order`'s order: no commit before all of its children, otherwise newest
+committer date first, every tie broken as git breaks it. It is git's incremental
+topological walk from `revision.c` (`init_topo_walk`, `compute_indegrees_to_depth`,
+`indegree_walk_step`, `next_topo_commit`, `expand_topo_walk`), each step citing git's
+source at v2.30.9 and v2.56.0: the tips each once, in the order given, stably sorted by
+date; an in-degree queue ordered by generation then date; and a topological queue ordered
+by date. Both queues pop ties in the order they were put, as git's `prio_queue` does with
+its insertion counter (`date_order/queue.rs`); gitoxide's own `PriorityQueue` and its
+`Topo` walk break equal dates arbitrarily, which is why neither is used. A merge's parents
+are queued in the commit's order, so at one date the first parent comes first. git's
+explore walk is left out: it only settles what a negative tip hides, and a history walk
+has none.
+
+Each commit is read once — from the commit-graph where git would read one, with its
+generation, else from its object through `Grafted`, generation infinite — and kept with
+its in-degree in gitoxide's `IdMap` of `gix_revwalk::graph::Commit`s
+(`date_order/commits.rs`), through a handle with no object cache, since nothing is read
+twice. Without a usable commit-graph every generation is infinite and the opening pass
+reads every commit reachable before the first is known, as git's own whole-list path
+does; with one, only as deep as the lowest generation among the tips, then as deep as each
+commit about to be emitted needs. The opening pass polls its cancel before each tip and
+each commit it reads parents for, and returns nothing once cancelled; a later step that
+must walk deeper polls the same way, and, cancelled, leaves the walk as it was, its
+deepening done before anything is popped. How many commits the pass has read goes to a
+listener at most once per 100 ms (`date_order/pace.rs`).
+
+A stash is a tip whose one parent is its base, as `git replace --graft <stash> <stash>^1`
+makes it for git; its own parents are never read. It is seeded only when the refs reach
+its base, as the in-degree walk decides once it is down to the base's generation, and
+dropped when they do not, or when the refs reach the stash's commit itself. It is decided
+no sooner than the walk needs it — once the walk is that deep anyway, before the commit
+it would pop ahead of, or before its base is counted down — holding meanwhile the place
+among git's tips it was given, so a stash made on an old commit costs the first page
+nothing where a commit-graph bounds the walk. With Show Lost Commits' reflog ids among the
+tips, every stash is decided before they join. The walk is exposed as
+`Repository::date_order` over `DateOrderTips` (refs and `HEAD`, stashes, reflog ids) for
+the parity tests and the reporters; the history's own routes keep commit-time order.
+
+Pinned against git itself, through one oracle run in each fixture at test time —
+`git log --date-order --format=%H --branches --remotes --tags HEAD --stdin`, each stash
+whose base the refs reach grafted onto it in a copy and fed with the reflog ids on stdin —
+on commit times tied across branches, merges, two stashes and a rebase in one second, the
+ui-review recipe, stashes on two branches and on a deleted one, clock skew, and reflog
+entries, each with and without a commit-graph, for the refs, with the stashes and with
+the reflog ids (`the_walk_is_in_git_date_order`), and at both floor gits in `git-floor`;
+the lazy stash decisions by `a_stash_is_decided_no_sooner_than_the_walk_needs_it`; the
+ties and parents by `ties_pop_in_the_order_they_were_put` and
+`parents_are_queued_in_gits_order`; cancellation and the count by
+`an_opening_pass_stops_when_superseded`, `a_cancelled_step_leaves_the_walk_as_it_was` and
+`an_opening_pass_reports_how_far_it_has_read`. On rust-lang/rust from every ref the whole
+walk equals git's `--date-order` row for row; the opening pass costs a little under git's
+own time without a commit-graph (1.19-1.20 s against 1.25-1.26 s) and a little over with
+one (95 ms against 82-84 ms), keeping about 170 bytes per commit (`docs/research/history-topo-order/measured.md`,
+`measures_the_opening_pass_against_a_named_repository`,
+`measures_what_deciding_a_stashs_base_costs`).
 
 ### From every ref, labelled, with stash rows
 

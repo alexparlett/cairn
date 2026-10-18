@@ -26,7 +26,7 @@ impl Repository {
             return Ok(Vec::new());
         };
         let cancelled = |walked: usize| Error::Cancelled { walked };
-        let Some(walk) = walk::open(
+        let Some(mut walk) = walk::open(
             self.inner(),
             &[tip.detach()],
             HistoryOrder::CommitTime,
@@ -36,11 +36,15 @@ impl Repository {
             return Err(cancelled(0));
         };
         let mut messages = Vec::with_capacity(RECENT_MESSAGES);
-        for commit in walk.take(RECENT_MESSAGES) {
+        while messages.len() < RECENT_MESSAGES {
             if cancel.is_cancelled() {
                 return Err(cancelled(messages.len()));
             }
-            let commit = commit.map_err(|source| walk_error(Box::new(source)))?;
+            let commit = match walk.next(cancel)? {
+                walk::Step::Commit(commit) => commit,
+                walk::Step::End => break,
+                walk::Step::Cancelled => return Err(cancelled(messages.len())),
+            };
             let id = crate::object_id::model_id(&commit.id)?;
             messages.push(self.commit_details(&id)?.message);
         }

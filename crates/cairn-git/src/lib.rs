@@ -8,6 +8,7 @@ mod commit;
 mod commit_encoding;
 mod diff;
 mod error;
+mod grafts;
 mod history;
 mod object_id;
 mod operation_in_progress;
@@ -19,8 +20,8 @@ mod recent_messages;
 mod ref_storage;
 mod refs;
 mod remotes;
+mod replacements;
 mod repository;
-mod shallow;
 mod status;
 
 pub use ahead_behind::AheadBehindRead;
@@ -32,7 +33,10 @@ pub use diff::{
 pub use error::{
     CheckoutMoved, CheckoutRefusal, CommitRefusal, Error, LockRefusal, Refusal, RefusedWrite,
 };
-pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
+pub use history::{
+    DateOrderTips, DateOrderWalk, DateOrdered, HistoryCursor, HistoryOrder, HistoryPage,
+    HistoryRequest, HistorySession,
+};
 pub use recent_messages::RECENT_MESSAGES;
 pub use refs::{RefsCost, RefsRead};
 pub use repository::{CLOSE_BOUND, CommandMark, Repository, SharedRepository};

@@ -674,6 +674,42 @@ fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
     assert_eq!(published(&clone), Publication::SomeRemote, "detached");
 }
 
+/// A remote-tracking ref whose history holds a commit replaced by an object the repository
+/// does not have: git dies reading it where it walks that history (`git rev-list HEAD --not
+/// origin/main`, the question asked here; `git branch -r --contains HEAD` instead names no
+/// branch and exits 0), so the amend's cost is an error — never an unpublished `HEAD` amended
+/// without asking. The replaced commit sits on the remote's side alone, above `HEAD`, where
+/// only the hiding walk's paint of the remote's history reads it. Caught by: a read on that
+/// side failing quietly, or the replacement read as the commit it replaces.
+#[test]
+fn an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement() {
+    let (_origin, clone) = cloned("missing-replacement");
+    clone.git(&["reset", "-q", "--hard", "HEAD^"]);
+    assert_eq!(
+        published(&clone),
+        Publication::Upstream(cairn_model::RefName::new("refs/remotes/origin/main")),
+        "the upstream ahead of HEAD has it"
+    );
+    let replaced = clone.rev("origin/main");
+    let missing = "1234567890123456789012345678901234567890";
+    // Written as a file: git will not write a ref naming an object it does not have.
+    clone.write(
+        &format!(".git/refs/replace/{replaced}"),
+        format!("{missing}\n").as_bytes(),
+    );
+    assert!(
+        clone
+            .try_git(&["rev-list", "HEAD", "--not", "origin/main"], &[], None)
+            .is_err_and(|stderr| stderr.contains("not found")),
+        "git itself walked past the missing replacement"
+    );
+    let cost = consequence(&clone);
+    assert!(
+        matches!(cost, Err(Error::Walk { .. })),
+        "an amend with a remote's history unreadable was not refused: {cost:?}"
+    );
+}
+
 /// With a commit-graph, whether a remote has `HEAD` is answered from the graph, cut at `HEAD`'s
 /// generation, and the answer is the object walk's and git's own — `HEAD` far behind a remote tip,
 /// on a side branch no remote reaches, at the tip, and a new commit the graph does not hold (the

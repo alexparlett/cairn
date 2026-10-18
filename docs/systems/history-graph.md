@@ -373,8 +373,11 @@ routes, with the graph required to be the one git's parents lay out
 a graft, a shallow file and a shallow clone over a history with a commit-graph, each laid
 out so that the graph's parents would give another order
 (`the_commit_graph_is_used_only_where_git_uses_it`, `crates/cairn-git/tests/date_order.rs`,
-with and without a graph written, for the refs and for Show Lost Commits' reflog ids, and
-with `core.useReplaceRefs` off, and the shallow file beating a graft for one commit); the
+with and without a graph written, for the refs, for a stash on `main` — a tip pending above
+the substituted history, in the graph with its real parents — and for Show Lost Commits'
+reflog ids, and with `core.useReplaceRefs` off, and the shallow file beating a graft for one
+commit; its oracle grafts the stashes through a copy's graft file, which that setting does
+not switch off); the
 commit-time and graph-order routes, Show Lost Commits' reflog dates, ahead and behind, and
 a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`;
 the details under a graft and a shallow boundary — they read through gitoxide's own handle,

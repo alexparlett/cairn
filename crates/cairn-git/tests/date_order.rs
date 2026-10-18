@@ -478,10 +478,17 @@ fn oracle(fixture: &Fixture, tips: &Tips) -> Vec<String> {
         .collect();
     let copy = (!stashes.is_empty()).then(|| fixture.copy("oracle"));
     let at = copy.as_ref().unwrap_or(fixture);
+    // Through the graft file, after any line the fixture wrote there: a replace ref would do,
+    // but `core.useReplaceRefs false` switches those off and the graft file not.
+    let grafts = at.path.join(".git/info/grafts");
+    let mut lines = std::fs::read_to_string(&grafts).unwrap_or_default();
     for (stash, base) in &tips.stashes {
         if stashes.contains(&stash) {
-            at.git(&["replace", "--graft", stash, base]);
+            lines.push_str(&format!("{stash} {base}\n"));
         }
+    }
+    if !stashes.is_empty() {
+        at.write(".git/info/grafts", &lines);
     }
     let mut input = String::new();
     for id in stashes.iter().copied().chain(&tips.reflogs) {
@@ -824,19 +831,27 @@ fn substitutions() -> [(&'static str, Substitution, bool); 7] {
 /// The walk reads the commit-graph only where git does: not under a replace ref git reads, a
 /// graft or a shallow boundary, each of which gives a commit parents the graph does not hold —
 /// each fixture laid out so that the graph's parents give another order — and with and
-/// without a graph written, for the refs and for Show Lost Commits' reflog ids, whose dates
-/// are the replacements'. Where git does read it, so does the walk. Caught by:
+/// without a graph written, for the refs, for a stash on `main` and for Show Lost Commits'
+/// reflog ids, whose dates are the replacements'. Where git does read it, so does the walk.
+/// Caught by:
 /// `commit_graph_if_enabled` taken alone, as gix decides, which reads the original parents
 /// and walks to the graph's generations; replace refs read whatever `core.useReplaceRefs`
 /// says; or the shallow file losing to a graft.
 #[test]
 fn the_commit_graph_is_used_only_where_git_uses_it() {
-    let readings = [Reading::Refs, Reading::LostCommits];
+    let readings = [Reading::Refs, Reading::Stashes, Reading::LostCommits];
     let mut found = Vec::new();
     for graph in [false, true] {
         let mut plain_order = Vec::new();
         for (name, substitute, git_reads_the_graph) in substitutions() {
             let (fixture, commits) = substituted(&name.replace(' ', "-"), graph);
+            // A stash on `D`: a tip whose one parent the walk is given, pending above the
+            // substituted history, and in the commit-graph with its real parents.
+            fixture.write("f", "stashed");
+            fixture.git(&["stash", "push", "-q"]);
+            if graph {
+                fixture.write_commit_graph();
+            }
             substitute(&fixture, &commits);
             found.extend(mismatches(
                 name,

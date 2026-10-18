@@ -486,8 +486,12 @@ object walk and git's 10 ms
 history as git's `git branch -r --contains` sees it, replace refs and grafts applied: a local
 replace ref or graft that cuts a remote's history short of `HEAD` answers `HEAD` unpublished
 though the remote holds it — and an amend git logs then runs without asking, its old commit
-kept in the reflog — and a replace ref whose replacement is missing fails the check, as git
-dies on it, rather than answering (`a_replacement_that_is_not_there_fails_the_walk`). Without a graph — the bench
+kept in the reflog — and a replace ref whose replacement is missing fails the check, as git's
+`rev-list` dies on it (git 2.56's `branch -r --contains` instead names no branch and exits 0;
+2.30.9 and 2.32.7 die), rather than answering: on `HEAD`'s own history
+(`a_replacement_that_is_not_there_fails_the_walk`) and on the remote's side alone, read only by
+the hiding walk's paint of it
+(`an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
 at the press, again in a confirmed amend's re-check, and again once an amend at the press is
 made (C35) — never on a status (with `HEAD` at a remote tip the consequence costs 0.14 ms,

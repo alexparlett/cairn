@@ -3,6 +3,107 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-18 — phase 04, the merge bar (packet mode)
+
+An independent QA over the whole packet diff (`main...feature/history-topo-order`, 22 commits):
+`qa-checklist`, `test-coverage-auditor`, `responsiveness-reviewer`, `gate-integrity-reviewer` and
+`destructive-ops-reviewer` (the amend's pushed check reads through the new `Grafted`), each
+spawned fresh; 8 raw findings adjudicated by a fresh `qa-confirm`: 2 confirmed (both coverage
+gaps, no code defect), 6 dismissed.
+
+Criteria, each test checked to fail under a mutation (then restored): C1 `ties_pop_in_the_order_they_were_put`
+(ties popped in reverse), `parents_are_queued_in_gits_order` (parents pushed reversed); C2
+`the_walk_is_in_git_date_order` (the tie swap); C3 `an_opening_pass_stops_when_superseded` (the
+in-degree loop's poll removed), `an_opening_pass_reports_how_far_it_has_read` (the report
+disabled); C4 the four tests (`HistoryOrder::default()` back to `CommitTime`); C5 the frozen
+oracle byte-identical to `main`, `crates/cairn-model/tests/` untouched, the fingerprint and
+`recent_messages` tests passing, `CommitTime` and `GraphOrder` unchanged; C6
+`a_filter_is_answered_while_the_history_opens` (the repository thread's filter held 8 s),
+`a_refresh_supersedes_an_open_still_reading` (`reopen` forced false),
+`a_close_during_an_opening_pass_does_not_wait_for_it` (`Epochs::stop` a no-op); C7
+`the_history_says_it_is_reading_during_a_long_open` (the count dropped from the sentence),
+`a_reopen_keeps_the_old_rows_until_the_new_page` (`Progress::reopen` not marking); C10
+`the_commit_graph_is_used_only_where_git_uses_it` (the graph read under grafts and replace
+refs). C8 and C9 below.
+
+C8, measured again on the bench (release, `GIT_OPTIONAL_LOCKS=0`, marker 11:30:40 +0100, `find
+~/Development/bench/rust/.git -newer <marker>` empty after every run, exit 0, nothing on stderr;
+the commit-graph copy made afresh in the scratchpad, `cp -r` of `.git`, no alternates,
+`gc.auto 0`, `maintenance.auto false`, `git commit-graph write --reachable` in 1.5 s): git's
+`rev-list --date-order --max-count=64 --branches --remotes --tags HEAD` median 1,257 ms
+[1,251-1,296] (bar 1,383 ms); the history thread's open to its first 64 rows median 1,183 ms
+[1,178-1,186] — R6.1 met; counts told 9 times, the first at 309 ms (78,085 commits), least gap
+100 ms; a page after the pass 0.41 ms; the sidebar's filter 0.03 ms alone, 0.06 ms asked 296 ms
+into a pass, before the first page every time; a close 29.7 ms into a pass against 38.2 ms idle;
+the whole history through the boundary equals git's `log --date-order` row for row (345,545,
+"first difference at None"). With the commit-graph copy: git 86 ms [84-95], Cairn 115 ms
+[113-122], the order equal again. The window check: the first open drawn after 1,197 ms, 102
+frames, max 6.78 ms; 3,000 rows scrolled, max 9.23 ms; a reopen scrolled every frame, 80
+frames, max 2.27 ms, the filter keystroke 18.1 ms against 17.2 ms idle — no frame over 16.7 ms.
+All within the recorded figures in `docs/research/history-topo-order/measured.md`.
+
+C9: the reviewers read the root `CLAUDE.md`'s routing account against `worker/pool.rs` and
+`worker/routing.rs` arm by arm, every test name cited in `docs/systems/history-graph.md` and
+the touched systems docs found in the tree, and `docs/qa-gate.md`'s git-floor rows against
+`scripts/git-floor.sh`.
+
+Packet qa-checklist: (1) every cited `revision.c`, `prio-queue.c`, `commit.c` and
+`commit-graph.c` line at v2.30.9 and v2.56.0 resolves to the function named (19 checked by
+hand); the one departure, the explore walk left out, says why, and the parity tests hold the
+order; (2) the oracle is real git on both paths, tips in L5's order, grafts in a copy or
+outside the repository, the with-graph arm proven by `read_from_graph`; every R5.1 fixture
+present; (3) above; (4) the poll is on the opening pass's own loop (M3 fails it) and per tip;
+(5) above; (6) every rewritten test named in the phases' logs exists and says why; (7) measured
+above, the count paced on the worker (`READING_AFTER` 250 ms, `READING_EVERY` and
+`REPORT_EVERY` 100 ms).
+
+Dismissal-log audit: every dismissal's reason still holds — `reflog_tips` drops ids that are
+not commits; `old_stashes` is among `history_fixtures()` under
+`lost_commits_are_in_git_date_order`; no look-ahead remains in `cairn-git` or `cairn-model`;
+`Chunks::get_mut` is gone; `QC-2`'s path is unreachable (confirmed again below as RR-2); the
+inline unit tests run at the host git while the floor row is `tests/date_order.rs`; no rule
+requires a line ratchet.
+
+Confirmed and fixed (0eab817):
+- DO-1(b): the amend's pushed check was pinned fail-closed on a missing replacement on
+  `HEAD`'s side alone; `an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement`
+  (`tests/diff_engine/diff/commit.rs`) pins the remote's side, read only by gix's
+  hidden-frontier paint. Found on the way: git 2.56.0's `branch -r --contains HEAD` names no
+  branch and exits 0 there, where its `rev-list HEAD --not origin/main` and git 2.30.9 and
+  2.32.7 die; Cairn refuses, as the floors do (`docs/systems/staging.md`).
+- TC-3: `the_commit_graph_is_used_only_where_git_uses_it` now reads a stash on `main` under
+  each substitution too, and its oracle grafts stashes through the copy's graft file — the
+  `core.useReplaceRefs false` fixture switched its `git replace --graft` off and listed the
+  stash's index commit (an oracle artefact, not a Cairn row).
+
+Dismissed (qa-confirm):
+- DO-1(a) (a hidden-side missing replacement read as "unpublished"): gix's hidden-frontier
+  paint reads every hidden tip and painted parent with `?` before the first yield, through
+  `Grafted::try_find`, which fails a missing replacement; the `.ok()` the reviewer cites is a
+  parent-date read after the paint. Pinned anyway (DO-1(b)).
+- DO-2 (`reaches_through_graph` cuts at a raw generation where git maps 0 to infinity): git
+  writes a level for every commit in a layer and a lower layer cannot reference an upper one,
+  so a zero level is never a descendant of a positive one; with a zero-level tip the floor is 0
+  and nothing is cut. The answer cannot differ.
+- RR-1 (Show Lost Commits' reflog read polls per reflog, not per commit): the per-log and
+  per-id polls are `main`'s; R2.3 governs the walk, and the tip-gathering reads are bounded
+  file reads and polled lookups.
+- RR-2 (a replaced `History` dropped on the UI thread while closing): `closing` is set after
+  `submit(Close)` stops the epochs, and `Updates::next` hands no numbered update on once
+  stopping, so no `Update::Rows` reaches the arm while closing.
+- GATE-1 ("v1 generations at the floor" wording): 2.30.9 has no GDAT code and gix reads CDAT's
+  level alone, so the floor writes and Cairn reads v1 generations.
+- TC-1 (the floor one under the count): the script's stated convention for every row.
+- TC-2 (the close test decided by wall time): a same-process baseline and a half-pass margin,
+  false-failure only, as the suite's other timing tests are; the mutation fails it by a second.
+
+Decisions batched for the user, PENDING review (not approved), added to the phases' lists:
+- The pending item "the amend's pushed check follows git's replaced and grafted view, as `git
+  branch -r --contains` does" is exact for the floors and inexact for git 2.56.0 on a missing
+  replacement, where `--contains` fails open and Cairn fails closed with `rev-list`.
+- The oracle in `tests/date_order.rs` grafts stashes through a graft file, as
+  `tests/support/date_order_oracle.rs` does, rather than `git replace --graft`.
+
 ## 2026-10-18 — phase 03 built (packet mode)
 
 Built on `feature/history-topo-order` (061cf94, c784f04, 606f693, then the QA fixes 3319815,

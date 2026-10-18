@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: phase 03 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
+**Status: phase 04 QA done, READY for teardown, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`. Teardown (phase 04 STEP 5 onward) has not run; the decisions progress.md lists as PENDING the user's review are not approved.
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -144,4 +144,4 @@ Handed to phase 04 (the packet's QA over the whole diff):
 | 01 | done; C1, C2, C3, C10, C8 opening pass met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, fixes landed, dismissals and pending decisions in progress.md |
 | 02 | done; C4, C5 met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, 4 fixes landed, dismissals, deferrals and pending decisions in progress.md |
 | 03 | done; C6, C7, C8, C9 met; RR-1/2/3 fixed | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, 10 fixes landed, dismissals and pending decisions in progress.md |
-| 04 | not started | — | — |
+| 04 | done; C1-C10 each verified against its test (mutations in progress.md), the bench re-measured and git's order equal on 345,545 rows | `scripts/gate.sh` full at 0eab817, `gate: PASS`, exit 0 (git-floor: date_order 11 tests, floor 10, nothing skipped at 2.30.9 or 2.32.7) | done: 5 reviewers + qa-confirm over the whole diff, 8 raw findings, 2 coverage gaps fixed (0eab817), 6 dismissed with reasons in progress.md |

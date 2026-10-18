@@ -616,7 +616,10 @@ FILE, and it is a guard, not a convention — see below.
   while a walk opens leaves the pass running and is served once the first page is out,
   and only the next open — a reopen — or a close stops it
   (`an_opening_pass_is_superseded_by_the_next_walk_alone`, on the lane;
-  `a_find_or_its_stop_never_supersedes_a_walk_still_opening`, through the boundary).
+  `an_open_runs_whatever_the_history_lane_asked_after_it`, the history thread started with its
+  jobs already queued; `a_find_or_its_stop_never_supersedes_a_walk_still_opening`, through the
+  boundary). A stop ends a running find within a page
+  (`a_stop_ends_a_running_find_within_a_page`).
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
   implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
   superseding a request stops its walk at the next commit rather than
@@ -640,6 +643,7 @@ FILE, and it is a guard, not a convention — see below.
   The `WorkerExit` tests in `crates/cairn-app/src/worker/pool.rs` cover it
   (`a_panicking_worker_says_so_instead_of_disappearing`,
   `a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it`,
+  `a_panic_on_the_history_thread_is_announced`,
   `a_worker_that_exits_cleanly_raises_no_alarm`,
   `a_failed_open_ends_the_stream_rather_than_leaving_it_open`,
   `a_worker_ending_in_silence_still_wakes_the_waiting_task`). `Outbox` is not
@@ -678,11 +682,12 @@ FILE, and it is a guard, not a convention — see below.
   the way into an opening pass is answered before its first page, in a sliver of the pass
   (`a_filter_is_answered_while_the_history_opens`; on rust-lang/rust 0.09 ms against 0.03-0.05
   ms with nothing opening, and in the window drawn a frame after the keystroke either way,
-  `opening_pass_check`). The repository thread stops the epochs and joins the history thread
-  as the repository closes, before it waits on any reap, so a close during an opening pass
-  ends the pass at its next commit and the update stream in what a close with nothing running
-  takes (`a_close_during_an_opening_pass_does_not_wait_for_it`; on rust-lang/rust 29 ms
-  against 38 ms idle).
+  `opening_pass_check`). The repository thread stops the epochs, tells every thread to stop
+  and cancels a fetch, then joins the history thread as the repository closes, before it waits
+  on any reap, so a close during an opening pass ends the pass at its next commit and the
+  update stream in what a close with nothing running takes
+  (`a_close_during_an_opening_pass_does_not_wait_for_it`; on rust-lang/rust 29 ms against
+  38 ms idle).
   A second thread costs the first almost nothing: measured by
   `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
   concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
@@ -756,7 +761,9 @@ file system (R10.2).
 
 **What reopens the history.** The repository thread and the history thread share the
 snapshot the walk began from and the snapshot the last refresh read (`WalkedRefs`,
-`worker/history/refs.rs`, a lock held for a pointer's clone or assignment). A refresh compares
+`worker/history/refs.rs`, behind a lock the history thread holds for a pointer's clone or
+assignment and a refresh across its comparison, so an open between the two cannot make a
+refresh answer for the wrong walk; the UI thread never takes it). A refresh compares
 the refs it reads with the first by `RefsSnapshot::walks_as` — the same refs naming the same
 objects, the same `HEAD`, the same stash list — and answers `Update::Refs { snapshot, reopen
 }`. The history thread names a snapshot the one the walk began from as it takes it to open,
@@ -838,7 +845,10 @@ free and a diff each run on another thread — and the window says it is reading
   `READING_AFTER` (250 ms), then each at most once per 100 ms (`ReadingPace`,
   `worker/history/reading.rs`; `the_count_is_told_once_the_pass_has_run_250_ms_then_at_most_every_100_ms`),
   as `Update::Reading { commits }` under the walk's number, so a superseded walk's count is
-  never drawn (`the_window_is_told_how_far_an_opening_pass_has_read`). The window keeps the
+  never drawn (`the_window_is_told_how_far_an_opening_pass_has_read`). A cold restart — the walk
+  dropped by a failed page and resumed from its cursor — runs its pass again under the walk's
+  number but tells no count, since it replaces no rows
+  (`a_cold_restart_tells_the_window_no_count`). The window keeps the
   number in `Progress` (`Progress::reading`) and keeps no timer: a pass shorter than 250 ms
   says nothing. On rust-lang/rust the first count is told at 304-309 ms, nine or ten times an
   open.

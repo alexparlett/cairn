@@ -1650,15 +1650,15 @@ runs on the UI thread:
    tick — and queues the close, which `serve` breaks on.
 2. On the repository thread, `Threads::drop` stops the epochs (again, or for the
    first time when every handle went rather than a close being asked), tells the
-   history thread to stop and joins it — its walk polls the epochs between the commits
-   it reads, so a close during an opening pass waits on no more than one commit's read
-   (`a_close_during_an_opening_pass_does_not_wait_for_it`), and the history thread runs
-   no `git` — then tells the diff thread to stop
-   (the window's handles hold its queue open, so it is told rather than left
-   to see the queue close), closes the network lane's queue, cancels the fetch
-   in flight at once through `FetchControl`, as `CancelFetch` does — so a fetch
-   never runs on while a commit's hooks do
-   (`a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit`) — marks the local
+   history and diff threads to stop (the window's handles hold their queues open, so
+   they are told rather than left to see a queue close), closes the network lane's
+   queue, cancels the fetch in flight at once through `FetchControl`, as `CancelFetch`
+   does — so a fetch never runs on while a walk opens or a commit's hooks run
+   (`a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit`) — then joins the history
+   thread, whose walk polls the epochs between the commits it reads, so a close during an
+   opening pass waits on no more than one commit's read
+   (`a_close_during_an_opening_pass_does_not_wait_for_it`), and which runs no `git`; then
+   it marks the local
    lane closing (the close's arm of `submit` has already marked it, so a write
    asked after the close is never started:
    `a_close_marks_the_local_lane_closing_as_it_is_submitted`) — it starts no

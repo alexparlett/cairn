@@ -318,7 +318,7 @@ fn a_slow_status_delays_neither_a_page_nor_a_diff() {
     let fixture = Refreshable::new("cairn-refresh-slow-status");
     let stub = StubGit::wrapping("status", STATUS_HANGS);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let (handle, mut updates) = match crate::worker::pool::open(
+    let (handle, mut updates) = match crate::worker::pool::open_untold(
         fixture.path(),
         &Discovery::new(stub.startup(Some((&home, &runtime)))),
     ) {
@@ -415,7 +415,10 @@ fn with_slow_status(
     stub: &StubGit,
     around: (&Home, &RuntimeDir),
 ) -> (RepositoryHandle, Updates) {
-    match crate::worker::pool::open(fixture.path(), &Discovery::new(stub.startup(Some(around)))) {
+    match crate::worker::pool::open_untold(
+        fixture.path(),
+        &Discovery::new(stub.startup(Some(around))),
+    ) {
         Ok((handle, updates, _)) => (handle, updates),
         Err(error) => panic!("starting the worker: {error}"),
     }

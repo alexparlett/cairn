@@ -360,7 +360,7 @@ fn a_superseded_diff_kills_its_git() {
     let fixture = BorrowedRepository::new(&format!("cairn-diff-killed-{}", std::process::id()));
     fixture.point_main_at(&ids[0].to_string());
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let (handle, mut updates) = match crate::worker::pool::open(
+    let (handle, mut updates) = match crate::worker::pool::open_untold(
         &fixture.fixture.path,
         &Discovery::new(stub.startup(Some((&home, &runtime)))),
     ) {
@@ -890,7 +890,7 @@ fn a_failed_read_is_sent_as_a_failure_naming_its_query() {
     let fixture = BorrowedRepository::new(&format!("cairn-diff-failed-{}", std::process::id()));
     fixture.point_main_at(&ids[0].to_string());
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let (handle, mut updates) = match crate::worker::pool::open(
+    let (handle, mut updates) = match crate::worker::pool::open_untold(
         &fixture.fixture.path,
         &Discovery::new(stub.startup(Some((&home, &runtime)))),
     ) {
@@ -1130,7 +1130,7 @@ fn a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read() {
     let fixture = BorrowedRepository::new(&format!("cairn-expand-killed-{}", std::process::id()));
     fixture.point_main_at(&head.to_string());
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let (handle, mut updates) = match crate::worker::pool::open(
+    let (handle, mut updates) = match crate::worker::pool::open_untold(
         &fixture.fixture.path,
         &Discovery::new(stub.startup(Some((&home, &runtime)))),
     ) {

@@ -19,6 +19,17 @@ pub(crate) struct Pacing {
     pub(crate) every: Duration,
 }
 
+impl Pacing {
+    /// No count told however long a pass runs: what a test opens with when its updates do not
+    /// decide the count, so a pass that runs past the hold-back on a slow machine puts no
+    /// [`crate::worker::Update::Reading`] among the pages it reads.
+    #[cfg(test)]
+    pub(crate) const UNTOLD: Self = Self {
+        after: Duration::MAX,
+        every: READING_EVERY,
+    };
+}
+
 impl Default for Pacing {
     fn default() -> Self {
         Self {

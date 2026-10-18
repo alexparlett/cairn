@@ -293,13 +293,25 @@ fn repository_name(shared: &SharedRepository) -> String {
 
 /// [`open`] with a `git` found afresh from `startup` — the environment it is
 /// searched on and run with, and the helper it is pointed at; what a test
-/// hands in.
+/// hands in — and no count of an opening pass told ([`open_untold`]).
 #[cfg(test)]
 pub(super) fn open_with(
     path: impl AsRef<Path>,
     startup: Startup,
 ) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
-    open(path, &Discovery::new(startup))
+    open_untold(path, &Discovery::new(startup))
+}
+
+/// [`open`], the window told no count of an opening pass however long it runs
+/// ([`Pacing::UNTOLD`]): for a test whose updates the count does not decide, which would
+/// otherwise read a [`Update::Reading`] before a page wherever a pass outran the hold-back.
+/// A test that decides the count opens with [`open_paced_with`].
+#[cfg(test)]
+pub(super) fn open_untold(
+    path: impl AsRef<Path>,
+    git: &Discovery,
+) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
+    open_paced(path, git, Pacing::UNTOLD)
 }
 
 /// [`open_with`], the window told how far an opening pass has read on `pacing` — with no

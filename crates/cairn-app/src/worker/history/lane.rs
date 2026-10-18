@@ -565,7 +565,8 @@ mod tests {
 
     /// The history thread over `path`, started with `jobs` already queued and the epochs as the
     /// caller left them, so nothing it does races what was asked; it serves until `sender` —
-    /// handed back — is dropped. What it sends is read raw, beneath the epoch filter.
+    /// handed back — is dropped. What it sends is read raw, beneath the epoch filter, and
+    /// carries no count of an opening pass (`Pacing::UNTOLD`).
     fn serving(
         path: &std::path::Path,
         epochs: &Epochs,
@@ -591,7 +592,7 @@ mod tests {
                 jobs: &queue,
                 outbox: &outbox,
                 refs: WalkedRefs::default(),
-                pacing: Pacing::default(),
+                pacing: Pacing::UNTOLD,
             };
             serve_history(&shared, &serving);
         });
@@ -960,6 +961,8 @@ mod tests {
             outbox: &outbox,
         };
         let mut lane = HistoryLane::new(WalkedRefs::holding(stale));
+        // Only the refs and the first page are read: no count of a pass outrunning the hold-back.
+        lane.pacing = Pacing::UNTOLD;
         epochs.bump(QueryLane::History);
         let walk = epochs.bump(QueryLane::Walk);
         lane.open_walk(&repo, 3, walk, false, &answering);

@@ -35,9 +35,11 @@ far that branch is from its upstream ("The title bar", there too).
 
 One commit crosses four crates and changes shape three times.
 
-1. **`gix` hands over a walk entry.** `Repository::history_session`
-   (`crates/cairn-git/src/history/session.rs`) opens one gitoxide revision walk
-   and keeps it for the life of a scroll. Each step yields an id and its parent
+1. **The walk hands over an entry.** `Repository::history_session`
+   (`crates/cairn-git/src/history/session.rs`) opens one walk — in git's date order, the
+   default, Cairn's own port of git's topological walk over gitoxide's commit reads
+   (`crates/cairn-git/src/history/date_order.rs`); in commit-time and graph order a gitoxide
+   revision walk — and keeps it for the life of a scroll. Each step yields an id and its parent
    ids, read from the walk rather than from a decoded object — the parents git
    shows, which in a shallow clone are not always the ones the object names
    (see "A shallow clone" below). In git's date order a refs snapshot's stashes are
@@ -1096,9 +1098,11 @@ with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,07
 Each reflog id is checked once to name a commit — the commit-graph answering where it holds
 the id (`reflogs::reflog_tips`) — and the walk reads each tip itself, a ref's or a reflog's,
 its date and parents the commit-graph's where the graph holds it, as git's own walk takes
-them (`a_commit_graph_dates_the_tips_as_the_objects_do`). Measured in commit-time order, on
-the clone, back to back against a walk that read each tip twice and dated it from its
-object ("before"):
+them (`a_commit_graph_dates_the_tips_as_the_objects_do`). Measured in commit-time order,
+which isolates the reflog reads, on the clone, back to back against a walk that read each tip
+twice and dated it from its object ("before") — Show Lost Commits itself walks date order, so
+without a commit-graph its first page also pays the opening pass ("The opening pass in the
+window"):
 with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
 pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
 1,000 entries 7.8 ms and 2.8 ms; 200 local branches each with a 50-entry log (10,000 ids),
@@ -1359,14 +1363,22 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 - **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
   residual): the open checks each distinct reflog id once — from a commit-graph where one
   holds it — and the walk reads it as a tip, and without a commit-graph those reads from the
-  pack are the cost, about 5 µs a read on rust-lang/rust. Measured above in commit-time
-  order: a `HEAD` log of 10,000 entries
+  pack are the cost, about 5 µs a read on rust-lang/rust. The reflog reads alone, measured
+  above in commit-time order: a `HEAD` log of 10,000 entries
   makes the first page 50.8 ms with no commit-graph and 8.8 ms with one, where git's own
   `rev-list --reflog` takes 57-80 ms; 200 local branches each with a 50-entry log, the same
   10,000 ids, 50.6 ms and 8.9 ms. The cost is the ids across every log read — `HEAD`'s and each
   local branch's — and it is paid again on every refresh that moves a ref while the toggle is
   on, since each reopen reads every log again. Merging the logs' ids with the refs' tips is
-  linear (a hash set, `history::open_stream`).
+  linear (a hash set, `history::open_stream`). Show Lost Commits walks date order, so without
+  a commit-graph its first page also pays the whole opening pass (about 1.2 s on
+  rust-lang/rust), and so does each reopen while it is on.
+- **A replace ref or a graft file changed alone reopens nothing.** The walk reads
+  `refs/replace/`, `info/grafts` and the shallow file as git does, but whether a refresh
+  reopens the history is decided by the refs snapshot alone (`RefsSnapshot::walks_as`), which
+  holds none of them. Adding or moving a replace ref, or editing the graft file, while no ref
+  the graph draws moves leaves the history drawing what it read until the next reopen — a
+  refresh that moves a ref, or Show Lost Commits toggled.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

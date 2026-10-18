@@ -156,6 +156,9 @@ On the application's side, in `crates/cairn-app/src/`:
                           Request::Close and Request::CommandLog, spawns the cairn-history,
                           cairn-diff and cairn-network threads, Threads::drop
   worker/history/lane.rs  the history thread's loop: the history lane, which runs no git
+  worker/history/refs.rs  WalkedRefs, the refs the walk began from and the latest, shared by
+                          the repository and history threads; a refresh's refs read
+  worker/history/reading.rs when the window is told an opening pass's count (Update::Reading)
   worker/routing.rs       the routing table: which thread serves each request, applied as it
                           is submitted
   worker/epoch.rs         epochs numbered per query lane, each a read's Cancel
@@ -618,7 +621,7 @@ where it ran.
 
 Pinned: `a_trusted_repository_is_named_to_git_ahead_of_the_verb` (a stub
 `git` prints its arguments) and
-`a_repository_trusted_less_than_fully_is_left_to_gits_discovery`, in
+`every_repository_is_named_to_git_whatever_trust_gix_gave_it`, in
 `process/cli.rs`; against real git,
 `a_repository_whose_working_tree_sits_inside_another_is_the_one_asked` and
 `a_bare_repository_is_answered_under_safe_bare_repository_explicit`

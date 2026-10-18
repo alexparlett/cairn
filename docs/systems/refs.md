@@ -60,7 +60,9 @@ unreadable count, which the graph does not draw (`a_walk_is_the_same_unless_what
 Comparing snapshots sees a symbolic ref retargeted and a tag object replaced on the same
 commit, which comparing peeled ids did not. It sees only what the snapshot holds, so a fetch
 that moves only a ref outside those namespaces (`refs/notes/`, `refs/pull/`,
-`refs/replace/`) reopens nothing. The network lane keeps no comparison of its own: a fetch
+`refs/replace/`) reopens nothing — though the walk reads `refs/replace/` as git does, so a
+replace ref changed alone leaves the history drawing what it read until the next reopen
+(`docs/systems/history-graph.md`, "Known limits"). The network lane keeps no comparison of its own: a fetch
 that ends asks a refresh, and the refresh's snapshot is what is compared.
 
 `RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its

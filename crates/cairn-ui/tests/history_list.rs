@@ -360,8 +360,9 @@ fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
 }
 
 /// A row of a commit no ref reaches is drawn lost, and only that row, from the history's own
-/// flag — and drawn as any other once a later page says a ref reaches it after all. Caught
-/// by: the flag not handed to the row, handed to its neighbours, or read from a stale copy.
+/// flag — and so is a lost row a later page brings, the rows before it drawn as they were.
+/// Caught by: the flag not handed to the row, handed to its neighbours, or read from a stale
+/// copy of the history.
 #[test]
 fn a_lost_row_is_drawn_lost_and_no_other() {
     let mut history = History::new();
@@ -396,9 +397,17 @@ fn a_lost_row_is_drawn_lost_and_no_other() {
         ]
     );
     let mut rows = fixture.rows;
-    let mut reached = RowsPage::new();
-    reached.reached(3, oid(3));
-    test.run_in(|| hold(&mut rows.write(), reached));
+    let mut later = RowsPage::new();
+    later.push_lost(
+        GraphRow::new(oid(6), Lane::new(1), Vec::new()),
+        PagedCommit {
+            parents: 1,
+            subject: "commit 6",
+            author: "A",
+            author_time: 0,
+        },
+    );
+    test.run_in(|| hold(&mut rows.write(), later));
     test.sync_and_update();
     test.sync_and_update();
     assert_eq!(
@@ -407,9 +416,10 @@ fn a_lost_row_is_drawn_lost_and_no_other() {
             "commit 0",
             "commit 1",
             "~ commit 2",
-            "commit 3",
+            "~ commit 3",
             "commit 4",
-            "commit 5"
+            "commit 5",
+            "~ commit 6"
         ]
     );
 }

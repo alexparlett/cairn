@@ -96,6 +96,12 @@ impl Marking {
 /// joined to the tips after the refs' own. In git's date order each stash is a tip on its base
 /// after the refs and before the reflog ids, as `git log --date-order` is given them; another
 /// order places the stashes itself (`stream`). `None` when `cancel` fired; nothing is kept.
+/// How many commits date order's opening pass has read goes to `report`, at most once per
+/// `every` (`walk::open_from`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part of where and how the walk opens; none belongs with another"
+)]
 fn open_stream<'repo>(
     repo: &'repo gix::Repository,
     tips: &mut Tips,
@@ -103,6 +109,8 @@ fn open_stream<'repo>(
     decoration: &Arc<Decoration>,
     order: HistoryOrder,
     cancel: &impl Cancel,
+    report: &mut dyn FnMut(usize),
+    every: std::time::Duration,
 ) -> Result<Option<Stream<'repo>>, Error> {
     if let Marking::Unread(branches) = marking {
         let Some(reflog_tips) = reflogs::reflog_tips(repo, branches, cancel)? else {
@@ -141,7 +149,7 @@ fn open_stream<'repo>(
         stashes: &stashes,
         reflogs,
     };
-    let Some(walk) = walk::open_from(repo, walk_tips, order, cancel)? else {
+    let Some(walk) = walk::open_from(repo, walk_tips, order, cancel, report, every)? else {
         return Ok(None);
     };
     Ok(Some(Stream::new(
@@ -328,6 +336,8 @@ fn read_page(
         &decoration,
         order,
         cancel,
+        &mut |_| {},
+        date_order::REPORT_EVERY,
     )?
     else {
         return Err(Error::Cancelled { walked: 0 });
@@ -816,7 +826,11 @@ mod tests {
         );
         assert!(!tips.is_empty(), "no ref resolved to a commit");
 
-        for order in [HistoryOrder::CommitTime, HistoryOrder::GraphOrder] {
+        for order in [
+            HistoryOrder::DateOrder,
+            HistoryOrder::CommitTime,
+            HistoryOrder::GraphOrder,
+        ] {
             let request = HistoryRequest::from_commits(tips.clone(), limit).with_order(order);
             let started = Instant::now();
             let page = repo.history(&request, &CancelSignal::new()).unwrap();

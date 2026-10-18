@@ -1105,6 +1105,66 @@ mod tests {
         );
     }
 
+    /// A history session's walk opens under a cancel of its own (`HistorySession::open_walk`):
+    /// a cancelled open keeps nothing; an open that runs hands its pass's count to its listener,
+    /// on the interval it is given — here none, so every chance is taken — and no rows; the page after it walks only what the page needs, polling no pass; and a
+    /// second open opens nothing. Caught by: the report left unthreaded from the session to the
+    /// walk (no count), an open that runs the pass again on the first page (that page's cancel
+    /// polled once per commit read), or one that lets a cancelled open stand.
+    #[test]
+    fn a_sessions_walk_opens_under_its_own_cancel_and_reports_its_count() {
+        let scratch = imported("session-opens", 1500);
+        let repo = worker(scratch.path());
+        let tip = cairn_model::Oid::from_bytes(head(scratch.path()).as_bytes()).unwrap();
+        let request = crate::HistoryRequest::from_commits([tip], 3).with_window(4);
+        let mut session = repo.history_session(&request).unwrap();
+
+        let cancelled = CancelAt::new(1, false);
+        assert!(matches!(
+            session.open_walk(&cancelled, Duration::ZERO, &mut |_| {}),
+            Err(Error::Cancelled { .. })
+        ));
+
+        let mut counts = Vec::new();
+        session
+            .open_walk(&CancelSignal::new(), Duration::ZERO, &mut |read| {
+                counts.push(read)
+            })
+            .unwrap();
+        assert!(counts.len() >= 4, "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] < pair[1]),
+            "{counts:?}"
+        );
+        let mut again = Vec::new();
+        session
+            .open_walk(&CancelSignal::new(), Duration::ZERO, &mut |read| {
+                again.push(read)
+            })
+            .unwrap();
+        assert!(again.is_empty(), "a second open read again: {again:?}");
+
+        let paging = CancelAt::new(usize::MAX, false);
+        let page = session.next_page(3, &paging).unwrap();
+        assert_eq!(page.rows.len(), 3);
+        assert!(
+            paging.polls.get() < 100,
+            "the first page after the open polled {} times",
+            paging.polls.get()
+        );
+
+        // The same first page from a session not opened first runs the pass under its cancel.
+        let mut unopened = repo.history_session(&request).unwrap();
+        let opening = CancelAt::new(usize::MAX, false);
+        let page = unopened.next_page(3, &opening).unwrap();
+        assert_eq!(page.rows.len(), 3);
+        assert!(
+            opening.polls.get() > 1500,
+            "the pass polled only {} times",
+            opening.polls.get()
+        );
+    }
+
     /// Reporter. The opening pass from every ref of `CAIRN_BENCH_REPO` — refs/heads, refs/remotes
     /// and refs/tags each in refname order, then `HEAD`, as `git log --branches --remotes --tags
     /// HEAD` takes them — to its first 64 rows, seven times: each run's wall time, the median,

@@ -2,9 +2,11 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cairn_model::{GraphRow, LaneAssigner, RowsPage};
 
+use super::date_order;
 use super::seeds::Decoration;
 use super::stream::{Next, Stream};
 use super::{
@@ -103,21 +105,7 @@ impl HistorySession<'_> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
 
-        if self.stream.is_none() {
-            let Some(stream) = open_stream(
-                self.repo,
-                &mut self.tips,
-                &mut self.marking,
-                &self.decoration,
-                self.order,
-                cancel,
-            )?
-            else {
-                // Nothing kept: the next page opens it again.
-                return Err(Error::Cancelled { walked: 0 });
-            };
-            self.stream = Some(stream);
-        }
+        self.open_walk(cancel, date_order::REPORT_EVERY, &mut |_| {})?;
 
         while self.ready.len() < limit && !self.exhausted {
             if cancel.is_cancelled() || !self.pull(cancel)? {
@@ -141,6 +129,39 @@ impl HistorySession<'_> {
             walked: self.walked - walked_before,
             decoded: self.decoded - decoded_before,
         })
+    }
+
+    /// Opens the walk, if no page has yet, under `cancel` — in date order its opening pass, which
+    /// may read every commit the tips reach (`Repository::history_session`) — handing nothing
+    /// out, so the opening can be cancelled by something other than what cancels the pages
+    /// after it. How many commits the pass has read goes to `report` at most once per `every`,
+    /// the first once `every` has passed; another order reports nothing. A cancelled open keeps
+    /// nothing, and is begun again by the next call or page ([`Error::Cancelled`]).
+    pub fn open_walk(
+        &mut self,
+        cancel: &impl Cancel,
+        every: Duration,
+        report: &mut dyn FnMut(usize),
+    ) -> Result<(), Error> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        let Some(stream) = open_stream(
+            self.repo,
+            &mut self.tips,
+            &mut self.marking,
+            &self.decoration,
+            self.order,
+            cancel,
+            report,
+            every,
+        )?
+        else {
+            // Nothing kept: the next page opens it again.
+            return Err(Error::Cancelled { walked: 0 });
+        };
+        self.stream = Some(stream);
+        Ok(())
     }
 
     /// Where a fresh query would start to continue this scroll.

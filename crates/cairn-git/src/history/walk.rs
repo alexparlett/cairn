@@ -103,25 +103,33 @@ pub(crate) fn open<'repo>(
         stashes: &[],
         reflogs: &[],
     };
-    open_from(repo, tips, order, cancel)
+    open_from(
+        repo,
+        tips,
+        order,
+        cancel,
+        &mut |_| {},
+        date_order::REPORT_EVERY,
+    )
 }
 
 /// [`open`] from refs, stashes and reflog ids, each list in the order git is given it. Git's
 /// date order walks each stash as a tip on its base and the reflog ids after the stashes
-/// (`date_order`); the other orders walk the refs' and the reflogs' commits alone, given no
-/// stash.
+/// (`date_order`), giving `report` how many commits its opening pass has read at most once per
+/// `every`, the first once `every` has passed; the other orders walk the refs' and the
+/// reflogs' commits alone, given no stash, and report nothing.
 pub(crate) fn open_from<'repo>(
     repo: &'repo gix::Repository,
     tips: date_order::Tips<'_>,
     order: HistoryOrder,
     cancel: &impl Cancel,
+    report: &mut dyn FnMut(usize),
+    every: std::time::Duration,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
     let Some(sorting) = order.sorting() else {
-        return Ok(
-            DateOrder::open(repo, tips, cancel, &mut |_| {}, date_order::REPORT_EVERY)?
-                .map(|walk| CommitWalk::DateOrder(Box::new(walk))),
-        );
+        return Ok(DateOrder::open(repo, tips, cancel, report, every)?
+            .map(|walk| CommitWalk::DateOrder(Box::new(walk))));
     };
     let tips: Vec<gix::hash::ObjectId> = tips.refs.iter().chain(tips.reflogs).copied().collect();
     let substitutions = Substitutions::read(repo)?;

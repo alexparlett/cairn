@@ -6,7 +6,7 @@ reasons, for the final QA phase to audit.
 ## 2026-10-18 — phase 03 built (packet mode)
 
 Built on `feature/history-topo-order` (061cf94, c784f04, 606f693, then the QA fixes 3319815,
-def05fa, 6bfa998, ac0f445, 518b37d, b9b6ef1): the history lane runs on a thread of its own,
+def05fa, 6bfa998, ac0f445, 518b37d, b9b6ef1, 03f617b): the history lane runs on a thread of its own,
 `cairn-history`, with its own handle — opens, pages, finds and stops routed to it by `submit`;
 the refs read, the filters, retires and operations stay on the repository thread, the two
 sharing `WalkedRefs` (the latest refs and the ones the walk began from); a reopen keeps the old
@@ -102,6 +102,12 @@ Confirmed and fixed:
 - TC-5: no boundary test of `reopen: false` for a refresh mid-pass (518b37d).
 - QC-3: the stop's promptness was no longer pinned (518b37d).
 - Docs for the above (b9b6ef1).
+- A fresh `qa-confirm` over `606f693...b9b6ef1` found all ten resolved and four low
+  inaccuracies the fixes left — two docs naming the quarter-pass timing the tests no longer use,
+  a claimed pin for the fetch-before-join order (none drives it; now said so), a doc comment
+  leaving out the refresh thread — and a preemption window in
+  `a_stop_ends_a_running_find_within_a_page` (pages read before the stop was numbered); fixed in
+  03f617b.
 
 Dismissed (qa-confirm):
 - QC-2 (a replaced history dropped on the UI thread while closing): unreachable — `closing` is

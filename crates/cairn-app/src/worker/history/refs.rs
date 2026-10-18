@@ -13,8 +13,9 @@
 //! the one the walk began from in the same breath, so a refresh while the walk is still opening
 //! compares with what that walk will draw and leaves it alone when nothing moved.
 //!
-//! The lock is held for a clone or an assignment of a shared pointer, never across a read of
-//! the refs or a comparison of two snapshots, and only by those two worker threads.
+//! The lock is held for a clone or an assignment of a shared pointer — and by a refresh across
+//! its comparison of two snapshots, so an open between the comparison and the keeping cannot
+//! answer it wrongly — never across a read of the refs, and only by those two worker threads.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -71,18 +72,21 @@ impl WalkedRefs {
 
     /// A refresh's read, kept as the latest — the one held when the two are equal, so the
     /// read is freed here — and whether the history must be reopened: when what it draws
-    /// differs from the snapshot the walk began from, or no walk has begun.
+    /// differs from the snapshot the walk began from, or no walk has begun. Compared and kept
+    /// under one hold of the lock, so an open taking the latest meanwhile is compared with as
+    /// the walk it begins: the history thread waits that comparison out, never the UI thread.
     fn refreshed(&self, read: RefsSnapshot) -> (Arc<RefsSnapshot>, bool) {
-        let (latest, walked_from) = {
-            let held = self.held();
-            (held.latest.clone(), held.walked_from.clone())
-        };
-        let snapshot = match latest {
-            Some(held) if *held == read => held,
+        let mut held = self.held();
+        let snapshot = match &held.latest {
+            Some(kept) if **kept == read => Arc::clone(kept),
             _ => Arc::new(read),
         };
-        let reopen = !walked_from.is_some_and(|walked| walked.walks_as(&snapshot));
-        self.held().latest = Some(Arc::clone(&snapshot));
+        let reopen = !held
+            .walked_from
+            .as_ref()
+            .is_some_and(|walked| walked.walks_as(&snapshot));
+        held.latest = Some(Arc::clone(&snapshot));
+        drop(held);
         (snapshot, reopen)
     }
 

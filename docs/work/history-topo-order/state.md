@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: phase 02 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
+**Status: phase 03 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -87,7 +87,37 @@ Phase 02 (`crates/cairn-git`, `crates/cairn-model`):
   `GIT_GRAFT_FILE`, needs the binary's `fixtures` module, whose `empty_home` is now `pub`),
   used by `every_ref.rs` and `lost_commits.rs`. git-floor `--test date_order` floor 10 (11 tests).
 
-Handed to phase 03 (from phase 02's QA, confirmed and deferred):
+Phase 03 (`crates/cairn-git`, `crates/cairn-app`):
+- `HistorySession::open_walk(cancel, every, report)` (public): runs the session's opening pass
+  alone, under its own cancel, reporting commits read at most once per `every`; a cancelled
+  open keeps nothing; `next_page` opens with a no-op reporter if not yet open.
+  `walk::open_from` and `history::open_stream` take `report` and `every`.
+- The history thread, `cairn-history` (`worker/history/lane.rs`: `serve_history`, `Serving`,
+  `HistoryLane::{new, open_walk, more, find_page}`): its own `to_worker()` handle; serves
+  `HistoryJob::Page { epoch, page }` (`routing.rs`, `Routed::History(Page)`,
+  `Thread::History`) and `HistoryJob::Stop`. An `Page::Open` whose walk is current always runs
+  (pass + first page under `epochs.watch(walk)`), whatever the history lane asked since;
+  More/Find under the history lane's epoch. A cold restart's pass also runs under the walk.
+- `worker/history/refs.rs`: `WalkedRefs` (latest + walked_from behind a mutex shared by the
+  repository and history threads; `opening()` names the snapshot taken the walked-from one at
+  once), `refs::refresh` (the repository thread's refs read, ex-`HistoryLane::refresh`).
+- `worker/history/reading.rs`: `READING_AFTER` 250 ms, `READING_EVERY` 100 ms, `Pacing`,
+  `ReadingPace`; `Update::Reading { commits }` under the walk's epoch.
+- `Threads::drop` stops the epochs, tells the history, diff and refresh threads to stop,
+  cancels a fetch, then joins the history thread, before the local lane join and
+  `end_invocations`. A cold restart's pass (`answer`) runs under the walk's number and tells no
+  count (`open_pass(.., told)`). `pool::open_paced_with` (test) opens with a given `Pacing`.
+- Window: `Progress::{reopen, is_reopening, reading, read_so_far}`; `session::reopen_history(progress,
+  lost, submit)` only marks and asks; `session::apply`'s `Update::Rows` replaces the history
+  (sized, old retired) when reopening; `status_text::{placeholder(&Progress), reading_strip}`;
+  `window.rs`'s `reading_strip`.
+- Test fixture: `WrittenRepository::packed(name, count)` (one pack + v2 index, CRC-32).
+- Reporters: `measures_the_history_thread_against_a_named_repository` (worker),
+  `opening_pass_check` (window); `measures_layout_over_every_ref_of_a_named_repository` walks
+  date order too.
+
+Handed to phase 03 (from phase 02's QA, confirmed and deferred) — all three fixed in phase 03
+(progress.md, RR-1/2/3):
 - The opening pass (about 1.2 s on the bench without a commit-graph) runs as one job on the
   repository thread: filters, a refresh's refs and retires wait behind every open and reopen
   until the history thread exists (packet qa-checklist item 7 fails until then).
@@ -98,11 +128,20 @@ Handed to phase 03 (from phase 02's QA, confirmed and deferred):
 - The opening pass's count is discarded (`walk::open_from` passes `&mut |_| {}`); phase 03
   routes it to the window.
 
+Handed to phase 04 (the packet's QA over the whole diff):
+- Decisions PENDING the user's review, listed in progress.md's phase 03 entry (the reopen asked
+  by the window, a find never superseding an opening pass, a cold restart's pass under the walk's
+  number telling no count, the reopen forgetting the old rows' end, a history-thread panic
+  announced without ending the stream, `Threads::drop` stopping the epochs).
+- To file at teardown: keeping the opening pass's state across a reopen.
+- Tests needing a pass that takes a while use `WrittenRepository::packed` (200,000 commits, about
+  0.8 s to write in a debug build) and `pool::open_paced_with` (every count told).
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 | done; C1, C2, C3, C10, C8 opening pass met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, fixes landed, dismissals and pending decisions in progress.md |
 | 02 | done; C4, C5 met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, 4 fixes landed, dismissals, deferrals and pending decisions in progress.md |
-| 03 | not started | — | — |
+| 03 | done; C6, C7, C8, C9 met; RR-1/2/3 fixed | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, 10 fixes landed, dismissals and pending decisions in progress.md |
 | 04 | not started | — | — |

@@ -3,6 +3,134 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-18 — phase 03 built (packet mode)
+
+Built on `feature/history-topo-order` (061cf94, c784f04, 606f693, then the QA fixes 3319815,
+def05fa, 6bfa998, ac0f445, 518b37d, b9b6ef1): the history lane runs on a thread of its own,
+`cairn-history`, with its own handle — opens, pages, finds and stops routed to it by `submit`;
+the refs read, the filters, retires and operations stay on the repository thread, the two
+sharing `WalkedRefs` (the latest refs and the ones the walk began from); a reopen keeps the old
+rows drawn and usable until the new walk's first page replaces them (then retired), under a
+strip "Reading history… N commits" once the worker tells a count (held back 250 ms, then at
+most every 100 ms; the first open's sentence says it in the list's place); `Threads::drop`
+stops the epochs, tells every thread to stop, cancels a fetch, then joins the history thread
+before any reap. cairn-git gained `HistorySession::open_walk(cancel, every, report)`.
+
+Handed-over findings:
+- RR-1 (an open holds up the repository thread): fixed by the thread. Measured (packet
+  qa-checklist item 7): a sidebar filter asked into an opening pass on the bench answered in
+  0.09 ms against 0.03-0.05 ms alone, always before the first page; in the window a filter
+  keystroke during a pass drawn in 18.3 ms against 17.2 ms with nothing opening.
+- RR-2 (a find or stop restarts the opening pass): an open's pass and first page run under the
+  walk lane's epoch, and an `Open` whose walk is current runs whatever the history lane asked
+  since; pinned by `an_open_runs_whatever_the_history_lane_asked_after_it` (jobs queued before
+  the thread starts), `a_find_or_its_stop_never_supersedes_a_walk_still_opening` (boundary) and
+  `an_opening_pass_is_superseded_by_the_next_walk_alone`. PENDING the user's review (the
+  orchestrator's decision).
+- RR-3 (the count not shown): `Update::Reading`, `ReadingPace`, `Progress::reading`,
+  `status_text::{placeholder, reading_strip}`.
+
+Acceptance:
+- C6: `a_filter_is_answered_while_the_history_opens`, `a_refresh_supersedes_an_open_still_reading`
+  (also requires `reopen: false` for a refresh with nothing moved mid-pass),
+  `a_close_during_an_opening_pass_does_not_wait_for_it` (worker/history/opening.rs, over a
+  200,000-commit packed line; the first two decided by the order of answers once the worker has
+  told the pass's first count, the third by time against an idle close).
+- C7: `the_history_says_it_is_reading_during_a_long_open` (status_text.rs),
+  `a_reopen_keeps_the_old_rows_until_the_new_page` (session.rs), with
+  `a_reopen_draws_the_old_rows_under_the_reading_strip` (window.rs),
+  `a_reopen_keeps_the_rows_and_asks_for_none_of_them_until_its_first_page` (state.rs),
+  `the_window_is_told_how_far_an_opening_pass_has_read` and
+  `the_count_is_told_once_the_pass_has_run_250_ms_then_at_most_every_100_ms`.
+- C8 (bench, `docs/research/history-topo-order/measured.md`, last section): the history thread's
+  whole open 1,174-1,206 ms against git's `rev-list --date-order --max-count=64` 1,259-1,270 ms
+  (R6.1 met); with a commit-graph copy 113-115 ms against git's 87-88 ms (recorded, cause:
+  the walk's own 95 ms plus session and first-page layout); a page after the pass 0.40 ms; the
+  whole history through the boundary equals git's `git log --date-order` row for row, with and
+  without the commit-graph (345,545 rows); no frame over 16.7 ms during a first open (max 6.7 ms)
+  or a reopen scrolled every frame (max 2.7 ms); a close during a pass 29 ms against 38 ms idle;
+  the frozen assigner counts 0 rows repainted and 0 late lines in date order (49,609, 14.357%,
+  in commit-time order). Bench untouched: marker 10:33:21, `find ~/Development/bench/rust/.git
+  -newer <marker>` empty after every run, exit 0, no stderr.
+- C9: docs/systems/history-graph.md (the walk's repaint figure replaced, "The opening pass in the
+  window", routing, refresh, reopen), sidebar.md, git-processes.md, diff.md, credentials.md,
+  local-changes.md (refs.md already said the refs are read on the repository thread), the root
+  CLAUDE.md routing account and UI-thread residuals, design/concurrency.md.
+
+Mutations each failing the named tests: the opening pass given a fresh `CancelSignal`; the Open
+heeding the history lane's epoch; a lock making the repository thread wait on the whole open job
+(the "same thread" defect); Rows during a reopen appended; `Progress::reopen` not marking;
+`WalkedRefs::opening` not naming walked-from (unit and boundary); `open_walk` dropping the
+reporter; the placeholder ignoring the count; the strip not drawn; `Reading` sent under no epoch;
+the hold-back bypassed; the cold restart telling its count; the history thread started without
+announcing a panic; a find that neither takes its queue nor heeds its number nor its page's
+cancel (the stop-within-a-page test; each of the three alone still stops it).
+
+Tests changed by design, each saying why: the Show Lost Commits window tests and
+`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row` (the reopen asks the
+walk alone and the old rows are retired at its first page);
+`a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection` became
+`a_reopen_keeps_the_old_rows_until_the_new_page`;
+`a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it` asks `ListRemotes`
+(answered inside `serve`), with `a_panic_on_the_history_thread_is_announced` beside it;
+`a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood` no longer relies on an operation
+queued behind the stop on one thread (promptness now decided by
+`a_stop_ends_a_running_find_within_a_page`); the status_text tests take a `Progress`, and
+`loading_and_empty_are_placeholders_regardless_of_what_arrived_before` went with the
+`(status, has_rows)` signature — a `Progress` cannot hold rows while Loading or Empty.
+
+QA: `qa-checklist`, `responsiveness-reviewer`, `test-coverage-auditor` and
+`gate-integrity-reviewer`, each spawned fresh over `f4a0f0e...606f693`; 13 raw findings
+adjudicated by a fresh `qa-confirm` (11 confirmed, QC-4 merged into TC-1).
+
+Confirmed and fixed:
+- QC-1: an over-long doc comment line (3319815).
+- RR-1: `WalkedRefs::refreshed` compared unlocked between two holds, so an open in between could
+  make a refresh reopen for nothing or miss a reopen; now one hold (def05fa).
+- RR-3: the close cancelled a fetch only after joining the history thread (6bfa998).
+- QC-5: a cold restart told its pass's counts, putting the strip over rows nothing replaced
+  (ac0f445, `a_cold_restart_tells_the_window_no_count`).
+- TC-1 (with QC-4): the filter and refresh tests slept a quarter of a timed pass and failed when
+  the next pass was faster (reproduced 7/40 and 1/32 under load); they now wait for the pass's
+  first count on a paced handle (`open_paced_with`, no hold-back) — 40 runs at 20 concurrent, 0
+  failures (518b37d).
+- TC-2: the close test's "no page" assertion could never fail; removed, the doc says time
+  decides (518b37d; and in the bench reporter).
+- TC-3: no test of a panic on the history thread (518b37d).
+- TC-4: the RR-2 test's catch depended on thread ordering; a serve-level test with the jobs
+  queued first decides it (518b37d).
+- TC-5: no boundary test of `reopen: false` for a refresh mid-pass (518b37d).
+- QC-3: the stop's promptness was no longer pinned (518b37d).
+- Docs for the above (b9b6ef1).
+
+Dismissed (qa-confirm):
+- QC-2 (a replaced history dropped on the UI thread while closing): unreachable — `closing` is
+  set only after `Request::Close` has stopped the epochs, so every `Rows` dequeued then arrives
+  as `Superseded`.
+- RR-2 (each count re-runs the window builder): paced to at most 10 Hz during a pass, bounded by
+  the viewport, measured at most 2.7 ms a frame; the same subscription every page triggers.
+
+Decisions batched for the user, PENDING review (not approved):
+- A reopen goes repository thread → window → history thread: the repository thread answers
+  `Update::Refs { reopen }` and the window asks `OpenHistory`, rather than the repository thread
+  sending the history thread a reopen itself (PRD R3.2's "asks the history thread to reopen"),
+  so the window stays the one numberer of the history lane and knows to keep its rows;
+  docs/design/concurrency.md says so.
+- RR-2 above: a find or its stop never supersedes or restarts a walk's opening pass; an open
+  whose walk is current runs whatever the history lane asked since. A cold restart's pass also
+  runs under the walk's number (only a reopen or close stops it) and tells no count.
+- During a reopen the old rows' end is forgotten (`Progress::reopen` sets complete false), so a
+  press of a ref the old rows do not label pages the new walk rather than saying "not in the
+  graph"; a failed reopen keeps the rows and is retried as a failed page is.
+- A history-thread panic is announced as `WorkerLost` and leaves the other threads serving, as a
+  diff thread's does; only the repository thread's ends the stream.
+- `Threads::drop` stops the epochs itself, so a walk ends even when every handle went without a
+  close.
+- The R6.2 copy's 25-28 ms over git with a commit-graph is recorded, not optimised.
+
+To file at teardown: keeping the opening pass's state across a reopen (PRD out of scope; a
+reopen pays the whole pass again, stated in history-graph.md's known limits).
+
 ## 2026-10-18 — phase 02 built (packet mode)
 
 Built on `feature/history-topo-order` (3c2c347, 4e442d3, then the QA fixes e8cc7e8, 1e2aba2):

@@ -21,17 +21,15 @@ use crate::{Cancel, Error};
 
 /// Every commit an entry of `HEAD`'s reflog or of one of `branches`' names, as its old or
 /// its new id, each once, in the order the logs hold them — `HEAD`'s first, then each
-/// branch's, oldest entry first — with its committer date, so the walk that starts from them
-/// reads none of them again. The date is the
-/// commit-graph's where the graph holds the commit, as git's own walk takes it; otherwise the
-/// commit is read once, for its kind and its date together. `None` once `cancel` fires, polled
-/// before each log and before each id's date is found. A log that cannot be read is skipped,
-/// as a log that is not there is.
+/// branch's, oldest entry first. An id is kept where the commit-graph holds it as a commit,
+/// and otherwise where its object is a commit, read once. `None` once `cancel` fires, polled
+/// before each log and before each id is checked. A log that cannot be read is skipped, as a
+/// log that is not there is.
 pub(super) fn reflog_tips(
     repo: &gix::Repository,
     branches: &[RefName],
     cancel: &impl Cancel,
-) -> Result<Option<Vec<(ObjectId, i64)>>, Error> {
+) -> Result<Option<Vec<ObjectId>>, Error> {
     use gix::objs::FindExt as _;
     let hex_len = repo.object_hash().len_in_hex();
     let mut ids = Vec::new();
@@ -59,30 +57,22 @@ pub(super) fn reflog_tips(
         }
     }
     // The graph is read only where the walk reads one (`walk::commit_graph`): not under a
-    // replace ref, a graft or a shallow boundary, whose commits' dates it may not hold.
+    // replace ref, a graft or a shallow boundary, whose commits it may not hold as git sees them.
     let substitutions = super::walk::Substitutions::read(repo)?;
     let graph = super::walk::commit_graph(repo, &substitutions)?;
-    // Read as the walk reads them: a replaced commit's date is its replacement's.
+    // Read as the walk reads them: a replaced commit is its replacement.
     let objects = super::walk::Grafted::new(&repo.objects, substitutions);
     let mut commits = Vec::with_capacity(ids.len());
     for id in ids {
         if cancel.is_cancelled() {
             return Ok(None);
         }
-        if let Some(date) = graph
+        let in_graph = graph
             .as_ref()
-            .and_then(|graph| super::walk::graph_date(graph, &id))
-        {
-            commits.push((id, date));
-            continue;
-        }
+            .is_some_and(|graph| graph.commit_by_id(id).is_some());
         // Missing, or not a commit (`find_commit_iter` refuses another kind): skipped.
-        let date = objects
-            .find_commit_iter(&id, &mut buffer)
-            .ok()
-            .and_then(|commit| commit.committer().ok().map(|committer| committer.seconds()));
-        if let Some(date) = date {
-            commits.push((id, date));
+        if in_graph || objects.find_commit_iter(&id, &mut buffer).is_ok() {
+            commits.push(id);
         }
     }
     Ok(Some(commits))

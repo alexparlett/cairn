@@ -315,15 +315,17 @@ commit-graph and deletes the loose objects of the commits a resumed page
 replays, so any stray decode fails to find its object
 (`a_replayed_prefix_is_walked_but_never_decoded`, `priming_the_window_walks_but_never_decodes`).
 
-**Cancellation is a poll, once per commit** — once per row laid out, once per commit a
-walk from a refs snapshot looks ahead at (below), and once per tip read to open the walk
-but the first. In commit-time order gitoxide reads every tip for its committer date
+**Cancellation is a poll, once per commit** — once per row laid out and, while a walk
+opens, once per tip and per commit the date-order walk's opening pass reads parents for
+(below), or, in commit-time order, once per tip read but the first. In commit-time order
+gitoxide reads every tip for its committer date
 before the walk's first step, in one call that polls nothing (`Simple::sorting`); so
 `walk::open` (`crates/cairn-git/src/history/walk.rs`) reads the tips in a loop of its
 own, polling between them, and answers gitoxide's read of each from the dates it read
 (`Seeded`), costing no second object read. A session opens its walk on its first page,
 under that page's cancel; a cancelled open keeps nothing, and the next page opens it
-again (`opening_a_walk_from_many_refs_is_cancelled_between_tips`). `Cancel` is a trait so a test can
+again (`opening_a_walk_from_many_refs_is_cancelled_between_tips`,
+`a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows`). `Cancel` is a trait so a test can
 stop a walk at a chosen commit; `cairn-git` still knows nothing about threads. A
 cancelled cold query reports how far it got and discards the page; a cancelled
 *session* keeps its progress, so the next call continues rather than re-walks
@@ -379,14 +381,15 @@ the graft file's reading by `a_graft_file_is_read_as_git_reads_it`; and a replac
 depth by `a_replacement_is_followed_as_far_as_git_follows_it`. A replace ref added after the
 repository was opened is read, since each walk reads the refs afresh.
 
-Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
-it nor `GraphOrder` is topological, which is why the assigner must be total over
-arrival order. A request may also ask for `HistoryOrder::DateOrder`, git's date order
-(below), which is topological; its stash rows are still placed by the stream as in
-commit-time order. The measurement (`measures_both_orders_against_a_named_repository`,
-`#[ignore]`d): walking *and laying out* 50k commits took 129 ms in commit-time
-order against 196 ms in graph order, which leaves far more lanes open per row.
-Walking alone is the other way round.
+Order is `HistoryOrder::DateOrder` by default: git's date order (below), the order
+`git log --date-order` and Fork's graph draw, in which no commit comes before any of its
+children. A request may ask for `HistoryOrder::CommitTime`, which Recent Commit Messages
+keeps for `git log -n 10`'s order, or `HistoryOrder::GraphOrder`; neither is topological,
+which is why the assigner stays total over arrival order. Show Lost Commits walks in date
+order whatever is asked (below). Of those two, walking *and laying out* 50k commits takes
+129 ms in commit-time order against 196 ms in graph order, which leaves far more lanes
+open per row; walking alone is the other way round
+(`measures_both_orders_against_a_named_repository`, `#[ignore]`d).
 
 ### git's date order
 
@@ -427,9 +430,13 @@ no sooner than the walk needs it — once the walk is that deep anyway, before t
 it would pop ahead of, or before its base is counted down — holding meanwhile the place
 among git's tips it was given, so a stash made on an old commit costs the first page
 nothing where a commit-graph bounds the walk. With Show Lost Commits' reflog ids among the
-tips, every stash is decided before they join. The walk is exposed as
-`Repository::date_order` over `DateOrderTips` (refs and `HEAD`, stashes, reflog ids) for
-the parity tests and the reporters; the history's own routes keep commit-time order.
+tips, every stash is decided before they join. A ref's tip whose object is missing fails
+the walk, as git dies on it ("bad object"); a tip that is no commit is dropped, and a reflog
+id that cannot be read is skipped (`bad_starting_points_are_errors_rather_than_empty_pages`).
+The history's routes drive this walk — the refs snapshot's, the cold cursor's, a held
+session's and a find's pages (below); it is also exposed as `Repository::date_order` over
+`DateOrderTips` (refs and `HEAD`, stashes, reflog ids) for the parity tests and the
+reporters.
 
 Pinned against git itself, through one oracle run in each fixture at test time —
 `git log --date-order --format=%H --branches --remotes --tags HEAD --stdin`, each stash
@@ -450,6 +457,15 @@ one (95 ms against 82-84 ms), keeping about 170 bytes per commit (`docs/research
 `measures_the_opening_pass_against_a_named_repository`,
 `measures_what_deciding_a_stashs_base_costs`).
 
+The history itself is held to the same oracle on every route a window pages, over those
+fixtures and the stashes at every depth, with and without a commit-graph, at the host's git
+and both floors (`crates/cairn-git/tests/date_order.rs`): the refs snapshot's history held in
+pages and read as one (`the_history_is_in_git_date_order`); each stash's row, its index and
+its base, exactly where git puts it, none for a stash on an unreached base, a commit's row
+for a stash a branch is built on (`stash_rows_are_where_git_puts_them`); Show Lost Commits'
+rows and its lost marks, whatever order the request names (`lost_commits_are_in_git_date_order`);
+and the cold cursor and a session resumed from one (`a_resumed_session_continues_git_date_order`).
+
 ### From every ref, labelled, with stash rows
 
 `HistoryRequest::from_refs(&RefsSnapshot, limit)` (`crates/cairn-git/src/history/seeds.rs`)
@@ -458,9 +474,9 @@ identifies — a tag on a tree or a blob identifies none, so seeds nothing and l
 nothing — each once, and `HEAD`'s, a detached `HEAD` naming what is not a commit
 seeding nothing; its labels are, per commit, the refs pointing at it in the
 snapshot's order, the branch `HEAD` is on marked current; and it carries the stash
-list. Nothing about a stash seeds the walk. When the request is resolved, each stash's
-commit is read for its author, its author date and its committer date, and its base's
-committer date — two reads per stash, polling nothing — and a stash whose commit cannot
+list. Neither `refs/stash` nor a stash's base seeds the refs' walk. When the request is
+resolved, each stash's commit is read for its author, its author date and its committer
+date — one read per stash, polling nothing — and a stash whose commit cannot
 be read, dropped and pruned since the snapshot, has no row, the walk going on without it
 (`a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row`); and a stash commit
 `git stash store` filed twice in the list is one row, its newest entry's — a commit is
@@ -471,31 +487,18 @@ stashes (`Decoration`) are shared by every page and cursor of the walk, as its t
 the labels and stashes of the snapshot the walk began from.
 
 Both routes lay out the same stream (`crates/cairn-git/src/history/stream.rs`): the
-walk's commits, each stash's row merged in. A stash's row goes where its commit's
-date falls among the walk's commits — newest committed first, the walk's own order —
-but never after its base, and only when the walk reaches the base. How the stream
-knows the base is reached when the stash's date comes up is by looking ahead in the
-walk itself: the commits it has pulled and not yet handed on are searched for the
-base, and more are pulled to find it until `LOOKAHEAD` (4,096) are ahead of the next
-one handed on, stopping once the walk passes the base's own committer date without
-meeting it. Found, the row goes at the stash's date; not found, the stash is held.
-Whenever the next commit to hand on is the base of a stash not yet placed — held, or
-not yet due because its date is older than its base's by clock skew — the row goes
-directly above it, once every stash newer than it is placed or held: stash rows keep
-their own date order, newest first and `stash@{0}` first among equal dates, and
-several stashes on one commit go above it newest first. A stash's date comes up when it
-is no older than the next commit, so a stash dated the same second as a commit goes
-first, as git's date order puts a stash above the index commit it was made with. A
-stash still unplaced when the walk ends has no row. So a row is there exactly when the
-walk reaches its base, and costs no walk of its own: the commits looked ahead at are the
-next the stream hands on. A stash commit the walk reaches through a ref is that commit's
-row and no stash's, whether the walk hands it on first or the look-ahead meets it. In
-graph order, which has no dates, every stash goes directly above its base.
-`HistoryRequest::with_stash_lookahead` sets the distance, and a cursor carries it.
+walk's entries, stash rows among them. In date order each stash is a tip of the walk itself,
+after `HEAD`'s and in `stash@{n}` order, whose one parent is its base (above): the walk
+seeds it only when the refs reach its base and not its commit, and yields its row where
+`git log --date-order` puts it, so the stream hands that row on as it comes — a stash on a
+deep base, on a deleted branch or dated before its base costs no look ahead and is placed
+exactly. A stash commit the walk reaches through a ref is that commit's row and no stash's.
+In commit-time and graph order, whose walks are given no stash, each stash goes directly
+above its base, newest committed first and `stash@{0}` first among equal dates.
 `HistoryPage::walked` counts rows laid out, stash rows among them; `decoded` counts
-commits read, which a stash's row adds none to; cancellation is polled once per row
-and once per commit looked ahead at; `HistorySession::commits_walked` counts every
-commit pulled off the walk.
+commits read, which a stash's row adds none to; cancellation is polled once per row and
+while the walk opens; `HistorySession::commits_walked` counts the commits pulled off the
+walk, stash rows aside.
 
 Every expectation is git's, run in the same fixture at test time and over the whole
 walk, paged small (`crates/cairn-git/tests/every_ref.rs`):
@@ -509,30 +512,31 @@ labels against `git log --decorate=full`, `refs/stash` aside, `origin/HEAD` and 
 nested tag among them; `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
 — each stash's index, base, message, author and date against `git stash list`, one
 line out of its node down its own lane into its base, two stashes on one commit in
-two lanes, a stash dated older than its base directly above it and the rest at their
-dates; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
-one, two and five); `a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base`;
+two lanes, a stash dated older than its base still above it, and every row where git's date
+order puts it; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
+one, two and five); `a_stash_on_a_deep_base_is_where_git_puts_it` (held and cold);
 `a_detached_head_no_ref_reaches_is_walked_and_labelled`;
 `a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs`;
 `a_braided_history_from_every_ref_is_git_rev_lists` (order too, against
 `--date-order`); `in_graph_order_a_stash_is_directly_above_its_base`;
-`a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs`;
-`stash_rows_are_in_gits_date_order` (against `git log --date-order` over the refs and
-the stash commits); `a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows`;
-and `looking_ahead_stops_once_the_walk_passes_the_bases_date`.
+`a_stash_commit_under_an_older_branch_commit_is_a_commits_row_and_no_stashs`;
+`stash_rows_are_in_gits_date_order` (a tie between a stash and the branch's commit it
+shares a second with going to the branch, given first);
+`a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows`;
+and `a_deleted_branchs_stash_pulls_nothing_ahead_and_has_no_row`. Each order comparison is
+against the oracle above, through `tests/support/date_order_oracle.rs`, which grafts the
+stashes from a graft file outside the repository (`GIT_GRAFT_FILE`).
 
-**Measured** (`measures_the_first_page_from_every_ref`, `#[ignore]`d; release, warm,
-median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`), on
-rust-lang/rust at `c999cef531e`, which has no commit-graph file: the first page of 64
-rows from `HEAD` 7.7 ms, from every ref 7.3 ms with the snapshot already read and
-8.6 ms with its read; each laid out 1,088 rows. On a scratch clone of it with real
-stashes: a stash on `HEAD` adds nothing (7.4 ms); a stash whose base is 20,000 commits
-deep, or a stash on a deleted branch's old commit, looks ahead the whole 4,096 commits
-on the first page and costs 21.5 ms (3.1 ms with the clone's own commit-graph); the
-stream never holds more than 4,096 commits pulled ahead of the next row, so that is
-the most looking ahead adds to a page.
-A find of rust's oldest commit from the snapshot takes 2,265 ms against 2,253 ms from
-every ref's commit unlabelled and 2,211 ms from `HEAD`.
+**Measured** on rust-lang/rust at `c999cef531e`, which has no commit-graph file (release,
+warm, median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`;
+`docs/research/history-topo-order/measured.md`): the first page from every ref pays git's own
+opening pass, 1.19-1.20 s against git's `rev-list --date-order --max-count=64` at 1.25-1.26 s,
+and 95 ms in a copy with a commit-graph against git's 82-84 ms; after it, a find of the oldest
+commit through the worker boundary takes 1,952 ms, every page appended to one history
+(`measures_a_find_through_the_boundary`). In commit-time order
+(`measures_the_first_page_from_every_ref`, `#[ignore]`d) the first page of 64 rows from
+`HEAD` is 7.7 ms, from every ref 7.3 ms with the snapshot already read and 8.6 ms with its
+read, each laying out 1,088 rows, and the same find 3,829 ms.
 
 Opening a walk reads one commit per tip. On a synthetic repository of a 50,000-commit
 chain with a tag on every commit (`git fast-import`), the first page from every ref
@@ -556,9 +560,8 @@ FILE, and it is a guard, not a convention — see below.
   object cache and the pack snapshot each time, which is why the call site
   carries a comment rather than being left to look obvious.
   `Repository::OBJECT_CACHE_BYTES` (4 MiB) is installed by that handle, and is
-  part of why `HistoryOrder::CommitTime` is the cheaper default: measured, a
-  commit-time walk of 50k commits cost 178 ms without the cache and 116 ms with
-  it, and more bought nothing. `a_shared_repository_can_cross_threads` pins
+  measured on a commit-time walk of 50k commits: 178 ms without the cache and 116 ms
+  with it, and more bought nothing. `a_shared_repository_can_cross_threads` pins
   `Send + Sync`, and is also the twin for gix's `parallel` feature staying on.
 - `worker::open(path, &Discovery) -> Result<(RepositoryHandle, Updates, Replier), OpenError>`.
   **The worker opens the repository**, because discovering one reads the
@@ -965,24 +968,21 @@ git skips — a zero time, no `>` before the time, a time zone that is not a sig
 digits, a last line with no newline — gives no id, and the lines after it are still read
 (`every_line_git_reads_is_an_entry_and_no_other`). The null id names nothing; an id whose
 object is gone or is not a commit is skipped, as git's walk skips it; the rest join the tips
-after the refs' own, each once. The reflogs are read as the walk opens, under the first
+after the refs' and the stashes', each once. The reflogs are read as the walk opens, under the first
 page's cancel (polled before each log and each id's lookup), and a cursor carries the tips
 read and which of them the refs named, so a cold page resumes the same walk.
 
 Which commits no ref reaches is decided as the walk goes, never by a walk of its own before
-the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`): a commit pulled off the
-walk is reached when a ref names it or a reached commit pulled before it names it as a
-parent; otherwise it is lost so far. The walk yields the newest committed first, so a
-commit's children come off before it — except where a child is dated older than its parent.
-There the parent can come off first, through a lost commit, and be taken for lost; when the
-reached child comes off, the parent and every commit lost only through it are reached after
-all. A row reads whether it is lost when it is carried (`RowsPage::push_lost`), so a row laid
-out meanwhile is carried right; a row a page already carried is named reached by the next
-page (`RowsPage::reached`, its number and its commit), and `History::append` clears it
+the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`). Show Lost Commits walks in
+git's date order whatever order the request names, so no commit comes off the walk before a
+child it walks: a commit is reached when a ref names it or a reached commit that came off
+before it names it as a parent, and lost otherwise — a verdict final when it is given, its row
+carried lost (`RowsPage::push_lost`) or not, however the commits are dated
 (`a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`). What is kept is the walk's
-reached frontier and the commits taken for lost; once every reflog tip not known to be
-reached has come off the walk and none is lost, nothing more can be, and the tracking stops.
-A stash's row is never lost: `refs/stash` reaches it.
+reached frontier and the parents of lost commits still to come; once every reflog tip not
+known to be reached has come off the walk and no lost commit's parent is still to come,
+nothing more can be lost, and the tracking stops. A stash's row is never lost: `refs/stash`
+reaches it.
 
 The expectations are git's (`crates/cairn-git/tests/lost_commits.rs`), over the whole walk,
 held and cold, at pages of 1, 2, 5 and 64 and windows of 1, 3 and 1,024:
@@ -1010,10 +1010,11 @@ date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags
 the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
 with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
 
-Each reflog tip is read once, its date taken with its
-kind (`reflogs::reflog_tips` hands the walk the dates, `walk::open_dated`), and every tip's
-date — a ref's or a reflog's — is the commit-graph's where the graph holds it, as git's own walk
-takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back against a walk that read each tip twice and dated it from its
+Each reflog id is checked once to name a commit — the commit-graph answering where it holds
+the id (`reflogs::reflog_tips`) — and the walk reads each tip itself, a ref's or a reflog's,
+its date and parents the commit-graph's where the graph holds it, as git's own walk takes
+them (`a_commit_graph_dates_the_tips_as_the_objects_do`). Measured in commit-time order, on
+the clone, back to back against a walk that read each tip twice and dated it from its
 object ("before"):
 with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
 pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
@@ -1259,12 +1260,6 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 - **No chip is built before the list is measured.** The list learns its width from its
   first layout (`on_sized`), so the first frame of a list draws its rows without chips and
   the next with them.
-- **A stash's row is at its date only when its base is near.** A stash whose base
-  lies more than `LOOKAHEAD` commits below its date, or past a skewed date, is drawn
-  directly above its base instead; one whose stash commit is reached through a ref
-  only after the stash's row was placed — the stash commit beyond the look-ahead, or
-  past a skewed date — would have a stash's row and a commit's. Neither is measured
-  on a real repository with stashes.
 - **Show Lost Commits reads the reflogs when the walk opens, and a reopen is what reads
   them again.** A reflog that changes while no ref the graph draws moves — `git reflog
   expire`, an entry pruned — leaves the history drawing what it read until the next reopen.
@@ -1275,9 +1270,10 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
   so a press of the chord in that moment is not heard.
 - **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
-  residual): the open reads each distinct reflog id once, its date with it — from a
-  commit-graph where one holds it — and without a commit-graph that read from the pack is the
-  cost, about 5 µs an id on rust-lang/rust. Measured above: a `HEAD` log of 10,000 entries
+  residual): the open checks each distinct reflog id once — from a commit-graph where one
+  holds it — and the walk reads it as a tip, and without a commit-graph those reads from the
+  pack are the cost, about 5 µs a read on rust-lang/rust. Measured above in commit-time
+  order: a `HEAD` log of 10,000 entries
   makes the first page 50.8 ms with no commit-graph and 8.8 ms with one, where git's own
   `rev-list --reflog` takes 57-80 ms; 200 local branches each with a 50-entry log, the same
   10,000 ids, 50.6 ms and 8.9 ms. The cost is the ids across every log read — `HEAD`'s and each

@@ -79,7 +79,7 @@ pub fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
 /// A directory with nothing in it, for `HOME` and `XDG_CONFIG_HOME`: no configuration
 /// file of the machine's user can be read through it, on any git. One for every run, kept
 /// rather than removed (a concurrent test binary may be using it), and checked empty.
-fn empty_home() -> &'static Path {
+pub fn empty_home() -> &'static Path {
     static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     HOME.get_or_init(|| {
         let path = std::env::temp_dir().join("cairn-git-tests-empty-home");

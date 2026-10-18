@@ -1,39 +1,19 @@
-//! The walk with each stash's row merged into it: what both history routes lay out, entry
-//! by entry.
+//! The walk with each stash's row in it: what both history routes lay out, entry by entry.
 //!
-//! A stash's row goes where its commit's date falls among the walk's commits — newest
-//! committed first, as the walk orders them — but never after the commit it was made on,
-//! its base, and only when the walk reaches that base (Fork's rule): a stash whose base no
-//! ref reaches has no row, and nothing of it is walked. The walk is seeded from refs alone,
-//! so how the stream knows the base is reached when the stash's date comes up is by looking
-//! ahead in the walk itself:
+//! In git's date order — the history's — a stash is a tip of the walk itself, whose one
+//! parent is its base (`date_order`): the walk seeds it only when the refs reach its base,
+//! and yields its row where `git log --date-order` puts it, so the stream hands that row on
+//! as it comes. A stash whose base no ref reaches has no row, and nothing of it is walked.
 //!
-//! - When a stash's date comes up, the commits the walk has already yielded but not yet
-//!   handed on are searched for its base, and more are pulled off the walk to find it,
-//!   until [`LOOKAHEAD`] commits are ahead of the next one handed on — stopping early once
-//!   the walk passes the base's own date without meeting it. Found: the stash's row goes
-//!   here, at its date. Not found: the stash is held.
-//! - A stash's date comes up when it is no older than the commit about to be handed on —
-//!   a stash dated the same second as a commit goes first, as git's date order puts a
-//!   stash above the index commit it was made with — and stash rows keep their own date
-//!   order: newest first, `stash@{0}` first among equal dates, so a stash about to go
-//!   directly above its base waits for every newer stash to be placed or held.
-//! - Whenever the next commit to hand on is a held stash's base — or the base of a stash
-//!   whose date has not come up yet, as when a stash is dated older than its base by clock
-//!   skew — the stash's row goes directly above it.
-//! - A stash still waiting when the walk ends had a base the walk never reached: no row.
+//! The other orders walk the refs alone, and carry no dates the stream could place a stash
+//! by: there each stash whose base the walk reaches goes directly above that base, newest
+//! committed first, and a stash commit the walk reaches itself, through some ref, is that
+//! commit's row, never a stash's.
 //!
-//! So a stash's row is exact — there if and only if the walk reaches its base — and costs
-//! no walk of its own: the commits looked ahead at are the ones the stream hands on next.
-//! A stash whose base is reached only far below its date (more than [`LOOKAHEAD`] commits,
-//! or past a skewed date) is drawn directly above its base rather than at its date.
-//!
-//! A stash commit the walk reaches itself, through some ref, is that commit's row, never a
-//! stash's: the stream drops the stash when the walk hands the commit on, or meets it while
-//! looking ahead. In graph order, which carries no dates, every stash goes directly above
-//! its base.
+//! With Show Lost Commits, which always walks in date order, each commit's row says whether
+//! no ref reaches it, decided as it comes off the walk (`reach`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cairn_model::Oid;
@@ -43,16 +23,14 @@ use super::seeds::Decoration;
 use super::walk::{CommitWalk, Step};
 use crate::{Cancel, Error};
 
-/// How many commits the stream pulls ahead of the one it hands on next, looking for a
-/// stash's base when the stash's date comes up.
-pub(super) const LOOKAHEAD: usize = 4096;
-
 /// One entry of the stream, in the order the lane assigner lays them out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Entry {
     Commit {
         id: Oid,
         parents: Vec<Oid>,
+        /// No ref reaches it: only a reflog does (Show Lost Commits).
+        lost: bool,
     },
     /// The stash at this index of the decoration's stashes.
     Stash(usize),
@@ -63,328 +41,146 @@ pub(super) enum Entry {
 pub(super) enum Next {
     Entry(Entry),
     End,
-    /// `cancel` fired while the stream looked ahead, or within the walk's step; nothing was
-    /// lost, and the next call carries on.
+    /// `cancel` fired within the walk's step; nothing was lost, and the next call carries on.
     Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// Its date has not come up.
-    Waiting,
-    /// Its date came up before the stream knew its base was reached: it goes directly above
-    /// its base, if the walk reaches it.
-    Held,
-    /// Its row is laid out, or it has none.
-    Done,
-}
-
-/// A commit pulled off the walk and not yet handed on.
-#[derive(Debug)]
-struct Walked {
-    id: Oid,
-    parents: Vec<Oid>,
-    /// Its committer date; `None` in graph order.
-    time: Option<i64>,
 }
 
 pub(super) struct Stream<'repo> {
     walk: CommitWalk<'repo>,
-    decoration: Arc<Decoration>,
-    lookahead: usize,
-    ahead: VecDeque<Walked>,
-    exhausted: bool,
-    /// One per stash of the decoration.
-    places: Vec<Place>,
-    /// Stashes by base, each list newest committed first: what goes directly above it.
+    /// Whether the walk yields the stashes' rows itself (date order).
+    stashes_walked: bool,
+    /// Stashes by base, each list newest committed first: what goes directly above it, in an
+    /// order whose walk yields no stash.
     by_base: HashMap<Oid, Vec<usize>>,
     /// Stashes by their own commit, to drop one the walk reaches as a commit.
     by_commit: HashMap<Oid, usize>,
-    /// Stashes newest committed first, and the first whose date has not come up.
-    dated: Vec<usize>,
-    next_dated: usize,
+    /// One per stash of the decoration: its row is laid out, or it has none.
+    placed: Vec<bool>,
+    /// A commit pulled off the walk and held back while the stashes on it go first.
+    held: Option<Entry>,
     /// Commits pulled off the walk.
     pulled: usize,
-    /// Entries handed on: the row the next one is, counted from the walk's first.
-    handed: usize,
     /// Which commits no ref reaches, when the walk has tips only reflogs name (Show Lost
     /// Commits); `None` when every commit it walks is reached.
     reach: Option<Reach>,
+    decoration: Arc<Decoration>,
 }
 
 impl std::fmt::Debug for Stream<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Stream")
-            .field("ahead", &self.ahead.len())
-            .field("exhausted", &self.exhausted)
-            .field("places", &self.places)
+            .field("stashes_walked", &self.stashes_walked)
+            .field("pulled", &self.pulled)
+            .field("placed", &self.placed)
             .finish_non_exhaustive()
     }
 }
 
 impl<'repo> Stream<'repo> {
-    /// `reach` decides which commits no ref reaches, for a walk with tips only reflogs name.
+    /// `stashes_walked` when `walk` yields the stashes' rows itself; `reach` decides which
+    /// commits no ref reaches, for a walk with tips only reflogs name.
     pub(super) fn new(
         walk: CommitWalk<'repo>,
         decoration: Arc<Decoration>,
-        lookahead: usize,
+        stashes_walked: bool,
         reach: Option<Reach>,
     ) -> Self {
         let stashes = decoration.stashes();
-        let mut dated: Vec<usize> = (0..stashes.len()).collect();
-        // Newest committed first; among equal dates, `stash@{0}` first.
-        dated.sort_by_key(|&at| {
-            stashes
-                .get(at)
-                .map(|stash| (std::cmp::Reverse(stash.committed), stash.index))
-        });
         let mut by_base: HashMap<Oid, Vec<usize>> = HashMap::new();
         let mut by_commit = HashMap::new();
-        for &at in &dated {
-            if let Some(stash) = stashes.get(at) {
-                by_base.entry(stash.base).or_default().push(at);
-                by_commit.insert(stash.id, at);
+        if !stashes_walked {
+            let mut dated: Vec<usize> = (0..stashes.len()).collect();
+            // Newest committed first; among equal dates, `stash@{0}` first.
+            dated.sort_by_key(|&at| {
+                stashes
+                    .get(at)
+                    .map(|stash| (std::cmp::Reverse(stash.committed), stash.index))
+            });
+            for at in dated {
+                if let Some(stash) = stashes.get(at) {
+                    by_base.entry(stash.base).or_default().push(at);
+                    by_commit.insert(stash.id, at);
+                }
             }
         }
         Self {
             walk,
-            places: vec![Place::Waiting; stashes.len()],
-            decoration,
-            lookahead,
-            ahead: VecDeque::new(),
-            exhausted: false,
+            stashes_walked,
             by_base,
             by_commit,
-            dated,
-            next_dated: 0,
+            placed: vec![false; stashes.len()],
+            held: None,
             pulled: 0,
-            handed: 0,
             reach,
+            decoration,
         }
     }
 
-    /// Whether no ref reaches `commit`, as far as the walk has come: read when its row is
-    /// carried, so a row laid out before the walk met a reached child is carried as reached.
-    pub(super) fn is_lost(&self, commit: &Oid) -> bool {
-        self.reach
-            .as_ref()
-            .is_some_and(|reach| reach.is_lost(commit))
-    }
-
-    /// The rows among the first `drawn` — those pages have carried — that were carried as
-    /// lost and a ref reaches after all, each with its commit, each said once.
-    pub(super) fn take_reached(&mut self, drawn: usize) -> Vec<(usize, Oid)> {
-        self.reach
-            .as_mut()
-            .map(|reach| reach.take_reached(drawn))
-            .unwrap_or_default()
-    }
-
-    /// Commits pulled off the walk so far, those looked ahead at included.
+    /// Commits pulled off the walk so far.
     pub(super) fn pulled(&self) -> usize {
         self.pulled
     }
 
-    /// The next entry. The caller polls `cancel` before asking for one; the stream polls it
-    /// again before each commit it pulls to look ahead for a stash's base, and the walk
-    /// polls it within a step that reads commits to know the next one (date order). Each
-    /// entry is the next row.
+    /// The next entry: each is the next row. The caller polls `cancel` before asking for
+    /// one, and the walk polls it within a step that reads commits to know the next one
+    /// (date order).
     pub(super) fn next(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
-        let next = self.next_entry(cancel)?;
-        if let Next::Entry(entry) = &next {
-            let row = self.handed;
-            self.handed += 1;
-            if let (Entry::Commit { id, .. }, Some(reach)) = (entry, self.reach.as_mut()) {
-                reach.handed(id, row);
-            }
+        if let Some(held) = self.held.take() {
+            return Ok(Next::Entry(self.above(held)));
         }
-        Ok(next)
-    }
-
-    fn next_entry(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
-        if self.ahead.is_empty()
-            && !self.exhausted
-            && matches!(self.pull(cancel)?, Pulled::Cancelled)
-        {
-            return Ok(Next::Cancelled);
-        }
-        let Some(front) = self.ahead.front() else {
-            // The walk is over: a stash still waiting had a base it never reached.
-            return Ok(Next::End);
-        };
-        let (front_id, front_time) = (front.id, front.time);
-
-        // The newest stash made on the commit about to be handed on, which goes directly
-        // above it — after every stash newer than it, below.
-        let above = self.above(&front_id);
-
-        // Each stash no older than the commit about to be handed on, and newer than the
-        // stash going above it, goes here, newest first, if its base is reached; one that is
-        // not is held.
-        while let Some(stash) = self.due(front_time, above) {
-            match self.look_ahead(stash, cancel)? {
-                Ahead::Reached => {
-                    self.finish(stash);
-                    return Ok(Next::Entry(Entry::Stash(stash)));
-                }
-                Ahead::WalkedItself => self.finish(stash),
-                Ahead::NotYet => self.hold(stash),
-                Ahead::Cancelled => return Ok(Next::Cancelled),
-            }
-        }
-
-        if let Some(stash) = above {
-            self.finish(stash);
-            return Ok(Next::Entry(Entry::Stash(stash)));
-        }
-
-        let Some(walked) = self.ahead.pop_front() else {
-            return Ok(Next::End);
-        };
-        if let Some(&stash) = (!self.by_commit.is_empty())
-            .then(|| self.by_commit.get(&walked.id))
-            .flatten()
-        {
-            // The walk reaches the stash commit itself: that is a commit's row.
-            self.finish(stash);
-        }
-        Ok(Next::Entry(Entry::Commit {
-            id: walked.id,
-            parents: walked.parents,
-        }))
-    }
-
-    /// The newest stash on `base` not yet placed, left unplaced.
-    fn above(&self, base: &Oid) -> Option<usize> {
-        if self.by_base.is_empty() {
-            return None;
-        }
-        self.by_base
-            .get(base)?
-            .iter()
-            .copied()
-            .find(|&at| self.places.get(at) != Some(&Place::Done))
-    }
-
-    /// The newest stash still waiting that is no older than `time`, the date of the commit
-    /// about to be handed on, and that comes before `above`, the stash going directly above
-    /// that commit: newer, or as new with a lower `stash@{n}`.
-    fn due(&mut self, time: Option<i64>, above: Option<usize>) -> Option<usize> {
-        let time = time?;
-        let stashes = self.decoration.stashes();
-        let order = |at: usize| {
-            stashes
-                .get(at)
-                .map(|stash| (stash.committed, std::cmp::Reverse(stash.index)))
-        };
-        while let Some(&at) = self.dated.get(self.next_dated) {
-            if self.places.get(at) != Some(&Place::Waiting) {
-                self.next_dated += 1;
-                continue;
-            }
-            let (committed, _) = order(at)?;
-            if committed < time {
-                return None;
-            }
-            // `dated` is in this order, so if this one does not come first, none does.
-            return match above {
-                Some(above) if order(at) <= order(above) => None,
-                Some(_) | None => Some(at),
-            };
-        }
-        None
-    }
-
-    /// Whether stash `at`'s base is among the commits pulled and not yet handed on, pulling
-    /// up to the lookahead more to find it.
-    fn look_ahead(&mut self, at: usize, cancel: &impl Cancel) -> Result<Ahead, Error> {
-        let Some(stash) = self.decoration.stashes().get(at) else {
-            return Ok(Ahead::NotYet);
-        };
-        let (id, base, base_committed) = (stash.id, stash.base, stash.base_committed);
-        for walked in &self.ahead {
-            if walked.id == id {
-                return Ok(Ahead::WalkedItself);
-            }
-            if walked.id == base {
-                return Ok(Ahead::Reached);
-            }
-        }
-        while self.ahead.len() < self.lookahead && !self.exhausted {
-            if cancel.is_cancelled() {
-                return Ok(Ahead::Cancelled);
-            }
-            let walked = match self.pull(cancel)? {
-                Pulled::Commit(walked) => walked,
-                Pulled::End => break,
-                Pulled::Cancelled => return Ok(Ahead::Cancelled),
-            };
-            if walked.id == id {
-                return Ok(Ahead::WalkedItself);
-            }
-            if walked.id == base {
-                return Ok(Ahead::Reached);
-            }
-            if let (Some(time), Some(base_time)) = (walked.time, base_committed)
-                && time < base_time
-            {
-                // Past the base's date without meeting it: it is reached far below, if at all.
-                break;
-            }
-        }
-        Ok(Ahead::NotYet)
-    }
-
-    fn finish(&mut self, at: usize) {
-        if let Some(place) = self.places.get_mut(at) {
-            *place = Place::Done;
-        }
-    }
-
-    fn hold(&mut self, at: usize) {
-        if let Some(place) = self.places.get_mut(at) {
-            *place = Place::Held;
-        }
-    }
-
-    /// Pulls one commit off the walk to the back of what is ahead, or notes the walk's end.
-    fn pull(&mut self, cancel: &impl Cancel) -> Result<Pulled<'_>, Error> {
         let info = match self.walk.next(cancel)? {
             Step::Commit(info) => info,
-            Step::End => {
-                self.exhausted = true;
-                return Ok(Pulled::End);
+            Step::Stash(at) => {
+                if let Some(place) = self.placed.get_mut(at) {
+                    *place = true;
+                }
+                if let (Some(reach), Some(stash)) =
+                    (self.reach.as_mut(), self.decoration.stashes().get(at))
+                {
+                    reach.passed(&stash.id);
+                }
+                return Ok(Next::Entry(Entry::Stash(at)));
             }
-            Step::Cancelled => return Ok(Pulled::Cancelled),
+            Step::End => return Ok(Next::End),
+            Step::Cancelled => return Ok(Next::Cancelled),
         };
-        let walked = Walked {
-            id: crate::object_id::model_id(&info.id)?,
-            parents: super::parents_of(&info)?,
-            time: info.commit_time,
-        };
+        let id = crate::object_id::model_id(&info.id)?;
+        let parents = super::parents_of(&info)?;
         self.pulled += 1;
-        if let Some(reach) = self.reach.as_mut() {
-            reach.pulled(walked.id, &walked.parents);
+        let lost = self
+            .reach
+            .as_mut()
+            .is_some_and(|reach| reach.pulled(id, &parents));
+        if let Some(&stash) = self.by_commit.get(&id) {
+            // The walk reaches the stash commit itself: that is a commit's row.
+            if let Some(place) = self.placed.get_mut(stash) {
+                *place = true;
+            }
         }
-        self.ahead.push_back(walked);
-        Ok(self.ahead.back().map_or(Pulled::End, Pulled::Commit))
+        Ok(Next::Entry(self.above(Entry::Commit { id, parents, lost })))
     }
-}
 
-/// What [`Stream::pull`] found.
-enum Pulled<'a> {
-    Commit(&'a Walked),
-    End,
-    /// `cancel` fired within the walk's step; nothing was pulled.
-    Cancelled,
-}
-
-/// What looking ahead for a stash's base found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ahead {
-    Reached,
-    /// The stash commit itself is a commit the walk reaches.
-    WalkedItself,
-    NotYet,
-    Cancelled,
+    /// `commit`, or — in an order whose walk yields no stash — the newest stash on it not yet
+    /// placed, `commit` held back for the next call.
+    fn above(&mut self, commit: Entry) -> Entry {
+        let Entry::Commit { id, .. } = &commit else {
+            return commit;
+        };
+        let next = self.by_base.get(id).and_then(|stashes| {
+            stashes
+                .iter()
+                .copied()
+                .find(|&at| self.placed.get(at) == Some(&false))
+        });
+        match next {
+            Some(stash) => {
+                if let Some(place) = self.placed.get_mut(stash) {
+                    *place = true;
+                }
+                self.held = Some(commit);
+                Entry::Stash(stash)
+            }
+            None => commit,
+        }
+    }
 }

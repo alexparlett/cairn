@@ -13,7 +13,8 @@
 //! graph only as deep as the lowest generation it is about to emit.
 //!
 //! - **Tips** (`prepare_revision_walk`, v2.30.9 `:3535`, v2.56.0 `:4016`): each once, in the
-//!   order given, a missing one or one that is no commit dropped, then sorted newest
+//!   order given, one that is no commit dropped, a ref's that is missing an error (git's
+//!   `get_reference` dies, "bad object") and a reflog id's skipped, then sorted newest
 //!   committer date first by a stable sort (`commit_list_sort_by_date`, v2.30.9
 //!   `revision.c:3570`, v2.56.0 `:4050`), so equal dates keep the order given: the refs' and
 //!   `HEAD`, then each stash, then each reflog id (Show Lost Commits).
@@ -208,9 +209,17 @@ impl<'repo> DateOrder<'repo> {
             if !seen.insert(*tip) {
                 continue;
             }
-            if let Some((date, generation)) = walk.begin(tip)? {
-                given.push((Given::Commit(*tip), date));
-                cutoff = cutoff.min(generation);
+            match walk.begin(tip)? {
+                Some((date, generation)) => {
+                    given.push((Given::Commit(*tip), date));
+                    cutoff = cutoff.min(generation);
+                }
+                None if !repo.has_object(tip) => {
+                    return Err(Error::Walk {
+                        source: Box::new(BadObject(*tip)),
+                    });
+                }
+                None => {}
             }
         }
         if walk.compute_indegrees_to_depth(cutoff, cancel, Some(&mut progress))? == Depth::Cancelled
@@ -572,6 +581,12 @@ impl<'repo> DateOrder<'repo> {
         Ok(())
     }
 }
+
+/// What a walk fails with when a tip it is given names no object: git dies on it, "bad
+/// object" (`get_reference` in `revision.c`).
+#[derive(Debug, thiserror::Error)]
+#[error("bad object {0}")]
+struct BadObject(gix::ObjectId);
 
 /// What a walk whose accounting broke fails with: never expected, and an error rather than a
 /// panic.

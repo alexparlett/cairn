@@ -1,13 +1,14 @@
 //! What a walk from a refs snapshot starts from, and what its rows carry from it: every
 //! commit a local branch, a remote-tracking ref or a tag identifies, and `HEAD`'s — Fork's
 //! All Commits, git's `rev-list --branches --remotes --tags HEAD` — with the refs that label
-//! each, and the stash list. Nothing about a stash seeds the walk: not `refs/stash`, not the
-//! commit a stash was made on. A tag naming a tree or a blob identifies no commit, so it is
-//! no seed and labels no row.
+//! each, and the stash list. Neither `refs/stash` nor the commit a stash was made on seeds
+//! the refs' walk; in git's date order each stash is a tip of its own whose one parent is its
+//! base (`date_order`). A tag naming a tree or a blob identifies no commit, so it is no seed
+//! and labels no row.
 //!
 //! [`RefSeeds`] is read from the snapshot alone, as plain data; [`Decoration`] is what a
-//! walk resolves it to once it opens — each stash's commit read for the dates its row is
-//! placed and drawn by — and shares, unchanged, with every page and cursor of that walk.
+//! walk resolves it to once it opens — each stash's commit read for what its row draws —
+//! and shares, unchanged, with every page and cursor of that walk.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -115,12 +116,9 @@ pub(super) struct Stash {
     pub(super) message: String,
     pub(super) author: String,
     pub(super) author_time: i64,
-    /// The stash commit's committer date: where the walk's order — newest committed first
-    /// — places its row.
+    /// The stash commit's committer date: which of the stashes on one base goes first, in an
+    /// order whose walk yields no stash (`stream`).
     pub(super) committed: i64,
-    /// The base's committer date, past which a walk that has not met the base stops
-    /// looking ahead for it; `None` when the base could not be read.
-    pub(super) base_committed: Option<i64>,
 }
 
 /// What a walk's rows carry beyond their commits, shared by every page and cursor of it.
@@ -154,7 +152,7 @@ impl Decoration {
 /// nothing. A stash whose commit cannot be read — dropped and pruned since the snapshot —
 /// has no row, as the snapshot's own stash read skips an entry it cannot read; the walk
 /// goes on without it. A stash commit filed more than once is one row, its newest entry's.
-/// Reads two commits per stash and, for a detached `HEAD`, one header;
+/// Reads one commit per stash and, for a detached `HEAD`, one header;
 /// the labels are shared, not copied.
 pub(super) fn resolve(
     repo: &gix::Repository,
@@ -226,13 +224,5 @@ fn stash_of(repo: &gix::Repository, entry: &StashEntry) -> Result<Stash, Error> 
         author: encoding.text(author.name),
         author_time,
         committed,
-        base_committed: committed_at(repo, &entry.base),
     })
-}
-
-/// A commit's committer date, or `None` when it cannot be read.
-fn committed_at(repo: &gix::Repository, id: &Oid) -> Option<i64> {
-    let found = repo.find_commit(object_id(id).ok()?).ok()?;
-    let decoded = found.decode().ok()?;
-    Some(decoded.committer().ok()?.time().ok()?.seconds)
 }

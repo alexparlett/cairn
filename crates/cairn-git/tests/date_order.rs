@@ -894,9 +894,9 @@ fn the_commit_graph_is_used_only_where_git_uses_it() {
 
 /// The routes that walk in gitoxide's own orders, and the counts and details beside them, see
 /// the same substitutions git does, with and without a commit-graph: commit-time and graph
-/// order list the commits git lists, each with the parents git shows; Show Lost Commits in
-/// commit-time order is `git log`'s order over the same reflog ids, each dated as git dates
-/// it; a branch's ahead and behind are `git rev-list --left-right --count`'s; and a commit's
+/// order list the commits git lists, each with the parents git shows; Show Lost Commits, which
+/// walks in date order, is `git log --date-order`'s order over the same reflog ids, each read
+/// as git reads it; a branch's ahead and behind are `git rev-list --left-right --count`'s; and a commit's
 /// details carry `git log --format=%P`'s parents under a graft and a shallow boundary.
 /// Caught by: a route reading the objects as stored, or the graph where git reads none.
 #[test]
@@ -954,8 +954,8 @@ fn every_route_sees_the_substitutions_git_sees() {
             }
         }
         let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
-        // Show Lost Commits in commit-time order, its reflog ids dated as git dates them — a
-        // replaced commit by its replacement — against git's own commit-time order.
+        // Show Lost Commits, its reflog ids read as git reads them — a replaced commit as its
+        // replacement — against git's own date order.
         let lost = HistoryRequest::from_refs(&snapshot, 1000).with_lost_commits();
         let page = ok(repo.history(&lost, &CancelSignal::new()), "a page");
         let ours: Vec<String> = page.rows.ids().map(|id| id.to_string()).collect();
@@ -969,6 +969,7 @@ fn every_route_sees_the_substitutions_git_sees() {
             TIED,
             &[
                 "log",
+                "--date-order",
                 "--format=%H",
                 "--branches",
                 "--remotes",
@@ -1125,4 +1126,317 @@ fn the_public_walk_reports_its_count_every_100_ms() {
         reports.iter().all(|&(_, read)| read <= walk.commits_read()),
         "{reports:?}"
     );
+}
+
+// --- The history: every route a window pages, against the same oracle ---
+
+/// The fixtures the history is compared on, each built afresh: the walk's own, and the old
+/// stashes at every depth.
+fn history_fixtures() -> [(&'static str, Build); 7] {
+    [
+        ("tied", || with_remote(tied())),
+        ("recipe", || with_remote(recipe("recipe"))),
+        ("two stashes", || with_remote(two_stashes())),
+        ("skew", || (skew(), None)),
+        ("reflogs", || (reflogs(), None)),
+        ("a branch at a stash", || (branch_at_a_stash(), None)),
+        ("old stashes", || (old_stashes(), None)),
+    ]
+}
+
+/// The history request the window makes: from the refs snapshot read now, with Show Lost
+/// Commits when `lost`.
+fn snapshot_request(repo: &Repository, lost: bool, limit: usize) -> HistoryRequest {
+    let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+    let request = HistoryRequest::from_refs(&snapshot, limit);
+    if lost {
+        request.with_lost_commits()
+    } else {
+        request
+    }
+}
+
+/// A history held as the window holds it, paged `page` rows at a time by one session.
+fn held_history(repo: &Repository, request: &HistoryRequest, page: usize) -> History {
+    let mut session = ok(repo.history_session(request), "opening the session");
+    let mut rows = History::new();
+    loop {
+        let next = ok(session.next_page(page, &CancelSignal::new()), "paging");
+        ok(rows.append(next.rows), "holding a page");
+        if next.cursor.is_none() {
+            return rows;
+        }
+    }
+}
+
+/// Each row's id, a stash's row by its stash commit.
+fn history_ids(rows: &History) -> Vec<String> {
+    rows.rows()
+        .map(|row| match row.id() {
+            cairn_model::RowId::Commit(id) | cairn_model::RowId::Stash(id) => id.to_string(),
+        })
+        .collect()
+}
+
+/// The commits git draws as lost for `tips`' reflog ids: `git rev-list <ids> --not --branches
+/// --remotes --tags HEAD`.
+fn lost_by_git(fixture: &Fixture, tips: &Tips) -> HashSet<String> {
+    if tips.reflogs.is_empty() {
+        return HashSet::new();
+    }
+    let mut args = vec!["rev-list"];
+    args.extend(tips.reflogs.iter().map(String::as_str));
+    args.extend(["--not", "--branches", "--remotes", "--tags", "HEAD"]);
+    fixture.git(&args).lines().map(str::to_owned).collect()
+}
+
+/// The commits a history draws as lost.
+fn drawn_lost(rows: &History) -> HashSet<String> {
+    rows.rows()
+        .filter(|row| row.is_lost())
+        .map(|row| match row.content() {
+            RowContent::Commit(commit) => commit.id.to_string(),
+            RowContent::Stash(stash) => panic!("stash {} drawn as lost", stash.id),
+        })
+        .collect()
+}
+
+/// Over every fixture, with and without a commit-graph, `check` with each fixture.
+fn over_every_fixture(check: &mut dyn FnMut(&str, &Fixture, bool)) {
+    for graph in [false, true] {
+        for (name, make) in history_fixtures() {
+            let (fixture, _remote) = make();
+            if graph {
+                fixture.write_commit_graph();
+            }
+            check(name, &fixture, graph);
+        }
+    }
+}
+
+/// The history from a refs snapshot — held in pages of five as the window holds it, and
+/// read as one page — is `git log --date-order` over the refs with each stash a tip on its
+/// base, on every fixture, with and without a commit-graph. Caught by: the history walked in
+/// commit-time or graph order, its tips given in another order, or a stash merged by date.
+#[test]
+fn the_history_is_in_git_date_order() {
+    let mut found = Vec::new();
+    over_every_fixture(&mut |name, fixture, graph| {
+        let expected = oracle(fixture, &tips_for(fixture, Reading::Stashes));
+        let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+        let held = history_ids(&held_history(&repo, &snapshot_request(&repo, false, 5), 5));
+        let page = ok(
+            repo.history(
+                &snapshot_request(&repo, false, 10_000),
+                &CancelSignal::new(),
+            ),
+            "one page",
+        );
+        let mut whole = History::new();
+        ok(whole.append(page.rows), "holding the page");
+        for (route, ids) in [("held", held), ("one page", history_ids(&whole))] {
+            if ids != expected {
+                found.push(format!(
+                    "{name}, commit-graph {graph}, {route}:\n  git:   {}\n  cairn: {}",
+                    short(&expected),
+                    short(&ids)
+                ));
+            }
+        }
+    });
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+/// Every stash whose base the refs reach, and whose commit they do not, is a stash's row —
+/// its own index and base — exactly where git's date order puts it, and every other row is a
+/// commit's: a stash on a deep base, one dated before its base, one on a deleted branch (no
+/// row), one a branch is built on (a commit's row). Caught by: a stash placed by its date or
+/// directly above its base, a stash on an unreached base drawn, or a reached stash commit
+/// drawn as a stash.
+#[test]
+fn stash_rows_are_where_git_puts_them() {
+    let mut found = Vec::new();
+    let mut stash_rows = 0usize;
+    over_every_fixture(&mut |name, fixture, graph| {
+        let tips = tips_for(fixture, Reading::Stashes);
+        let expected = oracle(fixture, &tips);
+        let reached: HashSet<String> = fixture
+            .git(&["rev-list", "--branches", "--remotes", "--tags", "HEAD"])
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+        let rows = held_history(&repo, &snapshot_request(&repo, false, 3), 3);
+        let label = format!("{name}, commit-graph {graph}");
+        if history_ids(&rows) != expected {
+            found.push(format!("{label}: the rows are not git's"));
+        }
+        for row in rows.rows() {
+            match row.content() {
+                RowContent::Commit(commit) => {
+                    let id = commit.id.to_string();
+                    let grafted = tips.stashes.iter().any(|(stash, base)| {
+                        *stash == id && reached.contains(base) && !reached.contains(stash)
+                    });
+                    if grafted {
+                        found.push(format!("{label}: stash {id} drawn as a commit"));
+                    }
+                }
+                RowContent::Stash(stash) => {
+                    stash_rows += 1;
+                    let listed = tips.stashes.get(stash.index);
+                    let id = stash.id.to_string();
+                    let base = stash.base.to_string();
+                    if listed != Some(&(id.clone(), base.clone())) {
+                        found.push(format!(
+                            "{label}: stash@{{{}}} drawn as {id} on {base}, listed {listed:?}",
+                            stash.index
+                        ));
+                    }
+                    if !reached.contains(&base) || reached.contains(&id) {
+                        found.push(format!("{label}: stash {id} drawn though git has none"));
+                    }
+                }
+            }
+        }
+    });
+    assert!(found.is_empty(), "{}", found.join("\n"));
+    assert!(
+        stash_rows >= 18,
+        "only {stash_rows} stash rows decided anything"
+    );
+}
+
+/// Show Lost Commits' history — the reflog ids tips after the stashes — is git's date order
+/// over the same tips, and the rows it draws as lost are exactly what `git rev-list <reflog
+/// ids> --not --branches --remotes --tags HEAD` lists, each verdict given as its row is laid
+/// out, on every fixture, with and without a commit-graph, in pages of one and of seven —
+/// and so whatever order the request names. Caught by: the reflog ids given before the
+/// stashes, the toggle walking another order, or a commit a ref reaches only through a child
+/// dated older than it drawn as lost.
+#[test]
+fn lost_commits_are_in_git_date_order() {
+    let mut found = Vec::new();
+    let mut lost_rows = 0usize;
+    over_every_fixture(&mut |name, fixture, graph| {
+        let tips = tips_for(fixture, Reading::LostCommits);
+        let expected = oracle(fixture, &tips);
+        let expected_lost = lost_by_git(fixture, &tips);
+        let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+        let asked = [
+            (1, HistoryOrder::DateOrder),
+            (7, HistoryOrder::DateOrder),
+            (7, HistoryOrder::CommitTime),
+            (7, HistoryOrder::GraphOrder),
+        ];
+        for (page, order) in asked {
+            let request = snapshot_request(&repo, true, page).with_order(order);
+            let rows = held_history(&repo, &request, page);
+            let label = format!("{name}, commit-graph {graph}, pages of {page}, {order:?} asked");
+            let ids = history_ids(&rows);
+            if ids != expected {
+                found.push(format!(
+                    "{label}:\n  git:   {}\n  cairn: {}",
+                    short(&expected),
+                    short(&ids)
+                ));
+            }
+            let lost = drawn_lost(&rows);
+            lost_rows += lost.len();
+            if lost != expected_lost {
+                found.push(format!(
+                    "{label}: lost {lost:?}, git lists {expected_lost:?}"
+                ));
+            }
+        }
+    });
+    assert!(found.is_empty(), "{}", found.join("\n"));
+    assert!(
+        lost_rows >= 20,
+        "only {lost_rows} lost rows decided anything"
+    );
+}
+
+/// A walk resumed from a cursor — a fresh page each time on the cold route, or a session
+/// started from one, as a find or a reopened scroll resumes — continues git's date order where
+/// the page before it stopped, stashes and Show Lost Commits' rows and marks included, on the
+/// tied and the reflogs fixtures, with and without a commit-graph. Caught by: a cold page that
+/// opens its walk otherwise than the first page did, or a resumed session that starts its
+/// replay from the refs alone.
+#[test]
+fn a_resumed_session_continues_git_date_order() {
+    let mut found = Vec::new();
+    for graph in [false, true] {
+        let builds: [(&str, Build); 2] = [
+            ("tied", || with_remote(tied())),
+            ("reflogs", || (reflogs(), None)),
+        ];
+        for (name, make) in builds {
+            let (fixture, _remote) = make();
+            if graph {
+                fixture.write_commit_graph();
+            }
+            let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+            for (lost, reading) in [(false, Reading::Stashes), (true, Reading::LostCommits)] {
+                let tips = tips_for(&fixture, reading);
+                let expected = oracle(&fixture, &tips);
+                let expected_lost = lost_by_git(&fixture, &tips);
+                let label = format!("{name}, commit-graph {graph}, lost {lost}");
+
+                // Cold: every page a fresh walk from the cursor before it.
+                let mut cold = History::new();
+                let mut next = ok(
+                    repo.history(&snapshot_request(&repo, lost, 4), &CancelSignal::new()),
+                    "a cold page",
+                );
+                loop {
+                    let cursor = next.cursor.take();
+                    ok(cold.append(next.rows), "holding a page");
+                    let Some(cursor) = cursor else { break };
+                    next = ok(
+                        repo.history(&HistoryRequest::resume(cursor, 4), &CancelSignal::new()),
+                        "a cold page",
+                    );
+                }
+
+                // A session for one page, then a session resumed from its cursor to the end.
+                let mut first = ok(
+                    repo.history_session(&snapshot_request(&repo, lost, 4)),
+                    "opening the session",
+                );
+                let page = ok(first.next_page(4, &CancelSignal::new()), "the first page");
+                let mut resumed_rows = History::new();
+                ok(resumed_rows.append(page.rows), "holding a page");
+                let cursor = first.cursor();
+                drop(first);
+                let mut resumed = ok(
+                    repo.history_session(&HistoryRequest::resume(cursor, 4)),
+                    "resuming the session",
+                );
+                loop {
+                    let page = ok(resumed.next_page(4, &CancelSignal::new()), "paging");
+                    let done = page.cursor.is_none();
+                    ok(resumed_rows.append(page.rows), "holding a page");
+                    if done {
+                        break;
+                    }
+                }
+
+                for (route, rows) in [("cold", &cold), ("resumed", &resumed_rows)] {
+                    let ids = history_ids(rows);
+                    if ids != expected {
+                        found.push(format!(
+                            "{label}, {route}:\n  git:   {}\n  cairn: {}",
+                            short(&expected),
+                            short(&ids)
+                        ));
+                    }
+                    if drawn_lost(rows) != expected_lost {
+                        found.push(format!("{label}, {route}: the lost rows are not git's"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "{}", found.join("\n"));
 }

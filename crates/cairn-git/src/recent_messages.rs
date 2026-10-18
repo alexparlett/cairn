@@ -42,6 +42,8 @@ impl Repository {
             }
             let commit = match walk.next(cancel)? {
                 walk::Step::Commit(commit) => commit,
+                // A walk given no stash yields no stash's row.
+                walk::Step::Stash(_) => continue,
                 walk::Step::End => break,
                 walk::Step::Cancelled => return Err(cancelled(messages.len())),
             };

@@ -49,6 +49,9 @@ pub(crate) enum CommitWalk<'repo> {
 #[derive(Debug)]
 pub(crate) enum Step {
     Commit(gix::traverse::commit::Info),
+    /// A stash's row, by its index among the stashes the walk was given: only git's date
+    /// order is given any.
+    Stash(usize),
     End,
     /// `cancel` fired within the step; the walk is as it was before it, and the next step
     /// carries on.
@@ -68,7 +71,10 @@ impl CommitWalk<'_> {
                 }),
             },
             Self::DateOrder(walk) => Ok(match walk.next(cancel)? {
-                date_order::Popped::Commit { info, .. } => Step::Commit(info),
+                date_order::Popped::Commit {
+                    stash: Some(index), ..
+                } => Step::Stash(index),
+                date_order::Popped::Commit { info, stash: None } => Step::Commit(info),
                 date_order::Popped::End => Step::End,
                 date_order::Popped::Cancelled => Step::Cancelled,
             }),
@@ -92,40 +98,36 @@ pub(crate) fn open<'repo>(
     order: HistoryOrder,
     cancel: &impl Cancel,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
-    open_dated(repo, tips, order, HashMap::new(), cancel)
+    let tips = date_order::Tips {
+        refs: tips,
+        stashes: &[],
+        reflogs: &[],
+    };
+    open_from(repo, tips, order, cancel)
 }
 
-/// [`open`], with the committer dates of some tips known already — read with their ids, as
-/// Show Lost Commits' reflog tips are (`reflogs::reflog_tips`), so no tip is read twice. A
-/// tip whose date is not known is taken from the commit-graph where the graph holds it, as
-/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise.
-/// Date order reads its tips itself, each once, and takes no known dates.
-pub(crate) fn open_dated<'repo>(
+/// [`open`] from refs, stashes and reflog ids, each list in the order git is given it. Git's
+/// date order walks each stash as a tip on its base and the reflog ids after the stashes
+/// (`date_order`); the other orders walk the refs' and the reflogs' commits alone, given no
+/// stash.
+pub(crate) fn open_from<'repo>(
     repo: &'repo gix::Repository,
-    tips: &[gix::hash::ObjectId],
+    tips: date_order::Tips<'_>,
     order: HistoryOrder,
-    known: HashMap<gix::hash::ObjectId, i64>,
     cancel: &impl Cancel,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
-    let sorting = match order.sorting() {
-        Some(sorting) => sorting,
-        None => {
-            let tips = date_order::Tips {
-                refs: tips,
-                stashes: &[],
-                reflogs: &[],
-            };
-            return Ok(
-                DateOrder::open(repo, tips, cancel, &mut |_| {}, date_order::REPORT_EVERY)?
-                    .map(|walk| CommitWalk::DateOrder(Box::new(walk))),
-            );
-        }
+    let Some(sorting) = order.sorting() else {
+        return Ok(
+            DateOrder::open(repo, tips, cancel, &mut |_| {}, date_order::REPORT_EVERY)?
+                .map(|walk| CommitWalk::DateOrder(Box::new(walk))),
+        );
     };
+    let tips: Vec<gix::hash::ObjectId> = tips.refs.iter().chain(tips.reflogs).copied().collect();
     let substitutions = Substitutions::read(repo)?;
     let graph = commit_graph(repo, &substitutions)?;
     let objects = Grafted::new(&repo.objects, substitutions);
-    let mut dates = known;
+    let mut dates = HashMap::new();
     if matches!(order, HistoryOrder::CommitTime) {
         dates.reserve(tips.len());
         let mut buffer = Vec::new();

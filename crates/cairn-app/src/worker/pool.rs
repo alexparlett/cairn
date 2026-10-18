@@ -613,11 +613,11 @@ impl Threads {
 }
 
 impl Drop for Threads {
-    /// Closes the repository: the epochs are stopped and the history thread is told to stop
-    /// and joined, its walk ending at the next commit it reads; the diff thread is told to stop
-    /// and the network lane's queue is closed; the fetch in flight, if any, is
-    /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the
-    /// local lane is waited for next and a fetch must not run on for as long
+    /// Closes the repository: the epochs are stopped; the history and diff threads are told
+    /// to stop and the network lane's queue is closed; the fetch in flight, if any, is
+    /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the history thread —
+    /// its walk ending at the next commit it reads — and then the local lane are waited for
+    /// next and a fetch must not run on for as long
     /// as a commit's hooks do; then the local lane is marked closing and
     /// joined, so the write it is running finishes and is never ended by a
     /// close; then every `git` still running in the
@@ -634,22 +634,23 @@ impl Drop for Threads {
     /// a prompt still waiting is withdrawn by the window when its fetch's or
     /// write's outcome arrives) and on unwinding alike.
     fn drop(&mut self) {
-        // The history thread first: the epochs stopped — as a close stopped them already, and
-        // as every handle gone may not have — so a walk still opening ends at its next commit,
-        // and joined, here on the repository thread, before anything waits on a reap.
+        // The epochs stopped — as a close stopped them already, and as every handle gone may
+        // not have — so a walk still opening ends at its next commit; and every thread told to
+        // stop, so the diff thread takes up nothing more; what it is running is ended with the
+        // rest below, or by its epoch.
         self.epochs.stop();
         let _ = self.history.send(HistoryJob::Stop);
-        if let Some(history) = self.history_thread.take() {
-            let _ = history.join();
-        }
-        // Then, so the diff thread takes up nothing more; what it is running is
-        // ended with the rest below, or by its epoch if the close stopped them.
         let _ = self.diff.send(DiffJob::Stop);
         let _ = self.refresh.send(RefreshJob::Stop);
         self.network = None;
-        // Ended now, not after the local lane is waited for below: a fetch is ended by a
-        // close as soon as it is asked, whatever write is still running.
+        // Ended now, not after a thread is waited for below: a fetch is ended by a close as
+        // soon as it is asked, whatever walk or write is still running.
         self.control.cancel();
+        // The history thread joined, here on the repository thread, before anything waits on
+        // a reap: it runs no `git`, and its walk polls the stopped epochs between commits.
+        if let Some(history) = self.history_thread.take() {
+            let _ = history.join();
+        }
         // The local lane starts nothing more, and the write it is running — a commit in its
         // hooks, say — is waited for, never ended: the window says
         // which, and a second close after its patience closes it anyway. Waited for here, on

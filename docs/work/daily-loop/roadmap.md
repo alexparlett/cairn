@@ -15,8 +15,8 @@ nuance that run must not lose.
 | 4 | `refs-and-status` | **shipped** | 1, 2a (O2 picked `git status`), 3 |
 | 5 | `staging-and-commit` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 2, 2a, 3, 4 |
 | 5b | `stash-and-ignore` | brief only | 5, 5d |
-| 5c | `history-topo-order` | **planned** — next (`docs/prd/history-topo-order.md`, `docs/work/history-topo-order/`) | 1 |
-| 5d | `fork-alignment` | **planned** (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
+| 5c | `history-topo-order` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1 |
+| 5d | `fork-alignment` | **planned** — next (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
 | 5e | `file-tree-view` | brief only | 5d |
 | 5f | `quick-launch` | brief only | 5d |
 | 5g | `preferences` | brief only | 5d |
@@ -286,10 +286,21 @@ Activity Manager a drop's prompt is quoted in. For the intent-to-add bullet abov
 packet 5 discards an intent-to-add file by emptying it, as git does, keeping its entry
 (`an_intent_to_add_files_discard_empties_it_and_says_so`).
 
-## 5c. history-topo-order — planned
+## 5c. history-topo-order — shipped
 
-`docs/prd/history-topo-order.md`, `docs/work/history-topo-order/`, evidence
-`docs/research/history-topo-order/`. The history drawn in `git log --date-order`'s order,
+`docs/prd/history-topo-order.md` (frozen), evidence `docs/research/history-topo-order/` —
+among it `measured.md` (the walk, the history thread and the window on the bench) and
+`packet-record.md` (the decisions made in flight that await the user's review, each phase's QA
+adjudication and the merge bar's numbers). Merge bar passed on 2026-10-18; the work directory
+was torn down and the packet lands on `main` as one pull request. As built:
+`docs/systems/history-graph.md` (git's date order, stashes as tips of the walk, Show Lost
+Commits in date order, the history thread, the opening pass and a reopen in the window) and what
+it changed in `docs/systems/git-processes.md` (closing), `sidebar.md`, `diff.md`,
+`credentials.md` and `local-changes.md` (what runs on which thread). Leftovers: #139 (keep the
+opening pass's state across a reopen), #140 (date order's first page without the lane
+assigner's priming), #141 (corrected commit dates once gitoxide reads them).
+
+The history drawn in `git log --date-order`'s order,
 Fork's default — no commit above its children, ties in git's order — by git's own walk written
 in `cairn-git` over gitoxide's commit graph (gitoxide's own date order breaks ties arbitrarily),
 pinned against git on fixtures at every supported git. The history gets a thread of its own, so

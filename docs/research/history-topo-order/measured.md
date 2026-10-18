@@ -122,8 +122,32 @@ the same, since the opening pass reads everything anyway.
 
 ## What this record does not settle
 
-- The history thread's opening, a page after the opening pass, a find to the oldest commit and
-  the window's frames during an opening pass (R6.3, R6.5): measured once the walk is the
-  history's order and has a thread of its own.
+- The history thread's opening, a page after the opening pass and the window's frames during
+  an opening pass (R6.3, R6.5): measured once the walk has a thread of its own (a find to the
+  oldest commit is measured below).
 - Why git's first page with a graph is 13 ms faster per 283k commits than Cairn's: not profiled
   (no profiler on the machine); the hash map is the likely cause, not established.
+
+## A find after the opening pass, with the walk as the history's order
+
+Measured when the history's routes first walked in date order, before the history thread
+existed. `cargo test --release -p cairn-app --bin cairn measures_a_find_through_the_boundary --
+--ignored --nocapture` with `CAIRN_BENCH_REPO` naming the bench: the repository thread opens the
+history from the refs snapshot (the first page of `PAGE_ROWS`, its opening pass included and
+not timed), then finds the walk's last row — the oldest commit, `c01efc669f0`, row 345,544 in
+both orders — in pages of `FIND_PAGE_ROWS`, every page appended to one `History` as the window
+appends it; median of seven after a warm-up. The same reporter was run on the tree before the
+change (the integration branch at `c05ece5`, the history then in commit-time order), from a
+source copy built in the scratchpad.
+
+| | Commit-time order (`c05ece5`) | Date order |
+| --- | --- | --- |
+| the find, after the first page | 3,829 ms [3,822-3,839] | 1,952 ms [1,933-2,017] |
+| the whole walk as one page (warm-up, opening pass included) | 4,285 ms | 3,950 ms |
+| a find stopped halfway | 1,914 ms, 158,784 rows kept | 976 ms, 160,832 rows kept |
+| retained by the history at the end | 52.67 MiB | 52.62 MiB |
+
+After its opening pass the date-order walk holds every commit's parents and date, so each
+page reads only the commits it draws (`summary_of_commit`), where commit-time order's walk
+read each commit to step and again to draw it. A marker was touched before each run and `find
+~/Development/bench/rust/.git -newer <marker>` was empty after each, exit 0, nothing on stderr.

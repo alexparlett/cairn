@@ -3,6 +3,123 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-18 — phase 02 built (packet mode)
+
+Built on `feature/history-topo-order` (3c2c347, 4e442d3, then the QA fixes e8cc7e8, 1e2aba2):
+the history's default order is `HistoryOrder::DateOrder`, so the refs snapshot's walk, the cold
+cursor, `HistorySession` and a find's pages are git's `--date-order`; a refs walk gives each
+stash to the walk as a tip on its base after `HEAD`, and Show Lost Commits' reflog ids after
+the stashes; `stream.rs`'s date merge and look-ahead are retired; Show Lost Commits forces date
+order, so `reach.rs` gives a final verdict as each commit comes off the walk and the
+reached-after-all correction (`RowsPage::reached`, `History::append`'s flag clearing,
+`Chunks::get_mut`) is removed (R2.6: no other order needs it, since none walks with the toggle).
+
+C4: `the_history_is_in_git_date_order`, `stash_rows_are_where_git_puts_them`,
+`lost_commits_are_in_git_date_order` and `a_resumed_session_continues_git_date_order` in
+`crates/cairn-git/tests/date_order.rs` (git-floor row, floor 6 → 10 for 11 tests, green at
+2.30.9 and 2.32.7). Mutations each failing at least one test: the default back to `CommitTime`;
+no stashes given to the walk; Show Lost Commits not forcing date order (with the default kept and
+with it reverted); `Reach` deciding lost wrongly or settling early; the graph-order stash
+placement removed; the stream's `by_commit` arm removed; the cursor's refs/reflogs split
+dropped; the per-tip poll removed; the bad-object arm removed.
+
+Find to a deep ref (the stopping rule): `measures_a_find_through_the_boundary` on the bench, the
+oldest commit (row 345,544), timed after the first page: 3,829 ms [3,822-3,839] at c05ece5 in
+commit-time order against 1,952 ms [1,933-2,017] in date order — faster, so the rule did not
+trigger (`docs/research/history-topo-order/measured.md`). Bench untouched: `find
+~/Development/bench/rust/.git -newer <marker>` empty after both runs.
+
+Tests changed by design (C5), each with its reason in its doc and still failing when broken:
+- Class A: `a_backward_line_across_a_page_boundary_is_a_gained_segment` and
+  `a_row_that_left_the_window_is_never_repainted` (`tests/history.rs`) now ask
+  `HistoryOrder::CommitTime`, which still hands a parent over before its child, so they keep
+  pinning the assigner's page and window behaviour; `a_session_over_a_skewed_history_returns_every_commit`
+  became `..._in_gits_date_order` (oracle `git rev-list --date-order HEAD`, no repaints, and the
+  skew asserted to change the order); `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`
+  (`tests/lost_commits.rs`) now asserts the child comes off first and the rows are git's order.
+- Class B (`tests/every_ref.rs`): `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
+  keeps its row and line checks, placement now the oracle's;
+  `a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base` became
+  `a_stash_on_a_deep_base_is_where_git_puts_it`; `a_stash_commit_met_while_looking_ahead_...`
+  became `a_stash_commit_under_an_older_branch_commit_...`; `stash_rows_are_in_gits_date_order`
+  compares every row with the grafted oracle; `looking_ahead_stops_once_the_walk_passes_the_bases_date`
+  became `a_deleted_branchs_stash_pulls_nothing_ahead_and_has_no_row`.
+- Class E: `a_page_cancelled_while_looking_ahead_...` became
+  `a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows`;
+  `a_cancelled_query_stops_walking_and_says_where`,
+  `cancelling_exactly_at_the_page_boundary_is_still_a_cancellation` and
+  `cancelling_a_session_stops_the_walk_and_keeps_its_progress` count the opening pass's polls
+  (`opening_polls`) or open the walk first; `cancelling_stops_the_walk_and_keeps_what_it_had`
+  (`session.rs`) opens the walk with an empty page first;
+  `opening_a_walk_from_many_refs_is_cancelled_between_tips` kept its counts and gained a missing
+  sixth tip that decides the poll before each tip.
+- Class F: none moved — the priming tests and the window's tests pass unchanged.
+- Beside them: `every_route_sees_the_substitutions_git_sees` compares Show Lost Commits with
+  `git log --date-order`; `reach.rs`'s unit tests are rewritten for the final verdict (the
+  clock-skew correction test replaced by `a_lost_commits_parents_are_lost_unless_a_ref_reaches_them`);
+  the model's `a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it` became
+  `a_lost_row_reads_back_lost_and_no_later_page_changes_it` and the ui's
+  `a_lost_row_is_drawn_lost_and_no_other` appends a later lost page instead of a correction;
+  `an_item_changed_in_place_is_that_item_alone` went with `Chunks::get_mut`, which nothing calls.
+  The lane assigner's tests, the frozen oracle's fingerprint, compact rows' and
+  `recent_messages`' tests pass unchanged.
+
+QA: `qa-checklist`, `test-coverage-auditor`, `responsiveness-reviewer` and
+`gate-integrity-reviewer` (for `scripts/git-floor.sh`), each spawned fresh over
+`c05ece5...4e442d3`; 14 raw findings adjudicated by a fresh `qa-confirm`.
+
+Confirmed and fixed:
+- QA-1: the systems doc's pins table named the model test by its old name, and lacked C4's
+  pins (1e2aba2).
+- QA-5: the git-floor comment this change wrote cited acceptance ids (1e2aba2).
+- TC-1: `opening_a_walk_from_many_refs_is_cancelled_between_tips` no longer proved a poll before
+  each tip, the in-degree pass polling too; a missing sixth tip now decides it (e8cc7e8, checked
+  to fail with the per-tip poll removed).
+- TC-2: the stream's `by_commit` arm went undriven once the default was date order;
+  `a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs` now runs in all three orders
+  (e8cc7e8, checked to fail with the arm removed).
+
+Confirmed, deferred to phase 03 (recorded in state.md's hand-off):
+- RR-1: the opening pass runs on the repository thread, so filters, a refresh's refs and retires
+  wait behind every open until the history thread exists (packet qa-checklist item 7).
+- RR-2: a find or stop-finding bumps the history lane and cancels an opening pass of the same
+  walk, which then starts again from nothing; phase 03's spec does not yet say a same-walk find
+  must keep the pass. PENDING the user's review: name it in phase 03's brief, or accept it.
+- RR-3: the opening pass's count is not yet shown.
+
+Dismissed:
+- QA-2 (`Reach` never settling on a dropped reflog id): `reflog_tips` already drops ids that are
+  missing or not commits, through the walk's own view; a stash's commit is cleared by `passed` or
+  becomes a tip; a commit git cannot parse fails the walk. No case leaves a tip pending.
+- QA-3 (Show Lost Commits with a stash only a reflog reaches): covered by `old_stashes` under
+  `lost_commits_are_in_git_date_order`, whose oracle grafts on refs-reached bases only.
+- QA-4 ("costs no look ahead" in the systems doc): true of the code as built.
+- TC-3 (a reflog id set in hex order in one oracle call): the fixture's dates are distinct and the
+  set compared is order-free; tip order is pinned by `lost_commits_are_in_git_date_order`.
+- RR-4 (170 B per commit for the session's life): accepted in phase 01.
+
+Decisions batched for the user, PENDING review (not approved):
+- Show Lost Commits walks in date order whatever order the request names (`with_order` is
+  ignored with it), so its verdicts need no correction; R2.6's "removed if no other order needs
+  it" read as: no route walks the toggle in another order.
+- Commit-time and graph order, given no stash by their walks, put each stash directly above its
+  base (graph order's old rule; commit-time order used to place a stash by its date).
+- `stash_rows_are_in_gits_date_order`'s sub-assertion that a stash is drawn above the index commit
+  it shares a second with now asserts the oracle's opposite: with a branch naming that index
+  commit, the tie goes to the branch's commit, the refs' tips being given before the stashes.
+- A ref tip whose object is missing fails the date-order walk, as git's `get_reference` dies
+  ("bad object"), keeping `bad_starting_points_are_errors_rather_than_empty_pages`; a reflog id
+  that cannot be read is still skipped.
+- Each reflog id is read twice — once to check it names a commit, once by the walk — the same
+  count as the commit-time walk's date read plus traversal read.
+- Floor movement for batched review: `--test date_order` 6 → 10 in `scripts/git-floor.sh`.
+- Three tests went with the mechanisms they pinned rather than being rewritten:
+  `looking_ahead_stops_once_the_walk_passes_the_bases_date` (replaced by
+  `a_deleted_branchs_stash_pulls_nothing_ahead_and_has_no_row`), `reach.rs`'s
+  `a_parent_taken_for_lost_before_its_reached_child_is_reached_after_all` (replaced by
+  `a_lost_commits_parents_are_lost_unless_a_ref_reaches_them`) and `chunked_store.rs`'s
+  `an_item_changed_in_place_is_that_item_alone` (its function removed).
+
 ## 2026-10-18 — phase 01 built (packet mode)
 
 Built on `feature/history-topo-order`: `HistoryOrder::DateOrder` (git's incremental date-order

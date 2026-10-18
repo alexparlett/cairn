@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: phase 01 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
+**Status: phase 02 built, 2026-10-18 (packet mode, on `feature/history-topo-order`).** Its base is `main`. It runs before `fork-alignment`.
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -61,11 +61,48 @@ Phase 01 (`crates/cairn-git`):
   parity tests can reuse (`oracle`, `tips_for`, `ref_tips`, `stash_tips`, `reflog_tips`); its
   oracle grafts only stashes whose base the refs reach and whose commit they do not.
 
+Phase 02 (`crates/cairn-git`, `crates/cairn-model`):
+- `HistoryOrder::default()` is `DateOrder`: `from_refs`, `from_head`, `from_commits`, the cold
+  cursor, `HistorySession` and so a find's pages all walk git's date order. `CommitTime`
+  (Recent Commit Messages, explicit) and `GraphOrder` are unchanged.
+- `history.rs` `open_stream` gives the date-order walk `date_order::Tips { refs, stashes,
+  reflogs }` — the decoration's stashes in `stash@{n}` order, the reflog ids after them — through
+  `walk::open_from`; `walk::open` keeps its old signature (refs only) for Recent Commit
+  Messages and reporters; `walk::Step::Stash(index)` is a stash's row (date order only), its
+  index into the decoration's stashes.
+- `stream.rs` is thin: date order hands the walk's rows on; commit-time and graph order put each
+  stash directly above its base (`by_base`, `by_commit` kept for them). `LOOKAHEAD`,
+  `with_stash_lookahead`, the cursor's/request's `lookahead`, `seeds::Stash::base_committed`
+  are gone. `Entry::Commit` carries `lost`.
+- Show Lost Commits forces `DateOrder` (`starting_points`, on an unread marking); `reach.rs` is
+  `Reach { frontier, below_lost, pending, settled }`, `pulled(id, parents) -> bool` (final) and
+  `passed(stash id)`; `reflogs::reflog_tips` returns ids only (still filtered to commits).
+- `RowsPage::reached`, its `reached` field, `History::append`'s flag clearing and
+  `Chunks::get_mut` are removed.
+- `DateOrder::open` fails a ref tip whose object is missing (`BadObject`, git's "bad object").
+- Tests: C4's four in `tests/date_order.rs` (`the_history_is_in_git_date_order`,
+  `stash_rows_are_where_git_puts_them`, `lost_commits_are_in_git_date_order`,
+  `a_resumed_session_continues_git_date_order`, over `history_fixtures()` incl. `old_stashes`);
+  `tests/support/date_order_oracle.rs` (`git_date_order`, `stash_tips`; grafts via
+  `GIT_GRAFT_FILE`, needs the binary's `fixtures` module, whose `empty_home` is now `pub`),
+  used by `every_ref.rs` and `lost_commits.rs`. git-floor `--test date_order` floor 10 (11 tests).
+
+Handed to phase 03 (from phase 02's QA, confirmed and deferred):
+- The opening pass (about 1.2 s on the bench without a commit-graph) runs as one job on the
+  repository thread: filters, a refresh's refs and retires wait behind every open and reopen
+  until the history thread exists (packet qa-checklist item 7 fails until then).
+- A `Request::FindRow` or `StopFinding` bumps the history lane's epoch, so a sidebar press during
+  an opening pass cancels it and the find's page opens the walk again from nothing; phase 03's
+  supersede rules should keep a pass that a same-walk find or stop-finding interrupts
+  (or the user decides otherwise).
+- The opening pass's count is discarded (`walk::open_from` passes `&mut |_| {}`); phase 03
+  routes it to the window.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 | done; C1, C2, C3, C10, C8 opening pass met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, fixes landed, dismissals and pending decisions in progress.md |
-| 02 | not started | — | — |
+| 02 | done; C4, C5 met | `scripts/gate.sh` full, exit 0 | done: 4 reviewers + qa-confirm, 4 fixes landed, dismissals, deferrals and pending decisions in progress.md |
 | 03 | not started | — | — |
 | 04 | not started | — | — |

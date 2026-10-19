@@ -1040,7 +1040,7 @@ refs), and, through the window, by
 
 ### The title bar
 
-The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/title_bar/status_box.rs`;
+The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/toolbar/status_box.rs`;
 R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
 component of its working tree (of its git directory when it is bare), which the worker
 sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a

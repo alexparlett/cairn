@@ -24,7 +24,7 @@ use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::style::{metrics, tones};
 use crate::text_field::text_field;
-use crate::title_bar::status_box::counts_text;
+use crate::toolbar::status_box::counts_text;
 
 /// A row's height in the sidebar's list.
 pub const SIDEBAR_ROW_HEIGHT: f32 = metrics::SIDEBAR_ROW;

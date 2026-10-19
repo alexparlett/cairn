@@ -15,7 +15,7 @@ pub mod menu;
 mod sidebar;
 pub mod style;
 mod text_field;
-mod title_bar;
+mod toolbar;
 
 pub use caption_row::{CAPTION_TITLE, CaptionRow, Frame, FrameRequest};
 pub use commit_box::{
@@ -113,13 +113,13 @@ pub use sidebar::{
     SidebarTarget, drawn_row, local_changes_text, section_caption,
 };
 pub use text_field::{text_field, text_field_in, text_field_recalling};
-pub use title_bar::activity_popover::{
+pub use toolbar::activity_popover::{
     ACTIVITY_TITLE, ActivityEntry, ActivityLine, ActivityPopover, ActivityStatus,
     CANCEL_OPERATION_CAPTION, CANCELLED_GLYPH, CONFIRMED_CAPTION, EARLIER_NOT_KEPT,
     ENTRY_ROW_HEIGHT, FAILED_GLYPH, LINE_ROW_HEIGHT, NO_ACTIVITY, SHOW_IN_LOST_COMMITS_CAPTION,
 };
-pub use title_bar::lock_banner::{LOCK_BANNER_TEXT, LOCK_STALE_AFTER, LockBanner, lock_is_stale};
-pub use title_bar::status_box::{
+pub use toolbar::lock_banner::{LOCK_BANNER_TEXT, LOCK_STALE_AFTER, LockBanner, lock_is_stale};
+pub use toolbar::status_box::{
     NO_COMMITS_YET, PROGRESS_AFTER, Running, StatusBox, Tracking, UPSTREAM_GONE, counts_text,
     current_branch, head_text, name_text, progress_shown, running_text,
 };

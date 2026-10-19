@@ -1187,7 +1187,7 @@ The user's decisions on it, as built:
   only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
   arrow (a square turned 45°, half hidden under the panel) pointing up at the box, the whole
   kept inside the window's width (`Platform::root_size`), the panel narrowed to a window
-  narrower than it (`cairn_ui::title_bar::activity_popover::hung`;
+  narrower than it (`cairn_ui::toolbar::activity_popover::hung`;
   `the_panel_hangs_under_the_box_inside_the_window`,
   `the_popover_hangs_from_the_status_box_inside_the_window`,
   `the_popover_hangs_under_the_status_box`).

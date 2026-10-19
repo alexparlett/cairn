@@ -1081,6 +1081,18 @@ fn the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_
         "a shallow boundary walks as no graft does"
     );
     std::fs::remove_file(fixture.path().join(".git/shallow")).unwrap_or_else(|e| panic!("{e}"));
+    // A shallow file git cannot open — here a directory — makes no shallow repository.
+    std::fs::create_dir_all(fixture.path().join(".git/shallow")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        oracle(fixture.path(), &["log", "--format=%H", "HEAD"], None)
+            .status
+            .success()
+    );
+    assert!(
+        read().walks_as(&plain),
+        "an unreadable shallow file was read as one"
+    );
+    std::fs::remove_dir(fixture.path().join(".git/shallow")).unwrap_or_else(|e| panic!("{e}"));
 
     // A replace ref that names nothing replaces its object with the null id, as git registers
     // it; two for one object are git's `duplicate replace ref`, kept as unreadable.
@@ -1090,6 +1102,14 @@ fn the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_
         "ref: refs/heads/nothing\n",
     );
     let unresolved = read();
+    // Whoever keeps what was read under the substitutions stamps the branch such a ref names.
+    let files = Repository::discover(fixture.path())
+        .unwrap()
+        .substitution_files();
+    assert!(
+        files.contains(&fixture.path().join(".git/refs/heads/nothing")),
+        "{files:?}"
+    );
     assert_eq!(
         unresolved.substitutions.replacements(),
         &[(oid(&third), oid(&"0".repeat(40)))],

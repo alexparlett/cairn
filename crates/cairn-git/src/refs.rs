@@ -149,7 +149,7 @@ impl Repository {
                     if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                         directories.push(entry.path());
                     } else {
-                        files.push(entry.path());
+                        files.extend(symbolic_chain(common, entry.path()));
                     }
                 }
             }
@@ -159,6 +159,26 @@ impl Repository {
         files.sort();
         files
     }
+}
+
+/// A loose ref and each loose ref its symbolic chain names, as far as git follows one: a
+/// replace ref that names a branch is read through it.
+fn symbolic_chain(common: &std::path::Path, loose: std::path::PathBuf) -> Vec<std::path::PathBuf> {
+    let mut chain = vec![loose];
+    for _ in 0..SYMREF_MAX_DEPTH {
+        let Some(target) = chain
+            .last()
+            .and_then(|last| std::fs::read_to_string(last).ok())
+            .and_then(|text| {
+                text.strip_prefix("ref: ")
+                    .map(|name| name.trim().to_owned())
+            })
+        else {
+            break;
+        };
+        chain.push(common.join(target));
+    }
+    chain
 }
 
 /// The repository's substitutions, read once: for reading objects through, and as the

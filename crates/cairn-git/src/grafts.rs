@@ -49,17 +49,17 @@ impl Grafts {
             Ok(bytes) => graft_file(&bytes, repo.object_hash()),
             Err(_) => HashMap::new(),
         };
-        for commit in repo
-            .shallow_commits()?
-            .iter()
-            .flat_map(|commits| commits.iter())
-        {
+        // A shallow file git cannot open is no shallow file (`is_repository_shallow` in
+        // `shallow.c`); one with a line that is not an id, git dies on, and so does this read.
+        let (shallow, commits) = match repo.shallow_commits() {
+            Ok(commits) => (repo.shallow_file().is_file(), commits),
+            Err(gix::shallow::read::Error::Io(_)) => (false, None),
+            Err(other) => return Err(other.into()),
+        };
+        for commit in commits.iter().flat_map(|commits| commits.iter()) {
             parents.insert(*commit, Vec::new());
         }
-        Ok(Self {
-            parents,
-            shallow: repo.shallow_file().is_file(),
-        })
+        Ok(Self { parents, shallow })
     }
 
     /// Whether git reads no graft at all, shallow or from the file: one of the conditions

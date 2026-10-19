@@ -210,6 +210,11 @@ fn said_over_discard(test: &mut TestingRunner) -> Vec<String> {
         .rfind(|(text, ..)| text == DISCARD_CAPTION)
         .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y) + 2.))
         .unwrap_or_else(|| panic!("no Discard Changes… in the menu"));
+    let before = texts(test);
+    assert!(
+        !before.iter().any(|t| t.contains("can't be discarded")),
+        "a reason drawn before the pointer reached the item: {before:?}"
+    );
     test.move_cursor(discard);
     test.poll(Duration::from_millis(50), Duration::from_millis(900));
     texts(test)

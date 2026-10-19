@@ -633,8 +633,8 @@ pub fn recall_step_on(key: &Key, held: Modifiers) -> Option<RecallStep> {
 
 /// What a key press does in an open menu (`crate::menu`): Fork's ↑ and ↓ walk its items, Return
 /// chooses, → opens a submenu or the next menu of the bar and ← goes back, Escape closes; a
-/// modifier key is left to the window, which keeps what is held; anything else is held by the
-/// menu and does nothing.
+/// modifier key is the window's, unclaimed; anything else is kept by the menu and does
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuKey {
     Up,
@@ -643,8 +643,8 @@ pub enum MenuKey {
     Forward,
     Back,
     Close,
-    /// A modifier key going down or up.
-    Held,
+    /// A modifier key, left to the window, which keeps what is held.
+    Unclaimed,
     Other,
 }
 
@@ -659,9 +659,13 @@ pub fn menu_key_on(key: &Key, held: Modifiers) -> MenuKey {
     let bare = chord_modifiers(held).is_empty();
     match key {
         Key::Named(NamedKey::Escape) => MenuKey::Close,
-        Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Meta) => {
-            MenuKey::Held
-        }
+        Key::Named(
+            NamedKey::Shift
+            | NamedKey::Control
+            | NamedKey::Alt
+            | NamedKey::AltGraph
+            | NamedKey::Meta,
+        ) => MenuKey::Unclaimed,
         Key::Named(NamedKey::ArrowUp) if bare => MenuKey::Up,
         Key::Named(NamedKey::ArrowDown) if bare => MenuKey::Down,
         Key::Named(NamedKey::Enter) if bare => MenuKey::Choose,
@@ -925,7 +929,12 @@ mod tests {
             assert_eq!(menu_key_on(&named(key), Modifiers::empty()), heard);
             assert_eq!(menu_key_on(&named(key), Modifiers::CAPS_LOCK), heard);
             if heard != MenuKey::Close {
-                for held in [Modifiers::SHIFT, Modifiers::CONTROL, Modifiers::META] {
+                for held in [
+                    Modifiers::SHIFT,
+                    Modifiers::CONTROL,
+                    Modifiers::ALT,
+                    Modifiers::META,
+                ] {
                     assert_eq!(menu_key_on(&named(key), held), MenuKey::Other, "{key:?}");
                 }
             }
@@ -938,9 +947,13 @@ mod tests {
             NamedKey::Shift,
             NamedKey::Control,
             NamedKey::Alt,
+            NamedKey::AltGraph,
             NamedKey::Meta,
         ] {
-            assert_eq!(menu_key_on(&named(key), Modifiers::empty()), MenuKey::Held);
+            assert_eq!(
+                menu_key_on(&named(key), Modifiers::empty()),
+                MenuKey::Unclaimed
+            );
         }
         assert_eq!(
             menu_key_on(&Key::Character("a".into()), Modifiers::empty()),
@@ -1635,8 +1648,8 @@ mod tests {
             ),
             Some(Action::ShowLostCommits)
         );
-        // Shift turns `=` into `+`, and a layout may put `-` elsewhere: the zoom is matched by
-        // where the key sits.
+        // A layout whose key in `=`'s place types `+` still zooms: the zoom is matched by where
+        // the key sits, not by what it types.
         assert_eq!(
             resolve_key_on(
                 Os::Linux,

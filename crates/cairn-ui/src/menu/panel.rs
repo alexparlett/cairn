@@ -28,6 +28,8 @@ pub struct Panel<T> {
     on_sideways: Option<EventHandler<Side>>,
     /// A submenu's: ← and Escape close it, back to the row that opened it.
     on_back: Option<EventHandler<()>>,
+    /// Closes the whole menu on Escape, which then goes no further.
+    on_dismiss: Option<EventHandler<()>>,
     key: DiffKey,
 }
 
@@ -41,6 +43,7 @@ impl<T> Panel<T> {
             on_choose: EventHandler::new(|_: T| {}),
             on_sideways: None,
             on_back: None,
+            on_dismiss: None,
             key: DiffKey::None,
         }
     }
@@ -67,6 +70,11 @@ impl<T> Panel<T> {
         self
     }
 
+    pub fn on_dismiss(mut self, on_dismiss: impl Into<EventHandler<()>>) -> Self {
+        self.on_dismiss = Some(on_dismiss.into());
+        self
+    }
+
     fn on_back(mut self, on_back: impl Into<EventHandler<()>>) -> Self {
         self.on_back = Some(on_back.into());
         self
@@ -82,6 +90,7 @@ impl<T: PartialEq> PartialEq for Panel<T> {
             && self.take_focus == other.take_focus
             && self.on_sideways.is_some() == other.on_sideways.is_some()
             && self.on_back.is_some() == other.on_back.is_some()
+            && self.on_dismiss.is_some() == other.on_dismiss.is_some()
             && self.key == other.key
     }
 }
@@ -177,6 +186,7 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
             let mut choose = choose.clone();
             let on_sideways = self.on_sideways.clone();
             let on_back = self.on_back.clone();
+            let on_dismiss = self.on_dismiss.clone();
             move |e: Event<KeyboardEventData>| {
                 let is_submenu = |n: Option<usize>| {
                     n.and_then(|n| groups.iter().flatten().nth(n))
@@ -212,6 +222,9 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
                     MenuKey::Close => {
                         if let Some(on_back) = &on_back {
                             on_back.call(());
+                        } else if let Some(on_dismiss) = &on_dismiss {
+                            return_focus.request_focus();
+                            on_dismiss.call(());
                         } else {
                             // The menu's own Escape closes it; focus goes back first.
                             return_focus.request_focus();
@@ -220,7 +233,7 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
                         }
                     }
                     // A modifier held is heard by the window, which keeps what is held.
-                    MenuKey::Held => return,
+                    MenuKey::Unclaimed => return,
                     MenuKey::Other => {}
                 }
                 // The menu holds the keyboard: nothing behind it hears the key.

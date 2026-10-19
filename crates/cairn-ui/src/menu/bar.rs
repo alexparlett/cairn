@@ -102,6 +102,7 @@ impl<T: Clone + PartialEq + 'static> Component for MenuBar<T> {
                         Menu::new().on_close(close).on_escape(close).child(
                             Panel::new(menu.groups.clone(), *return_focus.peek())
                                 .key(DiffKey::U64(at as u64))
+                                .on_dismiss(move |()| open.set(None))
                                 .on_choose(move |choice: T| {
                                     open.set(None);
                                     on_choose.call(choice);

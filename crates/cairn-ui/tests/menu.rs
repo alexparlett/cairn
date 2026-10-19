@@ -193,6 +193,14 @@ fn a_menu_is_drawn_from_its_data() {
         "the greyed item does not say why: {:?}",
         texts(&test)
     );
+    // The pointer gone from it, the reason goes too.
+    let alpha = at(&test, "Alpha");
+    test.move_cursor(alpha);
+    test.sync_and_update();
+    assert!(
+        !texts(&test).iter().any(|t| t == BRAVO_REASON),
+        "the reason stayed after the pointer left"
+    );
     test.click_cursor(bravo);
     test.sync_and_update();
     assert!(heard.chosen.borrow().is_empty(), "a greyed item was chosen");
@@ -287,8 +295,12 @@ fn launch_bar() -> (TestingRunner, Heard) {
     let (mut test, ()) = TestingRunner::new(
         move || {
             let chosen = hearing.chosen.clone();
+            let keys = hearing.keys.clone();
             rect()
                 .expanded()
+                .on_global_key_down(move |e: Event<KeyboardEventData>| {
+                    keys.borrow_mut().push(e.key.clone());
+                })
                 .child(
                     rect()
                         .width(Size::fill())
@@ -368,6 +380,24 @@ fn the_menu_bar_opens_moves_and_closes_as_forks() {
     test.click_cursor((600., 400.));
     test.sync_and_update();
     assert_eq!(shown(&test), None, "a press outside closes it");
+
+    // Escape closes the open menu, choosing nothing; ↓ and Return choose from it.
+    test.click_cursor(view);
+    test.sync_and_update();
+    press(&mut test, NamedKey::Escape);
+    assert_eq!(shown(&test), None, "Escape left the menu open");
+    test.click_cursor(view);
+    test.sync_and_update();
+    press(&mut test, NamedKey::ArrowDown);
+    press(&mut test, NamedKey::Enter);
+    assert_eq!(heard.chosen.borrow().as_slice(), [Choice::Show]);
+    assert_eq!(shown(&test), None, "Return left the menu open");
+    assert!(
+        heard.keys.borrow().is_empty(),
+        "the window heard {:?} through the bar's menu",
+        heard.keys.borrow()
+    );
+    heard.chosen.borrow_mut().clear();
 
     // With none open, the pointer over a name opens nothing.
     let help = at(&test, "Help");

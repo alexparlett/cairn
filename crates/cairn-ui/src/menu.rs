@@ -110,6 +110,7 @@ pub fn context_menu<T: Clone + PartialEq + 'static>(
     Menu::new().child(
         Panel::new(groups, return_focus)
             .highlight_first(true)
+            .on_dismiss(|()| ContextMenu::close())
             .on_choose(move |choice: T| {
                 ContextMenu::close();
                 on_choose.call(choice);

@@ -353,6 +353,7 @@ fn refs_read(test: &mut TestingRunner, view: View, head: HeadState, main: Oid) {
         head,
         stashes: Vec::new(),
         unreadable: 0,
+        substitutions: cairn_model::Substitutions::default(),
     }));
     settle(test);
 }

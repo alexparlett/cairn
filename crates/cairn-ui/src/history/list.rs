@@ -712,6 +712,7 @@ mod tests {
             head: cairn_model::HeadState::Detached(oid(0)),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         });
         let (mut test, mut tick) = TestingRunner::new(
             || -> Element {

@@ -85,6 +85,7 @@ fn snapshot(refs: &[(&str, u8, Option<&str>)], head: HeadState) -> RefsSnapshot 
         head,
         stashes: Vec::new(),
         unreadable: 0,
+        substitutions: cairn_model::Substitutions::default(),
     }
 }
 

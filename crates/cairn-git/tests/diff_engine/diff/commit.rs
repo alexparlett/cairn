@@ -674,6 +674,42 @@ fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
     assert_eq!(published(&clone), Publication::SomeRemote, "detached");
 }
 
+/// A remote-tracking ref whose history holds a commit replaced by an object the repository
+/// does not have: git dies reading it where it walks that history (`git rev-list HEAD --not
+/// origin/main`, the question asked here; `git branch -r --contains HEAD` instead names no
+/// branch and exits 0), so the amend's cost is an error — never an unpublished `HEAD` amended
+/// without asking. The replaced commit sits on the remote's side alone, above `HEAD`, where
+/// only the hiding walk's paint of the remote's history reads it. Caught by: a read on that
+/// side failing quietly, or the replacement read as the commit it replaces.
+#[test]
+fn an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement() {
+    let (_origin, clone) = cloned("missing-replacement");
+    clone.git(&["reset", "-q", "--hard", "HEAD^"]);
+    assert_eq!(
+        published(&clone),
+        Publication::Upstream(cairn_model::RefName::new("refs/remotes/origin/main")),
+        "the upstream ahead of HEAD has it"
+    );
+    let replaced = clone.rev("origin/main");
+    let missing = "1234567890123456789012345678901234567890";
+    // Written as a file: git will not write a ref naming an object it does not have.
+    clone.write(
+        &format!(".git/refs/replace/{replaced}"),
+        format!("{missing}\n").as_bytes(),
+    );
+    assert!(
+        clone
+            .try_git(&["rev-list", "HEAD", "--not", "origin/main"], &[], None)
+            .is_err_and(|stderr| stderr.contains("not found")),
+        "git itself walked past the missing replacement"
+    );
+    let cost = consequence(&clone);
+    assert!(
+        matches!(cost, Err(Error::Walk { .. })),
+        "an amend with a remote's history unreadable was not refused: {cost:?}"
+    );
+}
+
 /// With a commit-graph, whether a remote has `HEAD` is answered from the graph, cut at `HEAD`'s
 /// generation, and the answer is the object walk's and git's own — `HEAD` far behind a remote tip,
 /// on a side branch no remote reaches, at the tip, and a new commit the graph does not hold (the
@@ -817,6 +853,77 @@ fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
     assert_ne!(repo.rev("HEAD"), replaced);
     assert!(logged_a_move_from(&repo, &replaced));
     assert_eq!(shown_by_show_lost_commits(&repo, &replaced), Some(true));
+}
+
+/// An amend of a commit git reads with other parents is made as git makes it, and said to be
+/// made: `git commit --amend` writes the parents git reads for `HEAD` — none at a shallow
+/// boundary, the graft's under a graft file, the replacement's under `git replace --graft` — so
+/// the amended commit is a root, or on the graft's parent. Caught by: the check after git is
+/// reaped comparing the new commit's parents with the replaced commit's as stored, which calls
+/// a made amend not made.
+#[test]
+fn an_amend_of_a_commit_git_reads_with_other_parents_is_made_as_git_makes_it() {
+    type Substitute = fn(&Repo, &str, &str);
+    let substitutions: [(&str, Substitute, &str); 3] = [
+        (
+            "shallow boundary",
+            |repo, head, _| repo.write(".git/shallow", format!("{head}\n").as_bytes()),
+            "",
+        ),
+        (
+            "graft file",
+            |repo, head, root| {
+                repo.write(".git/info/grafts", format!("{head} {root}\n").as_bytes());
+            },
+            "root",
+        ),
+        (
+            "git replace --graft",
+            |repo, head, root| {
+                repo.git(&["replace", "--graft", head, root]);
+            },
+            "root",
+        ),
+    ];
+    for (name, substitute, parent) in substitutions {
+        let repo = identified(&format!(
+            "amend-substituted-{}",
+            name.replace([' ', '-'], "")
+        ));
+        repo.write("a.txt", b"a\n");
+        let root = repo.commit("root").to_string();
+        repo.write("a.txt", b"b\n");
+        repo.commit("middle");
+        repo.write("a.txt", b"c\n");
+        let head = repo.commit("head").to_string();
+        substitute(&repo, &head, &root);
+        repo.write("a.txt", b"d\n");
+        repo.git(&["add", "a.txt"]);
+        match amend_at_press(&repo, "head, amended", Hooks::Run) {
+            Ok(AmendAnswer::Amended { replaced, .. }) => {
+                assert_eq!(replaced.to_string(), head, "{name}");
+            }
+            Ok(AmendAnswer::NeedsConfirming(consequence)) => {
+                panic!("{name}: a recoverable amend asked to be confirmed: {consequence:?}")
+            }
+            Err(error) => panic!("{name}: the amend git made was not said to be made: {error}"),
+        }
+        let written = repo.git(&["cat-file", "-p", "HEAD"]);
+        let parents: Vec<&str> = written
+            .lines()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .collect();
+        let expected: Vec<&str> = match parent {
+            "" => Vec::new(),
+            _ => vec![root.as_str()],
+        };
+        assert_eq!(parents, expected, "{name}: the parents git wrote");
+        assert_eq!(
+            repo.git(&["log", "-1", "--format=%s", "HEAD"]),
+            "head, amended\n",
+            "{name}"
+        );
+    }
 }
 
 /// The same press on a commit a remote has, and on a repository whose `core.logAllRefUpdates` is

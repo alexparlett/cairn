@@ -7,7 +7,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use cairn_git::{
-    Cancel, CancelSignal, Error, HistoryOrder, HistoryPage, HistoryRequest, Repository,
+    Cancel, CancelSignal, DateOrderTips, Error, HistoryOrder, HistoryPage, HistoryRequest,
+    Repository,
 };
 use cairn_model::{CommitSummary, EdgeSegment, History, HistoryRow, RowContent, RowId, RowsPage};
 
@@ -282,15 +283,20 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
     assert_eq!(first.walked, n, "the first page walked past its limit");
 }
 
-/// The braided fixture cannot put a backward line's ends in different pages.
+/// The braided fixture cannot put a backward line's ends in different pages. Commit-time order
+/// over the skewed fixture hands a parent over before its child, as the lane assigner must
+/// tolerate from any walk; the history's own date order never does
+/// (`a_session_over_a_skewed_history_returns_every_commit_in_gits_date_order`).
 #[test]
 fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
     let fixture = skewed();
     let repo = open(&fixture);
     let expected = fixture.rev_list();
+    let from_head =
+        |limit: usize| HistoryRequest::from_head(limit).with_order(HistoryOrder::CommitTime);
 
-    let whole = read(&repo, &HistoryRequest::from_head(expected.len()));
-    let first = read(&repo, &HistoryRequest::from_head(3));
+    let whole = read(&repo, &from_head(expected.len()));
+    let first = read(&repo, &from_head(3));
     let cursor = match first.cursor.clone() {
         Some(cursor) => cursor,
         None => panic!("three of five commits ended the history"),
@@ -348,6 +354,25 @@ impl Cancel for StopAfter {
     }
 }
 
+/// How many times opening the date-order walk from `HEAD` polls its cancel: once per tip and
+/// per commit its opening pass reads parents for, counted on the walk itself.
+fn opening_polls(repo: &Repository, fixture: &Fixture) -> usize {
+    let head = ok(cairn_model::Oid::parse(&fixture.rev_list()[0]), "an id");
+    let counted = StopAfter {
+        limit: usize::MAX,
+        polls: Cell::new(0),
+    };
+    ok(
+        repo.date_order(&DateOrderTips::new([head]), &counted, &mut |_| {}),
+        "opening the walk",
+    );
+    counted.polls.get()
+}
+
+/// The page polls once per row once the walk is open, stops at the poll that says so and
+/// says how many rows it laid out; cancelled within the walk's opening pass, it lays none
+/// out. Caught by: a poll dropped from the page's loop or from the opening pass, or the walk
+/// carried on past it.
 #[test]
 fn a_cancelled_query_stops_walking_and_says_where() {
     let fixture = fixtures::braided(40);
@@ -363,8 +388,24 @@ fn a_cancelled_query_stops_walking_and_says_where() {
     let uncancelled = read(&repo, &HistoryRequest::from_head(total));
     assert_eq!(uncancelled.rows.len(), total);
 
+    let opening = opening_polls(&repo, &fixture);
+    assert!(opening > total, "the opening pass polled {opening} times");
+    let in_the_open = StopAfter {
+        limit: opening / 2,
+        polls: Cell::new(0),
+    };
+    match repo.history(&HistoryRequest::from_head(total), &in_the_open) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+    assert_eq!(
+        in_the_open.polls.get(),
+        opening / 2 + 1,
+        "the opening pass kept polling after it had been cancelled"
+    );
+
     let signal = StopAfter {
-        limit: stop_at,
+        limit: opening + stop_at,
         polls: Cell::new(0),
     };
     let error = repo
@@ -379,7 +420,7 @@ fn a_cancelled_query_stops_walking_and_says_where() {
     }
     assert_eq!(
         signal.polls.get(),
-        stop_at + 1,
+        opening + stop_at + 1,
         "the walk kept polling after it had been cancelled"
     );
 
@@ -421,6 +462,7 @@ fn repaints(rows: &History) -> usize {
         .count()
 }
 
+/// Commit-time order over the skewed fixture, which hands a parent over before its child.
 /// Caught by: repainting a row the window has already made final.
 #[test]
 fn a_row_that_left_the_window_is_never_repainted() {
@@ -428,15 +470,10 @@ fn a_row_that_left_the_window_is_never_repainted() {
     let repo = open(&fixture);
     let expected = fixture.rev_list();
     assert_eq!(expected.len(), 5, "the skew fixture changed shape");
+    let request = HistoryRequest::from_head(expected.len()).with_order(HistoryOrder::CommitTime);
 
-    let held_page = read(
-        &repo,
-        &HistoryRequest::from_head(expected.len()).with_window(8),
-    );
-    let dropped = read(
-        &repo,
-        &HistoryRequest::from_head(expected.len()).with_window(1),
-    );
+    let held_page = read(&repo, &request.clone().with_window(8));
+    let dropped = read(&repo, &request.with_window(1));
 
     let mut from_git = expected.clone();
     from_git.sort();
@@ -724,9 +761,11 @@ fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
         "the fixture is too short"
     );
 
-    // The limit-th poll is the last inside the loop; the next is the look-ahead.
+    // The opening pass's polls, then one per row: the last inside the loop is the limit-th
+    // after them; the next is the look-ahead.
+    let opening = opening_polls(&repo, &fixture);
     let signal = StopAfter {
-        limit,
+        limit: opening + limit,
         polls: Cell::new(0),
     };
     match repo.history(&HistoryRequest::from_head(limit), &signal) {
@@ -735,7 +774,7 @@ fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
     }
     assert_eq!(
         signal.polls.get(),
-        limit + 1,
+        opening + limit + 1,
         "the look-ahead was not polled"
     );
 }
@@ -837,12 +876,18 @@ fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
     );
 }
 
+/// The walk opened by an empty page, a page cancelled at its eighth poll lays out seven rows
+/// and keeps them. Caught by: a poll per row dropped, or the cancelled page's rows lost.
 #[test]
 fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
     let fixture = fixtures::braided(40);
     let repo = open(&fixture);
     let request = HistoryRequest::from_head(usize::MAX).with_window(2);
     let mut session = ok(repo.history_session(&request), "starting a session");
+    ok(
+        session.next_page(0, &CancelSignal::new()),
+        "opening the walk",
+    );
 
     let stop_at = 7;
     let signal = StopAfter {
@@ -906,15 +951,28 @@ fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
     );
 }
 
+/// Over the skewed fixture, whose newest-first order hands `shared` over before its child
+/// `stale`, the history is `git rev-list --date-order`'s, every child above its parents, and
+/// draws no backward line. Caught by: the history walked newest committed first.
 #[test]
-fn a_session_over_a_skewed_history_returns_every_commit() {
+fn a_session_over_a_skewed_history_returns_every_commit_in_gits_date_order() {
     let fixture = skewed();
     let repo = open(&fixture);
-    let expected = fixture.rev_list();
+    let expected: Vec<String> = fixture
+        .git(&["rev-list", "--date-order", "HEAD"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_ne!(
+        expected,
+        fixture.rev_list(),
+        "the skew changes nothing, so this decides nothing"
+    );
     let request = HistoryRequest::from_head(usize::MAX).with_window(2);
 
     let (rows, _) = drain_session(&repo, &request, 2);
     assert_eq!(ids_of(&rows), expected);
+    assert_eq!(repaints(&rows), 0, "a parent was drawn above its child");
 }
 
 #[test]

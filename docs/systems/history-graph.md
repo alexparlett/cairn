@@ -22,10 +22,11 @@ repository picker.
 remote-tracking ref and tag that identifies a commit, and `HEAD` — labels each row
 with the refs pointing at its commit, and draws each stash whose base the walk
 reaches as a row of its own ("From every ref, labelled, with stash rows" below).
-The window opens its history from the snapshot its first refresh reads on the history
-thread, and reopens it whenever a later refresh — on focus, after a fetch, on the
-Refresh action — finds what the graph draws changed ("Refresh", under the worker
-boundary below). Each row draws its refs as Fork's chips between the graph and the
+The window opens its history from the snapshot its first refresh reads on the repository
+thread, walked on a history thread of its own, and reopens it whenever a later refresh — on
+focus, after a fetch, on the Refresh action — finds what the graph draws changed, the old rows
+drawn and usable until the new walk's first page replaces them ("Refresh" and "The opening
+pass in the window", under the worker boundary below). Each row draws its refs as Fork's chips between the graph and the
 subject, a stash's row its `stash@{n}` chip, and `HEAD`'s subject bold ("Chips on a
 row", under the view below); the title bar names the repository, its branch and how
 far that branch is from its upstream ("The title bar", there too).
@@ -34,13 +35,16 @@ far that branch is from its upstream ("The title bar", there too).
 
 One commit crosses four crates and changes shape three times.
 
-1. **`gix` hands over a walk entry.** `Repository::history_session`
-   (`crates/cairn-git/src/history/session.rs`) opens one gitoxide revision walk
-   and keeps it for the life of a scroll. Each step yields an id and its parent
+1. **The walk hands over an entry.** `Repository::history_session`
+   (`crates/cairn-git/src/history/session.rs`) opens one walk — in git's date order, the
+   default, Cairn's own port of git's topological walk over gitoxide's commit reads
+   (`crates/cairn-git/src/history/date_order.rs`); in commit-time and graph order a gitoxide
+   revision walk — and keeps it for the life of a scroll. Each step yields an id and its parent
    ids, read from the walk rather than from a decoded object — the parents git
    shows, which in a shallow clone are not always the ones the object names
-   (see "A shallow clone" below). A walk from a refs snapshot merges each stash's
-   row into those steps (`crates/cairn-git/src/history/stream.rs`).
+   (see "A shallow clone" below). In git's date order a refs snapshot's stashes are
+   tips of the walk, each stepped as a row of its own; in the other orders
+   `crates/cairn-git/src/history/stream.rs` puts each directly above its base.
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
    order and produces a `GraphRow`: the commit's `Lane` and only the lane changes
@@ -123,11 +127,15 @@ order kept, one leaked lane reservation per event.
 
 What IS measured on real repositories is the opposite case, the one the window
 catches: rows carrying an `out_of_order` segment, i.e. a late parent the
-assigner still held and repainted a line to. In the order Cairn walks that is
-0-0.2% of rows (0.197% at the highest, and zero on four of the seven); in
-`GraphOrder` it is most rows, by construction. That rate bounds the blind spot
-from above without measuring it, since a parent must arrive late at all before
-it can arrive too late.
+assigner still held and repainted a line to. In git's date order, the history's, no
+parent ever arrives before a child, so there is none: on rust-lang/rust from every ref,
+0 of 345,545 rows carry one, and the frozen assigner's comparison counts 0 rows repainted
+and 0 late lines (`measures_layout_over_every_ref_of_a_named_repository`,
+`measures_compact_rows_over_a_named_repository`; `docs/research/history-topo-order/measured.md`).
+In commit-time order, which the same reporter still walks, the skew there makes it 49,609
+rows (14.4%, 64,698 segments); in `GraphOrder` it is most rows, by construction. That rate
+bounds the blind spot from above without measuring it, since a parent must arrive late at
+all before it can arrive too late.
 
 **A stash's row is laid out with one line, in a lane of its own**
 (`LaneAssigner::push_stash`). The stash commit is pushed as the row's id with its
@@ -315,53 +323,171 @@ commit-graph and deletes the loose objects of the commits a resumed page
 replays, so any stray decode fails to find its object
 (`a_replayed_prefix_is_walked_but_never_decoded`, `priming_the_window_walks_but_never_decodes`).
 
-**Cancellation is a poll, once per commit** — once per row laid out, once per commit a
-walk from a refs snapshot looks ahead at (below), and once per tip read to open the walk
-but the first. In commit-time order gitoxide reads every tip for its committer date
+**Cancellation is a poll, once per commit** — once per row laid out and, while a walk
+opens, once per tip and per commit the date-order walk's opening pass reads parents for
+(below), or, in commit-time order, once per tip read but the first. In commit-time order
+gitoxide reads every tip for its committer date
 before the walk's first step, in one call that polls nothing (`Simple::sorting`); so
 `walk::open` (`crates/cairn-git/src/history/walk.rs`) reads the tips in a loop of its
 own, polling between them, and answers gitoxide's read of each from the dates it read
 (`Seeded`), costing no second object read. A session opens its walk on its first page,
 under that page's cancel; a cancelled open keeps nothing, and the next page opens it
-again (`opening_a_walk_from_many_refs_is_cancelled_between_tips`). `Cancel` is a trait so a test can
+again (`opening_a_walk_from_many_refs_is_cancelled_between_tips`,
+`a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows`). `Cancel` is a trait so a test can
 stop a walk at a chosen commit; `cairn-git` still knows nothing about threads. A
 cancelled cold query reports how far it got and discards the page; a cancelled
 *session* keeps its progress, so the next call continues rather than re-walks
 (`a_cancelled_query_stops_walking_and_says_where`,
 `cancelling_a_session_stops_the_walk_and_keeps_its_progress`).
 
-**A shallow clone is walked as git walks it.** A boundary commit — one the
-clone's `shallow` file lists — names parents in its object that the clone does
-not have, and git reads the file as grafts: the commit has no parents, so `git
-log --format=%P` prints nothing for it and `--graph` draws it as a root, while
-a parent the clone DOES have, reached through another branch, is still shown.
-gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
-over with the parents its object names, and skips the next appearance of each
-of those ids whichever commit names it — so a merge-shaped history cloned with
-`--depth` loses a commit its sibling branch reaches, and the lane assigner holds
-a lane open for a parent that never arrives. Both routes therefore walk through
-`crates/cairn-git/src/history/walk.rs`: gitoxide's `Simple` traversal itself,
-reading every commit through a `Grafted` object source that serves a boundary
-commit with its `parent` header lines removed — git's graft, applied where the
-object is read — and with no commit-graph in a shallow repository, which git
-does not read there either (`commit_graph_compatible`). The shallow file is
-read once per walk (`crates/cairn-git/src/shallow.rs`, which
-`Repository::commit_details` reads too). With no parents a boundary commit is a
-root to the assigner, so its line ends there and no lane stays reserved below
-it. Pinned against `git log --format='%H %P'` at four depths of one history — a
-lone tip, a merge cut at the boundary, two boundaries on two branches, and a
-boundary whose parent the clone has through a sibling — on both routes, with
-the graph required to be the one git's parents lay out
+**A shallow clone, a graft and a replace ref are walked as git walks them.** A
+boundary commit — one the clone's `shallow` file lists — names parents in its object
+that the clone does not have, and git reads the file as grafts: the commit has no
+parents, so `git log --format=%P` prints nothing for it and `--graph` draws it as a
+root, while a parent the clone DOES have, reached through another branch, is still
+shown. gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
+over with the parents its object names, and skips the next appearance of each of
+those ids whichever commit names it — so a merge-shaped history cloned with
+`--depth` loses a commit its sibling branch reaches, and the lane assigner holds a
+lane open for a parent that never arrives. git also reads `<common dir>/info/grafts`,
+each line giving a commit the parents git shows in place of its own, which gix does not
+read at all; and `refs/replace/<id>`, reading the object the ref names wherever `<id>`
+is read, which gix 0.87.1 reads with `core.useReplaceRefs` the wrong way round — off
+when unset or true — so it applies none by default. Every walk therefore goes through
+`crates/cairn-git/src/history/walk.rs`, reading each commit through a `Grafted` object
+source over a handle of its own, told to apply no replacement of gix's: an object a
+replace ref replaces reads as its replacement, followed as git follows it
+(`crates/cairn-git/src/replacements.rs`), and a grafted commit — shallow, or from the
+graft file, the shallow file winning for one commit as in git — reads with its `parent`
+header lines replaced by the graft's, found by the commit's own id
+(`crates/cairn-git/src/grafts.rs`). Each row's subject, author and date are read through the
+same substitutions, by a `Grafted` reader the walk's stream holds beside the walk, opened from
+the same read (`history::open_stream`), so a replaced commit's row is its replacement's as `git
+log` shows it; and `Repository::commit_details` reads through one too (`docs/systems/diff.md`,
+"What a commit's details carry"). git
+reads no commit-graph where any of these applies (`commit_graph_compatible`: a replace
+ref, a graft, a shallow repository), since the graph holds each commit's own parents and
+generations computed over them; nor does any graph read of Cairn's — the walk's, Show
+Lost Commits' tip dates and the amend's pushed check (`walk::commit_graph`). Each is read
+once per walk. With no parents a boundary commit is a root to the assigner, so its line
+ends there and no lane stays reserved below it. Pinned against `git log --format='%H %P'`
+at four depths of one history — a lone tip, a merge cut at the boundary, two boundaries
+on two branches, and a boundary whose parent the clone has through a sibling — on both
+routes, with the graph required to be the one git's parents lay out
 (`a_shallow_clones_boundary_commits_have_the_parents_git_log_shows`,
-`crates/cairn-git/tests/history.rs`); the header rewrite by
-`only_the_headers_parent_lines_are_removed`.
+`crates/cairn-git/tests/history.rs`); against `git log --date-order` with a replace ref,
+a graft, a shallow file and a shallow clone over a history with a commit-graph, each laid
+out so that the graph's parents would give another order
+(`the_commit_graph_is_used_only_where_git_uses_it`, `crates/cairn-git/tests/date_order.rs`,
+with and without a graph written, for the refs, for a stash on `main` — a tip pending above
+the substituted history, in the graph with its real parents — and for Show Lost Commits'
+reflog ids, and with `core.useReplaceRefs` off, and the shallow file beating a graft for one
+commit; its oracle grafts the stashes through a copy's graft file, which that setting does
+not switch off); the
+commit-time and graph-order routes, Show Lost Commits' reflog dates, ahead and behind, and
+a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`);
+the rows' subjects, authors and dates against `git log`
+(`a_substituted_commit_is_described_and_compared_as_git_shows_it`); a replace ref whose
+replacement is missing failing the walk — and a detached `HEAD` no ref reaches, replaced by
+an object that is not there, failing it too rather than being left out, while a replace ref
+naming nothing fails only the reads that meet its object
+(`a_replacement_that_is_not_there_fails_only_what_meets_it`) —
+as git dies (`a_replacement_that_is_not_there_fails_the_walk`);
+the pushed check's graph stepping aside under each
+(`the_graph_does_not_answer_where_git_would_not_read_it`); the header rewrite by
+`only_the_headers_parent_lines_are_removed` and `a_grafts_parents_replace_the_commits_own`;
+the graft file's reading by `a_graft_file_is_read_as_git_reads_it`; and a replacement's
+depth by `a_replacement_is_followed_as_far_as_git_follows_it`. A replace ref added after the
+repository was opened is read, since each walk reads the refs afresh; and `core.useReplaceRefs`
+is read as the configuration says when the walk opens, the history thread opening its handle
+again first when a configuration file moved (`crates/cairn-app/src/worker/configured.rs`).
+Whether a refresh reopens the history compares the substitutions too (`RefsSnapshot::walks_as`,
+"Refresh" below).
 
-Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
-it nor `GraphOrder` is topological, which is why the assigner must be total over
-arrival order. The measurement (`measures_both_orders_against_a_named_repository`,
-`#[ignore]`d): walking *and laying out* 50k commits took 129 ms in commit-time
-order against 196 ms in graph order, which leaves far more lanes open per row.
-Walking alone is the other way round.
+Order is `HistoryOrder::DateOrder` by default: git's date order (below), the order
+`git log --date-order` and Fork's graph draw, in which no commit comes before any of its
+children. A request may ask for `HistoryOrder::CommitTime`, which Recent Commit Messages
+keeps for `git log -n 10`'s order, or `HistoryOrder::GraphOrder`; neither is topological,
+which is why the assigner stays total over arrival order. Show Lost Commits walks in date
+order whatever is asked (below). Of those two, walking *and laying out* 50k commits takes
+129 ms in commit-time order against 196 ms in graph order, which leaves far more lanes
+open per row; walking alone is the other way round
+(`measures_both_orders_against_a_named_repository`, `#[ignore]`d).
+
+### git's date order
+
+`HistoryOrder::DateOrder` (`crates/cairn-git/src/history/date_order.rs`) is
+`git log --date-order`'s order: no commit before all of its children, otherwise newest
+committer date first, every tie broken as git breaks it. It is git's incremental
+topological walk from `revision.c` (`init_topo_walk`, `compute_indegrees_to_depth`,
+`indegree_walk_step`, `next_topo_commit`, `expand_topo_walk`), each step citing git's
+source at v2.30.9 and v2.56.0: the tips each once, in the order given, stably sorted by
+date; an in-degree queue ordered by generation then date; and a topological queue ordered
+by date. Both queues pop ties in the order they were put, as git's `prio_queue` does with
+its insertion counter (`date_order/queue.rs`); gitoxide's own `PriorityQueue` and its
+`Topo` walk break equal dates arbitrarily, which is why neither is used. A merge's parents
+are queued in the commit's order, so at one date the first parent comes first. git's
+explore walk is left out: it only settles what a negative tip hides, and a history walk
+has none.
+
+Each commit is read once — from the commit-graph where git would read one, with its
+generation, else from its object through `Grafted`, generation infinite — and kept with
+its in-degree in gitoxide's `IdMap` of `gix_revwalk::graph::Commit`s
+(`date_order/commits.rs`), through a handle with no object cache, since nothing is read
+twice. Without a usable commit-graph every generation is infinite and the opening pass
+reads every commit reachable before the first is known, as git's own whole-list path
+does; with one, only as deep as the lowest generation among the tips, then as deep as each
+commit about to be emitted needs. The opening pass polls its cancel before each tip and
+each commit it reads parents for, and returns nothing once cancelled; a later step that
+must walk deeper polls the same way, and, cancelled, leaves the walk as it was, its
+deepening done before anything is popped. How many commits the pass has read goes to a
+listener at most once per 100 ms (`date_order/pace.rs`).
+
+A stash is a tip whose one parent is its base, as `git replace --graft <stash> <stash>^1`
+makes it for git; its own parents are never read. It is seeded only when the refs reach
+its base, as the in-degree walk decides once it is down to the base's generation, and
+dropped when they do not, or when the refs reach the stash's commit itself — a branch
+built on it — which is then that commit's row with the parents it was made with, its index
+commit among them, as the user's own `git log` shows it (the "a branch at a stash" fixture). It is decided
+no sooner than the walk needs it — once the walk is that deep anyway, before the commit
+it would pop ahead of, or before its base is counted down — holding meanwhile the place
+among git's tips it was given, so a stash made on an old commit costs the first page
+nothing where a commit-graph bounds the walk. With Show Lost Commits' reflog ids among the
+tips, every stash is decided before they join. A ref's tip whose object is missing fails
+the walk, as git dies on it ("bad object"); a tip that is no commit is dropped, and a reflog
+id that cannot be read is skipped (`bad_starting_points_are_errors_rather_than_empty_pages`).
+The history's routes drive this walk — the refs snapshot's, the cold cursor's, a held
+session's and a find's pages (below); it is also exposed as `Repository::date_order` over
+`DateOrderTips` (refs and `HEAD`, stashes, reflog ids) for the parity tests and the
+reporters.
+
+Pinned against git itself, through one oracle run in each fixture at test time —
+`git log --date-order --format=%H --branches --remotes --tags HEAD --stdin`, each stash
+whose base the refs reach grafted onto it in a copy and fed with the reflog ids on stdin —
+on commit times tied across branches, merges, two stashes and a rebase in one second, the
+ui-review recipe, stashes on two branches and on a deleted one, clock skew, and reflog
+entries, each with and without a commit-graph, for the refs, with the stashes and with
+the reflog ids (`the_walk_is_in_git_date_order`), and at both floor gits in `git-floor`;
+the lazy stash decisions by `a_stash_is_decided_no_sooner_than_the_walk_needs_it`; the
+ties and parents by `ties_pop_in_the_order_they_were_put` and
+`parents_are_queued_in_gits_order`; cancellation and the count by
+`an_opening_pass_stops_when_superseded`, `a_cancelled_step_leaves_the_walk_as_it_was` and
+`an_opening_pass_reports_how_far_it_has_read` and, through the public open,
+`the_public_walk_reports_its_count_every_100_ms`. On rust-lang/rust from every ref the whole
+walk equals git's `--date-order` row for row; the opening pass costs a little under git's
+own time without a commit-graph (1.19-1.20 s against 1.25-1.26 s) and a little over with
+one (95 ms against 82-84 ms), keeping about 170 bytes per commit (`docs/research/history-topo-order/measured.md`,
+`measures_the_opening_pass_against_a_named_repository`,
+`measures_what_deciding_a_stashs_base_costs`).
+
+The history itself is held to the same oracle on every route a window pages, over those
+fixtures and the stashes at every depth, with and without a commit-graph, at the host's git
+and both floors (`crates/cairn-git/tests/date_order.rs`): the refs snapshot's history held in
+pages and read as one (`the_history_is_in_git_date_order`); each stash's row, its index and
+its base, exactly where git puts it, none for a stash on an unreached base, a commit's row
+for a stash a branch is built on (`stash_rows_are_where_git_puts_them`); Show Lost Commits'
+rows and its lost marks, whatever order the request names (`lost_commits_are_in_git_date_order`);
+and the cold cursor and a session resumed from one (`a_resumed_session_continues_git_date_order`).
 
 ### From every ref, labelled, with stash rows
 
@@ -371,9 +497,9 @@ identifies — a tag on a tree or a blob identifies none, so seeds nothing and l
 nothing — each once, and `HEAD`'s, a detached `HEAD` naming what is not a commit
 seeding nothing; its labels are, per commit, the refs pointing at it in the
 snapshot's order, the branch `HEAD` is on marked current; and it carries the stash
-list. Nothing about a stash seeds the walk. When the request is resolved, each stash's
-commit is read for its author, its author date and its committer date, and its base's
-committer date — two reads per stash, polling nothing — and a stash whose commit cannot
+list. Neither `refs/stash` nor a stash's base seeds the refs' walk. When the request is
+resolved, each stash's commit is read for its author, its author date and its committer
+date — one read per stash, polling nothing — and a stash whose commit cannot
 be read, dropped and pruned since the snapshot, has no row, the walk going on without it
 (`a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row`); and a stash commit
 `git stash store` filed twice in the list is one row, its newest entry's — a commit is
@@ -384,31 +510,18 @@ stashes (`Decoration`) are shared by every page and cursor of the walk, as its t
 the labels and stashes of the snapshot the walk began from.
 
 Both routes lay out the same stream (`crates/cairn-git/src/history/stream.rs`): the
-walk's commits, each stash's row merged in. A stash's row goes where its commit's
-date falls among the walk's commits — newest committed first, the walk's own order —
-but never after its base, and only when the walk reaches the base. How the stream
-knows the base is reached when the stash's date comes up is by looking ahead in the
-walk itself: the commits it has pulled and not yet handed on are searched for the
-base, and more are pulled to find it until `LOOKAHEAD` (4,096) are ahead of the next
-one handed on, stopping once the walk passes the base's own committer date without
-meeting it. Found, the row goes at the stash's date; not found, the stash is held.
-Whenever the next commit to hand on is the base of a stash not yet placed — held, or
-not yet due because its date is older than its base's by clock skew — the row goes
-directly above it, once every stash newer than it is placed or held: stash rows keep
-their own date order, newest first and `stash@{0}` first among equal dates, and
-several stashes on one commit go above it newest first. A stash's date comes up when it
-is no older than the next commit, so a stash dated the same second as a commit goes
-first, as git's date order puts a stash above the index commit it was made with. A
-stash still unplaced when the walk ends has no row. So a row is there exactly when the
-walk reaches its base, and costs no walk of its own: the commits looked ahead at are the
-next the stream hands on. A stash commit the walk reaches through a ref is that commit's
-row and no stash's, whether the walk hands it on first or the look-ahead meets it. In
-graph order, which has no dates, every stash goes directly above its base.
-`HistoryRequest::with_stash_lookahead` sets the distance, and a cursor carries it.
+walk's entries, stash rows among them. In date order each stash is a tip of the walk itself,
+after `HEAD`'s and in `stash@{n}` order, whose one parent is its base (above): the walk
+seeds it only when the refs reach its base and not its commit, and yields its row where
+`git log --date-order` puts it, so the stream hands that row on as it comes — a stash on a
+deep base, on a deleted branch or dated before its base costs no look ahead and is placed
+exactly. A stash commit the walk reaches through a ref is that commit's row and no stash's.
+In commit-time and graph order, whose walks are given no stash, each stash goes directly
+above its base, newest committed first and `stash@{0}` first among equal dates.
 `HistoryPage::walked` counts rows laid out, stash rows among them; `decoded` counts
-commits read, which a stash's row adds none to; cancellation is polled once per row
-and once per commit looked ahead at; `HistorySession::commits_walked` counts every
-commit pulled off the walk.
+commits read, which a stash's row adds none to; cancellation is polled once per row and
+while the walk opens; `HistorySession::commits_walked` counts the commits pulled off the
+walk, stash rows aside.
 
 Every expectation is git's, run in the same fixture at test time and over the whole
 walk, paged small (`crates/cairn-git/tests/every_ref.rs`):
@@ -422,30 +535,35 @@ labels against `git log --decorate=full`, `refs/stash` aside, `origin/HEAD` and 
 nested tag among them; `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
 — each stash's index, base, message, author and date against `git stash list`, one
 line out of its node down its own lane into its base, two stashes on one commit in
-two lanes, a stash dated older than its base directly above it and the rest at their
-dates; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
-one, two and five); `a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base`;
+two lanes, a stash dated older than its base still above it, and every row where git's date
+order puts it; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
+one, two and five); `a_stash_on_a_deep_base_is_where_git_puts_it` (held and cold);
 `a_detached_head_no_ref_reaches_is_walked_and_labelled`;
 `a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs`;
 `a_braided_history_from_every_ref_is_git_rev_lists` (order too, against
 `--date-order`); `in_graph_order_a_stash_is_directly_above_its_base`;
-`a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs`;
-`stash_rows_are_in_gits_date_order` (against `git log --date-order` over the refs and
-the stash commits); `a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows`;
-and `looking_ahead_stops_once_the_walk_passes_the_bases_date`.
+`a_stash_commit_under_an_older_branch_commit_is_a_commits_row_and_no_stashs`;
+`stash_rows_are_in_gits_date_order` (a tie between a stash and the branch's commit it
+shares a second with going to the branch, given first);
+`a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows`;
+and `a_deleted_branchs_stash_pulls_nothing_ahead_and_has_no_row`. Each order comparison is
+against the oracle above, through `tests/support/date_order_oracle.rs`, which grafts the
+stashes from a graft file outside the repository (`GIT_GRAFT_FILE`).
 
-**Measured** (`measures_the_first_page_from_every_ref`, `#[ignore]`d; release, warm,
-median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`), on
-rust-lang/rust at `c999cef531e`, which has no commit-graph file: the first page of 64
-rows from `HEAD` 7.7 ms, from every ref 7.3 ms with the snapshot already read and
-8.6 ms with its read; each laid out 1,088 rows. On a scratch clone of it with real
-stashes: a stash on `HEAD` adds nothing (7.4 ms); a stash whose base is 20,000 commits
-deep, or a stash on a deleted branch's old commit, looks ahead the whole 4,096 commits
-on the first page and costs 21.5 ms (3.1 ms with the clone's own commit-graph); the
-stream never holds more than 4,096 commits pulled ahead of the next row, so that is
-the most looking ahead adds to a page.
-A find of rust's oldest commit from the snapshot takes 2,265 ms against 2,253 ms from
-every ref's commit unlabelled and 2,211 ms from `HEAD`.
+**Measured** on rust-lang/rust at `c999cef531e`, which has no commit-graph file (release,
+warm, median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`;
+`docs/research/history-topo-order/measured.md`): the first page from every ref pays git's own
+opening pass, 1.19-1.20 s against git's `rev-list --date-order --max-count=64` at 1.25-1.26 s,
+and 95 ms in a copy with a commit-graph against git's 82-84 ms; through the worker boundary
+the history thread's whole open, refs snapshot to its first 64 rows, is 1,174-1,206 ms against
+git's 1,259-1,270 ms, and 113-115 ms with a commit-graph against git's 87-88 ms; a page after
+the opening pass costs 0.4 ms, and a find of the oldest commit 1,952 ms, every page appended to
+one history (`measures_the_history_thread_against_a_named_repository`,
+`measures_a_find_through_the_boundary`). The whole history opened through the boundary equals
+git's `git log --date-order` row for row, with and without the commit-graph. In commit-time order
+(`measures_the_first_page_from_every_ref`, `#[ignore]`d) the first page of 64 rows from
+`HEAD` is 7.7 ms, from every ref 7.3 ms with the snapshot already read and 8.6 ms with its
+read, each laying out 1,088 rows, and the same find 3,829 ms.
 
 Opening a walk reads one commit per tip. On a synthetic repository of a 50,000-commit
 chain with a tag on every commit (`git fast-import`), the first page from every ref
@@ -464,14 +582,14 @@ FILE, and it is a guard, not a convention — see below.
   `cairn_git::SharedRepository` is gitoxide's `ThreadSafeRepository` with the
   paths cached, and `SharedRepository::to_worker()` is the `Repository` a worker
   runs on. Each thread that reads calls it **once, at the top of the thread** —
-  `serve` on the repository thread, `serve_diffs` on the diff thread: a
+  `serve` on the repository thread, `serve_history` on the history thread,
+  `serve_diffs` on the diff thread: a
   per-request conversion compiles and passes every test while rebuilding the
   object cache and the pack snapshot each time, which is why the call site
   carries a comment rather than being left to look obvious.
   `Repository::OBJECT_CACHE_BYTES` (4 MiB) is installed by that handle, and is
-  part of why `HistoryOrder::CommitTime` is the cheaper default: measured, a
-  commit-time walk of 50k commits cost 178 ms without the cache and 116 ms with
-  it, and more bought nothing. `a_shared_repository_can_cross_threads` pins
+  measured on a commit-time walk of 50k commits: 178 ms without the cache and 116 ms
+  with it, and more bought nothing. `a_shared_repository_can_cross_threads` pins
   `Send + Sync`, and is also the twin for gix's `parallel` feature staying on.
 - `worker::open(path, &Discovery) -> Result<(RepositoryHandle, Updates, Replier), OpenError>`.
   **The worker opens the repository**, because discovering one reads the
@@ -510,7 +628,15 @@ FILE, and it is a guard, not a convention — see below.
   sidebar and its stop are numbered in, and its walk lane, which only an open
   moves and every page of rows is answered under — so a page a superseded find had
   laid out still arrives, and a reopen's replaced walk's pages do not
-  (`docs/systems/sidebar.md`, "Pressing an entry").
+  (`docs/systems/sidebar.md`, "Pressing an entry"). An open's opening pass and its first
+  page run under the walk lane's number, not the query lane's: a find or its stop asked
+  while a walk opens leaves the pass running and is served once the first page is out,
+  and only the next open — a reopen — or a close stops it
+  (`an_opening_pass_is_superseded_by_the_next_walk_alone`, on the lane;
+  `an_open_runs_whatever_the_history_lane_asked_after_it`, the history thread started with its
+  jobs already queued; `a_find_or_its_stop_never_supersedes_a_walk_still_opening`, through the
+  boundary). A stop ends a running find within a page
+  (`a_stop_ends_a_running_find_within_a_page`).
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
   implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
   superseding a request stops its walk at the next commit rather than
@@ -534,6 +660,7 @@ FILE, and it is a guard, not a convention — see below.
   The `WorkerExit` tests in `crates/cairn-app/src/worker/pool.rs` cover it
   (`a_panicking_worker_says_so_instead_of_disappearing`,
   `a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it`,
+  `a_panic_on_the_history_thread_is_announced`,
   `a_worker_that_exits_cleanly_raises_no_alarm`,
   `a_failed_open_ends_the_stream_rather_than_leaving_it_open`,
   `a_worker_ending_in_silence_still_wakes_the_waiting_task`). `Outbox` is not
@@ -556,16 +683,29 @@ FILE, and it is a guard, not a convention — see below.
   bounded (`network::tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
 - **An explicit routing table names the thread for each lane**
-  (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
-  refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
-  thread's handle across turns and is not `Send`, so it never moves
-  (`worker/history/lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
-  changes and file-diff lanes, commits, comparisons and the working tree alike, on
-  `cairn-diff` (`worker/diff/lane.rs`); and status and ahead/behind on
-  `cairn-refresh` (`worker/refresh/lane.rs`), so neither a page nor a diff queues
-  behind a slow status. `route` applies it to every request as it is
-  submitted and hands each thread its own job type, so neither thread forwards
-  the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
+  (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane — opens,
+  pages, finds and their stops — on `cairn-history`, which owns the live walk — it borrows
+  that thread's handle across turns and is not `Send`, so it never moves
+  (`worker/history/lane.rs`) — and runs nothing else, so an opening pass that reads the
+  whole history holds up only the history; a refresh's refs (`worker/history/refs.rs`),
+  the Changes tab's, the sidebar's and Local Changes' filters, the freeing of old answers
+  and the operations' front door on `cairn-repository`; the changes and file-diff lanes,
+  commits, comparisons and the working tree alike, on `cairn-diff`
+  (`worker/diff/lane.rs`); and status and ahead/behind on `cairn-refresh`
+  (`worker/refresh/lane.rs`), so neither a page nor a diff queues behind a slow status.
+  `route` applies it to every request as it is submitted and hands each thread its own job
+  type, so no thread forwards another's work
+  (`every_query_is_served_on_the_thread_its_lane_is_routed_to`). A filter asked while an
+  opening pass runs is answered before its first page
+  (`a_filter_is_answered_while_the_history_opens`, asked once the pass has told its first
+  count); on rust-lang/rust, asked a quarter of the way into the pass, in 0.09 ms against
+  0.03-0.05 ms with nothing opening, and in the window drawn a frame after the keystroke either
+  way (`measures_the_history_thread_against_a_named_repository`, `opening_pass_check`). The repository thread stops the epochs, tells every thread to stop
+  and cancels a fetch, then joins the history thread as the repository closes, before it waits
+  on any reap, so a close during an opening pass ends the pass at its next commit and the
+  update stream in what a close with nothing running takes
+  (`a_close_during_an_opening_pass_does_not_wait_for_it`; on rust-lang/rust 29 ms against
+  38 ms idle).
   A second thread costs the first almost nothing: measured by
   `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
   concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
@@ -615,9 +755,13 @@ ending every `git` in the repository's registry, either of which ends it
 thread.
 
 **What a refresh costs, as built.** The refs are read on the repository thread (R11.2,
-kept by the user's decision of 2026-10-07), so a scroll page asked while a refresh reads
+kept by the user's decision of 2026-10-07), so a filter or a free asked while a refresh reads
 them waits behind one refs read — about 28 ms for the snapshot of a 10,001-ref
-fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most once per trigger; a refresh never cancels the page. A status, once
+fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most
+once per trigger. A page never waits on it, being the history thread's, and a refresh never
+waits on an open: asked while an opening pass runs, its refs are answered before the pass's
+first page — reopening nothing when nothing moved, reopening when a ref did
+(`a_refresh_supersedes_an_open_still_reading`); a refresh never cancels a page. A status, once
 started, runs to its end whatever refreshes arrive, so a window switched faster than a
 status takes still gets one, followed by at most one more; each status is a full stat of
 the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while one runs
@@ -634,34 +778,50 @@ F5 on Linux and ⌘R on macOS in the accelerator table
 what opens the history: there is no walk yet to compare with. Nothing watches the
 file system (R10.2).
 
-**What reopens the history.** The repository thread keeps, beside the walk
-(`HistoryLane`), the snapshot the walk began from and the snapshot the last refresh
-read. A refresh compares the refs it reads with the first by
-`RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
-the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
-the snapshot (`refresh/state.rs`, which the history's chips, the title bar, the sidebar
-and the Commit tab's REFS row read) and, on `reopen`,
-reopens: the old `History` is moved out, a new one is built with
-`History::with_author_capacity` of the old one's author count, the history is asked
-for again and then the old one handed to the repository thread to free as a
-`Request::Retire` (#52, R11.3) — in that order, so the new first page is not queued
-behind the free — and the selection is left as it is, drawn again when its row arrives
-(R10.5). A chosen commit that never arrives again — its branch deleted, nothing else
+**What reopens the history.** The repository thread and the history thread share the
+snapshot the walk began from and the snapshot the last refresh read (`WalkedRefs`,
+`worker/history/refs.rs`, behind a lock the history thread holds for a pointer's clone or
+assignment and a refresh across its comparison, so an open between the two cannot make a
+refresh answer for the wrong walk; the UI thread never takes it). A refresh compares
+the refs it reads with the first by `RefsSnapshot::walks_as` — the same refs naming the same
+objects, the same `HEAD`, the same stash list, and the same substitutions git walks under
+(the replace refs it reads and the grafts, a shallow boundary among them;
+`docs/systems/refs.md`) — and answers `Update::Refs { snapshot, reopen }`. The repository
+thread reads the refs on a handle that follows the configuration, so `core.useReplaceRefs`
+turned off or on reopens the history too (`crates/cairn-app/src/worker/configured.rs`). When
+the substitutions differ from the snapshot the window kept, the window also asks the chosen
+commit's changes again, since its details and what it changed may be other now
+(`history::selection::ask_again`). The history thread names a snapshot the one the walk began from as it takes it to open,
+so a refresh while that walk is still opening compares with what it will draw and reopens
+nothing when nothing moved (`a_refresh_during_an_open_compares_with_the_refs_the_open_took`).
+The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the title bar,
+the sidebar and the Commit tab's REFS row read) and, on `reopen`, asks the history thread for
+the new walk (`session::reopen_history`), whose number supersedes a walk still opening there,
+its pass ending at its next commit. The old rows stay drawn and usable — selected, scrolled,
+their details and diffs asked — and page no further, since their walk is gone
+(`Progress::reopen`); the new walk's first page replaces them: the old `History` is moved out,
+a new one is built with `History::with_author_capacity` of the old one's author count, the
+page appended to it, and the old one handed to the repository thread to free as a
+`Request::Retire` (#52, R11.3); the selection is left as it is, drawn again when its row
+arrives (R10.5). A chosen commit that never arrives again — its branch deleted, nothing else
 reaching it — stays chosen: no row is drawn chosen, and the detail pane keeps the
 answer it holds for it until another row is chosen. A stash pushed, a checkout that moves no ref and a moved ref each reopen; a
 refresh that finds nothing changed does not, and neither does an upstream's
 configuration alone (`a_walk_is_the_same_unless_what_it_draws_changed`, in the model)
 (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`,
-counting the window's reopens through the real boundary;
+counting the window's reopens through the real boundary, and
+`a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now`, for a
+replace ref added and moved, `core.useReplaceRefs` off and on, the graft and shallow files, each
+reopened history drawing the replaced commit's row as git reads it then;
 `focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`, headless
-with focus set; `a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection`).
+with focus set; `a_reopen_keeps_the_old_rows_until_the_new_page`).
 The fetch's own before-and-after comparison of the refs, and `session::reload_if`
 that acted on it, are gone.
 
 **What an open walks from.** `OpenHistory` walks from the snapshot the last refresh
 read, so a reopen reads the refs once. With none read — a test that opens without a
 refresh, or after a failed open, which forgets them — the open reads its own and
-answers it as `Update::Refs { reopen: false }` in the history lane before its first
+answers it as `Update::Refs { reopen: false }` under the walk's number before its first
 page. A snapshot with no ref and an unborn `HEAD` walks nothing and answers the empty,
 complete page an unborn repository always answered
 (`a_freshly_initialised_repository_reaches_the_view_as_an_empty_history`). A ref whose
@@ -699,6 +859,42 @@ reader to scroll. Pinned by
 `a_failed_request_is_answered_when_it_is_asked_again`
 (`crates/cairn-app/src/worker/pool.rs`) for the worker recovering, and by
 `a_stream_that_has_ended_stops_asking_for_good` for the worker-gone case.
+
+### The opening pass in the window
+
+In git's date order a walk with no commit-graph git would use reads every commit the tips
+reach before its first row ("git's date order", above): about 1.2 s on rust-lang/rust. The
+history thread runs that pass and nothing else waits on it — a filter, a refresh's refs, a
+free and a diff each run on another thread — and the window says it is reading.
+
+- **The count is the worker's to pace.** The walk reports how many commits its pass has read
+  at most once per `READING_EVERY` (100 ms, the interval `HistorySession::open_walk` is
+  given); the history thread tells the window none of them until the pass has run
+  `READING_AFTER` (250 ms), then each at most once per 100 ms (`ReadingPace`,
+  `worker/history/reading.rs`; `the_count_is_told_once_the_pass_has_run_250_ms_then_at_most_every_100_ms`),
+  as `Update::Reading { commits }` under the walk's number, so a superseded walk's count is
+  never drawn (`the_window_is_told_how_far_an_opening_pass_has_read`). A cold restart — the walk
+  dropped by a failed page and resumed from its cursor — runs its pass again under the walk's
+  number but tells no count, since it replaces no rows
+  (`a_cold_restart_tells_the_window_no_count`). The window keeps the
+  number in `Progress` (`Progress::reading`) and keeps no timer: a pass shorter than 250 ms
+  says nothing. On rust-lang/rust the first count is told at 304-309 ms, nine or ten times an
+  open.
+- **A first open** draws the opening sentence in the list's place, "Reading history…", and
+  "Reading history… N commits" once a count is told (`status_text::placeholder`).
+- **A reopen keeps the rows** (`Progress::reopen`, "What reopens the history" above): drawn
+  and usable until the new first page replaces them, under a strip over the list reading
+  "Reading history… N commits" once a count is told (`status_text::reading_strip`, drawn by
+  `window.rs`; `the_history_says_it_is_reading_during_a_long_open`,
+  `a_reopen_draws_the_old_rows_under_the_reading_strip`). Over no rows — a reopen of an empty
+  history — the count takes the placeholder's place instead. A find or its stop asked
+  meanwhile leaves the reopen waiting for its first page, never letting the old rows page
+  (`a_reopen_keeps_the_rows_and_asks_for_none_of_them_until_its_first_page`); a failed reopen
+  keeps the rows and is asked again as a failed page is.
+- **Frames.** On rust-lang/rust no frame took over 16.7 ms during the first open (max 6.7 ms)
+  or during a reopen with 3,000 rows drawn and scrolled every frame (max 2.7 ms), and a
+  filter keystroke made during the pass was drawn 18 ms after it, as one made with nothing
+  opening was (`opening_pass_check`, `docs/research/history-topo-order/measured.md`).
 
 ## The view (`cairn-ui`)
 
@@ -878,24 +1074,21 @@ git skips — a zero time, no `>` before the time, a time zone that is not a sig
 digits, a last line with no newline — gives no id, and the lines after it are still read
 (`every_line_git_reads_is_an_entry_and_no_other`). The null id names nothing; an id whose
 object is gone or is not a commit is skipped, as git's walk skips it; the rest join the tips
-after the refs' own, each once. The reflogs are read as the walk opens, under the first
+after the refs' and the stashes', each once. The reflogs are read as the walk opens, under the first
 page's cancel (polled before each log and each id's lookup), and a cursor carries the tips
 read and which of them the refs named, so a cold page resumes the same walk.
 
 Which commits no ref reaches is decided as the walk goes, never by a walk of its own before
-the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`): a commit pulled off the
-walk is reached when a ref names it or a reached commit pulled before it names it as a
-parent; otherwise it is lost so far. The walk yields the newest committed first, so a
-commit's children come off before it — except where a child is dated older than its parent.
-There the parent can come off first, through a lost commit, and be taken for lost; when the
-reached child comes off, the parent and every commit lost only through it are reached after
-all. A row reads whether it is lost when it is carried (`RowsPage::push_lost`), so a row laid
-out meanwhile is carried right; a row a page already carried is named reached by the next
-page (`RowsPage::reached`, its number and its commit), and `History::append` clears it
+the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`). Show Lost Commits walks in
+git's date order whatever order the request names, so no commit comes off the walk before a
+child it walks: a commit is reached when a ref names it or a reached commit that came off
+before it names it as a parent, and lost otherwise — a verdict final when it is given, its row
+carried lost (`RowsPage::push_lost`) or not, however the commits are dated
 (`a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`). What is kept is the walk's
-reached frontier and the commits taken for lost; once every reflog tip not known to be
-reached has come off the walk and none is lost, nothing more can be, and the tracking stops.
-A stash's row is never lost: `refs/stash` reaches it.
+reached frontier and the parents of lost commits still to come; once every reflog tip not
+known to be reached has come off the walk and no lost commit's parent is still to come,
+nothing more can be lost, and the tracking stops. A stash's row is never lost: `refs/stash`
+reaches it.
 
 The expectations are git's (`crates/cairn-git/tests/lost_commits.rs`), over the whole walk,
 held and cold, at pages of 1, 2, 5 and 64 and windows of 1, 3 and 1,024:
@@ -923,11 +1116,14 @@ date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags
 the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
 with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
 
-Each reflog tip is read once, its date taken with its
-kind (`reflogs::reflog_tips` hands the walk the dates, `walk::open_dated`), and every tip's
-date — a ref's or a reflog's — is the commit-graph's where the graph holds it, as git's own walk
-takes it (`a_commit_graph_dates_the_tips_as_the_objects_do`). On the clone, back to back against a walk that read each tip twice and dated it from its
-object ("before"):
+Each reflog id is checked once to name a commit — the commit-graph answering where it holds
+the id (`reflogs::reflog_tips`) — and the walk reads each tip itself, a ref's or a reflog's,
+its date and parents the commit-graph's where the graph holds it, as git's own walk takes
+them (`a_commit_graph_dates_the_tips_as_the_objects_do`). Measured in commit-time order,
+which isolates the reflog reads, on the clone, back to back against a walk that read each tip
+twice and dated it from its object ("before") — Show Lost Commits itself walks date order, so
+without a commit-graph its first page also pays the opening pass ("The opening pass in the
+window"):
 with no graph, 10,000 entries 52.2 ms before and 50.8 ms after (the commits' reads from the
 pack are the cost, not their number); with a graph written, 50.4 ms before and 8.8 ms after,
 1,000 entries 7.8 ms and 2.8 ms; 200 local branches each with a 50-entry log (10,000 ids),
@@ -948,9 +1144,8 @@ every heading stays over its column and no row loses width — ticked while on, 
 chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
 `accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
 `the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
-keeps the keyboard through the reopen: it gives way to the opening sentence until the reopened
-walk's first page arrives, and takes focus again as it is drawn, so the chord is heard again
-with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
+keeps the keyboard through the reopen: its old rows stay drawn until the reopened walk's first
+page replaces them, so the chord is heard again with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
 author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
 its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
 `a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
@@ -1050,7 +1245,8 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
 | No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 | What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
-| Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it` (`crates/cairn-model/src/history.rs`) |
+| Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_and_no_later_page_changes_it` (`crates/cairn-model/src/history.rs`), `lost_commits_are_in_git_date_order` (`crates/cairn-git/tests/date_order.rs`) |
+| The history from a refs snapshot, a resumed walk and its stash rows are in git's date order | `the_history_is_in_git_date_order`, `stash_rows_are_where_git_puts_them`, `a_resumed_session_continues_git_date_order` (`crates/cairn-git/tests/date_order.rs`), `stash_rows_are_in_gits_date_order`, `a_stash_on_a_deep_base_is_where_git_puts_it` (`crates/cairn-git/tests/every_ref.rs`) |
 | A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history/state.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
@@ -1147,6 +1343,11 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 - **Opening a walk from every ref reads a commit per tip**: about 0.1 s at 50,000
   tags on one line of history, cancellable between tips (above), and a reopen pays
   it again.
+- **A reopen pays the whole opening pass again.** Without a commit-graph a reopen — every
+  refresh that moves a ref, Show Lost Commits toggled — reads every commit the tips reach
+  before its first row, as the first open did, however little moved (about 1.2 s on
+  rust-lang/rust); the old rows stay drawn meanwhile, and nothing else waits on it. The
+  walk's state is not kept across a reopen to pay only for what changed.
 - **Layout and drawing grow with open lanes, and every ref can open one.** The
   assigner scans every open lane twice per row laid out (`LaneAssigner::push`), a
   snapshot holds one bit per lane, and deriving a drawn row's edges walks the lines
@@ -1172,12 +1373,6 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 - **No chip is built before the list is measured.** The list learns its width from its
   first layout (`on_sized`), so the first frame of a list draws its rows without chips and
   the next with them.
-- **A stash's row is at its date only when its base is near.** A stash whose base
-  lies more than `LOOKAHEAD` commits below its date, or past a skewed date, is drawn
-  directly above its base instead; one whose stash commit is reached through a ref
-  only after the stash's row was placed — the stash commit beyond the look-ahead, or
-  past a skewed date — would have a stash's row and a commit's. Neither is measured
-  on a real repository with stashes.
 - **Show Lost Commits reads the reflogs when the walk opens, and a reopen is what reads
   them again.** A reflog that changes while no ref the graph draws moves — `git reflog
   expire`, an entry pruned — leaves the history drawing what it read until the next reopen.
@@ -1185,18 +1380,20 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   default), and from then on the walk no longer has it. Only `HEAD`'s and the local
   branches' logs are read, where Fork's mode reads every reflog (`git log --all --reflog`):
   a remote-tracking ref's log, a deleted branch's leftover log and another worktree's
-  `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
-  so a press of the chord in that moment is not heard.
+  `HEAD` are not.
 - **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
-  residual): the open reads each distinct reflog id once, its date with it — from a
-  commit-graph where one holds it — and without a commit-graph that read from the pack is the
-  cost, about 5 µs an id on rust-lang/rust. Measured above: a `HEAD` log of 10,000 entries
+  residual): the open checks each distinct reflog id once — from a commit-graph where one
+  holds it — and the walk reads it as a tip, and without a commit-graph those reads from the
+  pack are the cost, about 5 µs a read on rust-lang/rust. The reflog reads alone, measured
+  above in commit-time order: a `HEAD` log of 10,000 entries
   makes the first page 50.8 ms with no commit-graph and 8.8 ms with one, where git's own
   `rev-list --reflog` takes 57-80 ms; 200 local branches each with a 50-entry log, the same
   10,000 ids, 50.6 ms and 8.9 ms. The cost is the ids across every log read — `HEAD`'s and each
   local branch's — and it is paid again on every refresh that moves a ref while the toggle is
   on, since each reopen reads every log again. Merging the logs' ids with the refs' tips is
-  linear (a hash set, `history::open_stream`).
+  linear (a hash set, `history::open_stream`). Show Lost Commits walks date order, so without
+  a commit-graph its first page also pays the whole opening pass (about 1.2 s on
+  rust-lang/rust), and so does each reopen while it is on.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

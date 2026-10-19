@@ -94,13 +94,16 @@ A section's or folder's row opens or closes it and asks the rows again. A ref, a
   `HEAD`'s (`History::labelled_position`): a pass that grows with the labelled rows, never
   with every loaded row — a few hundred for the whole of rust-lang/rust, a fraction of a
   millisecond at 50,000 refs. It is right because every ref the sidebar lists labels its
-  commit's row in the walk the window holds: `session::apply` asks the sidebar's rows for a
-  refresh's snapshot (`Request::FilterRefs`) before it asks the reopen that snapshot's moved
-  refs need (`Request::OpenHistory`), both on the repository thread, which serves them in
-  order (`a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection` pins the order),
-  so the rows a press is read from never name a ref the history is not walked from. The row
-  found is told to the history list's cursor hint (`View::history_cursor`), so the next
-  arrow key starts from it without searching.
+  commit's row in the walk the window holds — but while a reopen reads, when the sidebar's
+  rows for the refresh's snapshot (`Request::FilterRefs`, on the repository thread) may
+  arrive before the reopened walk's first page (`Request::OpenHistory`, on the history
+  thread) and the rows drawn are still the old walk's. A ref that moved then labels no
+  loaded row, or labels one by its old place: its press finds nothing among them, or a
+  commit both walks hold; the end the old rows reached is forgotten at the reopen
+  (`Progress::reopen`), so a press that finds nothing pages the new walk, which is from the
+  sidebar's snapshot, and its first page replaces the old rows. The row found is told to the
+  history list's cursor hint (`View::history_cursor`), so the next arrow key starts from it
+  without searching.
 - **A row not loaded yet** is found by paging the held walk forward:
   `Request::FindRow { target, rows }` — `ref_find::FIND_PAGE_ROWS` rows a page — while the
   sidebar says "Finding <ref>…". Every page is answered as `Update::Rows`, as a scroll's
@@ -135,18 +138,18 @@ asked for; and its walk lane, `QueryLane::Walk`, moved by an open alone. Every p
 is answered under the walk's number (`HistoryLane::send_rows`), so a page laid out before a
 press, scroll or stop superseded the find that walked it still arrives and is appended —
 dropping it would leave a hole the next page is appended after — while the pages of a walk
-a reopen replaced are dropped. An open superseded in the query lane before it started
-(a find asked straight after it) still lets go of the walk it replaces
-(`HistoryLane::replace_walk`), so the find pages the new walk from its start.
+a reopen replaced are dropped. An open is the one history-lane request no later press,
+scroll or stop supersedes: whose walk is still the window's, it runs — its opening pass and
+its first page under the walk's number — whatever the query lane asked since, so a find asked
+straight after a reopen pages the new walk on from its first page, and a stop asked while a
+walk opens leaves it opening (`a_find_or_its_stop_never_supersedes_a_walk_still_opening`).
 
-**A find shares its thread.** On the repository thread a find walks one page whenever no
-other job is waiting (`pool::serve`'s `finding`), so a filter keystroke, a refresh's refs or
-a free asked meanwhile is served between its pages; the next history-lane request ends it.
-A repository-thread job that is not history-lane work — the sidebar's rows
-(`FilterRefs`), the Changes tab's filter (`FilterFiles`), a refresh's refs, a free — waits
-for at most the one 512-row page being walked (a few milliseconds warm, tens cold), eight
-times a scroll's 64-row page; a history-lane request does not wait, since its number cancels
-the page mid-walk.
+**A find has the history thread.** On the history thread, which runs the history lane and
+nothing else, a find walks one page whenever no other job is waiting (`lane::serve_history`'s
+`finding`), so the next history-lane request is taken up between its pages and ends it. The
+sidebar's rows (`FilterRefs`), the Changes tab's filter (`FilterFiles`), a refresh's refs and
+a free run on the repository thread and wait on no page of a find, nor on an opening pass;
+a history-lane request does not wait either, since its number cancels the page mid-walk.
 Cancelling is the walk's own: the epoch is the cancel signal the engine polls once per
 commit, so a superseded find stops mid-page and the walk keeps what it laid out for the next
 page asked.

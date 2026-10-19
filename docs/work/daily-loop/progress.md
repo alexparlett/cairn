@@ -3,6 +3,20 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-18 — history-topo-order shipped and torn down
+
+Packet 5c passed its merge bar (every C1-C10 met, each test checked to fail under a mutation;
+C8 on the bench: the first 64 rows in 1,183 ms against git's 1,257 ms without a commit-graph,
+the whole history equal to git's `--date-order` row for row; full gate green). A CI failure on
+the integration branch — a worker test reading the opening pass's count where it expected a
+page on a slow runner — was fixed in its tests (`Pacing::UNTOLD`). Torn down on
+`feature/history-topo-order`: PRD `docs/prd/history-topo-order.md` stamped shipped; as built in
+`docs/systems/history-graph.md`; the decisions made in flight, PENDING the user's review, listed
+in the packet pull request; no new invariant (the packet changed the
+routing account and the UI-thread guard's stated residuals in the root `CLAUDE.md`, under their
+existing twins); leftovers filed as #139-#141. Not filed, for the user: the gitoxide
+replace-refs issue, and whether #128 is closed. Next: 5d, `fork-alignment`.
+
 ## 2026-10-17 — history-topo-order planned
 
 Packet 5c planned with `/feature-plan` (PRD `docs/prd/history-topo-order.md`, work dir

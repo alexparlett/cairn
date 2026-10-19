@@ -123,6 +123,9 @@ pub struct DiffState {
     file_index: Option<usize>,
     /// Local Changes' primary and its diff.
     working: Option<working::Working>,
+    /// What git substitutes changed while the changes kept could not be asked again: they are
+    /// asked again when the history is shown.
+    changes_stale: bool,
 }
 
 /// The file-diff lane: one holder, taken and let go of here alone.
@@ -156,6 +159,7 @@ impl DiffState {
     /// [`Request::Retire`] handing them to a worker, so a large change set is not freed on
     /// the UI thread (1.2-2.0 ms measured for 55,184 files).
     pub fn select_changes(&mut self, of: Comparison) -> Vec<Request> {
+        self.changes_stale = false;
         let changes = self.changes.replace((of, Answer::Waiting));
         let file = self.file.take();
         let opening = self.opening.take();
@@ -177,6 +181,17 @@ impl DiffState {
         let mut requests = vec![Request::Changes { of }];
         requests.extend(Retired::of(changes, shown_diffs).map(Request::Retire));
         requests
+    }
+
+    /// The changes kept may no longer be what git answers: asked again when the history is next
+    /// shown. Nothing kept, nothing marked.
+    pub fn mark_changes_stale(&mut self) {
+        self.changes_stale = self.changes.is_some();
+    }
+
+    /// Whether the changes kept are to be asked again ([`Self::mark_changes_stale`]).
+    pub fn changes_stale(&self) -> bool {
+        self.changes_stale
     }
 
     /// Selects one file's diff — another file, or the same one at other options. Expand All

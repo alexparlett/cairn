@@ -27,6 +27,17 @@
 //!
 //! `GIT_NAMESPACE` is not honoured: the repository is opened without it
 //! (`SharedRepository::discover_for`), so these are the refs the `git` Cairn runs sees.
+//!
+//! Beside the refs, the snapshot keeps what git substitutes as it walks from them — the replace
+//! refs it reads and the grafts, a shallow clone's boundary among them (`history::walk::
+//! Substitutions`) — since a history walked under other substitutions is another history though
+//! no ref moved (`RefsSnapshot::walks_as`). A replace ref is not listed as a ref: no listing of
+//! git's the sidebar follows (`git branch`, `git tag`) names one. A stash's base is read through
+//! those substitutions, as `git stash list` reads `stash@{n}^1`. A ref's target is told apart and
+//! a tag peeled from the objects as they are stored: git looks a replacement up there too
+//! (`peel_object_ext` in git's `object.c`), and dies where it is missing, but a ref hidden for a
+//! replacement the repository lacks would make a pushed `HEAD` read as unpublished — so a tag
+//! object itself replaced peels to the commit the stored tag names.
 
 mod stash;
 mod upstream;
@@ -35,6 +46,7 @@ use std::time::{Duration, Instant};
 
 use cairn_model::{HeadState, Ref, RefKind, RefName, RefTarget, RefsSnapshot};
 
+use crate::history::walk::{Grafted, Substitutions};
 use crate::object_id::model_id;
 use crate::{Cancel, Error, Repository};
 
@@ -72,8 +84,11 @@ impl Repository {
     /// skipped and counted in [`RefsSnapshot::unreadable`].
     pub fn refs(&self, cancel: &impl Cancel) -> Result<RefsRead, Error> {
         let started = Instant::now();
+        let repo = self.inner();
+        let (substituted, substitutions) = substitutions_of(repo);
         let mut reading = Reading {
-            repo: self.inner(),
+            repo,
+            objects: Grafted::new(&repo.objects, substituted),
             cost: RefsCost::default(),
             unreadable: 0,
         };
@@ -96,15 +111,100 @@ impl Repository {
                 head,
                 stashes,
                 unreadable: reading.unreadable,
+                substitutions,
             },
             cost,
         })
     }
 }
 
+impl Repository {
+    /// What git substitutes as it reads this repository's objects now — the replace refs it
+    /// reads and the grafts, a shallow clone's boundary among them — as a refs snapshot keeps
+    /// them ([`RefsSnapshot::substitutions`]): what a kept answer about a commit was read
+    /// under, and is no longer git's answer once it changes.
+    pub fn substitutions(&self) -> cairn_model::Substitutions {
+        substitutions_of(self.inner()).1
+    }
+
+    /// The files [`Repository::substitutions`] is read from, existing or not: the graft file,
+    /// the shallow file, the packed refs, and `refs/replace/` with every directory and loose ref
+    /// beneath it — each a file or directory a replace ref, a graft or a shallow boundary is
+    /// written in, so
+    /// whoever keeps what was read under them can tell when to read them again. Whether git
+    /// reads replace refs at all is the configuration's (`core.useReplaceRefs`), which the
+    /// caller stamps with the rest of it ([`crate::DiffInputs::configuration`]).
+    pub fn substitution_files(&self) -> Vec<std::path::PathBuf> {
+        let repo = self.inner();
+        let common = repo.common_dir();
+        let mut files = vec![
+            common.join("info").join("grafts"),
+            repo.shallow_file(),
+            common.join("packed-refs"),
+        ];
+        let mut directories = vec![common.join("refs").join("replace")];
+        while let Some(directory) = directories.pop() {
+            if let Ok(entries) = std::fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                        directories.push(entry.path());
+                    } else {
+                        files.extend(symbolic_chain(common, entry.path()));
+                    }
+                }
+            }
+            files.push(directory);
+        }
+        // In one order whatever order the directories were listed in.
+        files.sort();
+        files
+    }
+}
+
+/// A loose ref and each loose ref its symbolic chain names, as far as git follows one: a
+/// replace ref that names a branch is read through it.
+fn symbolic_chain(common: &std::path::Path, loose: std::path::PathBuf) -> Vec<std::path::PathBuf> {
+    let mut chain = vec![loose];
+    for _ in 0..SYMREF_MAX_DEPTH {
+        let Some(target) = chain
+            .last()
+            .and_then(|last| std::fs::read_to_string(last).ok())
+            .and_then(|text| {
+                text.strip_prefix("ref: ")
+                    .map(|name| name.trim().to_owned())
+            })
+        else {
+            break;
+        };
+        chain.push(common.join(target));
+    }
+    chain
+}
+
+/// The repository's substitutions, read once: for reading objects through, and as the
+/// snapshot keeps them. A read that fails is kept as that failure, which the walk fails on
+/// too, and the objects are then read as they are stored.
+fn substitutions_of(repo: &gix::Repository) -> (Substitutions, cairn_model::Substitutions) {
+    match Substitutions::read(repo) {
+        Ok(read) => {
+            let kept = read
+                .model()
+                .unwrap_or_else(|error| cairn_model::Substitutions::unreadable(error.to_string()));
+            (read, kept)
+        }
+        Err(error) => (
+            Substitutions::default(),
+            cairn_model::Substitutions::unreadable(error.to_string()),
+        ),
+    }
+}
+
 /// One query's state: the repository, what it has cost so far and what it skipped.
 pub(crate) struct Reading<'repo> {
     repo: &'repo gix::Repository,
+    /// The repository's objects as git reads them, through its substitutions: what a stash's
+    /// base is read through.
+    objects: Grafted<'repo>,
     cost: RefsCost,
     unreadable: usize,
 }
@@ -261,6 +361,9 @@ impl Reading<'_> {
 
     fn kind(&mut self, id: gix::ObjectId) -> Option<gix::objs::Kind> {
         self.cost.objects_read += 1;
+        // The object as it is stored, not its replacement's: a replace ref naming an object
+        // the repository lacks would otherwise hide the ref, and a pushed `HEAD` would read as
+        // unpublished (git's own `for-each-ref` dies on it instead).
         match self.repo.try_find_header(id) {
             Ok(Some(header)) => Some(header.kind()),
             Ok(None) | Err(_) => None,

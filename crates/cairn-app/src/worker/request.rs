@@ -320,14 +320,16 @@ impl Retired {
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(Clone))]
 pub enum Request {
-    /// Starts a walk from every ref, abandoning any walk already open: from the refs snapshot
-    /// the last refresh read on the history thread, or — when none has been read, or the walk
-    /// from it fails because one of its commits has gone since — from one read now, which is
-    /// answered as [`Update::Refs`] in the history lane before the first page. Numbered in the
-    /// walk lane too: every page of the walk it opens is answered under that number, so the
-    /// pages of the walk it replaces are never drawn. With `lost`, Show Lost Commits: the walk
-    /// starts from every reflog entry of `HEAD` and each local branch too, and draws the
-    /// commits no ref reaches as lost.
+    /// Starts a walk from every ref on the history thread, abandoning any walk already open:
+    /// from the refs snapshot the last refresh read on the repository thread, or — when none
+    /// has been read, or the walk from it fails because one of its commits has gone since —
+    /// from one read now, which is answered as [`Update::Refs`] under the walk's number before
+    /// the first page. Numbered in the walk lane too: every page of the walk it opens is
+    /// answered under that number, so the pages of the walk it replaces are never drawn, and
+    /// its opening pass and first page run under it, so only the next open — never a find or a
+    /// stop asked meanwhile — supersedes them; the pass tells how far it has read as
+    /// [`Update::Reading`]. With `lost`, Show Lost Commits: the walk starts from every reflog
+    /// entry of `HEAD` and each local branch too, and draws the commits no ref reaches as lost.
     OpenHistory { rows: usize, lost: bool },
     /// The next `rows` rows; falls back to the cold cursor when no walk is open.
     MoreHistory { rows: usize },
@@ -335,8 +337,9 @@ pub enum Request {
     /// walk open forward `rows` at a time until a page holds it or the walk ends — every page
     /// answered as [`Update::Rows`], as a scroll's are, so the window keeps what scrolling
     /// there would and no more. History-lane work: the next press, scroll or stop supersedes
-    /// it, and it supersedes the page or find in flight. On the repository thread a page at a
-    /// time, so a filter or a refresh asked meanwhile is served between its pages.
+    /// it, and it supersedes the page or find in flight — never a walk still opening, whose
+    /// first page comes first. On the history thread a page at a time, so the next press,
+    /// scroll or stop is taken up between its pages.
     FindRow { target: Oid, rows: usize },
     /// Supersedes the find in flight and asks nothing: what a scroll of the list, a row
     /// chosen in it or a find answered by a page already loaded asks of the history lane.
@@ -375,7 +378,7 @@ pub enum Request {
     /// and nothing else — no page, no diff, no filter. Status is not superseded: a refresh
     /// leaves a running `git status` to finish, and every refresh asked while it runs is
     /// one follow-up status after it; only a close ends it. The refs are read on the
-    /// history thread and answered by [`Update::Refs`], saying whether the history must be
+    /// repository thread and answered by [`Update::Refs`], saying whether the history must be
     /// reopened; ahead/behind is counted for that snapshot, and status read, on the refresh
     /// thread ([`Update::AheadBehind`], [`Update::Status`]), so neither a page nor a diff
     /// queues behind a slow one. A failure is [`Update::RefreshFailed`].
@@ -572,6 +575,10 @@ pub enum Update {
     /// One page of rows, its text, authors, lane changes and snapshots beside them, for the
     /// window to append to its history (`cairn_model::History::append`).
     Rows { rows: RowsPage, complete: bool },
+    /// How many commits the walk being opened has read so far, answered under its number: told
+    /// once its opening pass has run 250 ms, then at most once per 100 ms, so the window draws
+    /// "Reading history… N commits" from it and keeps no timer of its own.
+    Reading { commits: usize },
     /// `message` is display text, already rendered from the engine's error.
     Failed { message: String },
     /// A worker died. Tied to no request, so never filtered out by epoch.
@@ -621,11 +628,11 @@ pub enum Update {
         text: String,
         asking: Option<String>,
     },
-    /// The refs as they stand, read on the history thread: by a refresh, in the refs lane,
+    /// The refs as they stand: read by a refresh on the repository thread, in the refs lane,
     /// with `reopen` saying whether what the history draws differs from the snapshot its walk
-    /// began from — so the window reopens it, and leaves
-    /// it alone otherwise; or by an open that read its own, in the history lane, with
-    /// `reopen` false, since the walk being opened is from this snapshot.
+    /// began from — so the window reopens it, and leaves it alone otherwise; or by an open that
+    /// read its own on the history thread, under the walk's number, with `reopen` false, since
+    /// the walk being opened is from this snapshot.
     Refs {
         snapshot: Arc<RefsSnapshot>,
         reopen: bool,
@@ -790,6 +797,7 @@ impl Update {
             Self::FilteredRefs { refs, rows, .. } => Some(Retired::sidebar(refs, Arc::new(rows))),
             Self::Superseded(retired) => Some(retired),
             Self::Rows { .. }
+            | Self::Reading { .. }
             | Self::RefreshFailed { .. }
             | Self::Failed { .. }
             | Self::WorkerLost { .. }
@@ -929,6 +937,7 @@ mod tests {
                         head: cairn_model::HeadState::Unborn(RefName::new("refs/heads/main")),
                         stashes: Vec::new(),
                         unreadable: 0,
+                        substitutions: cairn_model::Substitutions::default(),
                     }),
                     text: "main".to_owned(),
                     disclosure: Arc::new(Disclosure::default()),

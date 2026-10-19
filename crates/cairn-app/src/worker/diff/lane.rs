@@ -781,14 +781,15 @@ mod tests {
     }
 
     /// What each tier's move lets go, as the stamp design pins it. A moved global
-    /// attribute file drops the session and every answer and keeps the handle; a moved
+    /// attribute file, and a graft written, drop the session and every answer and keep the
+    /// handle; a moved
     /// configuration drops them and asks for the handle to be opened again; a stat-only
     /// rewrite of the index — what `git update-index --refresh` does — drops nothing.
     /// Over a fixture of this checkout's objects, with real files and the real
     /// `Freshness`, each query started past the settling time so every stamp is trusted.
     /// Caught by: a renewal that keeps the session (gix's stack holds `info/attributes`
-    /// for its life), one that keeps the answers, keying the index on its file, or a
-    /// moved configuration answered on the old handle.
+    /// for its life), one that keeps the answers, keying the index on its file, answers kept
+    /// across what git substitutes, or a moved configuration answered on the old handle.
     #[test]
     fn each_tier_lets_go_of_what_its_move_makes_stale() {
         let fixture = BorrowedRepository::new(&format!("cairn-diff-tiers-{}", std::process::id()));
@@ -844,6 +845,19 @@ mod tests {
             (false, 0),
             "an info/attributes edit kept the session or answers"
         );
+
+        // What git substitutes moved: `HEAD` grafted as a root, which changes what it changed.
+        fill(&mut kept, &repo);
+        std::fs::write(dot.join("info/grafts"), format!("{head}\n")).unwrap();
+        assert!(!kept.renew(freshness.check(&repo, &inputs, past()).moved));
+        assert_eq!(
+            held(&kept),
+            (false, 0),
+            "a graft written kept the session or answers"
+        );
+        fill(&mut kept, &repo);
+        assert!(!kept.renew(freshness.check(&repo, &inputs, past()).moved));
+        assert_eq!(held(&kept), (true, 1), "an unchanged graft let go again");
 
         fill(&mut kept, &repo);
         let mut config = std::fs::read_to_string(dot.join("config")).unwrap();

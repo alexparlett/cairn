@@ -30,9 +30,11 @@ page of it runs on the thread that owns the handle. History has its thread; diff
 queues a diff behind it, and nothing else runs on the history thread: an open
 that reads the whole history first, on a repository without a commit-graph,
 never holds up anything but the history. The repository thread reads the refs
-snapshot, keeps the one the history was opened from, and asks the history thread
-to reopen when a refresh finds the refs moved — a reopen that supersedes a pass
-still running — and answers the filters, the sidebar's rows and the freeing of
+snapshot, keeps the one the history was opened from, and says to reopen when a
+refresh finds the refs moved; the window, which alone asks the history lane for
+anything, asks the history thread for the reopen, which supersedes a pass still
+running — a find or its stop never does — while the old rows stay drawn. The
+repository thread also answers the filters, the sidebar's rows and the freeing of
 old answers. Status — a `git` read that rehashes every stat-dirty file — and
 ahead/behind — two walks a branch, as long as the branch has diverged — run on a
 refresh thread, so neither a page nor a diff queues behind a refresh.
@@ -91,7 +93,8 @@ git never waits on, is written only from the local lane. Reads run beside both:
 gix takes no lock, and a `git` read runs with optional locks off.
 
 The local lane is a thread of its own, which a request reaches directly rather
-than through the repository thread, where a stage would wait behind a deep find.
+than through another thread, where a stage would wait behind that thread's work — a
+refresh's refs, a filter.
 Its writes run first in, first out. A write asked while another runs is queued,
 drawn as queued where the user acted, and never refused for being second, so a run
 of stage presses lands in the order pressed. A queued patch is checked against the

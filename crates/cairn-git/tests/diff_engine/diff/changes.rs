@@ -14,7 +14,7 @@ use super::{git, ok, since, some};
 /// One changed path, spelled the way `git diff-tree --raw` spells one, so both sides of
 /// the comparison are the same shape.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Row {
+pub(super) struct Row {
     old_mode: String,
     new_mode: String,
     old_id: String,
@@ -45,7 +45,7 @@ fn git_rows(repo: &Repo, flags: &[&str], revs: &[&str]) -> Vec<Row> {
 /// from the 2.30 floor reads that way; `--diff-merges=first-parent` would say the same
 /// from git 2.31 only (both checked against 2.30, 2.32 and 2.56, on a merge, under
 /// `log.diffMerges=separate` too).
-fn shown(repo: &Repo, commit: &str) -> (Vec<Row>, String) {
+pub(super) fn shown(repo: &Repo, commit: &str) -> (Vec<Row>, String) {
     let (status, stdout, stderr) = repo.run(
         &[
             "log",
@@ -112,7 +112,7 @@ fn rows_of(out: &str) -> Vec<Row> {
     rows
 }
 
-fn cairn_rows(files: &[ChangedFile], width: usize) -> Vec<Row> {
+pub(super) fn cairn_rows(files: &[ChangedFile], width: usize) -> Vec<Row> {
     let mut rows: Vec<Row> = files
         .iter()
         .map(|file| Row {

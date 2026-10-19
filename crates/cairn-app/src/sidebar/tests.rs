@@ -118,6 +118,7 @@ fn snapshot() -> Arc<RefsSnapshot> {
             base: oid(951),
         }],
         unreadable: 0,
+        substitutions: cairn_model::Substitutions::default(),
     })
 }
 

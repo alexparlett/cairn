@@ -2,14 +2,14 @@
 //!
 //! | Lane or request | Thread |
 //! | --- | --- |
-//! | history (`OpenHistory`, `MoreHistory`, `FindRow`, `StopFinding`) | `cairn-repository`, which owns the live walk |
+//! | history (`OpenHistory`, `MoreHistory`, `FindRow`, `StopFinding`) | `cairn-history`, which owns the live walk and runs nothing else, so an opening pass that reads the whole history holds up nothing but the history |
 //! | changes (`Changes`) | `cairn-diff` |
 //! | file diff (`FileDiff`, `Expand`) | `cairn-diff` |
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | file filter (`FilterFiles`) | `cairn-repository`, whose pages are bounded, so a keystroke never waits behind a diff |
-//! | refs (`Refresh`'s first read) | `cairn-repository`, which reopens the walk from them |
+//! | refs (`Refresh`'s first read) | `cairn-repository`, which compares them with the snapshot the walk began from and says whether to reopen it; the window asks the reopen of `cairn-history` |
 //! | ahead/behind and status (`Refresh`'s other two) | `cairn-refresh`, so neither a page nor a diff queues behind a slow status or a long divergence; ahead/behind is forwarded there by the repository thread once the refs it counts are read |
 //! | ref filter (`FilterRefs`) | `cairn-repository`, as the file filter |
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
@@ -26,11 +26,12 @@
 //! serve. [`thread_of`] states the lanes' half of it as decided, and a test holds `route`
 //! to it.
 //!
-//! The live walk borrows the repository thread's handle across turns and is not `Send`,
-//! so the history lane stays there; diffs have a thread of their own, so a long page never
-//! queues a diff behind it and a diff never queues a page. Routing happens as a request is
-//! submitted, on the caller's thread, so neither thread forwards the other's work: a diff
-//! asked while a page is walked reaches the diff thread at once.
+//! The live walk borrows the history thread's handle across turns and is not `Send`, so the
+//! history lane stays there; the repository thread keeps the refs, the filters and the freeing
+//! of old answers, so none of them waits behind an open; diffs have a thread of their own, so
+//! a long page never queues a diff behind it and a diff never queues a page. Routing happens as
+//! a request is submitted, on the caller's thread, so no thread forwards another's work: a
+//! diff or a filter asked while a page is walked reaches its thread at once.
 
 #[cfg(test)]
 use super::epoch::QueryLane;
@@ -47,8 +48,10 @@ use super::request::{Comparison, DiffQuery, FileQuery, Request, Retired};
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Thread {
-    /// `cairn-repository`: the history walk, the operations' front door, and the close.
+    /// `cairn-repository`: the refs, the filters, the operations' front door, and the close.
     Repository,
+    /// `cairn-history`: the history walk, its pages and its finds.
+    History,
     /// `cairn-diff`: the changes and file-diff lanes, commits and working tree alike.
     Diff,
     /// `cairn-refresh`: status and ahead/behind.
@@ -61,9 +64,8 @@ pub(super) enum Thread {
 #[cfg(test)]
 pub(super) const fn thread_of(lane: QueryLane) -> Thread {
     match lane {
-        QueryLane::History
-        | QueryLane::Walk
-        | QueryLane::FileFilter
+        QueryLane::History | QueryLane::Walk => Thread::History,
+        QueryLane::FileFilter
         | QueryLane::Refs
         | QueryLane::RefFilter
         | QueryLane::LocalChangesFilter => Thread::Repository,
@@ -96,10 +98,18 @@ pub(super) enum Page {
     Stop,
 }
 
+/// What the history thread is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum HistoryJob {
+    /// A page of the history lane, under its number there.
+    Page { epoch: Epoch, page: Page },
+    /// The repository is closing, or every handle to it has gone: serve nothing more.
+    Stop,
+}
+
 /// What the repository thread is sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RepositoryJob {
-    History(Page),
     ListRemotes,
     Fetch {
         remote: String,
@@ -136,6 +146,9 @@ pub(super) enum RepositoryJob {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Routed {
     Repository(RepositoryJob),
+    /// A page, a find or a stop of the history lane, to the history thread under the history
+    /// lane's number `submit` gave it.
+    History(Page),
     Diff(DiffQuery),
     /// `diff.context`, read on the diff thread — the one whose handle follows the
     /// configuration — now and again whenever that handle is opened afresh. Not a query:
@@ -146,7 +159,7 @@ pub(super) enum Routed {
     /// A refresh: its refs to the repository thread ([`RepositoryJob::Refs`]), its status to
     /// the refresh thread — each numbered by `submit`, which alone holds the epochs.
     Refresh,
-    /// A new walk, to the repository thread as [`Page::Open`] with the walk lane's number
+    /// A new walk, to the history thread as [`Page::Open`] with the walk lane's number
     /// `submit` gave it.
     OpenHistory {
         rows: usize,
@@ -206,7 +219,8 @@ impl Routed {
     /// The thread this is served on; `None` for what no thread queues.
     pub(super) fn thread(&self) -> Option<Thread> {
         match self {
-            Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
+            Self::Repository(_) => Some(Thread::Repository),
+            Self::History(_) | Self::OpenHistory { .. } => Some(Thread::History),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
             // `StopCounting` queues nowhere, but what it supersedes is the local lane's.
             Self::Write { .. }
@@ -242,13 +256,9 @@ impl Routed {
 pub(super) fn route(request: Request) -> Routed {
     match request {
         Request::OpenHistory { rows, lost } => Routed::OpenHistory { rows, lost },
-        Request::MoreHistory { rows } => {
-            Routed::Repository(RepositoryJob::History(Page::More { rows }))
-        }
-        Request::FindRow { target, rows } => {
-            Routed::Repository(RepositoryJob::History(Page::Find { target, rows }))
-        }
-        Request::StopFinding => Routed::Repository(RepositoryJob::History(Page::Stop)),
+        Request::MoreHistory { rows } => Routed::History(Page::More { rows }),
+        Request::FindRow { target, rows } => Routed::History(Page::Find { target, rows }),
+        Request::StopFinding => Routed::History(Page::Stop),
         Request::Changes { of } => Routed::Diff(DiffQuery::Changes(of)),
         Request::FileDiff(FileQuery { target, options }) => {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
@@ -309,15 +319,12 @@ pub(super) fn route(request: Request) -> Routed {
 #[cfg(test)]
 pub(super) fn unroute(routed: Routed) -> Request {
     match routed {
-        Routed::Repository(RepositoryJob::History(Page::Open { rows, lost, .. }))
-        | Routed::OpenHistory { rows, lost } => Request::OpenHistory { rows, lost },
-        Routed::Repository(RepositoryJob::History(Page::More { rows })) => {
-            Request::MoreHistory { rows }
+        Routed::History(Page::Open { rows, lost, .. }) | Routed::OpenHistory { rows, lost } => {
+            Request::OpenHistory { rows, lost }
         }
-        Routed::Repository(RepositoryJob::History(Page::Find { target, rows })) => {
-            Request::FindRow { target, rows }
-        }
-        Routed::Repository(RepositoryJob::History(Page::Stop)) => Request::StopFinding,
+        Routed::History(Page::More { rows }) => Request::MoreHistory { rows },
+        Routed::History(Page::Find { target, rows }) => Request::FindRow { target, rows },
+        Routed::History(Page::Stop) => Request::StopFinding,
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
@@ -438,6 +445,7 @@ mod tests {
                     )),
                     stashes: Vec::new(),
                     unreadable: 0,
+                    substitutions: cairn_model::Substitutions::default(),
                 }),
                 text: "main".to_owned(),
                 disclosure: Arc::new(cairn_model::Disclosure::default()),
@@ -487,16 +495,18 @@ mod tests {
     }
 
     /// Every query is served on the thread its lane is routed to, and the lanes are routed as
-    /// [`thread_of`] states — the history and the refs on the thread that owns the walk, the
-    /// changes and file-diff lanes on the diff thread, status and ahead/behind on the refresh
-    /// thread. Caught by: a diff routed to the repository
-    /// thread (it queues behind a page), a status routed to the repository or diff thread (a
-    /// page or a diff queues behind it), the table changed without the routing, or the
-    /// routing without the table.
+    /// [`thread_of`] states — the history on the thread that owns the walk and runs nothing
+    /// else, the refs and the filters on the repository thread, the changes and file-diff lanes
+    /// on the diff thread, status and ahead/behind on the refresh thread. Caught by: a page
+    /// routed to the repository thread (a filter, a refresh's refs and a free queue behind an
+    /// opening pass), a filter routed to the history thread (the same), a diff routed to the
+    /// repository thread (it queues behind a filter), a status routed to the repository or diff
+    /// thread (a filter or a diff queues behind it), the table changed without the routing, or
+    /// the routing without the table.
     #[test]
     fn every_query_is_served_on_the_thread_its_lane_is_routed_to() {
-        assert_eq!(thread_of(QueryLane::History), Thread::Repository);
-        assert_eq!(thread_of(QueryLane::Walk), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::History), Thread::History);
+        assert_eq!(thread_of(QueryLane::Walk), Thread::History);
         assert_eq!(thread_of(QueryLane::Changes), Thread::Diff);
         assert_eq!(thread_of(QueryLane::FileDiff), Thread::Diff);
         assert_eq!(thread_of(QueryLane::FileFilter), Thread::Repository);
@@ -552,8 +562,13 @@ mod tests {
                 None if request == Request::ConfiguredContext => {
                     assert_eq!(routed.thread(), Some(Thread::Diff));
                 }
-                // Any other operation: the repository thread's, or the fetch control's.
-                None => assert_ne!(routed.thread(), Some(Thread::Diff), "{request:?}"),
+                // Any other operation: the repository thread's, the local lane's or the fetch
+                // control's — never the diff thread's, and never the history thread's, which
+                // runs the history alone.
+                None => {
+                    assert_ne!(routed.thread(), Some(Thread::Diff), "{request:?}");
+                    assert_ne!(routed.thread(), Some(Thread::History), "{request:?}");
+                }
             }
         }
     }

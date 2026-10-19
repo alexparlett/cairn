@@ -12,11 +12,15 @@
 #[path = "support/fixtures.rs"]
 mod fixtures;
 
+#[path = "support/date_order_oracle.rs"]
+mod date_order_oracle;
+
 use std::collections::BTreeSet;
 
 use cairn_git::{CancelSignal, HistoryRequest, Repository};
 use cairn_model::{History, RowContent, RowId};
 
+use date_order_oracle::{git_date_order, stash_tips};
 use fixtures::Fixture;
 
 fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
@@ -382,11 +386,12 @@ fn show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_
     );
 }
 
-/// A parent dated newer than its child, which a ref reaches only through that child, comes
-/// off the walk first, through a lost commit: it is taken for lost, and once the child comes
-/// off it is reached after all — so it is drawn as any other row however the pages and the
-/// window fall, as git's own answer says. Caught by: a row carried as lost never corrected,
-/// or a correction applied to the wrong row.
+/// A parent dated newer than its child, which a ref reaches only through that child, and a
+/// lost commit newer than both on it: the walk, in git's date order, still yields the child
+/// before the parent, so the parent's row is laid out knowing a ref reaches it, and is drawn
+/// as any other however the pages and the window fall, as git's own answer says, every row
+/// where git's date order puts it. Caught by: a walk newest committed first, which meets the
+/// parent through the lost commit before its reached child and draws it lost.
 #[test]
 fn a_parent_dated_after_its_reached_child_is_not_drawn_as_lost() {
     let fixture = fixtures::unborn();
@@ -443,17 +448,25 @@ fn a_parent_dated_after_its_reached_child_is_not_drawn_as_lost() {
     assert!(expected_all.contains(&skewed));
     assert_every_route_draws(&fixture, &expected_all, &expected_lost);
 
-    // The skew is real: the walk takes `skewed` before `child`.
+    // The skew is real — `skewed` is dated after `child` — and the walk takes `child` first.
+    let date = |id: &str| fixture.git(&["log", "-1", "--format=%ct", id]);
+    assert!(date(&skewed) > date(&child), "the fixture is not skewed");
     let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
     let rows = held(&repo, &request(&repo, 64, 1024), 64);
     let at = |id: &str| {
         rows.rows()
             .position(|row| matches!(row.id(), RowId::Commit(commit) if commit.to_string() == id))
     };
-    assert!(
-        at(&skewed) < at(&child),
-        "the fixture's parent comes off first"
-    );
+    assert!(at(&child) < at(&skewed), "the parent came off first");
+    let reflogs: Vec<String> = ids.iter().cloned().collect();
+    let order: Vec<String> = rows
+        .rows()
+        .map(|row| match row.id() {
+            RowId::Commit(id) | RowId::Stash(id) => id.to_string(),
+        })
+        .collect();
+    let path = fixture.path();
+    assert_eq!(order, git_date_order(path, &stash_tips(path), &reflogs));
 }
 
 /// Every row's identity, lane and edges, as the list draws them.

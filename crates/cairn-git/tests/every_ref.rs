@@ -6,13 +6,19 @@
 #[path = "support/fixtures.rs"]
 mod fixtures;
 
+#[path = "support/date_order_oracle.rs"]
+mod date_order_oracle;
+
 use std::collections::{BTreeSet, HashMap};
 
 use std::cell::Cell;
 
 use cairn_git::{Cancel, CancelSignal, Error, HistoryOrder, HistoryRequest, Repository};
-use cairn_model::{EdgeKind, History, HistoryRow, Lane, RefKind, RowContent, RowId, StashSummary};
+use cairn_model::{
+    EdgeKind, History, HistoryRow, Lane, Oid, RefKind, RowContent, RowId, StashSummary,
+};
 
+use date_order_oracle::{git_date_order, stash_tips};
 use fixtures::Fixture;
 
 fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
@@ -512,9 +518,10 @@ fn every_rows_labels_are_what_git_log_decorates_it_with() {
 
 /// Each stash whose base is walked is one row — its index, base, message, author and date git's
 /// — with one line, leaving its node down its own lane and ending at its base; two stashes on
-/// one commit take a lane each; a stash dated older than its base is directly above it; the
-/// others sit at their dates. Caught by: a stash's row laid out as a commit's (lines joined, or
-/// to every parent), placed after its base, or placed by its base alone and never by its date.
+/// one commit take a lane each; a stash dated older than its base is still above it; and every
+/// row is where git's date order, each stash a tip on its base, puts it. Caught by: a stash's
+/// row laid out as a commit's (lines joined, or to every parent), placed after its base, or
+/// placed otherwise than git's walk places it.
 #[test]
 fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
     let it = everything();
@@ -589,26 +596,10 @@ fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
 
         if listed.id == it.skewed_stash {
             assert!(listed.committed < dates[base], "the skew decides nothing");
-            assert_eq!(
-                at + 1,
-                base_at,
-                "the skewed stash is not directly above its base"
-            );
-        } else {
-            // At its date: every commit above it newer, every commit below it older.
-            for row in rows.rows() {
-                let RowId::Commit(id) = row.id() else {
-                    continue;
-                };
-                let date = dates[&id.to_string()];
-                if row.index() < at {
-                    assert!(date >= listed.committed, "{id} is newer yet below");
-                } else {
-                    assert!(date <= listed.committed, "{id} is older yet above");
-                }
-            }
         }
     }
+    let path = it.fixture.path();
+    assert_eq!(row_ids(&rows), git_date_order(path, &stash_tips(path), &[]));
 
     // The two stashes on main's tip: a lane each, both ending there.
     let (plain, untracked) = (stashes[&it.plain_stash], stashes[&it.untracked_stash]);
@@ -685,54 +676,27 @@ fn deep_stash() -> (Fixture, String) {
     (fixture, base)
 }
 
-/// A deep base: the base is the `AFTER + 1`th commit the walk yields. Looking ahead that far,
-/// the stash's row is at its date; one commit less, directly above its base — never after it,
-/// and never missing — on the held route and on the cold one, whose cursor carries the
-/// look-ahead. Caught by: a stash whose base was not found within the look-ahead dropped or
-/// drawn below its base, the look-ahead bound off by one, or a resumed cold page looking ahead
-/// the default distance.
+/// A deep base, `AFTER` commits below `main`'s tip, under a stash newer than everything: the
+/// stash is a tip of git's walk, so its row is the first, however deep its base — on the held
+/// route and on the cold one, each page a fresh walk from its cursor — and every row is where
+/// git puts it. Caught by: a stash placed by looking for its base only so far ahead, which
+/// drops it to directly above its base, or a cold page that walks the stashes otherwise.
 #[test]
-fn a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base() {
+fn a_stash_on_a_deep_base_is_where_git_puts_it() {
     let (fixture, base) = deep_stash();
     let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
-    let reach = AFTER + 1;
-
+    let expected = git_date_order(fixture.path(), &stash_tips(fixture.path()), &[]);
     let place = |rows: &History| -> (usize, usize) {
         let (commits, stashes) = index(rows);
         assert_eq!(stashes.len(), 1, "the deep stash has no row");
         assert_eq!(rows.len(), AFTER + 2);
+        assert_eq!(row_ids(rows), expected);
         (stashes.values().copied().sum(), commits[&base])
     };
-    let held = |lookahead: usize| {
-        let request = snapshot_request(&repo, 4).with_stash_lookahead(lookahead);
-        place(&page_all(&repo, &request, 4))
-    };
-    let cold = |lookahead: usize| {
-        let request = snapshot_request(&repo, 4).with_stash_lookahead(lookahead);
-        place(&cold_all(&repo, request, 4))
-    };
-    assert_eq!(
-        held(64),
-        (0, reach),
-        "looking far enough, it is at its date"
-    );
-    assert_eq!(
-        held(reach),
-        (0, reach),
-        "looking exactly as far, it is at its date"
-    );
-    assert_eq!(
-        held(reach - 1),
-        (AFTER, reach),
-        "looking a commit less far, it is directly above its base"
-    );
-    assert_eq!(held(3), (AFTER, reach));
-    assert_eq!(
-        cold(3),
-        (AFTER, reach),
-        "the cold route looked ahead further"
-    );
-    assert_eq!(cold(reach), (0, reach));
+    let held = place(&page_all(&repo, &snapshot_request(&repo, 4), 4));
+    assert_eq!(held, (0, AFTER + 1), "held pages");
+    let cold = place(&cold_all(&repo, snapshot_request(&repo, 4), 4));
+    assert_eq!(cold, (0, AFTER + 1), "cold pages");
 }
 
 /// A detached `HEAD` at a commit no ref reaches seeds the walk and labels its row `HEAD`,
@@ -761,8 +725,9 @@ fn a_detached_head_no_ref_reaches_is_walked_and_labelled() {
 }
 
 /// A stash commit a branch reaches is a commit's row, labelled by the branch, and no
-/// stash's; its index commit is a commit's row too, as git walks it. Caught by: the
-/// stash's row drawn as well, the commit then having two rows.
+/// stash's; its index commit is a commit's row too, as git walks it — in date order, whose
+/// walk decides the stash, and in commit-time and graph order, whose stream does. Caught by:
+/// the stash's row drawn as well, the commit then having two rows.
 #[test]
 fn a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs() {
     let fixture = fixtures::unborn();
@@ -777,17 +742,25 @@ fn a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs() {
     let stash = rev_parse(&fixture, "stash@{0}");
     fixture.git(&["branch", "keep", &stash]);
     let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
-    let rows = page_all(&repo, &snapshot_request(&repo, 2), 2);
-    let (commits, stashes) = index(&rows);
-    assert!(
-        stashes.is_empty(),
-        "the reached stash also drew a stash's row"
-    );
-    assert_eq!(
-        commits.keys().cloned().collect::<BTreeSet<_>>(),
-        rev_list(&fixture)
-    );
-    assert!(commits.contains_key(&stash));
+    for order in [
+        HistoryOrder::DateOrder,
+        HistoryOrder::CommitTime,
+        HistoryOrder::GraphOrder,
+    ] {
+        let request = snapshot_request(&repo, 2).with_order(order);
+        let rows = page_all(&repo, &request, 2);
+        let (commits, stashes) = index(&rows);
+        assert!(
+            stashes.is_empty(),
+            "{order:?}: the reached stash also drew a stash's row"
+        );
+        assert_eq!(
+            commits.keys().cloned().collect::<BTreeSet<_>>(),
+            rev_list(&fixture),
+            "{order:?}"
+        );
+        assert!(commits.contains_key(&stash), "{order:?}");
+    }
 }
 
 /// A braided history of merges, two branches and no stash: from every ref, git's commits
@@ -913,12 +886,12 @@ fn row_ids(rows: &History) -> Vec<String> {
 }
 
 /// A branch commit on top of a stash commit, dated older than the stash but newer than its
-/// base, so the walk's first commit is that branch commit and looking ahead for the stash's
-/// base meets the stash commit itself first. The stash commit is a commit's row and no stash's,
-/// and the walk is git's `rev-list --date-order`. Caught by: the look-ahead not noticing the
-/// stash commit, which draws it twice.
+/// base, so the branch reaches the stash commit only through a commit older than it. The stash
+/// commit is a commit's row and no stash's, and the walk is git's `rev-list --date-order`.
+/// Caught by: the walk seeding the stash as a tip on its base though a ref reaches its commit,
+/// which draws it twice.
 #[test]
-fn a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs() {
+fn a_stash_commit_under_an_older_branch_commit_is_a_commits_row_and_no_stashs() {
     let fixture = fixtures::unborn();
     commit(&fixture, &mut Clock(fixtures::EPOCH), "f", "base\n", "base");
     write(&fixture, "f", "wip\n");
@@ -960,12 +933,12 @@ fn a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs() {
     assert_eq!(row_ids(&rows), expected);
 }
 
-/// Stash rows in their own date order. An older stash on the walk's first commit and a newer
-/// one on an older branch's tip: the newer is drawn first, as `git log --date-order` over the
-/// refs and the stash commits orders them — and over the fixture with every kind of stash too;
-/// and a stash dated the same second as its index commit is above it. Caught by: a stash going
-/// directly above its base before a newer stash whose date has come, or a commit going first on
-/// a tie.
+/// Stash rows where git's date order puts them, each stash a tip on its base after `HEAD`'s: an
+/// older stash on the walk's first commit and a newer one on an older branch's tip, the newer
+/// drawn first — and over the fixture with every kind of stash too, where a stash shares its
+/// second with the index commit a branch names, and the tie goes to the branch's commit, given
+/// first. Caught by: a stash going directly above its base before a newer stash, or a tie
+/// broken otherwise than in the order git is given its tips.
 #[test]
 fn stash_rows_are_in_gits_date_order() {
     let fixture = fixtures::unborn();
@@ -993,32 +966,18 @@ fn stash_rows_are_in_gits_date_order() {
         let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
         let rows = page_all(&repo, &snapshot_request(&repo, 3), 3);
         let (_, stashes) = index(&rows);
-        let drawn: Vec<String> = row_ids(&rows)
-            .into_iter()
-            .filter(|id| stashes.contains_key(id))
-            .collect();
-        assert!(drawn.len() >= 2, "the fixture decides nothing");
-        let mut args = vec![
-            "log",
-            "--date-order",
-            "--format=%H",
-            "--branches",
-            "--remotes",
-            "--tags",
-            "HEAD",
-        ];
-        args.extend(drawn.iter().map(String::as_str));
-        let expected: Vec<String> = fixture
-            .git(&args)
-            .lines()
-            .filter(|id| stashes.contains_key(*id))
-            .map(str::to_owned)
-            .collect();
-        assert_eq!(drawn, expected);
+        assert!(stashes.len() >= 2, "the fixture decides nothing");
+        let path = fixture.path();
+        assert_eq!(row_ids(&rows), git_date_order(path, &stash_tips(path), &[]));
     }
+    let (newer, older) = (
+        rev_parse(&fixture, "stash@{0}"),
+        rev_parse(&fixture, "stash@{1}"),
+    );
+    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let (_, stashes) = index(&page_all(&repo, &snapshot_request(&repo, 3), 3));
+    assert!(stashes[&newer] < stashes[&older], "the older stash first");
 
-    // A stash and the index commit it was made with share a second; git's date order puts
-    // the stash above it, its child, and so does the stream.
     let repo = ok(
         Repository::discover(it.fixture.path()),
         "opening the fixture",
@@ -1028,16 +987,18 @@ fn stash_rows_are_in_gits_date_order() {
     let shown = |id: &str| it.fixture.git(&["log", "-1", "--format=%ct", id]);
     assert_eq!(shown(&it.untracked_stash), shown(&it.untracked_index));
     assert!(
-        stashes[&it.untracked_stash] < commits[&it.untracked_index],
-        "the stash is below the index commit it was made with"
+        commits[&it.untracked_index] < stashes[&it.untracked_stash],
+        "the stash went before the branch's commit it ties with"
     );
 }
 
-/// A page cancelled while it looks ahead for a stash's base stops there, having laid nothing
-/// out, and the session then pages the same rows as one never cancelled. Caught by: the
-/// look-ahead not polling the cancel.
+/// A page cancelled while the walk opens stops having laid nothing out and kept nothing; asked
+/// again, the walk opens, and a page cancelled at its first poll after that keeps the open walk
+/// and lays nothing out; the session then pages the same rows as one never cancelled. Caught
+/// by: an opening pass that does not poll the cancel, or a cancelled page that drops the walk
+/// it opened.
 #[test]
-fn a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows() {
+fn a_page_cancelled_while_or_after_the_walk_opens_resumes_to_the_same_rows() {
     let (fixture, _) = deep_stash();
     let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
     let expected = described(&page_all(&repo, &snapshot_request(&repo, 4), 4));
@@ -1046,24 +1007,26 @@ fn a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows() {
         repo.history_session(&snapshot_request(&repo, 4)),
         "opening the session",
     );
+    let opening = StopAfter::new(2);
+    match session.next_page(4, &opening) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+    assert_eq!(opening.polls.get(), 3, "the open kept polling");
+    assert_eq!(session.commits_walked(), 0, "the walk opened");
     // Opens the walk, laying nothing out.
     ok(
         session.next_page(0, &CancelSignal::new()),
         "opening the walk",
     );
-    // The page's own poll passes; the look-ahead's first is cancelled.
-    let cancel = StopAfter::new(1);
+    let cancel = StopAfter::new(0);
     match session.next_page(4, &cancel) {
         Err(Error::Cancelled { walked }) => {
             assert_eq!(walked, 0, "the page laid out rows past its cancel");
         }
         other => panic!("expected a cancellation, got {other:?}"),
     }
-    assert!(
-        session.commits_walked() < AFTER,
-        "looked ahead {} commits past the cancel",
-        session.commits_walked()
-    );
+    assert_eq!(cancel.polls.get(), 1, "the page opened the walk again");
     let mut rows = History::new();
     loop {
         let page = ok(session.next_page(4, &CancelSignal::new()), "resuming");
@@ -1075,11 +1038,12 @@ fn a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows() {
     assert_eq!(described(&rows), expected);
 }
 
-/// Looking ahead for a deleted branch's stash stops once the walk passes its base's date: the
-/// first page pulls the commits newer than the base and one more, not the whole history. Caught
-/// by: the early stop dropped, which looks ahead to the walk's end.
+/// A deleted branch's stash, the newest thing in the repository on a base no ref reaches: the
+/// first page pulls off the walk only the rows it lays out, looking ahead for nothing, and the
+/// stash has no row. Caught by: a stash placed by pulling commits ahead to find its base, or a
+/// stash on a base no ref reaches drawn.
 #[test]
-fn looking_ahead_stops_once_the_walk_passes_the_bases_date() {
+fn a_deleted_branchs_stash_pulls_nothing_ahead_and_has_no_row() {
     let fixture = fixtures::unborn();
     let mut clock = Clock(fixtures::EPOCH);
     for n in 0..5 {
@@ -1119,8 +1083,13 @@ fn looking_ahead_stops_once_the_walk_passes_the_bases_date() {
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
         session.commits_walked(),
-        newer + 1,
-        "the look-ahead did not stop at the first commit older than the base"
+        page.walked,
+        "the first page pulled commits it did not lay out"
+    );
+    assert!(
+        page.walked <= 2,
+        "a page of one row laid out {}",
+        page.walked
     );
     let rows = page_all(&repo, &snapshot_request(&repo, 4), 4);
     assert!(
@@ -1225,11 +1194,12 @@ fn a_stash_commit_filed_twice_is_one_row_its_newest_entrys() {
     assert_eq!(unique.len(), ids.len(), "two rows share one identity");
 }
 
-/// Opening a walk from every ref reads each tip, and polls the cancel before each but the
-/// first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops having read
-/// six tips and laid nothing out, and a session cancelled there pages, once asked again, the
-/// rows one never cancelled does. Caught by: the open reading every tip without a poll
-/// (gitoxide's own `sorting`), which lays rows out before the cancel lands.
+/// Opening a walk from every ref reads each tip, and polls the cancel before each, on both
+/// routes: cancelled at its sixth poll, a walk from fifty tags stops having read five tips and
+/// laid nothing out, and a session cancelled there pages, once asked again, the rows one never
+/// cancelled does. Given five tags' commits and then an id naming nothing, the cancel at the
+/// sixth poll lands before the missing tip is read, which would fail the walk. Caught by: the
+/// open reading every tip without a poll between them.
 #[test]
 fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
     let fixture = fixtures::unborn();
@@ -1254,6 +1224,21 @@ fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
         other => panic!("expected a cancellation, got {other:?}"),
     }
     assert_eq!(cancel.polls.get(), stop_at + 1, "the open kept polling");
+
+    let mut tips: Vec<Oid> = (0..stop_at)
+        .map(|n| ok(Oid::parse(&rev_parse(&fixture, &format!("t{n}"))), "an id"))
+        .collect();
+    tips.push(ok(Oid::parse(&"0123456789abcdef".repeat(3)[..40]), "an id"));
+    let request = HistoryRequest::from_commits(tips, 10);
+    let cancel = StopAfter::new(stop_at);
+    match repo.history(&request, &cancel) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation before the missing tip, got {other:?}"),
+    }
+    match repo.history(&request, &CancelSignal::new()) {
+        Err(Error::Walk { .. }) => {}
+        other => panic!("expected the missing tip to fail the walk, got {other:?}"),
+    }
 
     let already = CancelSignal::new();
     already.cancel();
@@ -1290,9 +1275,9 @@ fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
 
 /// The first page: on the repository `CAIRN_BENCH_REPO` names (read only), the first page of 64
 /// rows from `HEAD` and from every ref — the snapshot already read, and with its read — warm,
-/// median of seven after a warm-up, each run a fresh open of the repository. It prints how many
-/// commits each first page pulled off the walk, look-ahead for a stash's base included, and how
-/// many stashes it drew. Run with `cargo test --release -p cairn-git --test every_ref --
+/// median of seven after a warm-up, each run a fresh open of the repository, its opening pass
+/// included. It prints how many commits each first page pulled off the walk, and how many
+/// stashes it drew. Run with `cargo test --release -p cairn-git --test every_ref --
 /// --ignored --nocapture`.
 #[test]
 #[ignore = "needs a repository named by CAIRN_BENCH_REPO; run with --release"]

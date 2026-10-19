@@ -53,15 +53,33 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         } => {
             // Count before handing the rows over; afterwards it rereads the whole history.
             let widest = state::widest_lane(&page);
-            let (loaded, held) = {
+            // The first page of a walk replacing the rows held: it replaces them, in a history
+            // sized for the authors they named, so its first pages do not rehash their way back
+            // up; they go to a worker to free (#52).
+            let reopened = progress.peek().is_reopening();
+            let (loaded, held, replaced) = {
                 let mut history = rows.write();
+                let replaced = reopened.then(|| {
+                    let sized = cairn_model::History::with_author_capacity(history.author_count());
+                    std::mem::replace(&mut *history, sized)
+                });
                 let held = history.append(page);
-                (history.len(), held)
+                (history.len(), held, replaced)
             };
+            if reopened {
+                progress.set(Progress::opening());
+            }
             progress.write().appended(widest, complete, loaded, held);
+            if let Some(replaced) = replaced
+                && !worker.closing
+            {
+                (worker.submit)(Request::Retire(Retired::history(replaced)));
+            }
             // A find in the sidebar looks through the rows that arrived.
             crate::history::ref_find::pages_arrived(view, Some(worker.submit));
         }
+        // How far the walk being opened has read: drawn as "Reading history… N commits".
+        Update::Reading { commits } => progress.write().reading(commits),
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
             crate::history::ref_find::failed(view);
@@ -255,15 +273,24 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if !worker.closing {
                 (worker.submit)(asked);
             }
+            // What git substitutes as it reads a commit changed: the chosen commit's details and
+            // changes are asked again, as git would answer them now.
+            let substituted = refreshed
+                .peek()
+                .refs()
+                .is_some_and(|kept| kept.substitutions != snapshot.substitutions);
             let replaced = refreshed.write().refs_arrived(snapshot);
             retire(replaced, worker);
+            if substituted && !worker.closing {
+                crate::history::selection::ask_again(view, Some(worker.submit));
+            }
             // What the commit box reads is asked again: a merge begun, a hook added, a commit
             // made.
             if !worker.closing {
                 crate::commit_box::pane::refs_arrived(view, worker.submit);
             }
             if reopen && !worker.closing {
-                reopen_history(rows, progress, *view.show_lost.peek(), worker.submit);
+                reopen_history(progress, *view.show_lost.peek(), worker.submit);
                 // A find looking in the history it replaced looks in the new one.
                 crate::history::ref_find::reopened(view, Some(worker.submit));
             }
@@ -449,31 +476,18 @@ fn refresh_after_an_operation(worker: &Worker<'_>) {
     }
 }
 
-/// The refs draw another history than the one on screen: it is reopened from them. The rows
-/// it held are handed to a worker to free rather than freed here (#52), the new
-/// history is sized for as many authors as the old named so its first pages do not rehash
-/// their way back up, and the selection is left as it is — it is drawn again when its row
-/// arrives. With `lost`, the walk is Show Lost Commits': a reopen like any other, off the UI
-/// thread.
-pub fn reopen_history(
-    mut rows: State<cairn_model::History>,
-    mut progress: State<Progress>,
-    lost: bool,
-    submit: &dyn Fn(Request),
-) {
-    let replaced = {
-        let mut history = rows.write();
-        let sized = cairn_model::History::with_author_capacity(history.author_count());
-        std::mem::replace(&mut *history, sized)
-    };
-    progress.set(Progress::opening());
-    // The new history asked first, so its first page is not queued behind the free of the
-    // old one on the repository thread.
+/// The refs draw another history than the one on screen: it is reopened from them, on the
+/// history thread, superseding a walk still opening there. The rows held stay drawn and
+/// usable, paging no further, until the new walk's first page replaces them (`apply`'s
+/// `Update::Rows`), when they are handed to a worker to free; the selection is left as it is
+/// — it is drawn again when its row arrives. With `lost`, the walk is Show Lost Commits': a
+/// reopen like any other, off the UI thread.
+pub fn reopen_history(mut progress: State<Progress>, lost: bool, submit: &dyn Fn(Request)) {
+    progress.write().reopen();
     submit(Request::OpenHistory {
         rows: PAGE_ROWS,
         lost,
     });
-    submit(Request::Retire(Retired::history(replaced)));
 }
 
 /// Takes down a dialog whose fetch or write has ended, refusing the prompt so the
@@ -1416,18 +1430,112 @@ mod tests {
             head: cairn_model::HeadState::Branch(cairn_model::RefName::new("refs/heads/main")),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         })
     }
 
-    /// The window's half of #52: refs that draw another history reopen
-    /// it — the old rows handed to a worker to free as one `Request::Retire`, never freed on
-    /// the UI thread, the new history sized for the authors the old one named, the history
-    /// asked for again, and the selection left as it was; refs that draw the same history
-    /// leave it, handing back only the snapshot they replace. Caught by: the old rows
-    /// replaced in place (no retirement), a reopen with `History::new` (an index with no
-    /// room), the selection cleared, or a reopen on a refresh that said not to.
+    /// What git substitutes changed: the chosen commit's changes are asked again at once while
+    /// the history is shown; while Local Changes is, nothing is asked — its primary's diff holds
+    /// the file-diff lane — until the history is shown again, which asks once; and refs naming
+    /// the same substitutions ask nothing. Caught by: the answer kept across a substitution
+    /// shown while Local Changes was up, a changes query taking the lane from Local Changes, or
+    /// a re-ask on every refresh.
     #[test]
-    fn a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection() {
+    fn a_substitution_change_asks_the_chosen_commits_changes_again_when_the_history_is_shown() {
+        use cairn_model::RowId;
+        use cairn_ui::MainView;
+
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        let changes_asked = || {
+            asked
+                .submitted
+                .borrow_mut()
+                .drain(..)
+                .filter(|request| {
+                    matches!(request, Request::Changes { of } if *of == crate::worker::Comparison::Commit(oid(1)))
+                })
+                .count()
+        };
+        let substituted = |n: u8| {
+            let mut snapshot = (*snapshot_naming(oid(2))).clone();
+            snapshot.substitutions =
+                cairn_model::Substitutions::new(vec![(oid(1), oid(n))], vec![]);
+            std::sync::Arc::new(snapshot)
+        };
+        let refs = |snapshot| Update::Refs {
+            snapshot,
+            reopen: false,
+        };
+        applying(&test, view, &asked, refs(snapshot_naming(oid(2))));
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::choose(RowId::Commit(oid(1)), view, Some(&submit));
+        });
+        assert_eq!(changes_asked(), 1, "choosing the commit asked its changes");
+
+        applying(&test, view, &asked, refs(substituted(3)));
+        assert_eq!(changes_asked(), 1, "a replace ref added, the history shown");
+        applying(&test, view, &asked, refs(substituted(3)));
+        assert_eq!(changes_asked(), 0, "the same substitutions asked again");
+
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+        });
+        applying(&test, view, &asked, refs(substituted(4)));
+        assert_eq!(
+            changes_asked(),
+            0,
+            "asked while Local Changes held the main region"
+        );
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::AllCommits, view, Some(&submit));
+        });
+        assert_eq!(
+            changes_asked(),
+            1,
+            "the history shown again did not ask again"
+        );
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+            crate::history::selection::show_main(MainView::AllCommits, view, Some(&submit));
+        });
+        assert_eq!(changes_asked(), 0, "asked again with nothing changed");
+
+        // Back to the history another way — a ref pressed choosing the same commit — asks too.
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+        });
+        applying(&test, view, &asked, refs(substituted(5)));
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            let mut main = view.sidebar.main;
+            main.set(MainView::AllCommits);
+            crate::history::selection::choose(RowId::Commit(oid(1)), view, Some(&submit));
+        });
+        assert_eq!(
+            changes_asked(),
+            1,
+            "a press choosing the commit drew the stale answer"
+        );
+    }
+
+    /// A reopen keeps the old rows drawn and usable until the new walk's first page replaces
+    /// them: refs that draw another history ask for the new walk alone, the rows, their status
+    /// and the selection kept and no page of them asked; the walk's count, once told, is kept
+    /// for the strip; its first page replaces them — the old rows handed to a worker to free as
+    /// one `Request::Retire` (#52), never freed on the UI thread, the new history sized for the
+    /// authors the old one named — and the selection is left as it was; refs that draw the same
+    /// history leave it, handing back only the snapshot they replace. Caught by: rows emptied or
+    /// retired at the ask ("Reading history…" in place of the list), a first page appended to
+    /// the old rows, the old rows replaced in place (no retirement), a reopen with
+    /// `History::new` (an index with no room), the selection cleared, or a reopen on a refresh
+    /// that said not to.
+    #[test]
+    fn a_reopen_keeps_the_old_rows_until_the_new_page() {
         use crate::history::state::Status;
 
         let (test, mut view, asked) = launch(FetchStatus::Idle);
@@ -1448,15 +1556,58 @@ mod tests {
             [
                 Request::FilterRefs { .. },
                 Request::OpenHistory { rows, lost: false },
-                Request::Retire(retired),
-            ] => {
-                assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
-                assert_eq!(*rows, PAGE_ROWS);
-            }
-            other => panic!("expected the old rows retired and the history asked, got {other:?}"),
+            ] => assert_eq!(*rows, PAGE_ROWS),
+            other => panic!("expected the history asked and nothing retired, got {other:?}"),
         }
-        assert!(view.rows.read().is_empty(), "the old rows are still drawn");
-        assert_eq!(view.progress.read().status(), &Status::Loading);
+        assert_eq!(
+            view.rows.read().len(),
+            3,
+            "the old rows were dropped at the ask"
+        );
+        assert_eq!(view.progress.read().status(), &Status::Ready);
+        assert!(
+            !view.progress.read().wants_more(),
+            "the rows being replaced asked for a page"
+        );
+        assert_eq!(*view.selected.read(), chosen);
+
+        applying(&test, view, &asked, Update::Reading { commits: 51_200 });
+        assert_eq!(view.progress.read().read_so_far(), Some(51_200));
+        assert_eq!(view.rows.read().len(), 3);
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Rows {
+                rows: page(5..7, "Grace"),
+                complete: false,
+            },
+        );
+        let ids: Vec<Oid> = view.rows.read().rows().map(|row| row.id().oid()).collect();
+        assert_eq!(
+            ids,
+            vec![oid(5), oid(6)],
+            "the first page did not replace the old rows"
+        );
+        match asked
+            .submitted
+            .borrow_mut()
+            .drain(..)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [Request::Retire(retired)] => {
+                assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
+            }
+            other => panic!("expected the old rows retired, got {other:?}"),
+        }
+        assert!(!view.progress.read().is_reopening());
+        assert_eq!(view.progress.read().read_so_far(), None);
+        assert!(
+            view.progress.read().wants_more(),
+            "the new walk is not paged"
+        );
         assert_eq!(
             *view.selected.read(),
             chosen,
@@ -1466,6 +1617,18 @@ mod tests {
             view.rows.read().retained().authors > History::new().retained().authors,
             "the new history was not sized for the authors the old one named"
         );
+        // The next page is the new walk's second, appended.
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Rows {
+                rows: page(7..8, "Grace"),
+                complete: true,
+            },
+        );
+        assert_eq!(view.rows.read().len(), 3);
+        assert!(asked.submitted.borrow().is_empty());
 
         // The same history drawn: the rows stay, and the snapshot replaced goes to a worker.
         let first = snapshot_naming(oid(2));
@@ -1672,6 +1835,191 @@ mod tests {
         assert_eq!(refresh(), 1, "a moved ref did not reopen");
 
         assert_eq!(refresh(), 0, "nothing changed, yet the history reopened");
+        drop(handle);
+    }
+
+    /// Through the real boundary, counting reopens: what git substitutes as it walks — a replace
+    /// ref added and moved, `core.useReplaceRefs` turned off and on, the graft file written and
+    /// removed, the shallow file written — each reopens the history though no ref moved, and a
+    /// refresh that finds nothing changed reopens nothing. After each, every thread reads the
+    /// configuration as it is then: the history draws the replaced commit's row as a handle
+    /// opened now reads it — its own subject with replace refs off, its replacement's on — the
+    /// refresh thread counts `main` against its upstream as one opened now counts it, and the
+    /// local lane's Recent Commit Messages are one opened now reads; and the chosen commit's
+    /// changes are asked again each time. Caught by: a comparison of the refs alone (no step
+    /// reopens), a thread whose handle keeps the configuration of its first open (the row, the
+    /// counts or the messages keep the replacement's with replace refs off), or the chosen
+    /// commit's answer kept across a substitution.
+    #[test]
+    fn a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now() {
+        use cairn_model::{RefName, RowContent, RowId};
+
+        use crate::worker::{Refreshable, Updates, next_update};
+
+        let fixture = Refreshable::new("cairn-session-substitutions");
+        let [newest, replaced, replacement, other] = [0, 1, 2, 3].map(|n| fixture.commits[n]);
+        // `main` tracks `up`, two commits behind it: a replace ref under `main`'s first parent
+        // changes what the two have in common.
+        fixture.point("up", replacement);
+        fixture.track("main", "up");
+        let (handle, mut updates) = fixture.open();
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        // Asks for a refresh and applies what arrives, handing on what applying asks, until the
+        // refresh's refs and its ahead/behind have been applied and — if the refs reopened the
+        // history — its first page has too. Returns how many reopens and how many changes
+        // queries the window asked.
+        let refresh = |updates: &mut Updates| -> (usize, usize) {
+            handle.submit(Request::Refresh);
+            let (mut refs_seen, mut counted, mut reopening) = (false, false, false);
+            let (mut opens, mut changes) = (0, 0);
+            loop {
+                for request in asked.submitted.borrow_mut().drain(..) {
+                    match request {
+                        Request::OpenHistory { .. } => {
+                            opens += 1;
+                            reopening = true;
+                        }
+                        Request::Changes { .. } => changes += 1,
+                        _ => {}
+                    }
+                    handle.submit(request);
+                }
+                if refs_seen && counted && !reopening {
+                    return (opens, changes);
+                }
+                let update = next_update(updates);
+                match &update {
+                    Update::Refs { .. } => refs_seen = true,
+                    Update::AheadBehind { .. } => counted = true,
+                    Update::Rows { .. } => reopening = false,
+                    _ => {}
+                }
+                applying(&test, view, &asked, update);
+            }
+        };
+        // The local lane's Recent Commit Messages, asked of it directly.
+        let recent = |updates: &mut Updates| -> Vec<String> {
+            handle.submit(Request::CommitReads);
+            loop {
+                match next_update(updates) {
+                    Update::CommitReads(reads) => match reads.recent {
+                        Ok(recent) => return recent,
+                        Err(error) => panic!("the recent messages failed: {error}"),
+                    },
+                    other => applying(&test, view, &asked, other),
+                }
+            }
+        };
+        let subject_drawn = |commit: Oid| -> Option<String> {
+            let rows = view.rows.peek();
+            let at = rows.position(RowId::Commit(commit))?;
+            match rows.row(at)?.content() {
+                RowContent::Commit(summary) => Some(summary.summary),
+                RowContent::Stash(stash) => panic!("a commit drawn as a stash: {stash:?}"),
+            }
+        };
+        let counted = || {
+            view.refreshed
+                .peek()
+                .ahead_behind_of(&RefName::new("refs/heads/main"))
+        };
+        // Every thread's answer is the one a handle opened now gives.
+        let every_thread_reads_it_now = |updates: &mut Updates, step: &str| {
+            assert_eq!(
+                subject_drawn(replaced),
+                Some(fixture.subject_now(replaced)),
+                "{step}: the history thread"
+            );
+            assert_eq!(
+                counted(),
+                fixture.ahead_behind_now("main"),
+                "{step}: the refresh thread"
+            );
+            assert_eq!(
+                recent(updates),
+                fixture.recent_messages_now(),
+                "{step}: the local lane"
+            );
+        };
+
+        assert_eq!(
+            refresh(&mut updates).0,
+            1,
+            "the first refresh did not open the history"
+        );
+        assert_eq!(
+            refresh(&mut updates),
+            (0, 0),
+            "a refresh that found nothing changed reopened"
+        );
+        test.run_in(|| {
+            let mut selected = view.selected;
+            selected.set(Some(RowId::Commit(replaced)));
+        });
+        let own = fixture.subject_now(replaced);
+        let stored_counts = fixture.ahead_behind_now("main");
+
+        fixture.replace(replaced, replacement);
+        assert_eq!(refresh(&mut updates), (1, 1), "a replace ref added");
+        every_thread_reads_it_now(&mut updates, "a replace ref added");
+        assert_ne!(
+            subject_drawn(replaced),
+            Some(own.clone()),
+            "the replacement was not drawn"
+        );
+
+        fixture.replace(replaced, other);
+        assert_eq!(refresh(&mut updates), (1, 1), "a replace ref moved");
+        every_thread_reads_it_now(&mut updates, "a replace ref moved");
+        let replaced_counts = counted();
+        assert_ne!(
+            replaced_counts, stored_counts,
+            "the fixture's replace ref changes no count, so the counts decide nothing"
+        );
+
+        let replaced_messages = fixture.recent_messages_now();
+        fixture.use_replace_refs(false);
+        assert_ne!(
+            fixture.recent_messages_now(),
+            replaced_messages,
+            "the fixture's replace ref changes no recent message, so the messages decide nothing"
+        );
+        assert_eq!(
+            refresh(&mut updates),
+            (1, 1),
+            "core.useReplaceRefs turned off"
+        );
+        every_thread_reads_it_now(&mut updates, "core.useReplaceRefs turned off");
+        assert_eq!(
+            subject_drawn(replaced),
+            Some(own.clone()),
+            "the walk kept reading the replace refs the configuration turned off"
+        );
+        assert_eq!(counted(), stored_counts, "the counts kept the replace refs");
+        fixture.use_replace_refs(true);
+        assert_eq!(
+            refresh(&mut updates),
+            (1, 1),
+            "core.useReplaceRefs turned on"
+        );
+        every_thread_reads_it_now(&mut updates, "core.useReplaceRefs turned on");
+        assert_eq!(counted(), replaced_counts);
+        fixture.unreplace(replaced);
+        assert_eq!(refresh(&mut updates), (1, 1), "the replace ref deleted");
+        assert_eq!(subject_drawn(replaced), Some(own));
+
+        fixture.graft(Some((newest, &[replacement])));
+        assert_eq!(refresh(&mut updates), (1, 1), "the graft file written");
+        fixture.graft(None);
+        assert_eq!(refresh(&mut updates), (1, 1), "the graft file removed");
+
+        fixture.shallow(Some(newest));
+        assert_eq!(refresh(&mut updates), (1, 1), "the shallow file written");
+        assert_eq!(
+            refresh(&mut updates),
+            (0, 0),
+            "nothing changed, yet the history reopened"
+        );
         drop(handle);
     }
 }

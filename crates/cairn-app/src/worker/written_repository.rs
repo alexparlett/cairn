@@ -5,7 +5,9 @@
 //! Each object is what git writes: `<kind> <length>\0<body>`, named by its SHA-1, stored as a
 //! zlib stream under `objects/xx/…`. The streams use deflate's stored blocks, which every
 //! inflater reads, so neither compression nor a hashing crate is needed: both are spelled out
-//! below, small and checked against git's own empty tree id.
+//! below, small and checked against git's own empty tree id. A long line is written as one
+//! pack and its version 2 index instead (`gitformat-pack`), so a history of a few hundred
+//! thousand commits costs two files rather than a file a commit.
 
 use cairn_model::Oid;
 
@@ -31,20 +33,45 @@ impl WrittenRepository {
         let mut parent: Option<String> = None;
         let mut oldest_first = Vec::with_capacity(count);
         for n in 0..count {
-            let time = 1_600_000_000 + n;
-            let mut body = format!("tree {EMPTY_TREE}\n");
-            if let Some(parent) = &parent {
-                body.push_str(&format!("parent {parent}\n"));
-            }
-            body.push_str(&format!(
-                "author Ada <ada@example.com> {time} +0000\n\
-                 committer Ada <ada@example.com> {time} +0000\n\ncommit {n}\n"
-            ));
+            let body = commit_body(n, parent.as_deref());
             let id = write_object(&objects, "commit", body.as_bytes());
             oldest_first.push(Oid::parse(&id).unwrap_or_else(|error| panic!("{id}: {error}")));
             parent = Some(id);
         }
-        if let Some(newest) = &parent {
+        Self::pointed(fixture, oldest_first)
+    }
+
+    /// [`Self::linear`] written as one pack and its index rather than as loose objects: a
+    /// history long enough that opening a walk over it takes a measurable while.
+    pub(crate) fn packed(name: &str, count: usize) -> Self {
+        let fixture = UnbornRepository::new(&format!("{name}-{}", std::process::id()));
+        let mut objects: Vec<(u8, Vec<u8>)> = Vec::with_capacity(count + 1);
+        // Pack object types: 1 a commit, 2 a tree.
+        objects.push((2, Vec::new()));
+        let mut parent: Option<String> = None;
+        let mut oldest_first = Vec::with_capacity(count);
+        for n in 0..count {
+            let body = commit_body(n, parent.as_deref()).into_bytes();
+            let id = hex(&sha1(&loose_form("commit", &body)));
+            oldest_first.push(Oid::parse(&id).unwrap_or_else(|error| panic!("{id}: {error}")));
+            parent = Some(id);
+            objects.push((1, body));
+        }
+        let pack_dir = fixture.path.join(".git/objects/pack");
+        std::fs::create_dir_all(&pack_dir)
+            .unwrap_or_else(|error| panic!("making {}: {error}", pack_dir.display()));
+        let (pack, index, name) = pack_of(&objects);
+        for (extension, bytes) in [("pack", pack), ("idx", index)] {
+            let path = pack_dir.join(format!("pack-{name}.{extension}"));
+            std::fs::write(&path, bytes)
+                .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+        }
+        Self::pointed(fixture, oldest_first)
+    }
+
+    /// `main` at the newest of `oldest_first`.
+    fn pointed(fixture: UnbornRepository, mut oldest_first: Vec<Oid>) -> Self {
+        if let Some(newest) = oldest_first.last() {
             let main = fixture.path.join(".git/refs/heads/main");
             std::fs::write(&main, format!("{newest}\n"))
                 .unwrap_or_else(|error| panic!("writing {}: {error}", main.display()));
@@ -61,11 +88,108 @@ impl WrittenRepository {
     }
 }
 
-/// Writes one loose object and answers its id in hex.
-fn write_object(objects: &std::path::Path, kind: &str, body: &[u8]) -> String {
+/// The `n`th commit of a line, a second newer than its parent.
+fn commit_body(n: usize, parent: Option<&str>) -> String {
+    let time = 1_600_000_000 + n;
+    let mut body = format!("tree {EMPTY_TREE}\n");
+    if let Some(parent) = parent {
+        body.push_str(&format!("parent {parent}\n"));
+    }
+    body.push_str(&format!(
+        "author Ada <ada@example.com> {time} +0000\n\
+         committer Ada <ada@example.com> {time} +0000\n\ncommit {n}\n"
+    ));
+    body
+}
+
+/// An object as it is named and stored loose: `<kind> <length>\0<body>`.
+fn loose_form(kind: &str, body: &[u8]) -> Vec<u8> {
     let mut object = format!("{kind} {}\0", body.len()).into_bytes();
     object.extend_from_slice(body);
-    let id: String = sha1(&object).iter().map(|b| format!("{b:02x}")).collect();
+    object
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A version 2 pack of `objects` — each its pack type (1 a commit, 2 a tree) and body —
+/// its version 2 index, and the pack's checksum in hex, which names both files.
+fn pack_of(objects: &[(u8, Vec<u8>)]) -> (Vec<u8>, Vec<u8>, String) {
+    let mut pack = b"PACK".to_vec();
+    pack.extend_from_slice(&2u32.to_be_bytes());
+    let count = u32::try_from(objects.len()).unwrap_or_else(|_| panic!("too many objects"));
+    pack.extend_from_slice(&count.to_be_bytes());
+    // Each object's id, its offset in the pack and the CRC-32 of its packed bytes.
+    let mut entries: Vec<([u8; 20], u32, u32)> = Vec::with_capacity(objects.len());
+    for (kind, body) in objects {
+        let name = if *kind == 1 { "commit" } else { "tree" };
+        let id = sha1(&loose_form(name, body));
+        let offset = u32::try_from(pack.len()).unwrap_or_else(|_| panic!("a pack past 2 GiB"));
+        let start = pack.len();
+        // The type and size: four bits of size in the first byte, seven in each after.
+        let mut size = body.len();
+        let mut byte = (kind << 4) | u8::try_from(size & 0x0f).unwrap_or(0);
+        size >>= 4;
+        while size > 0 {
+            pack.push(byte | 0x80);
+            byte = u8::try_from(size & 0x7f).unwrap_or(0);
+            size >>= 7;
+        }
+        pack.push(byte);
+        pack.extend_from_slice(&zlib_stored(body));
+        entries.push((id, offset, crc32(&pack[start..])));
+    }
+    let checksum = sha1(&pack);
+    pack.extend_from_slice(&checksum);
+
+    entries.sort_by_key(|(id, ..)| *id);
+    let mut index = vec![0xff, b't', b'O', b'c'];
+    index.extend_from_slice(&2u32.to_be_bytes());
+    let mut fanout = [0u32; 256];
+    for (id, ..) in &entries {
+        fanout[usize::from(id[0])] += 1;
+    }
+    let mut running = 0u32;
+    for slot in &mut fanout {
+        running += *slot;
+        index.extend_from_slice(&running.to_be_bytes());
+    }
+    for (id, ..) in &entries {
+        index.extend_from_slice(id);
+    }
+    for (_, _, crc) in &entries {
+        index.extend_from_slice(&crc.to_be_bytes());
+    }
+    for (_, offset, _) in &entries {
+        index.extend_from_slice(&offset.to_be_bytes());
+    }
+    index.extend_from_slice(&checksum);
+    let own = sha1(&index);
+    index.extend_from_slice(&own);
+    (pack, index, hex(&checksum))
+}
+
+/// CRC-32 (IEEE 802.3, reflected), as a pack index records one per object.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// Writes one loose object and answers its id in hex.
+fn write_object(objects: &std::path::Path, kind: &str, body: &[u8]) -> String {
+    let object = loose_form(kind, body);
+    let id = hex(&sha1(&object));
     let (dir, file) = id.split_at(2);
     let dir = objects.join(dir);
     std::fs::create_dir_all(&dir)
@@ -171,6 +295,25 @@ mod tests {
         let page = repo
             .history(
                 &cairn_git::HistoryRequest::from_head(100),
+                &cairn_git::CancelSignal::new(),
+            )
+            .unwrap_or_else(|error| panic!("walking: {error}"));
+        assert_eq!(page.rows.ids().collect::<Vec<_>>(), repository.commits);
+    }
+
+    /// A packed line is read back as written, and its checksums are what readers check:
+    /// CRC-32's published check value, and the walk reading every commit of the pack in order.
+    /// Caught by: a pack or an index a reader refuses, or an object named otherwise than its
+    /// loose form would be.
+    #[test]
+    fn a_packed_line_is_read_back_as_written() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        let repository = WrittenRepository::packed("cairn-packed-line", 300);
+        let repo = cairn_git::Repository::discover(repository.path())
+            .unwrap_or_else(|error| panic!("opening: {error}"));
+        let page = repo
+            .history(
+                &cairn_git::HistoryRequest::from_head(1_000),
                 &cairn_git::CancelSignal::new(),
             )
             .unwrap_or_else(|error| panic!("walking: {error}"));

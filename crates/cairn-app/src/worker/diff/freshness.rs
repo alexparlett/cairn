@@ -10,6 +10,12 @@
 //!   ([`cairn_git::StagedInputs`], read again only when the index file or `HEAD` moved,
 //!   and compared by value, so a stat-only refresh keeps everything). Moved, the session
 //!   and every kept answer go ([`Moved::Answers`]).
+//! - **What git substitutes** — the replace refs it reads and the grafts, a shallow clone's
+//!   boundary among them ([`cairn_git::Repository::substitutions`]), read again when a file
+//!   they are read from moved ([`cairn_git::Repository::substitution_files`]) and compared by
+//!   value: a commit replaced reads with another author, message, tree and parents, and a blob
+//!   replaced with other lines. Moved, the session and every kept answer go
+//!   ([`Moved::Answers`]).
 //! - **What one path reads** — the working tree's `.gitattributes` in each directory above
 //!   it. Each kept answer records the directories it read ([`Dependence`]) and is checked
 //!   on every hit; the session records the ones it has read, and goes when one moved.
@@ -80,13 +86,18 @@ impl Stamp {
     pub(crate) fn is_settled(&self) -> bool {
         self.settled
     }
+
+    /// Whether `now` shows the file as this stamp did, settled or not.
+    pub(crate) fn same_file(&self, now: &Stamp) -> bool {
+        self.file == now.file
+    }
 }
 
-fn stamps(paths: &[PathBuf], started: SystemTime) -> Vec<Stamp> {
+pub(crate) fn stamps(paths: &[PathBuf], started: SystemTime) -> Vec<Stamp> {
     paths.iter().map(|path| Stamp::of(path, started)).collect()
 }
 
-fn all_still(then: &[Stamp], now: &[Stamp]) -> bool {
+pub(crate) fn all_still(then: &[Stamp], now: &[Stamp]) -> bool {
     then.len() == now.len() && then.iter().zip(now).all(|(then, now)| then.still(now))
 }
 
@@ -234,6 +245,18 @@ pub(crate) struct Freshness {
     configuration: Vec<Stamp>,
     global: Option<Vec<Stamp>>,
     staged: Option<Staged>,
+    /// What git substituted when the last query was read, and the files it was read from as
+    /// they were then.
+    substitutions: Option<Substituted>,
+}
+
+/// What git substituted, and the files it was read from (`Repository::substitution_files`),
+/// each as that read found it.
+#[derive(Debug)]
+struct Substituted {
+    files: Vec<PathBuf>,
+    stamps: Vec<Stamp>,
+    read: cairn_model::Substitutions,
 }
 
 impl Freshness {
@@ -244,6 +267,7 @@ impl Freshness {
             configuration: stamps(inputs.configuration(), opened_at),
             global: None,
             staged: None,
+            substitutions: None,
         }
     }
 
@@ -271,6 +295,27 @@ impl Freshness {
             .is_some_and(|then| !all_still(then, &global));
         let settled = configuration.iter().chain(&global).all(Stamp::is_settled);
         self.global = Some(global);
+
+        // Read again only when a file they are read from moved: a shallow clone's boundary can
+        // be tens of thousands of commits.
+        let files = repo.substitution_files();
+        let stamped = stamps(&files, started);
+        let unchanged = self
+            .substitutions
+            .as_ref()
+            .is_some_and(|then| then.files == files && all_still(&then.stamps, &stamped));
+        if !unchanged {
+            let read = repo.substitutions();
+            moved |= self
+                .substitutions
+                .as_ref()
+                .is_some_and(|then| then.read != read);
+            self.substitutions = Some(Substituted {
+                files,
+                stamps: stamped,
+                read,
+            });
+        }
 
         let index = Stamp::of(inputs.index(), started);
         let head = repo.head_id();

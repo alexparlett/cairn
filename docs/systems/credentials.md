@@ -328,8 +328,7 @@ never enters `cairn-git` and never enters application state.
   the refs again and reopens the history when what it draws changed
   (`docs/systems/history-graph.md`, "Refresh"), and nothing reads the
   `Performed` itself (issue #25). Pinned by `every_single_flag_counts_as_something`,
-  `declarations_combine_without_losing_a_flag`,
-  `a_destructive_operation_records_what_the_user_agreed_to` and
+  `declarations_combine_without_losing_a_flag` and
   `an_unconfirmed_operation_carries_no_prompt`.
 - **`Repository::remotes`** (`crates/cairn-git/src/remotes.rs`). The
   configured remotes as `cairn_model::RemoteSummary`, the default first, read
@@ -391,8 +390,10 @@ never enters `cairn-git` and never enters application state.
   nor a fetch a scroll. The token is retired before the outcome goes out, so
   a helper orphaned by a killed git is refused at the channel rather than
   accepted afterwards. On shutdown — the window's `Request::Close`, or every
-  handle gone — the repository thread closes the network lane's queue, ends
-  and reaps every `git` running in the repository through its registry
+  handle gone — the repository thread stops the epochs, closes the network lane's queue
+  and cancels the fetch in flight, joins the history thread (which runs no `git`) and then
+  the local write lane, ends and reaps every `git` running in the repository through its
+  registry
   (`docs/systems/git-processes.md`, "Closing"), and wakes the
   acceptor by connecting to its own socket (the one thing that returns a
   blocking `accept`), on a clean exit and on unwinding alike; a prompt still
@@ -413,7 +414,7 @@ never enters `cairn-git` and never enters application state.
   Pinned by `crates/cairn-app/src/worker/network/tests.rs`
   against real git and the built helper, with a loopback remote that answers
   `401` to everything:
-  `a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs`
+  `a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_new_refs`
   (the cache contract's first real exercise: the worker's gix handle serves the
   commits a `git` subprocess just wrote; the remote is the Cairn checkout's
   `HEAD`, fetched into a bare fixture's `main`, because a CI checkout has no

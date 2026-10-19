@@ -1,10 +1,24 @@
 ---
-status: in-flight
+status: shipped
 packet: history-topo-order
 opened: 2026-10-17
+shipped: 2026-10-18
 ---
 
 # PRD — History in git's date order
+
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For how the
+history is walked in git's date order, the history thread, the opening pass and a reopen in the
+window, and Show Lost Commits now, read `docs/systems/history-graph.md`; what runs on which
+thread, `docs/systems/git-processes.md` and the root `CLAUDE.md`'s routing account; the design,
+`docs/design/history-graph.md` and `docs/design/concurrency.md`. Those are the living truth and
+this is not. Requirements R1-R7 and acceptance criteria C1-C10 were met at the merge bar
+(2026-10-18), each against a test that decides it, checked to fail under a mutation; C8 was met
+by `#[ignore]`d reporters on the bench, by reading — the first 64 rows in 1,183 ms against git's
+1,257 ms without a commit-graph, the whole history equal to git's `--date-order` row for row,
+no frame over 16.7 ms. The numbers as first measured are in
+`docs/research/history-topo-order/measured.md`; the work directory this cites (`docs/work/history-topo-order/`) was torn
+down and lives in git history. Leftovers: #139, #140, #141.
 
 The history graph drawn in `git log --date-order`'s order, which is Fork's default: no commit
 above any of its children, and otherwise newest first by commit time, with ties kept in the

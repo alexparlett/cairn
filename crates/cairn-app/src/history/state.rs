@@ -22,6 +22,12 @@ pub struct Progress {
     /// No worker is left to answer.
     ended: bool,
     loaded: usize,
+    /// A walk was asked to replace the rows held: they stay drawn and usable, paging no
+    /// further, until its first page replaces them.
+    reopening: bool,
+    /// How many commits the walk being opened has read, once the worker has said: told only
+    /// once its pass has run 250 ms, so a short open says nothing.
+    reading: Option<usize>,
 }
 
 impl Progress {
@@ -34,7 +40,35 @@ impl Progress {
             in_flight: true,
             ended: false,
             loaded: 0,
+            reopening: false,
+            reading: None,
         }
+    }
+
+    /// A walk asked to replace the rows held: they are kept as they are, the list asks for no
+    /// page of them, and the first page that arrives replaces them ([`Self::is_reopening`]).
+    /// Nothing more is known of the history's end until then.
+    pub fn reopen(&mut self) {
+        self.reopening = true;
+        self.in_flight = true;
+        self.complete = false;
+        self.reading = None;
+    }
+
+    /// Whether the next page to arrive is the first of a walk replacing the rows held.
+    pub fn is_reopening(&self) -> bool {
+        self.reopening
+    }
+
+    /// The walk being opened has read `commits` so far.
+    pub fn reading(&mut self, commits: usize) {
+        self.reading = Some(commits);
+    }
+
+    /// How many commits the walk being opened has read, once the worker has said; `None` once
+    /// its first page has arrived.
+    pub fn read_so_far(&self) -> Option<usize> {
+        self.reading
     }
 
     pub fn status(&self) -> &Status {
@@ -72,15 +106,19 @@ impl Progress {
 
     /// A find in the sidebar was stopped: no page is waited for, so the list's next
     /// visibility change may ask one. A page the find laid out before it stopped may still
-    /// arrive, and is appended as any page is.
+    /// arrive, and is appended as any page is. While a reopen is waited for, its first page
+    /// still is: a walk opening is never superseded by a find or its stop.
     pub fn stopped_finding(&mut self) {
-        self.in_flight = false;
+        if !self.reopening {
+            self.in_flight = false;
+        }
     }
 
     /// `loaded` is the total rows held once the page has been added. Once the history can
     /// hold no more ([`Self::appended`]) or the stream has ended, the failure stands.
     pub fn received(&mut self, widest_lane: usize, complete: bool, loaded: usize) {
         self.in_flight = false;
+        self.reading = None;
         self.lanes = self.lanes.max(widest_lane);
         self.complete = complete;
         self.loaded = loaded;
@@ -113,8 +151,11 @@ impl Progress {
         }
     }
 
+    /// A reopen that fails keeps waiting for its first page: the rows held stay, and the page
+    /// the list asks for again opens the walk afresh and replaces them.
     pub fn failed(&mut self, message: String) {
         self.in_flight = false;
+        self.reading = None;
         self.status = Status::Failed(message);
     }
 
@@ -321,6 +362,55 @@ mod tests {
 
         let reopened = Progress::opening();
         assert_eq!(reopened.status(), &Status::Loading, "a reopen starts again");
+    }
+
+    /// A reopen keeps the rows' count and status, asks for no page of them — a find stopped
+    /// meanwhile included, since the reopen's first page is still coming — and forgets the end
+    /// they reached; the count of what the new walk has read is kept until a page arrives, and a
+    /// failure forgets it too. Caught by: a reopen that says "Reading history…" over the rows
+    /// (status reset), one that lets the list page the old rows (a scroll, or a find's stop,
+    /// asking a page), one that keeps the old end (a find of a new branch said to be not in the
+    /// graph), or a count that outlives the first page.
+    #[test]
+    fn a_reopen_keeps_the_rows_and_asks_for_none_of_them_until_its_first_page() {
+        let mut progress = Progress::opening();
+        progress.received(1, true, 40);
+        progress.reopen();
+        assert!(progress.is_reopening());
+        assert_eq!(progress.status(), &Status::Ready);
+        assert_eq!(progress.loaded(), 40);
+        assert!(!progress.complete(), "the old walk's end outlived it");
+        assert!(
+            !progress.wants_more(),
+            "the rows being replaced asked for a page"
+        );
+        progress.stopped_finding();
+        assert!(
+            !progress.wants_more(),
+            "a find's stop let the old rows page"
+        );
+        assert_eq!(progress.read_so_far(), None);
+
+        progress.reading(1_200);
+        progress.reading(2_400);
+        assert_eq!(progress.read_so_far(), Some(2_400));
+        progress.received(1, false, 64);
+        assert_eq!(
+            progress.read_so_far(),
+            None,
+            "the count outlived the first page"
+        );
+
+        let mut failing = Progress::opening();
+        failing.reopen();
+        failing.reading(10);
+        failing.failed("failed to walk the history".to_owned());
+        assert_eq!(failing.read_so_far(), None);
+        assert!(
+            failing.is_reopening(),
+            "a failed reopen's retry would append to the old rows"
+        );
+        assert!(failing.wants_more(), "a failed reopen is never asked again");
     }
 
     /// Caught by: narrowing, which moves every subject sideways mid-scroll.

@@ -70,7 +70,7 @@ impl Component for SidebarPane {
                 .map(|message| format!("The refs could not be read: {message}"))
         });
         let pressing = self.submit.clone();
-        let mut main = view.sidebar.main;
+        let switching = self.submit.clone();
         Sidebar::new(state.shown().cloned(), view.sidebar.filter_text)
             .counts(refreshed.ahead_behind().cloned())
             .local_changes(local_changes_count(
@@ -80,7 +80,9 @@ impl Component for SidebarPane {
             .chosen(state.chosen().cloned())
             .notice(notice)
             .on_row(move |row: SidebarRow| ref_find::press(row, view, pressing.as_deref()))
-            .on_main(move |chosen: MainView| main.set(chosen))
+            .on_main(move |chosen: MainView| {
+                crate::history::selection::show_main(chosen, view, switching.as_deref());
+            })
     }
 }
 

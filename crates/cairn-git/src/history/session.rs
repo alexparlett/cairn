@@ -2,9 +2,11 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cairn_model::{GraphRow, LaneAssigner, RowsPage};
 
+use super::date_order;
 use super::seeds::Decoration;
 use super::stream::{Next, Stream};
 use super::{
@@ -30,7 +32,6 @@ pub struct HistorySession<'repo> {
     marking: Marking,
     order: HistoryOrder,
     window: usize,
-    lookahead: usize,
     /// Rows earlier pages covered: laid out for lane numbering, never decoded or handed back.
     skip: usize,
     /// Position in the walk of the next row to leave the assigner.
@@ -59,8 +60,9 @@ impl std::fmt::Debug for HistorySession<'_> {
 
 impl Repository {
     /// The request's limit is ignored; [`HistorySession::next_page`] takes one. The walk is
-    /// opened by the first page, under its cancel: opening reads every tip, and a walk from
-    /// every ref has one per ref (`walk::open`).
+    /// opened by the first page, under its cancel: in date order its opening pass reads every
+    /// tip and, without a commit-graph git would use, every commit the tips reach
+    /// (`date_order`); in commit-time order it reads every tip (`walk::open`).
     pub fn history_session(&self, request: &HistoryRequest) -> Result<HistorySession<'_>, Error> {
         let Resolved {
             tips,
@@ -68,7 +70,6 @@ impl Repository {
             marking,
             order,
             window,
-            lookahead,
             skip,
         } = starting_points(self, request)?;
 
@@ -84,7 +85,6 @@ impl Repository {
             marking,
             order,
             window,
-            lookahead,
             skip,
             next_row: 0,
             walked: 0,
@@ -96,31 +96,16 @@ impl Repository {
 }
 
 impl HistorySession<'_> {
-    /// `cancel` is polled once per row laid out, per commit looked ahead at, and — on the
-    /// page that opens the walk — per tip read but the first; on cancellation the work done
-    /// stays in the session, except a cancelled open, which the next page begins again.
+    /// `cancel` is polled once per row laid out and — on the page that opens the walk — while
+    /// it opens (`Repository::history`); on cancellation the work done stays in the session,
+    /// except a cancelled open, which the next page begins again.
     /// `walked` and `decoded` count this call only. Any error other than
     /// [`Error::Cancelled`] poisons the session.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
 
-        if self.stream.is_none() {
-            let Some(stream) = open_stream(
-                self.repo,
-                &mut self.tips,
-                &mut self.marking,
-                &self.decoration,
-                self.order,
-                self.lookahead,
-                cancel,
-            )?
-            else {
-                // Nothing kept: the next page opens it again.
-                return Err(Error::Cancelled { walked: 0 });
-            };
-            self.stream = Some(stream);
-        }
+        self.open_walk(cancel, date_order::REPORT_EVERY, &mut |_| {})?;
 
         while self.ready.len() < limit && !self.exhausted {
             if cancel.is_cancelled() || !self.pull(cancel)? {
@@ -132,15 +117,10 @@ impl HistorySession<'_> {
 
         let take = limit.min(self.ready.len());
         let mut rows = RowsPage::new();
-        if let Some(stream) = self.stream.as_mut() {
-            for (graph, laid) in self.ready.drain(..take) {
-                laid.push_to(&mut rows, graph, &self.decoration, stream);
-            }
-            self.delivered += rows.len();
-            for (row, id) in stream.take_reached(self.skip + self.delivered) {
-                rows.reached(row, id);
-            }
+        for (graph, laid) in self.ready.drain(..take) {
+            laid.push_to(&mut rows, graph, &self.decoration);
         }
+        self.delivered += rows.len();
         let more = !self.exhausted || !self.ready.is_empty();
 
         Ok(HistoryPage {
@@ -151,6 +131,39 @@ impl HistorySession<'_> {
         })
     }
 
+    /// Opens the walk, if no page has yet, under `cancel` — in date order its opening pass, which
+    /// may read every commit the tips reach (`Repository::history_session`) — handing nothing
+    /// out, so the opening can be cancelled by something other than what cancels the pages
+    /// after it. How many commits the pass has read goes to `report` at most once per `every`,
+    /// the first once `every` has passed; another order reports nothing. A cancelled open keeps
+    /// nothing, and is begun again by the next call or page ([`Error::Cancelled`]).
+    pub fn open_walk(
+        &mut self,
+        cancel: &impl Cancel,
+        every: Duration,
+        report: &mut dyn FnMut(usize),
+    ) -> Result<(), Error> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        let Some(stream) = open_stream(
+            self.repo,
+            &mut self.tips,
+            &mut self.marking,
+            &self.decoration,
+            self.order,
+            cancel,
+            report,
+            every,
+        )?
+        else {
+            // Nothing kept: the next page opens it again.
+            return Err(Error::Cancelled { walked: 0 });
+        };
+        self.stream = Some(stream);
+        Ok(())
+    }
+
     /// Where a fresh query would start to continue this scroll.
     pub fn cursor(&self) -> HistoryCursor {
         HistoryCursor {
@@ -159,7 +172,6 @@ impl HistorySession<'_> {
             marking: self.marking.clone(),
             order: self.order,
             window: self.window,
-            lookahead: self.lookahead,
             walked: self.skip + self.delivered,
         }
     }
@@ -168,8 +180,8 @@ impl HistorySession<'_> {
         self.delivered
     }
 
-    /// Commits pulled off the walk over the session's life, those looked ahead at for a
-    /// stash's base included.
+    /// Commits pulled off the walk over the session's life: rows laid out, the stashes' not
+    /// counted.
     pub fn commits_walked(&self) -> usize {
         self.stream.as_ref().map_or(0, Stream::pulled)
     }
@@ -180,7 +192,7 @@ impl HistorySession<'_> {
     }
 
     /// Lays out the stream's next entry, or notices the end. `false` when `cancel` fired
-    /// while the stream looked ahead.
+    /// within the walk's step.
     fn pull(&mut self, cancel: &impl Cancel) -> Result<bool, Error> {
         let Some(stream) = self.stream.as_mut() else {
             // Unreachable: `next_page` opens the walk before it pulls.
@@ -222,7 +234,11 @@ impl HistorySession<'_> {
             // Unreachable: one entry is pushed per row past the prefix.
             return Ok(());
         };
-        let laid = Laid::read(self.repo, entry)?;
+        let Some(stream) = self.stream.as_ref() else {
+            // Unreachable: a row is placed only from the walk the stream holds.
+            return Ok(());
+        };
+        let laid = Laid::read(stream.objects(), entry)?;
         if matches!(laid, Laid::Commit { .. }) {
             self.decoded += 1;
         }
@@ -315,11 +331,15 @@ mod tests {
         );
     }
 
+    /// The walk opened by an empty page — its opening pass polls the cancel too, and a cancel
+    /// there keeps nothing — a page cancelled on its fourth poll walks at most four commits and
+    /// keeps them. Caught by: a cancelled page dropping what it walked.
     #[test]
     fn cancelling_stops_the_walk_and_keeps_what_it_had() {
         let repo = cairn();
         let request = HistoryRequest::from_head(1).with_window(1);
         let mut session = repo.history_session(&request).unwrap();
+        session.next_page(0, &CancelSignal::new()).unwrap();
 
         // Fires on the fourth poll, so at most four commits are walked.
         let err = session.next_page(50, &StopsAfter::new(3)).unwrap_err();

@@ -1,6 +1,7 @@
 //! Repository worker threads.
 
 mod askpass;
+mod configured;
 mod diff;
 mod discovery;
 mod ending_words;

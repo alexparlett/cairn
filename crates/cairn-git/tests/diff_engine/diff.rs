@@ -23,6 +23,7 @@ mod patches;
 mod staged_renames;
 mod staging;
 mod stash;
+mod substitutions;
 mod working_tree;
 mod write_baseline;
 mod write_verbs;

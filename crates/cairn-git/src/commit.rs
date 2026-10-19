@@ -1,10 +1,11 @@
 //! Reading one commit in the detail the Commit tab shows.
 
 use cairn_model::{CommitDetails, Oid, Signature, Timestamp};
+use gix::objs::Find as _;
 
 use crate::commit_encoding::CommitEncoding;
+use crate::history::walk::Grafted;
 use crate::object_id::object_id;
-use crate::shallow::ShallowBoundary;
 use crate::{Error, Repository};
 
 impl Repository {
@@ -16,33 +17,33 @@ impl Repository {
     /// monorepo keeps a subject, a name and a parent count, and this pays for everything —
     /// every parent, both addresses, the whole message.
     pub fn commit_details(&self, id: &Oid) -> Result<CommitDetails, Error> {
-        let commit =
-            self.inner()
-                .find_commit(object_id(id)?)
-                .map_err(|source| Error::ReadCommit {
-                    id: id.to_string(),
-                    source: Box::new(source),
-                })?;
-        details_of(&commit, id)
+        details_of(&Grafted::read(self.inner())?, id)
     }
 }
 
-/// Shared with the changes query, which reads the same commit to find its first parent.
+/// `id`'s details as `git show -s` and `git log` read the commit, shared with the changes
+/// query, which reads the same commit to find its first parent, and Recent Commit Messages.
 ///
-/// The parents are the ones git shows: a shallow clone's boundary commit names parents
-/// the clone does not have, and git's own `git log` reads the shallow file and shows
-/// none (`%P` is empty), so neither does this (`crate::shallow`).
-pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDetails, Error> {
+/// The commit is read through `objects` (`Grafted`), as git reads it: a commit a replace ref
+/// replaces is its replacement's author, committer, message and parents — git looks the
+/// replacement up wherever it reads an object (`lookup_replace_object` in `odb.c`'s
+/// `do_oid_object_info_extended` and `object.c`'s `parse_object_with_flags`), unless
+/// `core.useReplaceRefs` is false; and the parents are the ones git shows: a shallow clone's
+/// boundary commit names parents the clone does not have, and git's own `git log` reads the
+/// shallow file and shows none (`%P` is empty), so neither does this, and a commit the graft
+/// file grafts shows the graft's parents (`parse_commit_buffer` in `commit.c`; `crate::grafts`).
+pub(crate) fn details_of(objects: &Grafted<'_>, id: &Oid) -> Result<CommitDetails, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
-    let named: Vec<gix::ObjectId> = commit.parent_ids().map(|parent| parent.detach()).collect();
-    let parents = ShallowBoundary::read(commit.repo)
-        .map_err(|e| read(Box::new(e)))?
-        .parents_of(&commit.id, named.iter().map(|parent| parent.as_ref()))?;
-    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
-    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let mut buffer = Vec::new();
+    let (decoded, bytes) = read_commit(objects, id, &mut buffer)?;
+    let parents = decoded
+        .parents()
+        .map(|parent| crate::object_id::model_id(&parent))
+        .collect::<Result<Vec<_>, Error>>()?;
+    let encoding = CommitEncoding::of_decoded(&decoded, bytes);
     let author = signature_of(
         decoded.author().map_err(|e| read(Box::new(e)))?,
         encoding,
@@ -63,6 +64,35 @@ pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDet
         message: encoding.text(decoded.message),
     })
 }
+
+/// `id` read as a commit through `objects` into `buffer` — git's commit, through a replace ref
+/// and a graft — decoded, beside the bytes it was decoded from. One that is missing, or not a
+/// commit, is [`Error::ReadCommit`], as is a replacement git would die on.
+pub(crate) fn read_commit<'b>(
+    objects: &Grafted<'_>,
+    id: &Oid,
+    buffer: &'b mut Vec<u8>,
+) -> Result<(gix::objs::CommitRef<'b>, &'b [u8]), Error> {
+    let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
+        id: id.to_string(),
+        source,
+    };
+    let data = objects
+        .try_find(&object_id(id)?, buffer)
+        .map_err(read)?
+        .ok_or_else(|| read(Box::new(NotACommit(*id))))?;
+    if data.kind != gix::objs::Kind::Commit {
+        return Err(read(Box::new(NotACommit(*id))));
+    }
+    let decoded = gix::objs::CommitRef::from_bytes(data.data, data.object_hash)
+        .map_err(|e| read(Box::new(e)))?;
+    Ok((decoded, data.data))
+}
+
+/// What reading a commit's details fails with where `id` names no commit as git reads it.
+#[derive(Debug, thiserror::Error)]
+#[error("{0} is not a commit in this repository")]
+pub(crate) struct NotACommit(pub(crate) Oid);
 
 /// `signature` as git prints it: its name and address in the commit's encoding.
 fn signature_of(

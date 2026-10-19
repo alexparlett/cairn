@@ -27,6 +27,7 @@ use cairn_model::{
 use gix::diff::blob::{ResourceKind, platform::prepare_diff::Operation};
 use gix::objs::tree::EntryKind;
 
+use crate::history::walk::Grafted;
 use crate::object_id::object_id;
 use crate::ops::GitBinary;
 use crate::reads::{
@@ -77,7 +78,7 @@ impl Trees {
                 return Ok(elsewhere);
             }
         };
-        if !holds(repo.inner(), &untracked, file)? {
+        if !holds(&Grafted::read(repo.inner())?, &untracked, file)? {
             return Ok(elsewhere);
         }
         let trees = Trees {
@@ -96,26 +97,23 @@ impl Trees {
     }
 }
 
-/// Whether the commit `holder`'s tree has `file`'s new side at its new path.
-fn holds(repo: &gix::Repository, holder: &Oid, file: &ChangedFile) -> Result<bool, Error> {
-    use gix::bstr::ByteSlice as _;
-    let unreadable = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffFile {
-        path: file.new_path.to_string(),
-        source,
-    };
-    let tree = repo
-        .find_commit(crate::object_id::object_id(holder)?)
-        .map_err(|e| unreadable(Box::new(e)))?
-        .tree()
-        .map_err(|e| unreadable(Box::new(e)))?;
-    let entry = tree
-        .lookup_entry(file.new_path.as_bytes().split_str("/"))
-        .map_err(|e| unreadable(Box::new(e)))?;
+/// Whether the commit `holder`'s tree has `file`'s new side at its new path, the commit and
+/// its trees read as git reads them (`Grafted`).
+fn holds(objects: &Grafted<'_>, holder: &Oid, file: &ChangedFile) -> Result<bool, Error> {
+    let entry = objects
+        .entry_in_commit(
+            &crate::object_id::object_id(holder)?,
+            file.new_path.as_bytes(),
+        )
+        .map_err(|source| Error::DiffFile {
+            path: file.new_path.to_string(),
+            source,
+        })?;
     let wanted = file
         .new_id
         .map(|id| crate::object_id::object_id(&id))
         .transpose()?;
-    Ok(entry.is_some_and(|entry| Some(entry.object_id()) == wanted))
+    Ok(entry.is_some_and(|entry| Some(entry.oid) == wanted))
 }
 
 /// What reading a file's two versions decided before git is asked anything.
@@ -146,7 +144,8 @@ pub(super) fn file_diff(
     // Read first, as `git diff` reads its configuration before it diffs anything: a value
     // it refuses refuses every file.
     let grouping = Grouping::read(repo.inner())?;
-    let content = match prepare(repo, cache, file, options)? {
+    let objects = Grafted::read(repo.inner())?;
+    let content = match prepare(&objects, cache, file, options)? {
         Prepared::Done(content) => content,
         Prepared::Text { old, new, asks_git } => {
             let readings = if asks_git {
@@ -209,6 +208,7 @@ pub(super) fn page(
     cancel: &impl Cancel,
 ) -> Result<Page, Error> {
     let grouping = Grouping::read(repo.inner())?;
+    let objects = Grafted::read(repo.inner())?;
     let mut admitted: Vec<usize> = Vec::new();
     let mut prepared: BTreeMap<usize, Prepared> = BTreeMap::new();
     let mut failed: BTreeMap<usize, Error> = BTreeMap::new();
@@ -229,7 +229,7 @@ pub(super) fn page(
             continue;
         };
         admitted.push(index);
-        let cost = match prepare(repo, cache, file, options) {
+        let cost = match prepare(&objects, cache, file, options) {
             Ok(read) => {
                 let lines = held_lines(&read);
                 prepared.insert(index, read);
@@ -713,8 +713,10 @@ fn whole(old: &[DiffLine], new: &[DiffLine]) -> Reading {
     }
 }
 
+/// One file's two versions read — through `objects`, as git reads each blob, a replace ref's
+/// blob in place of the one it replaces — and decided before git is asked anything.
 fn prepare(
-    repo: &Repository,
+    objects: &Grafted<'_>,
     cache: &mut gix::diff::blob::Platform,
     file: &ChangedFile,
     options: &ContentOptions,
@@ -739,7 +741,6 @@ fn prepare(
         return Ok(Prepared::Done(DiffContent::ModeChangeOnly));
     }
 
-    let inner = repo.inner();
     let ceiling = if options.load_anyway {
         options.limits.load_anyway_bytes
     } else {
@@ -749,7 +750,7 @@ fn prepare(
     // The size limit is tested BEFORE the content is read. An object's header
     // carries its size, so a file too large to draw is refused without inflating it.
     for id in [file.old_id, file.new_id].into_iter().flatten() {
-        let size = blob_size(inner, &id, file)?;
+        let size = blob_size(objects, &id, file)?;
         if size > ceiling {
             return Ok(Prepared::Done(DiffContent::TooLarge {
                 crossed: SizeLimit::Bytes {
@@ -764,8 +765,8 @@ fn prepare(
     // Keyed by id for an object from the database, so a file already read in this session
     // is not read again; cleared per file so the cache cannot grow with the query.
     cache.clear_resource_cache_keep_allocation();
-    set_side(inner, cache, file, ResourceKind::OldOrSource)?;
-    set_side(inner, cache, file, ResourceKind::NewOrDestination)?;
+    set_side(objects, cache, file, ResourceKind::OldOrSource)?;
+    set_side(objects, cache, file, ResourceKind::NewOrDestination)?;
 
     let prepared = cache.prepare_diff().map_err(|source| Error::DiffFile {
         path: file.new_path.to_string(),
@@ -830,19 +831,25 @@ fn prepare(
 }
 
 /// The size of one side's blob, read from its header so the object is never inflated.
-fn blob_size(repo: &gix::Repository, id: &Oid, file: &ChangedFile) -> Result<u64, Error> {
-    repo.find_header(object_id(id)?)
-        .map(|header| header.size())
-        .map_err(|source| Error::DiffFile {
-            path: file.new_path.to_string(),
-            source: Box::new(source),
-        })
+fn blob_size(objects: &Grafted<'_>, id: &Oid, file: &ChangedFile) -> Result<u64, Error> {
+    use gix::objs::FindHeader as _;
+    let id = object_id(id)?;
+    let unreadable = |source| Error::DiffFile {
+        path: file.new_path.to_string(),
+        source,
+    };
+    match objects.try_header(&id).map_err(unreadable)? {
+        Some(header) => Ok(header.size),
+        None => Err(unreadable(Box::new(
+            gix::objs::find::existing::Error::NotFound { oid: id },
+        ))),
+    }
 }
 
 /// A side that does not exist is set with the null id, which gix reads as missing content —
 /// the old side of an added file, the new side of a deleted one.
 fn set_side(
-    repo: &gix::Repository,
+    objects: &Grafted<'_>,
     cache: &mut gix::diff::blob::Platform,
     file: &ChangedFile,
     kind: ResourceKind,
@@ -853,16 +860,10 @@ fn set_side(
     };
     let id = match id {
         Some(id) => object_id(&id)?,
-        None => gix::hash::ObjectId::null(repo.object_hash()),
+        None => gix::hash::ObjectId::null(objects.object_hash()),
     };
     cache
-        .set_resource(
-            id,
-            entry_kind(mode),
-            path.as_bytes().into(),
-            kind,
-            &repo.objects,
-        )
+        .set_resource(id, entry_kind(mode), path.as_bytes().into(), kind, objects)
         .map_err(|source| Error::DiffFile {
             path: path.to_string(),
             source: Box::new(source),

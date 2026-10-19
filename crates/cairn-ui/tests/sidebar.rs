@@ -57,6 +57,7 @@ fn snapshot(mut refs: Vec<Ref>, head: HeadState, stashes: &[&str]) -> RefsSnapsh
             })
             .collect(),
         unreadable: 0,
+        substitutions: cairn_model::Substitutions::default(),
     }
 }
 

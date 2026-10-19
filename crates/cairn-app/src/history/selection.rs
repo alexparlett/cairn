@@ -178,13 +178,47 @@ pub fn swap(view: View, submit: Option<&dyn Fn(Request)>) {
     ask(of, view, submit);
 }
 
-/// Asks what `of` changed, unless it is what was asked last and its answer did not fail.
+/// What the selection compares, asked again though its answer is kept: what git substitutes
+/// as it reads a commit — a replace ref, a graft — changed, so the commit's details and what it
+/// changed may no longer be the answer kept. While Local Changes holds the main region, whose
+/// primary's diff holds the file-diff lane a changes query would take, the answer kept is
+/// marked stale instead, and asked again when the history is shown ([`show_main`]).
+pub fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
+    let mut diff = view.diff;
+    if *view.sidebar.main.peek() == cairn_ui::MainView::LocalChanges {
+        diff.write().mark_changes_stale();
+        return;
+    }
+    let Some(of) = selected_comparison(view) else {
+        return;
+    };
+    let requests = diff.write().select_changes(of);
+    if let Some(submit) = submit {
+        for request in requests {
+            submit(request);
+        }
+    }
+}
+
+/// `chosen` shown in the main region; the history shown again asks the chosen commit's changes
+/// again when what git substitutes changed while it was not ([`ask_again`]).
+pub fn show_main(chosen: cairn_ui::MainView, view: View, submit: Option<&dyn Fn(Request)>) {
+    let mut main = view.sidebar.main;
+    main.set(chosen);
+    if chosen != cairn_ui::MainView::LocalChanges && view.diff.peek().changes_stale() {
+        ask_again(view, submit);
+    }
+}
+
+/// Asks what `of` changed, unless it is what was asked last, its answer did not fail and what
+/// git substitutes has not changed since ([`crate::diff::state::DiffState::changes_stale`]).
 fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut diff = view.diff;
-    let asked = diff
-        .peek()
-        .changes()
-        .is_some_and(|(asked, answer)| asked == of && !matches!(answer, Answer::Failed(_)));
+    let asked = !diff.peek().changes_stale()
+        && diff
+            .peek()
+            .changes()
+            .is_some_and(|(asked, answer)| asked == of && !matches!(answer, Answer::Failed(_)));
     if asked {
         return;
     }

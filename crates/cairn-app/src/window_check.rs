@@ -84,6 +84,7 @@ struct Phase {
 fn kind(update: &Update) -> &'static str {
     match update {
         Update::Rows { .. } => "rows",
+        Update::Reading { .. } => "reading",
         Update::Changes { .. } => "changes",
         Update::FileDiff { .. } => "file diff",
         Update::Expanded { .. } => "expanded page",
@@ -708,6 +709,131 @@ fn window_check() {
     drop(harness);
 
     local_changes_check(&path);
+}
+
+/// The window while the history opens over the bench: the first open, from launch until what
+/// opening reads has landed, the open's count told on the way; then a reopen asked with the rows
+/// drawn, the old rows scrolled every frame until the new walk's first page replaces them, and
+/// the sidebar's filter typed a keystroke into the pass — from the keystroke to its rows
+/// arriving — every frame's UI-thread work timed; then the same keystroke with nothing opening.
+/// Run with `--release`; the bench is only read.
+#[test]
+#[ignore = "needs a large repository named by CAIRN_BENCH_REPO, and a release build"]
+fn opening_pass_check() {
+    let path = std::env::var("CAIRN_BENCH_REPO").expect("set CAIRN_BENCH_REPO");
+    eprintln!(
+        "opening pass check over {path}: {WIDTH}x{HEIGHT} at scale 1, release build: {}\n",
+        !cfg!(debug_assertions)
+    );
+    let mut harness = launch(&path);
+    let history = (WIDTH as f64 / 2., 200.);
+    let opened = harness.pump(Stimulus::Nothing, 30, landed);
+    opened.report("the first open: the refs, the first page, the sidebar's rows and the status");
+    describe_landed(&harness);
+
+    // Rows to scroll: the history paged on until a few thousand are loaded.
+    let loaded = harness.pump(
+        Stimulus::Scroll {
+            x: history.0,
+            y: history.1,
+            dy: -2400.,
+        },
+        0,
+        |view| view.rows.peek().len() >= 3_000,
+    );
+    loaded.report("the history scrolled until 3,000 rows were loaded");
+
+    // A reopen with the rows drawn, as a refresh whose refs moved asks it.
+    {
+        let submit = harness.submit();
+        let view = harness.view;
+        harness
+            .test
+            .run_in(|| session::reopen_history(view.progress, false, &submit));
+    }
+    // The sidebar's rows as drawn before the keystroke, and when the keystroke's were drawn.
+    let rows_drawn = |view: View| {
+        view.sidebar
+            .state
+            .peek()
+            .shown()
+            .map(|shown| std::sync::Arc::as_ptr(&shown.rows) as usize)
+    };
+    let keystroke_frame = 20;
+    let mut keyed: Option<(Instant, Option<usize>)> = None;
+    let mut filtered_after = None;
+    let reopened = {
+        let submit = harness.submit();
+        let (x, y) = history;
+        let mut frame = 0usize;
+        harness.pump_driven(
+            |_| {
+                vec![PlatformEvent::Wheel {
+                    name: WheelEventName::Wheel,
+                    scroll: (0., 60.).into(),
+                    cursor: (x, y).into(),
+                    source: WheelSource::Device,
+                    granularity: WheelGranularity::Pixel,
+                    timestamp: Instant::now(),
+                }]
+            },
+            10,
+            |view| {
+                frame += 1;
+                match keyed {
+                    None if frame == keystroke_frame => {
+                        let before = rows_drawn(view);
+                        let mut sidebar = view.sidebar.state;
+                        if let Some(asked) = sidebar.write().filter("1.") {
+                            keyed = Some((Instant::now(), before));
+                            submit(asked);
+                        }
+                    }
+                    Some((at, before))
+                        if filtered_after.is_none() && rows_drawn(view) != before =>
+                    {
+                        filtered_after = Some(at.elapsed());
+                    }
+                    _ => {}
+                }
+                !view.progress.peek().is_reopening()
+            },
+        )
+    };
+    reopened.report(
+        "a reopen: the old rows scrolled up 60 px a frame until the new walk's first page \
+         replaced them, a filter keystroke twenty frames in",
+    );
+    eprintln!(
+        "  the filter keystroke's rows drawn {:?} after it, the frame they arrived in included\n",
+        filtered_after.map(|after| format!("{:.1} ms", ms(after)))
+    );
+
+    // The same kind of keystroke with nothing opening.
+    let before = harness.test.run_in(|| rows_drawn(harness.view));
+    let keyed = Instant::now();
+    {
+        let submit = harness.submit();
+        let view = harness.view;
+        harness.test.run_in(|| {
+            let mut sidebar = view.sidebar.state;
+            if let Some(asked) = sidebar.write().filter("1.7") {
+                submit(asked);
+            }
+        });
+    }
+    let mut idle_after = None;
+    let _ = harness.pump(Stimulus::Nothing, 0, |view| {
+        let drawn = rows_drawn(view) != before;
+        if drawn {
+            idle_after = Some(keyed.elapsed());
+        }
+        drawn
+    });
+    eprintln!(
+        "a filter keystroke with nothing opening: its rows drawn {:?} after it",
+        idle_after.map(|after| format!("{:.1} ms", ms(after)))
+    );
 }
 
 /// Whether the window has landed what opening it reads: the refs, a

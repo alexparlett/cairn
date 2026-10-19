@@ -80,9 +80,6 @@ pub struct RowsPage {
     pub(crate) changes: Vec<LaneChange>,
     pub(crate) snapshots: Vec<LaneSnapshot>,
     pub(crate) labels: Vec<PageLabel>,
-    /// Rows the history already holds, by number, with their commits, that a page before
-    /// this one drew as lost and a ref reaches after all ([`RowsPage::reached`]).
-    pub(crate) reached: Vec<(usize, Oid)>,
 }
 
 impl RowsPage {
@@ -130,20 +127,12 @@ impl RowsPage {
     }
 
     /// Appends the row `graph` lays out for a commit no ref reaches — one only a reflog's
-    /// entry does, which Show Lost Commits draws dimmed. No ref
-    /// points at it and it is not `HEAD`'s, or a ref would reach it.
+    /// entry does, which Show Lost Commits draws dimmed. No ref points at it and it is not
+    /// `HEAD`'s, or a ref would reach it. The verdict is final: the walk yields no commit
+    /// before its children, so a row is laid out knowing every child that could reach it.
     pub fn push_lost(&mut self, graph: GraphRow, commit: PagedCommit<'_>) {
         let at = self.labels.len();
         self.push_row(graph, commit, (at, at), false, None, true);
-    }
-
-    /// Says that row `row` of the history this page is appended to — counted from the
-    /// history's first row, its commit `id` — was drawn as lost by an earlier page or this
-    /// one, and a ref reaches it after all: the walk met a child a ref reaches only after
-    /// the row was laid out, as a commit dated older than its parent makes it. Appending
-    /// the page draws that row as any other; a row that is not `id`'s is left alone.
-    pub fn reached(&mut self, row: usize, id: Oid) {
-        self.reached.push((row, id));
     }
 
     /// Whether row `index` of this page is a commit no ref reaches.

@@ -1,51 +1,60 @@
-//! The history lane's state on the repository thread: the walk held open across pages, the
-//! cursor a cold restart resumes from, and the refs it walks from.
+//! The history thread, `cairn-history`: the history lane of one repository — the walk held
+//! open across pages, the cursor a cold restart resumes from, and a find's pages — on a thread
+//! of its own, with its own thread-local repository handle, so an opening pass that reads the
+//! whole history holds up nothing but the history: the refs, the filters and the freeing of old
+//! answers are the repository thread's.
 //!
-//! The refs are read here, on the thread that owns the walk. A refresh reads them in the
-//! refs lane and compares what they would draw with the snapshot the open walk began from
-//! (`RefsSnapshot::walks_as`): the answer, [`Update::Refs`], says whether the history must be
-//! reopened, and the window — which alone numbers the history lane — asks for the reopen.
-//! A refresh never touches the walk itself, so a page being walked is never cancelled by
-//! one, and a refresh that finds nothing the graph draws changed leaves the history alone.
+//! An open walks from the snapshot the last refresh read on the repository thread
+//! (`refs.rs`). Two cases read their own, in the history lane, and answer it there before the
+//! first page: no refresh has read one (or the last open failed, which forgets it), and a walk
+//! that fails to open from it — a ref's commit deleted and pruned between the refresh and the
+//! open — when the refs read again differ: the open is then made once more, from them.
 //!
-//! An open walks from the snapshot the last refresh read. Two cases read their own, in the
-//! history lane, and answer it there before the first page: no refresh has read one (or the
-//! last open failed, which forgets it), and a walk that fails to open from it — a ref's
-//! commit deleted and pruned between the refresh and the open — when the refs read again
-//! differ: the open is then made once more, from them.
+//! **Cancellation.** An open's opening pass and its first page run under the walk's own number
+//! (`QueryLane::Walk`), which only the next open moves — a reopen asked because the refs moved,
+//! Show Lost Commits toggled — or a close stops: a find, or a find's stop, asked while a walk
+//! opens leaves the pass running, and is served once the first page is out. Every later page —
+//! a scroll's or a find's — runs under the history lane's number of the query that asked it, so
+//! the next press, scroll or stop supersedes it. The pass tells the window how far it has read
+//! once it has run 250 ms, then at most once per 100 ms (`reading.rs`).
 //!
-//! A find pages the same walk forward, a page at a time, until a page holds the row
-//! looked for or the walk ends; `pool::serve` walks one of its pages whenever no other job is
+//! A find pages the same walk forward, a page at a time, until a page holds the row looked
+//! for or the walk ends; [`serve_history`] walks one of its pages whenever no other job is
 //! waiting. Every page — a scroll's or a find's — is answered under the number of the walk it
-//! belongs to (`QueryLane::Walk`), not the query's: a page laid out before its find was
-//! superseded is still the walk's next page, and the window appends it.
+//! belongs to, not the query's: a page laid out before its find was superseded is still the
+//! walk's next page, and the window appends it.
 
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Instant;
 
-use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, Repository};
+use cairn_git::{
+    Error, HistoryCursor, HistoryRequest, HistorySession, Repository, SharedRepository,
+};
 use cairn_model::{Oid, RefsSnapshot, RowsPage};
 
+use crate::worker::configured::{Configured, Reopening};
 use crate::worker::epoch::{Epoch, Epochs, QueryLane, Superseded};
+use crate::worker::history::reading::{Pacing, ReadingPace};
+use crate::worker::history::refs::WalkedRefs;
 use crate::worker::pool::Outbox;
-use crate::worker::refresh::lane::RefreshJob;
-use crate::worker::request::{Refreshed, Update};
-use crate::worker::routing::Page;
+use crate::worker::request::Update;
+use crate::worker::routing::{HistoryJob, Page};
 
-#[derive(Default)]
 pub(crate) struct HistoryLane<'repo> {
     session: Option<HistorySession<'repo>>,
     /// `None` means the scroll has not started.
     cursor: Option<HistoryCursor>,
-    /// The snapshot the open walk began from: what a refresh compares with.
-    walked_from: Option<Arc<RefsSnapshot>>,
-    /// The snapshot the last refresh read: what the next open walks from.
-    latest: Option<Arc<RefsSnapshot>>,
-    /// The walk lane's number for the walk open: what its pages are answered under.
+    /// The refs the walk opens from, shared with the repository thread that reads them.
+    refs: WalkedRefs,
+    /// The walk lane's number for the walk open: what its pages are answered under, and what
+    /// cancels its opening pass.
     walk: Option<Epoch>,
     /// Whether the walk open — and the next one opened, should it fail — is Show Lost
     /// Commits': the open that began it said so.
     lost: bool,
+    /// When the window is told how far an opening pass has read.
+    pacing: Pacing,
 }
 
 /// What a page answered: whether it held the row a find looks for, and whether the walk
@@ -70,84 +79,157 @@ pub(crate) struct Answering<'a> {
     pub outbox: &'a Outbox,
 }
 
-impl<'repo> HistoryLane<'repo> {
-    /// A refresh's first read: the refs as they stand, under the refs lane's
-    /// `epoch`, which also cancels it. Answered as [`Update::Refs`] — `reopen` when what the
-    /// history draws differs from the snapshot its walk began from, or no walk has begun —
-    /// and handed on to the refresh thread for ahead/behind, under `ahead_behind`. A snapshot
-    /// equal to the one held is answered as that one, the new read freed here.
-    pub(crate) fn refresh(
-        &mut self,
-        repo: &Repository,
-        epoch: Epoch,
-        ahead_behind: Epoch,
-        refresh: &Sender<RefreshJob>,
-        answering: &Answering<'_>,
-    ) {
-        let read = match repo.refs(&answering.epochs.watch(epoch)) {
-            Ok(read) => read,
-            // Superseded by the next refresh: not a failure.
-            Err(Error::RefsCancelled) => return,
-            Err(error) => {
-                answering.outbox.send(
-                    Some(epoch),
-                    Update::RefreshFailed {
-                        what: Refreshed::Refs,
-                        message: error.to_string(),
-                    },
-                );
-                return;
+/// What the history thread is handed to serve with: the epochs it is cancelled by, its queue,
+/// its outbox, the refs it shares with the repository thread, the pace it tells the window
+/// an opening pass's count on, and how it opens the repository again when the configuration
+/// moves.
+pub(crate) struct Serving<'a> {
+    pub epochs: &'a Epochs,
+    pub jobs: &'a Receiver<HistoryJob>,
+    pub outbox: &'a Outbox,
+    pub refs: WalkedRefs,
+    pub pacing: Pacing,
+    pub reopening: &'a Reopening,
+}
+
+/// Why serving on one handle ended.
+enum Ended {
+    Stopped,
+    /// The configuration moved before an open: the handle is opened again and the open — the
+    /// job carried — served on the new one.
+    ConfigurationMoved,
+}
+
+/// Serves the history lane until told to stop, or until every sender has gone. A find in
+/// progress walks one page whenever no other job is waiting, so the next page, find or stop —
+/// whose number supersedes it — is taken up between its pages. Each open is walked under the
+/// configuration as it is now — whether the walk follows the replace refs is
+/// `core.useReplaceRefs`' — so a moved configuration opens the handle again first
+/// (`super::super::configured`); a scroll's or a find's page goes on in the walk it belongs to.
+pub(crate) fn serve_history(shared: &SharedRepository, serving: &Serving<'_>) {
+    let mut configured = Configured::open(shared, serving.reopening);
+    let mut finding: Option<(Epoch, Finding)> = None;
+    let mut carried: Option<HistoryJob> = None;
+    loop {
+        match serve_handle(&configured, serving, &mut finding, &mut carried) {
+            Ended::Stopped => return,
+            Ended::ConfigurationMoved => configured.reopen(),
+        }
+    }
+}
+
+/// Serves on `configured`'s handle until the thread stops or an open finds the configuration
+/// moved, which it hands back in `carried`.
+fn serve_handle(
+    configured: &Configured<'_>,
+    serving: &Serving<'_>,
+    finding: &mut Option<(Epoch, Finding)>,
+    carried: &mut Option<HistoryJob>,
+) -> Ended {
+    let epochs = serving.epochs;
+    let repo = configured.handle();
+    // Once per handle: the scroll's session borrows `repo` across turns.
+    let mut lane = HistoryLane::new(serving.refs.clone());
+    lane.pacing = serving.pacing;
+    let answering = Answering {
+        epochs,
+        outbox: serving.outbox,
+    };
+    loop {
+        // An open carried over from the handle before was opened again for: served on this
+        // one whatever its configuration's stamps say, so an open is never put off twice.
+        let followed = carried.is_some();
+        let job = match (carried.take(), *finding) {
+            (Some(job), _) => job,
+            (None, Some((epoch, find))) => match serving.jobs.try_recv() {
+                Ok(job) => job,
+                Err(TryRecvError::Empty) => {
+                    *finding = (!epochs.is_stopping()
+                        && epochs.is_current(epoch)
+                        && lane.find_page(repo, find, epoch, &answering))
+                    .then_some((epoch, find));
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => return Ended::Stopped,
+            },
+            (None, None) => match serving.jobs.recv() {
+                Ok(job) => job,
+                Err(_) => return Ended::Stopped,
+            },
+        };
+        if epochs.is_stopping() {
+            return Ended::Stopped;
+        }
+        let HistoryJob::Page { epoch, page } = job else {
+            return Ended::Stopped;
+        };
+        match page {
+            // Whatever the history lane has asked since — a find, a stop — an open whose walk is
+            // still the window's runs: its pass is superseded by the next open alone.
+            Page::Open { rows, walk, lost } => {
+                if epochs.is_current(walk) {
+                    if !followed && configured.moved() {
+                        *carried = Some(HistoryJob::Page { epoch, page });
+                        return Ended::ConfigurationMoved;
+                    }
+                    lane.open_walk(repo, rows, walk, lost, &answering);
+                }
             }
-        };
-        let snapshot = match &self.latest {
-            Some(held) if **held == read.snapshot => Arc::clone(held),
-            _ => Arc::new(read.snapshot),
-        };
-        // A failed send means the refresh thread has gone with the repository.
-        let _ = refresh.send(RefreshJob::AheadBehind {
-            epoch: ahead_behind,
-            snapshot: Arc::clone(&snapshot),
-        });
-        let reopen = !self
-            .walked_from
-            .as_ref()
-            .is_some_and(|walked| walked.walks_as(&snapshot));
-        self.latest = Some(Arc::clone(&snapshot));
-        answering
-            .outbox
-            .send(Some(epoch), Update::Refs { snapshot, reopen });
+            Page::More { rows } => {
+                if epochs.is_current(epoch) {
+                    lane.more(repo, rows, epoch, &answering);
+                }
+            }
+            Page::Find { target, rows } => {
+                if epochs.is_current(epoch) {
+                    *finding = Some((epoch, Finding { target, rows }));
+                }
+            }
+            // Its number superseded the find; there is nothing to walk.
+            Page::Stop => *finding = None,
+        }
+    }
+}
+
+impl<'repo> HistoryLane<'repo> {
+    pub(crate) fn new(refs: WalkedRefs) -> Self {
+        Self {
+            session: None,
+            cursor: None,
+            refs,
+            walk: None,
+            lost: false,
+            pacing: Pacing::default(),
+        }
     }
 
-    /// Answers one page under the history lane's `epoch`, which also cancels it.
-    pub(crate) fn page(
+    /// Drops the walk open and opens the one numbered `walk` — Show Lost Commits' when `lost` —
+    /// answering its first page; its opening pass and that page run under `walk`'s number.
+    pub(crate) fn open_walk(
         &mut self,
         repo: &'repo Repository,
-        page: Page,
+        rows: usize,
+        walk: Epoch,
+        lost: bool,
+        answering: &Answering<'_>,
+    ) {
+        self.session = None;
+        self.cursor = None;
+        self.walk = Some(walk);
+        self.lost = lost;
+        self.open(repo, rows, None, answering);
+    }
+
+    /// The walk's next `rows` rows, a scroll's, under the history lane's `epoch`, which also
+    /// cancels them.
+    pub(crate) fn more(
+        &mut self,
+        repo: &'repo Repository,
+        rows: usize,
         epoch: Epoch,
         answering: &Answering<'_>,
     ) {
-        let rows = match page {
-            Page::Open { rows, walk, lost } => {
-                // A different scroll: drop the open walk first.
-                self.replace_walk(walk, lost);
-                rows
-            }
-            Page::More { rows } => rows,
-            // `pool::serve` walks a find a page at a time (`find_page`), and a stop asks nothing.
-            Page::Find { .. } | Page::Stop => return,
-        };
         self.answer(repo, rows, None, epoch, answering);
-    }
-
-    /// Lets go of the walk open for the one an open numbered `walk` begins — Show Lost
-    /// Commits' when `lost` — without walking it: the open was superseded before it started,
-    /// and what superseded it pages the new walk from its start.
-    pub(crate) fn replace_walk(&mut self, walk: Epoch, lost: bool) {
-        self.session = None;
-        self.cursor = None;
-        self.walked_from = None;
-        self.walk = Some(walk);
-        self.lost = lost;
     }
 
     /// One page of `find`, under the history lane's `epoch`, which also cancels it: answered
@@ -164,11 +246,18 @@ impl<'repo> HistoryLane<'repo> {
             .is_some_and(|paged| !paged.found && !paged.complete)
     }
 
+    /// The walk's number, or — when no open has numbered one — the walk lane's now.
+    fn walk(&mut self, answering: &Answering<'_>) -> Epoch {
+        *self
+            .walk
+            .get_or_insert_with(|| answering.epochs.current(QueryLane::Walk))
+    }
+
     /// Answers the walk's next `rows` rows under the history lane's `epoch`, which also
-    /// cancels the walk: from the walk held, one restarted cold from the last good page's
-    /// cursor, or — with neither — one opened now. Says what the page answered, and whether
-    /// it held `target`'s row; `None` when nothing was answered — superseded mid-page (the
-    /// session keeps its rows), or failed, which is said.
+    /// cancels them: from the walk held, one restarted cold from the last good page's cursor
+    /// — its opening pass under the walk's number — or, with neither, one opened now. Says
+    /// what the page answered, and whether it held `target`'s row; `None` when nothing was
+    /// answered — superseded mid-page (the session keeps its rows), or failed, which is said.
     fn answer(
         &mut self,
         repo: &'repo Repository,
@@ -177,7 +266,6 @@ impl<'repo> HistoryLane<'repo> {
         epoch: Epoch,
         answering: &Answering<'_>,
     ) -> Option<Paged> {
-        let cancel = answering.epochs.watch(epoch);
         if self.session.is_none() {
             match self.cursor.clone() {
                 // Cold restart from the last good page, from the snapshot it began from.
@@ -188,9 +276,20 @@ impl<'repo> HistoryLane<'repo> {
                         return None;
                     }
                 },
-                None => return self.open(repo, rows, target, epoch, answering),
+                None => return self.open(repo, rows, target, answering),
+            }
+            // Rows are drawn already: the strip says a walk replacing them reads, and this one
+            // replaces nothing, so the window is told no count.
+            match self.open_pass(answering, false) {
+                Ok(()) => {}
+                Err(Error::Cancelled { .. }) => return None,
+                Err(error) => {
+                    self.failed(error, epoch, answering);
+                    return None;
+                }
             }
         }
+        let cancel = answering.epochs.watch(epoch);
         match self.next_page(rows, &cancel) {
             Ok((page, complete)) => Some(self.send_rows(page, complete, target, answering)),
             // Superseded mid-page: the session keeps its rows. Nothing is sent.
@@ -205,56 +304,53 @@ impl<'repo> HistoryLane<'repo> {
     /// A page of the walk open, answered under the walk's number; whether it held
     /// `target`'s row is read off it first.
     fn send_rows(
-        &self,
+        &mut self,
         rows: RowsPage,
         complete: bool,
         target: Option<Oid>,
         answering: &Answering<'_>,
     ) -> Paged {
         let found = target.is_some_and(|target| rows.ids().any(|id| id == target));
-        answering.outbox.send(
-            self.walk
-                .or_else(|| Some(answering.epochs.current(QueryLane::Walk))),
-            Update::Rows { rows, complete },
-        );
+        let walk = self.walk(answering);
+        answering
+            .outbox
+            .send(Some(walk), Update::Rows { rows, complete });
         Paged { found, complete }
     }
 
-    /// A new walk from every ref, and its first page.
+    /// A new walk from every ref, and its first page, under the walk's number: what it opens
+    /// from is read off the shared refs, or read now.
     fn open(
         &mut self,
         repo: &'repo Repository,
         rows: usize,
         target: Option<Oid>,
-        epoch: Epoch,
         answering: &Answering<'_>,
     ) -> Option<Paged> {
-        if self.walk.is_none() {
-            self.walk = Some(answering.epochs.current(QueryLane::Walk));
-        }
-        let cancel = answering.epochs.watch(epoch);
-        let (snapshot, read_now) = match self.latest.clone() {
+        let walk = self.walk(answering);
+        let cancel = answering.epochs.watch(walk);
+        let (snapshot, read_now) = match self.refs.opening() {
             Some(snapshot) => (snapshot, false),
             None => match repo.refs(&cancel) {
                 Ok(read) => (Arc::new(read.snapshot), true),
                 Err(Error::RefsCancelled) => return None,
                 Err(error) => {
-                    self.failed(error, epoch, answering);
+                    self.failed(error, walk, answering);
                     return None;
                 }
             },
         };
         if read_now {
-            self.latest = Some(Arc::clone(&snapshot));
+            self.refs.read_for_open(&snapshot);
             answering.outbox.send(
-                Some(epoch),
+                Some(walk),
                 Update::Refs {
                     snapshot: Arc::clone(&snapshot),
                     reopen: false,
                 },
             );
         }
-        let error = match self.first_page(repo, &snapshot, rows, &cancel) {
+        let error = match self.first_page(repo, &snapshot, rows, &cancel, answering) {
             Ok((page, complete)) => return Some(self.send_rows(page, complete, target, answering)),
             Err(Error::Cancelled { .. }) => return None,
             Err(error) if read_now => error,
@@ -265,15 +361,15 @@ impl<'repo> HistoryLane<'repo> {
                 match repo.refs(&cancel) {
                     Ok(read) if !read.snapshot.walks_as(&snapshot) => {
                         let fresh = Arc::new(read.snapshot);
-                        self.latest = Some(Arc::clone(&fresh));
+                        self.refs.read_for_open(&fresh);
                         answering.outbox.send(
-                            Some(epoch),
+                            Some(walk),
                             Update::Refs {
                                 snapshot: Arc::clone(&fresh),
                                 reopen: false,
                             },
                         );
-                        match self.first_page(repo, &fresh, rows, &cancel) {
+                        match self.first_page(repo, &fresh, rows, &cancel, answering) {
                             Ok((page, complete)) => {
                                 return Some(self.send_rows(page, complete, target, answering));
                             }
@@ -287,17 +383,19 @@ impl<'repo> HistoryLane<'repo> {
                 }
             }
         };
-        self.failed(error, epoch, answering);
+        self.failed(error, walk, answering);
         None
     }
 
-    /// Opens the walk from `snapshot` and reads its first page.
+    /// Opens the walk from `snapshot` — its opening pass — and reads its first page, both
+    /// under `cancel`, the walk's.
     fn first_page(
         &mut self,
         repo: &'repo Repository,
         snapshot: &Arc<RefsSnapshot>,
         rows: usize,
         cancel: &Superseded,
+        answering: &Answering<'_>,
     ) -> Result<(RowsPage, bool), Error> {
         let request = HistoryRequest::from_refs(snapshot, rows);
         let request = if self.lost {
@@ -306,8 +404,33 @@ impl<'repo> HistoryLane<'repo> {
             request
         };
         self.session = Some(repo.history_session(&request)?);
-        self.walked_from = Some(Arc::clone(snapshot));
+        self.open_pass(answering, true)?;
         self.next_page(rows, cancel)
+    }
+
+    /// The session's opening pass, under the walk's number — the window told how far it has
+    /// read on the pace `reading.rs` sets when `told`, as for a walk its first page will open.
+    /// Any failure but a cancel drops the session.
+    fn open_pass(&mut self, answering: &Answering<'_>, told: bool) -> Result<(), Error> {
+        let walk = self.walk(answering);
+        let cancel = answering.epochs.watch(walk);
+        let mut pace = ReadingPace::starting(Instant::now(), self.pacing);
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        let opened = session.open_walk(&cancel, self.pacing.every, &mut |commits| {
+            if told && pace.due(Instant::now()) {
+                answering
+                    .outbox
+                    .send(Some(walk), Update::Reading { commits });
+            }
+        });
+        if let Err(error) = &opened
+            && !matches!(error, Error::Cancelled { .. })
+        {
+            self.session = None;
+        }
+        opened
     }
 
     /// The next page of the walk open. Any failure but a cancel drops the session, so the
@@ -331,13 +454,12 @@ impl<'repo> HistoryLane<'repo> {
         }
     }
 
-    /// The walk failed: it is forgotten with the refs it began from, so the next open reads
-    /// them afresh and the next refresh reopens.
+    /// The walk failed, said under `epoch`: it is forgotten with the refs it began from, so
+    /// the next open reads them afresh and the next refresh reopens.
     fn failed(&mut self, error: Error, epoch: Epoch, answering: &Answering<'_>) {
         self.session = None;
         if self.cursor.is_none() {
-            self.walked_from = None;
-            self.latest = None;
+            self.refs.forget();
         }
         answering.outbox.send(
             Some(epoch),
@@ -379,19 +501,10 @@ mod tests {
             epochs: &epochs,
             outbox: &outbox,
         };
-        let mut lane = HistoryLane::default();
-        let opened = epochs.bump(QueryLane::History);
+        let mut lane = HistoryLane::new(WalkedRefs::default());
+        epochs.bump(QueryLane::History);
         let walk = epochs.bump(QueryLane::Walk);
-        lane.page(
-            &repo,
-            Page::Open {
-                rows: 2,
-                walk,
-                lost: false,
-            },
-            opened,
-            &answering,
-        );
+        lane.open_walk(&repo, 2, walk, false, &answering);
         let first: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
         let first_rows: Vec<Oid> = first
             .iter()
@@ -405,7 +518,7 @@ mod tests {
 
         let stale = epochs.bump(QueryLane::History);
         let current = epochs.bump(QueryLane::History);
-        lane.page(&repo, Page::More { rows: 1_000_000 }, stale, &answering);
+        lane.more(&repo, 1_000_000, stale, &answering);
         let after_stale: Vec<(Option<Epoch>, Update)> =
             sent.try_iter().map(|sent| sent.opened()).collect();
         assert!(
@@ -417,7 +530,7 @@ mod tests {
             "the superseded page dropped the walk"
         );
 
-        lane.page(&repo, Page::More { rows: 2 }, current, &answering);
+        lane.more(&repo, 2, current, &answering);
         let next: Vec<(Option<Epoch>, Update)> =
             sent.try_iter().map(|sent| sent.opened()).collect();
         match next.as_slice() {
@@ -432,6 +545,368 @@ mod tests {
             }
             other => panic!("expected the next two rows, got {other:?}"),
         }
+    }
+
+    /// An opening pass is superseded by the next walk alone: an open whose walk lane has moved
+    /// on — a reopen asked after it — ends its pass at the first commit it would read and sends
+    /// nothing, in a sliver of the time the same pass takes when its walk is current, which is
+    /// read first; one whose history lane alone moved on — a find and its stop asked after it —
+    /// runs its pass and sends its first page. Over a line long enough that its pass takes a
+    /// measurable while. Caught by: the pass handed a fresh `CancelSignal` or a number nothing
+    /// moves (the superseded open runs the whole pass), or the open sent under the history lane's
+    /// number (its first page dropped as superseded).
+    #[test]
+    fn an_opening_pass_is_superseded_by_the_next_walk_alone() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-pass-superseded",
+            100_000,
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::new(WalkedRefs::default());
+
+        epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        // A find and its stop, asked after the open.
+        epochs.bump(QueryLane::History);
+        epochs.bump(QueryLane::History);
+        let started = Instant::now();
+        lane.open_walk(&repo, 3, walk, false, &answering);
+        let pass = started.elapsed();
+        let answered: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let first = answered.iter().find_map(|(epoch, update)| match update {
+            Update::Rows { rows, .. } => Some((*epoch, rows.ids().collect::<Vec<_>>())),
+            _ => None,
+        });
+        assert_eq!(first, Some((Some(walk), line.commits[..3].to_vec())));
+
+        epochs.bump(QueryLane::History);
+        let superseded = epochs.bump(QueryLane::Walk);
+        // The reopen asked after it.
+        epochs.bump(QueryLane::Walk);
+        let started = Instant::now();
+        lane.open_walk(&repo, 3, superseded, false, &answering);
+        let stopped = started.elapsed();
+        let after: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        assert!(after.is_empty(), "a superseded open sent {after:?}");
+        assert!(
+            stopped < pass / 10,
+            "a superseded open took {stopped:?} of a {pass:?} pass"
+        );
+    }
+
+    /// The history thread over `path`, started with `jobs` already queued and the epochs as the
+    /// caller left them, so nothing it does races what was asked; it serves until `sender` —
+    /// handed back — is dropped. What it sends is read raw, beneath the epoch filter, and
+    /// carries no count of an opening pass (`Pacing::UNTOLD`).
+    fn serving(
+        path: &std::path::Path,
+        epochs: &Epochs,
+        jobs: Vec<HistoryJob>,
+    ) -> (
+        std::sync::mpsc::Sender<HistoryJob>,
+        std::sync::mpsc::Receiver<crate::worker::pool::Envelope>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let shared = cairn_git::SharedRepository::discover(path)
+            .unwrap_or_else(|error| panic!("opening {}: {error}", path.display()));
+        let (sender, queue) = std::sync::mpsc::channel();
+        for job in jobs {
+            sender
+                .send(job)
+                .unwrap_or_else(|error| panic!("queueing: {error}"));
+        }
+        let (outbox, sent) = Outbox::watched();
+        let epochs = epochs.clone();
+        let reopening = crate::worker::configured::Reopening::for_tests();
+        let thread = std::thread::spawn(move || {
+            let serving = Serving {
+                epochs: &epochs,
+                jobs: &queue,
+                outbox: &outbox,
+                refs: WalkedRefs::default(),
+                pacing: Pacing::UNTOLD,
+                reopening: &reopening,
+            };
+            serve_history(&shared, &serving);
+        });
+        (sender, sent, thread)
+    }
+
+    /// The rows each page sent carried, page by page, and whether any page said the walk ended.
+    fn pages_of(sent: &[(Option<Epoch>, Update)]) -> (Vec<Vec<Oid>>, bool) {
+        let mut ended = false;
+        let pages = sent
+            .iter()
+            .filter_map(|(_, update)| match update {
+                Update::Rows { rows, complete } => {
+                    ended |= complete;
+                    Some(rows.ids().collect())
+                }
+                _ => None,
+            })
+            .collect();
+        (pages, ended)
+    }
+
+    /// An open whose walk is still the window's runs — its pass and its first page — whatever
+    /// the history lane asked after it: here a find and its stop, queued behind it and numbered
+    /// past it before the history thread starts, so no ordering of threads decides it. The
+    /// find, superseded by its stop before it was taken up, walks nothing. Caught by: an open
+    /// that heeds the history lane's number (dropped, no first page — the window waits on it for
+    /// good), or a find walked though its number was superseded.
+    #[test]
+    fn an_open_runs_whatever_the_history_lane_asked_after_it() {
+        let line =
+            crate::worker::written_repository::WrittenRepository::linear("cairn-open-runs", 50);
+        let epochs = Epochs::new();
+        let opened = epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        let found = epochs.bump(QueryLane::History);
+        let stopped = epochs.bump(QueryLane::History);
+        let jobs = vec![
+            HistoryJob::Page {
+                epoch: opened,
+                page: Page::Open {
+                    rows: 3,
+                    walk,
+                    lost: false,
+                },
+            },
+            HistoryJob::Page {
+                epoch: found,
+                page: Page::Find {
+                    target: Oid::from_bytes(&[0x11; 20]).unwrap_or_else(|error| panic!("{error}")),
+                    rows: 1,
+                },
+            },
+            HistoryJob::Page {
+                epoch: stopped,
+                page: Page::Stop,
+            },
+        ];
+        let (sender, sent, thread) = serving(line.path(), &epochs, jobs);
+        drop(sender);
+        thread
+            .join()
+            .unwrap_or_else(|_| panic!("the history thread panicked"));
+        let sent: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let (pages, _) = pages_of(&sent);
+        assert_eq!(
+            pages,
+            vec![line.commits[..3].to_vec()],
+            "not the open's first page alone"
+        );
+        assert!(
+            sent.iter()
+                .filter(|(_, update)| matches!(update, Update::Rows { .. }))
+                .all(|(epoch, _)| *epoch == Some(walk)),
+            "a page answered under another number than the walk's"
+        );
+    }
+
+    /// A stop ends a running find within a page: once the stop's number has superseded the
+    /// find — what was sent until then read — at most the page being walked and one sent as the
+    /// stop was queued arrive, and the walk does not end. Over a line long enough that a find of
+    /// one row a page would page on for a measurable while. Caught by: a find that runs on after
+    /// its number was superseded — heeding neither that number before each page, nor its page's
+    /// cancel, nor the stop it is sent (more pages arrive, and the walk ends).
+    #[test]
+    fn a_stop_ends_a_running_find_within_a_page() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-stop-ends-find",
+            100_000,
+        );
+        let epochs = Epochs::new();
+        let opened = epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        let found = epochs.bump(QueryLane::History);
+        let jobs = vec![
+            HistoryJob::Page {
+                epoch: opened,
+                page: Page::Open {
+                    rows: 1,
+                    walk,
+                    lost: false,
+                },
+            },
+            HistoryJob::Page {
+                epoch: found,
+                page: Page::Find {
+                    target: Oid::from_bytes(&[0x11; 20]).unwrap_or_else(|error| panic!("{error}")),
+                    rows: 1,
+                },
+            },
+        ];
+        let (sender, sent, thread) = serving(line.path(), &epochs, jobs);
+        // The open's page and the find's first: the find is paging.
+        let mut before = Vec::new();
+        while pages_of(&before).0.len() < 2 {
+            match sent.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(envelope) => before.push(envelope.opened()),
+                Err(error) => panic!("no page came: {error}"),
+            }
+        }
+        let stopped = epochs.bump(QueryLane::History);
+        before.extend(sent.try_iter().map(|sent| sent.opened()));
+        sender
+            .send(HistoryJob::Page {
+                epoch: stopped,
+                page: Page::Stop,
+            })
+            .unwrap_or_else(|error| panic!("queueing the stop: {error}"));
+        drop(sender);
+        thread
+            .join()
+            .unwrap_or_else(|_| panic!("the history thread panicked"));
+        let after: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let (late, ended) = pages_of(&after);
+        assert!(!ended, "the find walked to the end of the line");
+        assert!(
+            late.len() <= 2,
+            "{} pages arrived after the stop was queued",
+            late.len()
+        );
+    }
+
+    /// A cold restart — the walk dropped by a failed page, the next resumed from the last good
+    /// page's cursor — runs its opening pass again but tells the window no count: its rows are
+    /// drawn already, and the strip says a walk replacing them reads. Here on a pace with no
+    /// hold-back and no interval, on which the open before it told its counts. Caught by: a cold
+    /// restart that tells its pass's counts (the strip drawn over rows nothing is replacing).
+    #[test]
+    fn a_cold_restart_tells_the_window_no_count() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-cold-restart",
+            20_000,
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::new(WalkedRefs::default());
+        lane.pacing = Pacing {
+            after: std::time::Duration::ZERO,
+            every: std::time::Duration::ZERO,
+        };
+        let walk = epochs.bump(QueryLane::Walk);
+        lane.open_walk(&repo, 3, walk, false, &answering);
+        let opening: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
+        assert!(
+            opening
+                .iter()
+                .any(|update| matches!(update, Update::Reading { .. })),
+            "the open told no count"
+        );
+
+        // As a failed page leaves it: the walk dropped, its cursor kept.
+        lane.session = None;
+        let more = epochs.bump(QueryLane::History);
+        lane.more(&repo, 2, more, &answering);
+        let resumed: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
+        assert!(
+            !resumed
+                .iter()
+                .any(|update| matches!(update, Update::Reading { .. })),
+            "a cold restart told its count"
+        );
+        let rows: Vec<Oid> = resumed
+            .iter()
+            .filter_map(|update| match update {
+                Update::Rows { rows, .. } => Some(rows.ids().collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(
+            rows,
+            line.commits[3..5],
+            "the restart did not take the walk up"
+        );
+    }
+
+    /// The window is told how far an opening pass has read, under the walk's number and before
+    /// its first page, the count rising and never past the commits in the line — here on a pace
+    /// with no hold-back and no interval, so every count the walk reports is told; a pass shorter
+    /// than its hold-back tells nothing. Caught by: the walk's
+    /// count dropped on its way to the window (none told), told under another number than the
+    /// walk's (dropped as superseded), or told on the window's pace before the pass has run its
+    /// hold-back.
+    #[test]
+    fn the_window_is_told_how_far_an_opening_pass_has_read() {
+        let line = crate::worker::written_repository::WrittenRepository::packed(
+            "cairn-pass-counted",
+            20_000,
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::new(WalkedRefs::default());
+        lane.pacing = Pacing {
+            after: std::time::Duration::ZERO,
+            every: std::time::Duration::ZERO,
+        };
+        let walk = epochs.bump(QueryLane::Walk);
+        lane.open_walk(&repo, 3, walk, false, &answering);
+        let answered: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        let counts: Vec<usize> = answered
+            .iter()
+            .take_while(|(_, update)| !matches!(update, Update::Rows { .. }))
+            .filter_map(|(epoch, update)| match update {
+                Update::Reading { commits } => {
+                    assert_eq!(*epoch, Some(walk), "a count told under another number");
+                    Some(*commits)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(counts.len() >= 4, "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] < pair[1]),
+            "{counts:?}"
+        );
+        assert!(counts.iter().all(|&count| count <= line.commits.len()));
+        assert!(
+            answered
+                .iter()
+                .any(|(_, update)| matches!(update, Update::Rows { .. })),
+            "no first page"
+        );
+
+        // Every count the walk reports, but a hold-back longer than the pass.
+        let mut paced = HistoryLane::new(WalkedRefs::default());
+        paced.pacing = Pacing {
+            after: std::time::Duration::from_secs(3600),
+            every: std::time::Duration::ZERO,
+        };
+        let walk = epochs.bump(QueryLane::Walk);
+        paced.open_walk(&repo, 3, walk, false, &answering);
+        let told = sent
+            .try_iter()
+            .map(|sent| sent.opened().1)
+            .filter(|update| matches!(update, Update::Reading { .. }))
+            .count();
+        assert_eq!(told, 0, "a pass shorter than the hold-back told its count");
     }
 
     /// An open asked as Show Lost Commits' walks from the
@@ -468,20 +943,11 @@ mod tests {
             epochs: &epochs,
             outbox: &outbox,
         };
-        let mut lane = HistoryLane::default();
+        let mut lane = HistoryLane::new(WalkedRefs::default());
         let mut open = |lost: bool| -> Vec<(Oid, bool)> {
-            let opened = epochs.bump(QueryLane::History);
+            epochs.bump(QueryLane::History);
             let walk = epochs.bump(QueryLane::Walk);
-            lane.page(
-                &repo,
-                Page::Open {
-                    rows: 64,
-                    walk,
-                    lost,
-                },
-                opened,
-                &answering,
-            );
+            lane.open_walk(&repo, 64, walk, lost, &answering);
             sent.try_iter()
                 .filter_map(|sent| match sent.opened().1 {
                     Update::Rows { rows, .. } => Some(
@@ -536,22 +1002,12 @@ mod tests {
             epochs: &epochs,
             outbox: &outbox,
         };
-        let mut lane = HistoryLane {
-            latest: Some(Arc::new(stale)),
-            ..HistoryLane::default()
-        };
-        let epoch = epochs.bump(QueryLane::History);
+        let mut lane = HistoryLane::new(WalkedRefs::holding(stale));
+        // Only the refs and the first page are read: no count of a pass outrunning the hold-back.
+        lane.pacing = Pacing::UNTOLD;
+        epochs.bump(QueryLane::History);
         let walk = epochs.bump(QueryLane::Walk);
-        lane.page(
-            &repo,
-            Page::Open {
-                rows: 3,
-                walk,
-                lost: false,
-            },
-            epoch,
-            &answering,
-        );
+        lane.open_walk(&repo, 3, walk, false, &answering);
         drop(outbox);
 
         let answers: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
@@ -565,7 +1021,7 @@ mod tests {
             other => panic!("expected the refs read again and the first page, got {other:?}"),
         }
         assert_eq!(
-            lane.walked_from.as_deref(),
+            lane.refs.walked_from().as_deref(),
             Some(&fresh),
             "the walk is not the one from the refs read again"
         );

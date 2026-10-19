@@ -2,8 +2,10 @@
 //!
 //! A walk starts from `HEAD`, from given commits, or from a refs snapshot — every branch,
 //! remote-tracking ref, tag and `HEAD` — whose rows then carry the refs that label them and
-//! whose stashes are rows of their own (`stream`).
+//! whose stashes are rows of their own (`stream`). The history walks in git's date order
+//! (`date_order`), as `git log --date-order` and Fork's graph do.
 
+mod date_order;
 mod reach;
 mod reflogs;
 mod seeds;
@@ -17,6 +19,7 @@ use cairn_model::{
     GraphRow, LaneAssigner, Oid, PagedCommit, PagedStash, RefName, RefsSnapshot, RowsPage,
 };
 
+pub use date_order::{DateOrderTips, DateOrderWalk, DateOrdered};
 pub use session::HistorySession;
 
 use reach::Reach;
@@ -27,28 +30,34 @@ use crate::commit_encoding::CommitEncoding;
 use crate::object_id::{model_id, object_id};
 use crate::{Cancel, Error, Repository};
 
-/// Neither order is topological: a parent can arrive before its child.
+/// The order a walk yields its commits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryOrder {
-    /// Newest committer date first.
+    /// Newest committer date first; not topological: a parent can arrive before its child.
     CommitTime,
-    /// Unsorted, as the commit graph mentions them; branches interleave.
+    /// Unsorted, as the commit graph mentions them; branches interleave, and a parent can
+    /// arrive before its child.
     GraphOrder,
+    /// `git log --date-order`'s: no commit before all of its children, otherwise newest
+    /// committer date first, ties in the order git queues them (`date_order`).
+    DateOrder,
 }
 
 impl Default for HistoryOrder {
-    /// Commit time: cheaper than graph order once lanes are laid out.
+    /// git's date order: the history's, so no commit is drawn above any of its children.
     fn default() -> Self {
-        Self::CommitTime
+        Self::DateOrder
     }
 }
 
 impl HistoryOrder {
-    fn sorting(self) -> gix::traverse::commit::simple::Sorting {
+    /// gitoxide's sorting for its own traversal; `None` for date order, which is Cairn's.
+    fn sorting(self) -> Option<gix::traverse::commit::simple::Sorting> {
         use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
         match self {
-            Self::CommitTime => Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
-            Self::GraphOrder => Sorting::BreadthFirst,
+            Self::CommitTime => Some(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst)),
+            Self::GraphOrder => Some(Sorting::BreadthFirst),
+            Self::DateOrder => None,
         }
     }
 }
@@ -82,20 +91,27 @@ impl Marking {
     }
 }
 
-/// The walk `tips` begin under `marking`: an unread marking has its reflogs read first, under
-/// `cancel`, and the ids they name that are not tips already joined to the tips after the
-/// refs' own. `None` when `cancel` fired; nothing is kept.
+/// The walk `tips` begin under `marking`, with the decoration's stashes: an unread marking has
+/// its reflogs read first, under `cancel`, and the ids they name that are not tips already
+/// joined to the tips after the refs' own. In git's date order each stash is a tip on its base
+/// after the refs and before the reflog ids, as `git log --date-order` is given them; another
+/// order places the stashes itself (`stream`). `None` when `cancel` fired; nothing is kept.
+/// How many commits date order's opening pass has read goes to `report`, at most once per
+/// `every` (`walk::open_from`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part of where and how the walk opens; none belongs with another"
+)]
 fn open_stream<'repo>(
     repo: &'repo gix::Repository,
     tips: &mut Tips,
     marking: &mut Marking,
     decoration: &Arc<Decoration>,
     order: HistoryOrder,
-    lookahead: usize,
     cancel: &impl Cancel,
+    report: &mut dyn FnMut(usize),
+    every: std::time::Duration,
 ) -> Result<Option<Stream<'repo>>, Error> {
-    // The reflog tips' dates, read with their ids: the walk reads none of them again.
-    let mut known = std::collections::HashMap::new();
     if let Marking::Unread(branches) = marking {
         let Some(reflog_tips) = reflogs::reflog_tips(repo, branches, cancel)? else {
             return Ok(None);
@@ -105,24 +121,47 @@ fn open_stream<'repo>(
         // A set, not a scan of the tips per reflog id: thousands of each on a long reflog.
         let mut seen: std::collections::HashSet<gix::hash::ObjectId> =
             tips.iter().copied().collect();
-        known.reserve(reflog_tips.len());
-        for (id, date) in reflog_tips {
+        for id in reflog_tips {
             if seen.insert(id) {
                 all.push(id);
-                known.insert(id, date);
             }
         }
         *tips = all.into();
         *marking = Marking::Read { refs };
     }
     let reach = marking.reach(tips)?;
-    let Some(walk) = walk::open_dated(repo, tips, order, known, cancel)? else {
+    let (refs, reflogs) = match marking {
+        Marking::Read { refs } => tips.split_at((*refs).min(tips.len())),
+        Marking::Off | Marking::Unread(_) => (&tips[..], &[][..]),
+    };
+    let stashes_walked = order == HistoryOrder::DateOrder;
+    let stashes = if stashes_walked {
+        decoration
+            .stashes()
+            .iter()
+            .map(|stash| Ok((object_id(&stash.id)?, object_id(&stash.base)?)))
+            .collect::<Result<Vec<_>, Error>>()?
+    } else {
+        Vec::new()
+    };
+    let walk_tips = date_order::Tips {
+        refs,
+        stashes: &stashes,
+        reflogs,
+    };
+    // One read of what git substitutes, for the walk and for each row's commit read after it,
+    // so a row's subject and author are the replacement's wherever its place is.
+    let substitutions = walk::Substitutions::read(repo)?;
+    let objects = walk::Grafted::new(&repo.objects, substitutions.clone());
+    let Some(walk) = walk::open_from(repo, substitutions, walk_tips, order, cancel, report, every)?
+    else {
         return Ok(None);
     };
     Ok(Some(Stream::new(
         walk,
+        objects,
         Arc::clone(decoration),
-        lookahead,
+        stashes_walked,
         reach,
     )))
 }
@@ -138,7 +177,6 @@ pub struct HistoryCursor {
     marking: Marking,
     order: HistoryOrder,
     window: usize,
-    lookahead: usize,
     walked: usize,
 }
 
@@ -165,7 +203,6 @@ pub struct HistoryRequest {
     order: HistoryOrder,
     limit: usize,
     window: usize,
-    lookahead: usize,
 }
 
 impl HistoryRequest {
@@ -178,24 +215,24 @@ impl HistoryRequest {
     }
 
     /// Every commit the snapshot's local branches, remote-tracking refs and tags identify,
-    /// and `HEAD`'s — git's `rev-list --branches --remotes --tags HEAD` — each row carrying
-    /// the refs that point at it and whether it is `HEAD`'s, and each stash whose base the
-    /// walk reaches a row of its own. A tag on a tree or a blob seeds nothing; nothing about
-    /// a stash seeds the walk.
+    /// and `HEAD`'s — git's `rev-list --branches --remotes --tags HEAD`, in that order of
+    /// tips — each row carrying the refs that point at it and whether it is `HEAD`'s, and
+    /// each stash whose base the refs reach a row of its own. A tag on a tree or a blob seeds
+    /// nothing; in date order each stash is a tip whose one parent is its base, after
+    /// `HEAD`'s.
     pub fn from_refs(snapshot: &RefsSnapshot, limit: usize) -> Self {
         Self::starting(Start::Refs(Box::new(RefSeeds::of(snapshot))), limit)
     }
 
     /// Continues where the page that produced `cursor` stopped.
     pub fn resume(cursor: HistoryCursor, limit: usize) -> Self {
-        let (order, window, lookahead) = (cursor.order, cursor.window, cursor.lookahead);
+        let (order, window) = (cursor.order, cursor.window);
         Self {
             start: Start::Resume(cursor),
             lost: false,
             order,
             limit,
             window,
-            lookahead,
         }
     }
 
@@ -206,33 +243,24 @@ impl HistoryRequest {
             order: HistoryOrder::default(),
             limit,
             window: LaneAssigner::DEFAULT_WINDOW,
-            lookahead: stream::LOOKAHEAD,
         }
-    }
-
-    /// How many commits the walk looks ahead, when a stash's date comes up, for the commit
-    /// it was made on before drawing it directly above that commit instead (`stream`).
-    /// Zero is raised to one. Ignored when resuming.
-    pub fn with_stash_lookahead(mut self, commits: usize) -> Self {
-        if !matches!(self.start, Start::Resume(_)) {
-            self.lookahead = commits.max(1);
-        }
-        self
     }
 
     /// Show Lost Commits: a walk from refs also starts from the old and the new id of every
     /// entry of `HEAD`'s reflog and of each local branch's — as `git rev-list --reflog` reads
-    /// them, each log read whole — and each row of a commit no ref reaches is carried as lost
-    /// ([`RowsPage::push_lost`]), or, when the walk finds a ref reaches it only after its row
-    /// was carried, named reached by a later page ([`RowsPage::reached`]). The reflogs are
-    /// read when the walk opens, under the first page's cancel. Ignored unless the walk
+    /// them, each log read whole — after the stashes, and each row of a commit no ref reaches
+    /// is carried as lost ([`RowsPage::push_lost`]). Such a walk is in git's date order,
+    /// whatever order is asked: it yields no commit before its children, so whether a ref
+    /// reaches a commit is known, finally, when its row is laid out (`reach`). The reflogs
+    /// are read when the walk opens, under the first page's cancel. Ignored unless the walk
     /// starts from refs; a resumed walk keeps what its cursor began with.
     pub fn with_lost_commits(mut self) -> Self {
         self.lost = true;
         self
     }
 
-    /// Ignored when resuming: the cursor carries the order.
+    /// Ignored when resuming, where the cursor carries the order, and by Show Lost Commits,
+    /// which walks in date order.
     pub fn with_order(mut self, order: HistoryOrder) -> Self {
         if !matches!(self.start, Start::Resume(_)) {
             self.order = order;
@@ -265,9 +293,10 @@ pub struct HistoryPage {
 }
 
 impl Repository {
-    /// `cancel` is polled once per row laid out, per commit looked ahead at, and per tip
-    /// read to open the walk but the first (`walk::open`). Resuming replays the walk, so
-    /// page `k` walks `k x limit` rows.
+    /// `cancel` is polled once per row laid out, and while the walk opens: in date order
+    /// before each tip and each commit its opening pass reads (`date_order`), in commit-time
+    /// order per tip read but the first (`walk::open`). Resuming opens the walk again and
+    /// replays it, so page `k` walks `k x limit` rows after the opening pass.
     pub fn history(
         &self,
         request: &HistoryRequest,
@@ -288,7 +317,6 @@ fn read_page(
         mut marking,
         order,
         window,
-        lookahead,
         skip,
     } = starting_points(repo, request)?;
     if request.limit == 0 {
@@ -301,7 +329,6 @@ fn read_page(
                 marking,
                 order,
                 window,
-                lookahead,
                 walked: skip,
             }),
             walked: 0,
@@ -314,8 +341,9 @@ fn read_page(
         &mut marking,
         &decoration,
         order,
-        lookahead,
         cancel,
+        &mut |_| {},
+        date_order::REPORT_EVERY,
     )?
     else {
         return Err(Error::Cancelled { walked: 0 });
@@ -326,7 +354,6 @@ fn read_page(
         marking: marking.clone(),
         order,
         window,
-        lookahead,
         walked,
     };
     let target = skip.saturating_add(request.limit);
@@ -357,7 +384,7 @@ fn read_page(
             Next::Cancelled => return Err(Error::Cancelled { walked }),
         };
         if walked >= skip && walked < target {
-            let laid = Laid::read(repo.inner(), Pending::of(&entry))?;
+            let laid = Laid::read(stream.objects(), Pending::of(&entry))?;
             if matches!(laid, Laid::Commit { .. }) {
                 decoded += 1;
             }
@@ -366,14 +393,11 @@ fn read_page(
         walked += 1;
 
         if let Some(finalised) = lay_out(&mut assigner, &decoration, entry) {
-            page.take(finalised, &stream);
+            page.take(finalised);
         }
     }
     for row in assigner.into_rows() {
-        page.take(row, &stream);
-    }
-    for (row, id) in stream.take_reached(skip + page.rows.len()) {
-        page.rows.reached(row, id);
+        page.take(row);
     }
 
     let cursor = if exhausted {
@@ -394,7 +418,7 @@ fn read_page(
 /// line to its base, in a lane of its own ([`LaneAssigner::push_stash`]).
 fn lay_out(assigner: &mut LaneAssigner, decoration: &Decoration, entry: Entry) -> Option<GraphRow> {
     match entry {
-        Entry::Commit { id, parents } => assigner.push(id, parents),
+        Entry::Commit { id, parents, .. } => assigner.push(id, parents),
         Entry::Stash(at) => {
             let stash = decoration.stashes().get(at)?;
             assigner.push_stash(stash.id, stash.base)
@@ -408,25 +432,28 @@ enum Laid {
     Commit {
         id: Oid,
         commit: Commit,
+        /// No ref reaches it (Show Lost Commits).
+        lost: bool,
     },
     /// The stash at this index of the walk's decoration, read when the walk opened.
     Stash(usize),
 }
 
-/// An entry laid out and not yet read: a commit by its id and how many parents the walk
-/// read for it, or a stash.
+/// An entry laid out and not yet read: a commit by its id, how many parents the walk read
+/// for it and whether no ref reaches it, or a stash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pending {
-    Commit { id: Oid, parents: usize },
+    Commit { id: Oid, parents: usize, lost: bool },
     Stash(usize),
 }
 
 impl Pending {
     fn of(entry: &Entry) -> Self {
         match entry {
-            Entry::Commit { id, parents } => Self::Commit {
+            Entry::Commit { id, parents, lost } => Self::Commit {
                 id: *id,
                 parents: parents.len(),
+                lost: *lost,
             },
             Entry::Stash(at) => Self::Stash(*at),
         }
@@ -434,31 +461,32 @@ impl Pending {
 }
 
 impl Laid {
-    /// A commit's row reads its commit; a stash's reads nothing.
-    fn read(repo: &gix::Repository, pending: Pending) -> Result<Self, Error> {
+    /// A commit's row reads its commit, as git reads it (`objects`); a stash's reads nothing.
+    fn read(objects: &walk::Grafted<'_>, pending: Pending) -> Result<Self, Error> {
         Ok(match pending {
-            Pending::Commit { id, parents } => Self::Commit {
+            Pending::Commit { id, parents, lost } => Self::Commit {
                 id,
-                commit: summary_of_commit(repo, &id, parents)?,
+                commit: summary_of_commit(objects, &id, parents)?,
+                lost,
             },
             Pending::Stash(at) => Self::Stash(at),
         })
     }
 
     /// Appends the row `graph` lays out for this to `rows`, with its labels — or, for a
-    /// commit no ref reaches as `stream` stands now, as lost.
-    fn push_to(
-        &self,
-        rows: &mut RowsPage,
-        graph: GraphRow,
-        decoration: &Decoration,
-        stream: &Stream<'_>,
-    ) {
+    /// commit no ref reaches, as lost.
+    fn push_to(&self, rows: &mut RowsPage, graph: GraphRow, decoration: &Decoration) {
         match self {
-            Self::Commit { id, commit } if stream.is_lost(id) => {
+            Self::Commit {
+                commit, lost: true, ..
+            } => {
                 rows.push_lost(graph, commit.paged());
             }
-            Self::Commit { id, commit } => rows.push_labelled(
+            Self::Commit {
+                id,
+                commit,
+                lost: false,
+            } => rows.push_labelled(
                 graph,
                 commit.paged(),
                 decoration.is_head(id),
@@ -509,7 +537,7 @@ struct Page<'d> {
 }
 
 impl Page<'_> {
-    fn take(&mut self, graph: GraphRow, stream: &Stream<'_>) {
+    fn take(&mut self, graph: GraphRow) {
         let position = self.next_row;
         self.next_row += 1;
         let Some(offset) = position.checked_sub(self.skip) else {
@@ -518,7 +546,7 @@ impl Page<'_> {
         let Some(laid) = self.laid.get(offset) else {
             return; // After it ends: the walk stopped at `target`.
         };
-        laid.push_to(&mut self.rows, graph, self.decoration, stream);
+        laid.push_to(&mut self.rows, graph, self.decoration);
     }
 }
 
@@ -556,7 +584,6 @@ struct Resolved {
     marking: Marking,
     order: HistoryOrder,
     window: usize,
-    lookahead: usize,
     skip: usize,
 }
 
@@ -597,13 +624,18 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
         Start::Resume(cursor) => cursor.walked,
         _ => 0,
     };
+    // Show Lost Commits decides each commit as it comes off the walk, which only an order
+    // yielding no commit before its children allows.
+    let order = match marking {
+        Marking::Unread(_) => HistoryOrder::DateOrder,
+        Marking::Off | Marking::Read { .. } => request.order,
+    };
     Ok(Resolved {
         tips,
         decoration: decoration.unwrap_or_default(),
         marking,
-        order: request.order,
+        order,
         window: request.window,
-        lookahead: request.lookahead,
         skip,
     })
 }
@@ -628,26 +660,23 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
 }
 
 /// The one place a walk step reads a commit object, by id: the walk hands over ids only,
-/// and `parents` counts the parents it read for it (`parents_of`).
-fn summary_of_commit(repo: &gix::Repository, id: &Oid, parents: usize) -> Result<Commit, Error> {
-    let commit = repo
-        .find_commit(object_id(id)?)
-        .map_err(|source| Error::ReadCommit {
-            id: id.to_string(),
-            source: Box::new(source),
-        })?;
-    summary_from(&commit, id, parents)
-}
-
-fn summary_from(commit: &gix::Commit<'_>, id: &Oid, parents: usize) -> Result<Commit, Error> {
+/// and `parents` counts the parents it read for it (`parents_of`). Read through `objects`, so
+/// a replaced commit's row is its replacement's subject, author and date, as `git log` shows
+/// it (`crate::commit::details_of`).
+fn summary_of_commit(
+    objects: &walk::Grafted<'_>,
+    id: &Oid,
+    parents: usize,
+) -> Result<Commit, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
+    let mut buffer = Vec::new();
     // Decoded once: the encoding header, the author and the message are all read from it.
-    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
+    let (decoded, bytes) = crate::commit::read_commit(objects, id, &mut buffer)?;
     // The characters git shows, as the Commit tab reads them (`crate::commit_encoding`).
-    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let encoding = CommitEncoding::of_decoded(&decoded, bytes);
     let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
     Ok(Commit {
@@ -759,8 +788,10 @@ mod tests {
                         .expect("an uncancelled open was cancelled");
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
-                        let Some(next) = walk.next() else { break };
-                        let info = next.unwrap();
+                        let walk::Step::Commit(info) = walk.next(&CancelSignal::new()).unwrap()
+                        else {
+                            break;
+                        };
                         let id = model_id(&info.id).unwrap();
                         let parents: Vec<Oid> = parents_of(&info).unwrap();
                         if lay_out {
@@ -798,7 +829,11 @@ mod tests {
         );
         assert!(!tips.is_empty(), "no ref resolved to a commit");
 
-        for order in [HistoryOrder::CommitTime, HistoryOrder::GraphOrder] {
+        for order in [
+            HistoryOrder::DateOrder,
+            HistoryOrder::CommitTime,
+            HistoryOrder::GraphOrder,
+        ] {
             let request = HistoryRequest::from_commits(tips.clone(), limit).with_order(order);
             let started = Instant::now();
             let page = repo.history(&request, &CancelSignal::new()).unwrap();

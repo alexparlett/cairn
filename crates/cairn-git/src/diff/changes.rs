@@ -9,7 +9,8 @@
 
 use cairn_model::{ChangeSet, ChangedFile, CommitDetails, Oid, RepoPath};
 
-use crate::object_id::{model_id, object_id};
+use crate::history::walk::Grafted;
+use crate::object_id::model_id;
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
@@ -106,19 +107,20 @@ pub(super) fn trees(inner: &gix::Repository, request: &ChangesRequest) -> Result
 }
 
 /// What a request compares: the two commits `git` is given — the one commit's first parent
-/// or, for a root commit or a shallow clone's boundary, the empty tree — and, for one
+/// as git reads it, through a replace ref and a graft, as `git show` diffs a commit against
+/// it, or, for a root commit or a shallow clone's boundary, the empty tree — and, for one
 /// commit, its details. Each id is read as a commit, so a missing one is
 /// [`Error::ReadCommit`] and git is never handed a tree or a blob as a commit.
 pub(super) fn subject(
     inner: &gix::Repository,
     request: &ChangesRequest,
 ) -> Result<(Oid, Oid, Option<CommitDetails>), Error> {
+    let objects = Grafted::read(inner)?;
     // Each id is read as a commit here first, so a missing one is `ReadCommit` — the same
     // answer whichever side it is on — and git is never handed a tree or a blob as a commit.
     Ok(match &request.subject {
         Subject::Commit(id) | Subject::Stash(id) => {
-            let commit = find_commit(inner, id)?;
-            let details = crate::commit::details_of(&commit, id)?;
+            let details = crate::commit::details_of(&objects, id)?;
             // A root commit is compared with the empty tree, which makes its diff the
             // whole of its content rather than nothing at all — and so is a shallow
             // clone's boundary commit, whose parents the clone does not have and which
@@ -131,8 +133,8 @@ pub(super) fn subject(
             (old, *id, Some(details))
         }
         Subject::Between { old, new } => {
-            find_commit(inner, old)?;
-            find_commit(inner, new)?;
+            crate::commit::details_of(&objects, old)?;
+            crate::commit::details_of(&objects, new)?;
             (*old, *new, None)
         }
     })
@@ -199,12 +201,4 @@ fn shows_root_diff(repo: &gix::Repository) -> Result<bool, Error> {
         Some(value) => parse_bool(value.as_ref().map(|value| value.as_slice()))
             .ok_or_else(|| invalid("log.showRoot", value)),
     }
-}
-
-fn find_commit<'repo>(repo: &'repo gix::Repository, id: &Oid) -> Result<gix::Commit<'repo>, Error> {
-    repo.find_commit(object_id(id)?)
-        .map_err(|source| Error::ReadCommit {
-            id: id.to_string(),
-            source: Box::new(source),
-        })
 }

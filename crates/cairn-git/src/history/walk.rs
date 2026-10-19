@@ -1,5 +1,5 @@
-//! The commit walk both history routes run: gitoxide's own traversal, over the parents git
-//! shows.
+//! The commit walks the history routes run: gitoxide's own traversal in commit-time or graph
+//! order, and git's date order (`date_order`), over the parents git shows.
 //!
 //! A shallow clone's boundary commits — the ones its `shallow` file lists — name parents in
 //! their objects that the clone cut off. git reads the file as grafts: each such commit has
@@ -9,14 +9,15 @@
 //! in 0.87.1): the next time a cut-off parent's id comes up it is skipped, whichever commit
 //! names it, so a parent the clone HAS, reached through a sibling branch, vanishes from the
 //! walk; and the boundary commit's `parent_ids` still name what the clone lacks, which would
-//! hold a lane of the graph open for a commit that never arrives.
+//! hold a lane of the graph open for a commit that never arrives. A commit the graft file
+//! grafts is shown with the graft's parents, and gix reads no graft file (`crate::grafts`).
 //!
 //! So the walk here is `gix::traverse::commit::Simple` itself, reading every commit through
-//! [`Grafted`], which hands a boundary commit over with its parent lines removed: git's
-//! graft, applied where the object is read, so the walk neither lists nor follows a parent
-//! git would not. git also never reads a commit-graph in a shallow repository
-//! (`commit_graph_compatible` in git's `commit-graph.c`), and a graph written before the
-//! repository became shallow would name the cut-off parents, so neither does this.
+//! [`Grafted`], which hands a grafted commit over with its parent lines replaced by the
+//! graft's: git's graft, applied where the object is read, so the walk neither lists nor
+//! follows a parent git would not. A replace ref is applied by gix's object database itself.
+//! The commit-graph is read only where git reads one ([`commit_graph`]): its parents are
+//! the commits' own, which a graft or a replace ref contradicts.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -25,17 +26,65 @@ use std::rc::Rc;
 
 use gix::objs::FindExt as _;
 
-use crate::shallow::ShallowBoundary;
+use crate::grafts::Grafts;
+use crate::object_id::model_id;
+use crate::replacements::Replacements;
 use crate::{Cancel, Error};
 
 use super::HistoryOrder;
+use super::date_order::{self, DateOrder};
 
 /// gitoxide's traversal over [`Grafted`] reads, yielding detached walk entries.
-pub(crate) type CommitWalk<'repo> =
+pub(crate) type SimpleWalk<'repo> =
     gix::traverse::commit::Simple<Seeded<'repo>, fn(&gix::oid) -> bool>;
 
+/// A walk in one of the history's orders.
+pub(crate) enum CommitWalk<'repo> {
+    /// Commit-time or graph order: gitoxide's traversal.
+    Simple(Box<SimpleWalk<'repo>>),
+    /// git's date order.
+    DateOrder(Box<DateOrder<'repo>>),
+}
+
+/// One step of a [`CommitWalk`].
+#[derive(Debug)]
+pub(crate) enum Step {
+    Commit(gix::traverse::commit::Info),
+    /// A stash's row, by its index among the stashes the walk was given: only git's date
+    /// order is given any.
+    Stash(usize),
+    End,
+    /// `cancel` fired within the step; the walk is as it was before it, and the next step
+    /// carries on.
+    Cancelled,
+}
+
+impl CommitWalk<'_> {
+    /// The next commit. gitoxide's traversal polls nothing; git's date order polls `cancel`
+    /// between the commits it reads to know a parent's children (`date_order`).
+    pub(crate) fn next(&mut self, cancel: &impl Cancel) -> Result<Step, Error> {
+        match self {
+            Self::Simple(walk) => match walk.next() {
+                None => Ok(Step::End),
+                Some(Ok(info)) => Ok(Step::Commit(info)),
+                Some(Err(source)) => Err(Error::Walk {
+                    source: Box::new(source),
+                }),
+            },
+            Self::DateOrder(walk) => Ok(match walk.next(cancel)? {
+                date_order::Popped::Commit {
+                    stash: Some(index), ..
+                } => Step::Stash(index),
+                date_order::Popped::Commit { info, stash: None } => Step::Commit(info),
+                date_order::Popped::End => Step::End,
+                date_order::Popped::Cancelled => Step::Cancelled,
+            }),
+        }
+    }
+}
+
 /// A walk from `tips` in `order`, with the repository's commit-graph where git would use one;
-/// `None` when `cancel` fired while the tips were read, nothing kept.
+/// `None` when `cancel` fired while the walk opened, nothing kept.
 ///
 /// In commit-time order gitoxide reads every tip's commit for its committer date before
 /// the walk's first step (`Simple::sorting`), in one call that polls nothing — a read per
@@ -43,44 +92,54 @@ pub(crate) type CommitWalk<'repo> =
 /// `cancel` polled before each but the first (a walk from one tip polls as it always did,
 /// once per commit laid out), and gitoxide's own read of each tip is then answered from
 /// the dates read ([`Seeded`]), costing no object read. Graph order reads no tip to open.
+/// Date order's opening pass reads every tip and polls between commits (`date_order`).
 pub(crate) fn open<'repo>(
     repo: &'repo gix::Repository,
     tips: &[gix::hash::ObjectId],
     order: HistoryOrder,
     cancel: &impl Cancel,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
-    open_dated(repo, tips, order, HashMap::new(), cancel)
+    let tips = date_order::Tips {
+        refs: tips,
+        stashes: &[],
+        reflogs: &[],
+    };
+    open_from(
+        repo,
+        Substitutions::read(repo)?,
+        tips,
+        order,
+        cancel,
+        &mut |_| {},
+        date_order::REPORT_EVERY,
+    )
 }
 
-/// [`open`], with the committer dates of some tips known already — read with their ids, as
-/// Show Lost Commits' reflog tips are (`reflogs::reflog_tips`), so no tip is read twice. A
-/// tip whose date is not known is taken from the commit-graph where the graph holds it, as
-/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise.
-pub(crate) fn open_dated<'repo>(
+/// [`open`] from refs, stashes and reflog ids, each list in the order git is given it. Git's
+/// date order walks each stash as a tip on its base and the reflog ids after the stashes
+/// (`date_order`), giving `report` how many commits its opening pass has read at most once per
+/// `every`, the first once `every` has passed; the other orders walk the refs' and the
+/// reflogs' commits alone, given no stash, and report nothing.
+pub(crate) fn open_from<'repo>(
     repo: &'repo gix::Repository,
-    tips: &[gix::hash::ObjectId],
+    substitutions: Substitutions,
+    tips: date_order::Tips<'_>,
     order: HistoryOrder,
-    known: HashMap<gix::hash::ObjectId, i64>,
     cancel: &impl Cancel,
+    report: &mut dyn FnMut(usize),
+    every: std::time::Duration,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
-    let boundary = ShallowBoundary::read(repo).map_err(|e| walk_error(Box::new(e)))?;
-    // As gix's own walk decides it: an invalid `core.commitGraph` is an error, and a graph
-    // that will not open is walked without, from the objects themselves.
-    let graph = if boundary.is_shallow() {
-        None
-    } else {
-        match repo.commit_graph_if_enabled() {
-            Ok(graph) => graph,
-            Err(gix::repository::commit_graph_if_enabled::Error::OpenCommitGraph(_)) => None,
-            Err(other) => return Err(walk_error(Box::new(other))),
-        }
+    let Some(sorting) = order.sorting() else {
+        return Ok(
+            DateOrder::open_substituted(repo, substitutions, tips, cancel, report, every)?
+                .map(|walk| CommitWalk::DateOrder(Box::new(walk))),
+        );
     };
-    let objects = Grafted {
-        objects: &repo.objects,
-        boundary,
-    };
-    let mut dates = known;
+    let tips: Vec<gix::hash::ObjectId> = tips.refs.iter().chain(tips.reflogs).copied().collect();
+    let graph = commit_graph(repo, &substitutions)?;
+    let objects = Grafted::new(&repo.objects, substitutions);
+    let mut dates = HashMap::new();
     if matches!(order, HistoryOrder::CommitTime) {
         dates.reserve(tips.len());
         let mut buffer = Vec::new();
@@ -108,11 +167,35 @@ pub(crate) fn open_dated<'repo>(
         dates: Rc::clone(&dates),
     };
     let walk = gix::traverse::commit::Simple::new(tips.iter().copied(), seeded)
-        .sorting(order.sorting())
+        .sorting(sorting)
         .map_err(|e| walk_error(Box::new(e)))?;
     // Every later read is the object's own.
     drop(dates.take());
-    Ok(Some(walk.commit_graph(graph)))
+    Ok(Some(CommitWalk::Simple(Box::new(walk.commit_graph(graph)))))
+}
+
+/// The repository's commit-graph, where git would read one: none where git's
+/// `commit_graph_compatible` refuses it — a replace ref git reads, a graft, a shallow
+/// repository (v2.30.9 `commit-graph.c:201-217`, v2.56.0
+/// `commit-graph.c:223-239`) — or where `core.commitGraph` is off. The graph's parents are
+/// each commit's own, which a replace ref or a graft contradicts, and a generation computed
+/// over parents git no longer walks would misorder a walk bounded by it. As gix's own walk
+/// decides it, an invalid `core.commitGraph` is an error, and a graph that will not open is
+/// walked without, from the objects themselves.
+pub(crate) fn commit_graph(
+    repo: &gix::Repository,
+    substitutions: &Substitutions,
+) -> Result<Option<gix::commitgraph::Graph>, Error> {
+    if !substitutions.grafts.is_empty() || !substitutions.replacements.is_empty() {
+        return Ok(None);
+    }
+    match repo.commit_graph_if_enabled() {
+        Ok(graph) => Ok(graph),
+        Err(gix::repository::commit_graph_if_enabled::Error::OpenCommitGraph(_)) => Ok(None),
+        Err(other) => Err(Error::Walk {
+            source: Box::new(other),
+        }),
+    }
 }
 
 /// `id`'s committer date as the commit-graph holds it, when it holds `id`.
@@ -182,12 +265,8 @@ pub(crate) fn hiding<'a, C: Cancel>(
     reads: &'a Cell<usize>,
 ) -> Result<HidingWalk<'a, C>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
-    let boundary = ShallowBoundary::read(repo).map_err(|e| walk_error(Box::new(e)))?;
     let objects = Polled {
-        objects: Grafted {
-            objects: &repo.objects,
-            boundary,
-        },
+        objects: Grafted::new(&repo.objects, Substitutions::read(repo)?),
         cancel,
         reads,
     };
@@ -201,9 +280,10 @@ pub(crate) fn hiding<'a, C: Cancel>(
 /// through the graph's parents that never descends below `tip`'s generation, since a commit of
 /// a lower generation cannot reach it. No object is read, `cancel` is polled before each
 /// commit the walk visits, and what it visited is counted in `visited`. `None` — answer by the
-/// object walk ([`hiding`]) instead — where the repository is shallow, no graph is enabled or
-/// opens, or the graph does not hold `tip` and every hidden tip. `Some(Err(..))` once
-/// cancelled, or on a graph that does not parse.
+/// object walk ([`hiding`]) instead — where git would read no graph ([`commit_graph`]: a
+/// replace ref, a graft or a shallow repository), no graph is enabled or opens, or the graph
+/// does not hold `tip` and every hidden tip. `Some(Err(..))` once cancelled, or on a graph
+/// that does not parse.
 pub(crate) fn reaches_through_graph<C: Cancel>(
     repo: &gix::Repository,
     tip: gix::hash::ObjectId,
@@ -211,10 +291,8 @@ pub(crate) fn reaches_through_graph<C: Cancel>(
     cancel: &C,
     visited: &Cell<usize>,
 ) -> Option<Result<bool, Error>> {
-    if repo.is_shallow() {
-        return None;
-    }
-    let graph = repo.commit_graph_if_enabled().ok().flatten()?;
+    let substitutions = Substitutions::read(repo).ok()?;
+    let graph = commit_graph(repo, &substitutions).ok().flatten()?;
     let target = graph.lookup(tip)?;
     let floor = graph.commit_at(target).generation();
     let starts: Vec<gix::commitgraph::Position> = hidden
@@ -289,11 +367,160 @@ impl<C: Cancel> gix::objs::Find for Polled<'_, C> {
     }
 }
 
-/// The object database as git's walk sees it in a shallow clone: a boundary commit reads
-/// with no parents. Every other object, and every other commit, is the stored bytes.
+/// The object database as git's walk sees it: an object a replace ref replaces reads as its
+/// replacement (`crate::replacements`), and a grafted commit — a shallow clone's boundary,
+/// or one the graft file names — reads with the graft's parents in place of its own (none at
+/// a shallow boundary), the graft found by the commit's own id, as git's
+/// `parse_commit_buffer` looks it up over the replacement's bytes. Every other object is the
+/// stored bytes. Its handle is its own, told to read no replacement of gitoxide's (which
+/// reads `core.useReplaceRefs` the wrong way round).
 pub(crate) struct Grafted<'repo> {
-    objects: &'repo gix::OdbHandle,
-    boundary: ShallowBoundary,
+    objects: gix::OdbHandle,
+    grafts: Grafts,
+    replacements: Replacements,
+    /// The repository whose objects these are: a walk is held no longer than it.
+    repo: std::marker::PhantomData<&'repo gix::OdbHandle>,
+}
+
+impl<'repo> Grafted<'repo> {
+    pub(crate) fn new(objects: &'repo gix::OdbHandle, substitutions: Substitutions) -> Self {
+        let mut objects = objects.clone();
+        objects.ignore_replacements = true;
+        let Substitutions {
+            grafts,
+            replacements,
+        } = substitutions;
+        Self {
+            objects,
+            grafts,
+            replacements,
+            repo: std::marker::PhantomData,
+        }
+    }
+
+    /// [`Grafted::new`], keeping no object cache: for a walk that reads each commit once and
+    /// keeps what it read, where filling a cache is only a cost.
+    pub(crate) fn uncached(objects: &'repo gix::OdbHandle, substitutions: Substitutions) -> Self {
+        let mut grafted = Self::new(objects, substitutions);
+        grafted.objects.unset_object_cache();
+        grafted
+    }
+
+    /// The repository's objects as git reads them now: its substitutions read afresh, for one
+    /// query. Every read Cairn shows of an object git would read through a replace ref or a
+    /// graft goes through one of these — a commit's details, a row's subject, a stash's base,
+    /// a file's blob — since the repository's own handle reads what is stored
+    /// (`Repository::to_worker`).
+    pub(crate) fn read(repo: &'repo gix::Repository) -> Result<Self, Error> {
+        Ok(Self::new(&repo.objects, Substitutions::read(repo)?))
+    }
+
+    /// The hash the repository names its objects by.
+    pub(crate) fn object_hash(&self) -> gix::hash::Kind {
+        self.objects.store_ref().object_hash()
+    }
+
+    /// The entry at `path` — its components split at `/` — in `commit`'s tree, as git reads
+    /// it: the commit's replacement's tree, and each tree on the way its replacement's. `None`
+    /// where the tree has nothing at `path`; an error where `commit` is not a commit.
+    pub(crate) fn entry_in_commit(
+        &self,
+        commit: &gix::oid,
+        path: &[u8],
+    ) -> Result<Option<gix::objs::tree::Entry>, gix::objs::find::Error> {
+        use gix::objs::Find as _;
+        let mut buffer = Vec::new();
+        let tree = match self.try_find(commit, &mut buffer)? {
+            Some(found) => match found.try_into_commit_iter() {
+                Some(mut found) => found.tree_id().map_err(Box::new)?,
+                None => return Err(Box::new(NotACommit(commit.to_owned()))),
+            },
+            None => return Err(Box::new(NotACommit(commit.to_owned()))),
+        };
+        let mut root = Vec::new();
+        let Some(found) = self.try_find(&tree, &mut root)? else {
+            return Ok(None);
+        };
+        let hash = found.object_hash;
+        gix::objs::TreeRefIter::from_bytes(found.data, hash).lookup_entry(
+            self,
+            &mut buffer,
+            path.split(|byte| *byte == b'/'),
+        )
+    }
+}
+
+/// What looking in a commit's tree fails with where the id names no commit.
+#[derive(Debug, thiserror::Error)]
+#[error("{0} is not a commit in this repository")]
+struct NotACommit(gix::ObjectId);
+
+/// What git reads in place of what is stored, read once for one walk: the grafts and the
+/// replace refs.
+#[derive(Clone, Default)]
+pub(crate) struct Substitutions {
+    pub(crate) grafts: Grafts,
+    pub(crate) replacements: Replacements,
+}
+
+impl Substitutions {
+    pub(crate) fn read(repo: &gix::Repository) -> Result<Self, Error> {
+        let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
+        Ok(Self {
+            grafts: Grafts::read(repo).map_err(|e| walk_error(Box::new(e)))?,
+            replacements: Replacements::read(repo).map_err(walk_error)?,
+        })
+    }
+
+    /// These substitutions as a refs snapshot keeps them, for a refresh to compare.
+    pub(crate) fn model(&self) -> Result<cairn_model::Substitutions, Error> {
+        let replacements = self
+            .replacements
+            .pairs()
+            .map(|(original, replacement)| Ok((model_id(original)?, model_id(replacement)?)))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let grafts = self
+            .grafts
+            .grafted()
+            .map(|(commit, parents)| {
+                Ok((
+                    model_id(commit)?,
+                    parents
+                        .iter()
+                        .map(|parent| model_id(parent))
+                        .collect::<Result<Vec<_>, Error>>()?,
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(cairn_model::Substitutions::new(replacements, grafts))
+    }
+}
+
+impl gix::objs::FindHeader for Grafted<'_> {
+    /// The header git reads for `id`: its replacement's, and for a grafted commit the size of
+    /// the object as it reads with the graft's parents.
+    fn try_header(
+        &self,
+        id: &gix::oid,
+    ) -> Result<Option<gix::objs::Header>, gix::objs::find::Error> {
+        if self.grafts.of(id).is_some() {
+            let mut buffer = Vec::new();
+            return Ok(
+                gix::objs::Find::try_find(self, id, &mut buffer)?.map(|data| gix::objs::Header {
+                    kind: data.kind,
+                    size: data.data.len() as u64,
+                }),
+            );
+        }
+        let stored = self.replacements.of(id).map_err(Box::new)?;
+        match self.objects.try_header(&stored)? {
+            None if stored != id => Err(Box::new(ReplacementMissing {
+                original: id.to_owned(),
+                replacement: stored,
+            })),
+            found => Ok(found),
+        }
+    }
 }
 
 impl gix::objs::Find for Grafted<'_> {
@@ -302,14 +529,30 @@ impl gix::objs::Find for Grafted<'_> {
         id: &gix::oid,
         buffer: &'a mut Vec<u8>,
     ) -> Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
-        if !self.boundary.cuts(id) {
-            return self.objects.try_find(id, buffer);
-        }
-        let (kind, object_hash, bytes) = match self.objects.try_find(id, buffer)? {
-            None => return Ok(None),
-            Some(found) if found.kind == gix::objs::Kind::Commit => {
-                (found.kind, found.object_hash, without_parents(found.data))
+        let stored = self.replacements.of(id).map_err(Box::new)?;
+        let replaced = stored != id;
+        let Some(parents) = self.grafts.of(id) else {
+            return match self.objects.try_find(&stored, buffer)? {
+                None if replaced => Err(Box::new(ReplacementMissing {
+                    original: id.to_owned(),
+                    replacement: stored,
+                })),
+                found => Ok(found),
+            };
+        };
+        let (kind, object_hash, bytes) = match self.objects.try_find(&stored, buffer)? {
+            None if replaced => {
+                return Err(Box::new(ReplacementMissing {
+                    original: id.to_owned(),
+                    replacement: stored,
+                }));
             }
+            None => return Ok(None),
+            Some(found) if found.kind == gix::objs::Kind::Commit => (
+                found.kind,
+                found.object_hash,
+                with_parents(found.data, parents),
+            ),
             Some(found) => (found.kind, found.object_hash, found.data.to_vec()),
         };
         *buffer = bytes;
@@ -321,11 +564,23 @@ impl gix::objs::Find for Grafted<'_> {
     }
 }
 
-/// A commit object's bytes with every `parent` line of its header removed, and nothing
-/// else touched. The header ends at the first empty line; a `parent` line can only be in
-/// it, and a continuation line of a multi-line header (a signature) starts with a space.
-fn without_parents(commit: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(commit.len());
+/// What reading a replaced object fails with when its replacement is not there: git dies
+/// rather than read the object as missing (`read_object_file_extended`, "replacement %s not
+/// found for %s"), and a walk that read it as missing would stop short — a hiding walk then
+/// answering that a tip is not reached where git answers nothing.
+#[derive(Debug, thiserror::Error)]
+#[error("replacement {replacement} not found for {original}")]
+struct ReplacementMissing {
+    original: gix::ObjectId,
+    replacement: gix::ObjectId,
+}
+
+/// A commit object's bytes with every `parent` line of its header replaced by one per id of
+/// `parents`, in their order, after the `tree` line, and nothing else touched. The header
+/// ends at the first empty line; a `parent` line can only be in it, and a continuation line
+/// of a multi-line header (a signature) starts with a space.
+fn with_parents(commit: &[u8], parents: &[gix::ObjectId]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(commit.len() + parents.len() * 72);
     let mut header = true;
     for line in commit.split_inclusive(|byte| *byte == b'\n') {
         if header && line == b"\n" {
@@ -335,6 +590,13 @@ fn without_parents(commit: &[u8]) -> Vec<u8> {
             continue;
         }
         out.extend_from_slice(line);
+        if header && line.starts_with(b"tree ") {
+            for parent in parents {
+                out.extend_from_slice(b"parent ");
+                out.extend_from_slice(parent.to_hex().to_string().as_bytes());
+                out.push(b'\n');
+            }
+        }
     }
     out
 }
@@ -366,11 +628,44 @@ subject\n\
 \n\
 parent 3333333333333333333333333333333333333333\n";
         assert_eq!(
-            String::from_utf8_lossy(&without_parents(commit)),
+            String::from_utf8_lossy(&with_parents(commit, &[])),
             String::from_utf8_lossy(expected)
         );
         let root = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@example.com> 1 +0000\n\nmsg";
-        assert_eq!(without_parents(root), root.to_vec(), "a root is untouched");
+        assert_eq!(
+            with_parents(root, &[]),
+            root.to_vec(),
+            "a root is untouched"
+        );
+    }
+
+    /// A graft's parents go in after the `tree` line, in the graft's order, in place of the
+    /// commit's own. Caught by: the commit's parents kept beside the graft's, the graft's put
+    /// after `author` where no reader looks for a parent, or their order changed.
+    #[test]
+    fn a_grafts_parents_replace_the_commits_own() {
+        let commit = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
+parent 1111111111111111111111111111111111111111\n\
+author A <a@example.com> 1600000000 +0000\n\
+committer C <c@example.com> 1600000000 +0000\n\
+\n\
+subject\n";
+        let graft = |hex: &str| gix::ObjectId::from_hex(hex.as_bytes()).unwrap();
+        let parents = [
+            graft("3333333333333333333333333333333333333333"),
+            graft("2222222222222222222222222222222222222222"),
+        ];
+        let expected = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
+parent 3333333333333333333333333333333333333333\n\
+parent 2222222222222222222222222222222222222222\n\
+author A <a@example.com> 1600000000 +0000\n\
+committer C <c@example.com> 1600000000 +0000\n\
+\n\
+subject\n";
+        assert_eq!(
+            String::from_utf8_lossy(&with_parents(commit, &parents)),
+            String::from_utf8_lossy(expected)
+        );
     }
 
     /// A repository of its own under the temporary directory, removed when dropped.
@@ -457,5 +752,61 @@ parent 3333333333333333333333333333333333333333\n";
             None,
             "a tip it does not hold"
         );
+    }
+
+    /// Where git would not read the commit-graph — a replace ref, a graft — the graph does not
+    /// answer, and the object walk, which reads the replaced and grafted parents, answers as
+    /// git does: `c3`'s parent replaced by `side` cuts `c1` and `c2` off it. Caught by: the
+    /// graph read whatever git reads, which still has `c3` reach `c1`.
+    #[test]
+    fn the_graph_does_not_answer_where_git_would_not_read_it() {
+        let dir = std::env::temp_dir().join(format!("cairn-graph-subst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = Scratch(dir);
+        let at = scratch.0.as_path();
+        git(at, &["init", "-q", "-b", "main"]);
+        let mut commits = Vec::new();
+        for n in 0..4 {
+            git(
+                at,
+                &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")],
+            );
+            commits.push(git(at, &["rev-parse", "HEAD"]));
+        }
+        git(at, &["checkout", "-q", "-b", "side", &commits[0]]);
+        git(at, &["commit", "-q", "--allow-empty", "-m", "side"]);
+        let side = git(at, &["rev-parse", "HEAD"]);
+        git(at, &["commit-graph", "write", "--reachable"]);
+        let id = |hex: &str| gix::hash::ObjectId::from_hex(hex.as_bytes()).unwrap();
+        let reaches = |hidden: &str| {
+            let repo = crate::SharedRepository::discover(at).unwrap().to_worker();
+            let cancel = crate::CancelSignal::new();
+            let reads = Cell::new(0);
+            let graph = reaches_through_graph(
+                repo.inner(),
+                id(&commits[1]),
+                &[id(hidden)],
+                &cancel,
+                &reads,
+            )
+            .map(|answer| answer.unwrap());
+            let walked = hiding(repo.inner(), id(&commits[1]), [id(hidden)], &cancel, &reads)
+                .unwrap()
+                .count();
+            (graph, walked == 0)
+        };
+        assert_eq!(reaches(&commits[3]), (Some(true), true), "no substitution");
+
+        git(at, &["replace", "--graft", &commits[3], &side]);
+        assert_eq!(reaches(&commits[3]), (None, false), "a replace ref");
+        git(at, &["replace", "-d", &commits[3]]);
+
+        std::fs::write(
+            at.join(".git/info/grafts"),
+            format!("{} {side}\n", commits[3]),
+        )
+        .unwrap();
+        assert_eq!(reaches(&commits[3]), (None, false), "a graft");
     }
 }

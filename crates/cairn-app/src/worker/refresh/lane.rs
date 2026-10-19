@@ -32,6 +32,7 @@ use cairn_git::ops::{self, GitBinary};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{LocalChanges, RefsSnapshot};
 
+use crate::worker::configured::{Configured, Reopening};
 use crate::worker::epoch::{Epoch, Epochs};
 use crate::worker::local::lane::LaneState;
 use crate::worker::pool::Outbox;
@@ -56,6 +57,9 @@ pub(crate) enum RefreshJob {
 /// What the refresh thread serves with.
 pub(crate) struct Refreshing<'a> {
     pub git: &'a GitBinary,
+    /// How the thread opens the repository again when the configuration moves: ahead and
+    /// behind walk through the replace refs `core.useReplaceRefs` says git reads.
+    pub reopening: &'a Reopening,
     pub epochs: &'a Epochs,
     /// The local lane's: whether a write runs, a commit among them, and the clock a status is
     /// stamped by.
@@ -72,7 +76,7 @@ pub(crate) struct Refreshing<'a> {
 /// status starts, so a count waits behind at most the status that was running when its
 /// refresh was asked, never behind the follow-up too.
 pub(crate) fn serve_refreshes(shared: &SharedRepository, serving: &Refreshing<'_>) {
-    let repo = shared.to_worker();
+    let mut configured = Configured::open(shared, serving.reopening);
     while let Ok(job) = serving.jobs.recv() {
         if serving.epochs.is_stopping() {
             break;
@@ -80,14 +84,14 @@ pub(crate) fn serve_refreshes(shared: &SharedRepository, serving: &Refreshing<'_
         match job {
             RefreshJob::Status { epoch } => {
                 for other in coalesced(serving.jobs) {
-                    if !serve_other(&repo, other, serving) {
+                    if !serve_other(configured.follow(), other, serving) {
                         return;
                     }
                 }
-                status(&repo, epoch, serving);
+                status(configured.follow(), epoch, serving);
             }
             other => {
-                if !serve_other(&repo, other, serving) {
+                if !serve_other(configured.follow(), other, serving) {
                     return;
                 }
             }

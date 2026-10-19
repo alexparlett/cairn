@@ -3,7 +3,7 @@
 //! `git rev-parse` and `git stash list` answer, as plain data.
 
 use crate::text_filter::{BETWEEN_CHECKS, Folded};
-use crate::{Oid, RefName};
+use crate::{Oid, RefName, Substitutions};
 
 /// Which of the three namespaces a listed ref lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -147,6 +147,10 @@ pub struct RefsSnapshot {
     /// Refs skipped because they could not be read — content that is not a ref, an object
     /// that is not there, a symbolic chain that never ends — which git skips too.
     pub unreadable: usize,
+    /// What git reads in place of what is stored as it walks from these refs: the replace
+    /// refs it reads and the grafts, a shallow clone's boundary among them. Not a ref of the
+    /// sidebar's, as no listing of git's but `git for-each-ref` names a replace ref.
+    pub substitutions: Substitutions,
 }
 
 impl RefsSnapshot {
@@ -173,13 +177,15 @@ impl RefsSnapshot {
     }
 
     /// Whether a history walked from `other` is the one walked from this: the same refs naming the
-    /// same objects (a symbolic ref's target among them), the same `HEAD` and the same stash list.
-    /// An upstream's configuration and the count of refs that could not be read draw nothing in the
-    /// graph, so they are left out: a refresh that finds only those changed leaves the history
-    /// alone.
+    /// same objects (a symbolic ref's target among them), the same `HEAD`, the same stash list and
+    /// the same substitutions — a replace ref or a graft changes which commits git walks and in
+    /// what order, though no ref moved. An upstream's configuration and the count of refs that
+    /// could not be read draw nothing in the graph, so they are left out: a refresh that finds only
+    /// those changed leaves the history alone.
     pub fn walks_as(&self, other: &Self) -> bool {
         self.head == other.head
             && self.stashes == other.stashes
+            && self.substitutions == other.substitutions
             && self.refs.len() == other.refs.len()
             && self.refs.iter().zip(&other.refs).all(|(one, another)| {
                 one.name == another.name
@@ -324,6 +330,7 @@ mod tests {
             head: HeadState::Branch(RefName::new("refs/heads/a")),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: crate::Substitutions::default(),
         };
         for reference in &snapshot.refs {
             assert_eq!(snapshot.find(&reference.name), Some(reference));
@@ -366,6 +373,7 @@ mod tests {
                 base: oid(1),
             }],
             unreadable: 0,
+            substitutions: crate::Substitutions::default(),
         };
         assert_eq!(base.clone(), base);
         let mut moved = base.clone();
@@ -422,14 +430,17 @@ mod tests {
                 })
                 .collect(),
             unreadable: 0,
+            substitutions: crate::Substitutions::default(),
         }
     }
 
     /// A refresh reopens the history when a ref moved, appeared or went, a symbolic ref was
-    /// retargeted, `HEAD`'s state changed or the stash list did, and not for what the graph does
-    /// not draw — an upstream's configuration, the count of refs that could not be read. Caught by:
+    /// retargeted, `HEAD`'s state changed, the stash list did or what git substitutes as it walks
+    /// did (a replace ref, a graft, or their read failing), and not for what the graph does not
+    /// draw — an upstream's configuration, the count of refs that could not be read. Caught by:
     /// comparing whole snapshots (an upstream edit reopens the history), or leaving any drawn part
-    /// out (a moved ref, a checkout that moves no ref, a dropped stash leave the graph stale).
+    /// out (a moved ref, a checkout that moves no ref, a dropped stash, a replace ref added leave
+    /// the graph stale).
     #[test]
     fn a_walk_is_the_same_unless_what_it_draws_changed() {
         let base = snapshot_of(&["refs/heads/main", "refs/heads/topic"], &["On main: wip"]);
@@ -462,6 +473,12 @@ mod tests {
         renamed.refs[1].name = RefName::new("refs/heads/topic2");
         let mut rekinded = base.clone();
         rekinded.refs[1].kind = RefKind::Tag;
+        let mut replaced = base.clone();
+        replaced.substitutions = Substitutions::new(vec![(oid(1), oid(2))], Vec::new());
+        let mut grafted = base.clone();
+        grafted.substitutions = Substitutions::new(Vec::new(), vec![(oid(1), Vec::new())]);
+        let mut unreadable = base.clone();
+        unreadable.substitutions = Substitutions::unreadable("duplicate replace ref".to_owned());
         for changed in [
             moved,
             retargeted,
@@ -471,6 +488,9 @@ mod tests {
             gone,
             renamed,
             rekinded,
+            replaced,
+            grafted,
+            unreadable,
         ] {
             assert!(!changed.walks_as(&base), "{changed:?}");
             assert!(!base.walks_as(&changed), "{changed:?}");

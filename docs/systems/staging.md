@@ -320,7 +320,10 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
 - **Made is read from `HEAD`** (R4.7). After git is reaped `HEAD` is
   read again: a commit was made when `HEAD` is a commit whose first parent is the `HEAD` it
   ran on (none, on an unborn branch); an amend, when `HEAD`'s parents are the replaced
-  commit's, as the object names them (a shallow boundary's included). So a commit or an amend
+  commit's as git reads them — through a replace ref and a graft — which are what `git commit
+  --amend` writes (`current_head->parents`): none at a shallow boundary, so an amend there
+  writes a root, and the graft's under a graft file or `git replace --graft`
+  (`an_amend_of_a_commit_git_reads_with_other_parents_is_made_as_git_makes_it`). So a commit or an amend
   cancelled after git made it — its `post-commit` hook running — is reported made, and one
   cancelled before is `Error::GitCancelled`
   (`a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so`); git's exit 0 with
@@ -475,13 +478,25 @@ new commit with no upstream, 91-99 ms; a detached `HEAD` at a commit 2,000 or
 tip — 1.1-1.3 s, which is git's own walk without a commit-graph (`git -c
 core.commitGraph=false rev-list -1 HEAD --not --remotes`, 1.14 s; 0.08 s with the
 graph, which the walk does not read so it can be cancelled at every object). Where the
-repository has a commit-graph holding `HEAD` and every remote tip the check reads, the graph
+repository has a commit-graph git would read — no replace ref, graft or shallow boundary
+(`walk::commit_graph`) — holding `HEAD` and every remote tip the check reads, the graph
 answers alone (`crate::history::walk::reaches_through_graph`): a walk down from the
 remote tips through the graph's parents that never descends below `HEAD`'s generation, as git's
 own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for that detached
 `HEAD` 20,000 commits behind on the bench clone with a graph written, against 1.2 s by the
 object walk and git's 10 ms
-(`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Without a graph — the bench
+(`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Both routes see the
+history as git's `git branch -r --contains` sees it, replace refs and grafts applied — the
+replace refs as `core.useReplaceRefs` says now, the local lane opening its handle again when a
+configuration file moved (`crates/cairn-app/src/worker/configured.rs`): a local
+replace ref or graft that cuts a remote's history short of `HEAD` answers `HEAD` unpublished
+though the remote holds it — and an amend git logs then runs without asking, its old commit
+kept in the reflog — and a replace ref whose replacement is missing fails the check, as git's
+`rev-list` dies on it (git 2.56's `branch -r --contains` instead names no branch and exits 0;
+2.30.9 and 2.32.7 die), rather than answering: on `HEAD`'s own history
+(`a_replacement_that_is_not_there_fails_the_walk`) and on the remote's side alone, read only by
+the hiding walk's paint of it
+(`an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement`). Without a graph — the bench
 itself has none — the object walk still costs 1.2 s there, cancellable, and an amend pays it
 at the press, again in a confirmed amend's re-check, and again once an amend at the press is
 made (C35) — never on a status (with `HEAD` at a remote tip the consequence costs 0.14 ms,

@@ -33,6 +33,7 @@ use cairn_model::{
 };
 use gix::bstr::ByteSlice as _;
 
+use crate::history::walk::Grafted;
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::reads::{
@@ -81,6 +82,8 @@ pub(super) fn working_tree_diff(
         }
     }
     let inner = repo.inner();
+    // Every blob and tree read as git reads it, through a replace ref.
+    let objects = Grafted::read(inner)?;
 
     // What the index says first: it decides some answers outright, and names the blob a
     // staged or an unstaged diff has on one side.
@@ -120,7 +123,7 @@ pub(super) fn working_tree_diff(
             });
             let index_size = match entry {
                 Some(entry) if !entry.mode.is_submodule() && !intent_to_add => {
-                    size_of(inner, entry.id, path)?
+                    size_of(&objects, entry.id, path)?
                 }
                 Some(_) | None => 0,
             };
@@ -131,9 +134,9 @@ pub(super) fn working_tree_diff(
                     return Ok(None);
                 }
                 let (commit, head_blob) = if which == WorkingTreeDiff::Amending {
-                    parent_side(repo, path)?
+                    parent_side(repo, &objects, path)?
                 } else {
-                    head_side(inner, path)?
+                    head_side(inner, &objects, path)?
                 };
                 staged_commit = Some(commit);
                 // The pair `git diff --cached` puts the path in, if any; its sides are
@@ -151,15 +154,15 @@ pub(super) fn working_tree_diff(
                 };
                 if let Some(paired) = paired {
                     let sizes = Sizes {
-                        old: Some(side_size(inner, &paired.old_id, path)?),
-                        new: Some(side_size(inner, &paired.new_id, path)?),
+                        old: Some(side_size(&objects, &paired.old_id, path)?),
+                        new: Some(side_size(&objects, &paired.new_id, path)?),
                     };
                     pair = Some((detection, paired));
                     sizes
                 } else {
                     Sizes {
                         old: Some(match head_blob {
-                            Some(id) => size_of(inner, id, path)?,
+                            Some(id) => size_of(&objects, id, path)?,
                             None => 0,
                         }),
                         new: Some(index_size),
@@ -199,6 +202,7 @@ pub(super) fn working_tree_diff(
     };
     let asker = Asker {
         repo,
+        objects: &objects,
         git,
         path,
         pair: pair.as_ref().map(|(detection, paired)| {
@@ -243,6 +247,8 @@ impl Sizes {
 /// What one query asks git, and with what.
 struct Asker<'a, C: Cancel> {
     repo: &'a Repository,
+    /// The repository's objects as git reads them, through a replace ref.
+    objects: &'a Grafted<'a>,
     git: &'a GitBinary,
     path: &'a RepoPath,
     /// The staged side's rename or copy, and the record the whole-index read found for it,
@@ -382,7 +388,7 @@ impl<C: Cancel> Asker<'_, C> {
             let new_size = match (self.working_tree(), file.new_id) {
                 _ if file.new_mode.is_none() => 0,
                 (true, _) => self.size_on_disk(),
-                (false, Some(id)) => size_of(inner, object_id(&id)?, self.path)?,
+                (false, Some(id)) => size_of(self.objects, object_id(&id)?, self.path)?,
                 (false, None) => 0,
             };
             let named = sections.last().and_then(PatchText::new_index_id);
@@ -419,7 +425,7 @@ impl<C: Cancel> Asker<'_, C> {
         // Both sides as lines in git's form: a blob as stored, a working-tree side rebuilt
         // from git's patch and checked against the object id git named for it.
         let old_bytes = match file.old_id.filter(|_| file.old_mode.is_some()) {
-            Some(id) => blob(inner, &id, self.path)?,
+            Some(id) => blob(self.objects, &id, self.path)?,
             None => Vec::new(),
         };
         let old = split_lines(&old_bytes);
@@ -436,7 +442,7 @@ impl<C: Cancel> Asker<'_, C> {
                     .0
             } else {
                 match file.new_id {
-                    Some(id) => split_lines(&blob(inner, &id, self.path)?),
+                    Some(id) => split_lines(&blob(self.objects, &id, self.path)?),
                     None => Vec::new(),
                 }
             };
@@ -448,7 +454,7 @@ impl<C: Cancel> Asker<'_, C> {
             (new, Some(reading))
         } else {
             let new = match file.new_id.filter(|_| file.new_mode.is_some()) {
-                Some(id) => split_lines(&blob(inner, &id, self.path)?),
+                Some(id) => split_lines(&blob(self.objects, &id, self.path)?),
                 None => Vec::new(),
             };
             let reading = first
@@ -609,7 +615,7 @@ impl<C: Cancel> Asker<'_, C> {
 
     fn old_size(&self, file: &ChangedFile) -> Result<u64, Error> {
         match file.old_id.filter(|_| file.old_mode.is_some()) {
-            Some(id) => size_of(self.repo.inner(), object_id(&id)?, self.path),
+            Some(id) => size_of(self.objects, object_id(&id)?, self.path),
             None => Ok(0),
         }
     }
@@ -739,9 +745,11 @@ fn fresh_index(repo: &gix::Repository) -> Result<gix::index::File, Error> {
 }
 
 /// The commit a staged diff compares the index with — `HEAD`, or the empty tree on an
-/// unborn branch, as `git diff --cached` compares — and the blob `HEAD` has at `path`.
+/// unborn branch, as `git diff --cached` compares — and the blob `HEAD` has at `path`, read as
+/// git reads `HEAD`'s tree: through a replace ref (`Grafted`).
 fn head_side(
     repo: &gix::Repository,
+    objects: &Grafted<'_>,
     path: &RepoPath,
 ) -> Result<(Oid, Option<gix::hash::ObjectId>), Error> {
     let setup = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffSetup { source };
@@ -754,24 +762,16 @@ fn head_side(
         let empty = gix::hash::ObjectId::empty_tree(repo.object_hash());
         return Ok((model_id(&empty)?, None));
     };
-    let tree = head
-        .object()
-        .map_err(|e| setup(Box::new(e)))?
-        .peel_to_tree()
-        .map_err(|e| setup(Box::new(e)))?;
-    let entry = tree
-        .lookup_entry(path.as_bytes().split_str("/"))
-        .map_err(|e| setup(Box::new(e)))?;
-    let blob = entry
-        .filter(|entry| entry.mode().is_blob_or_symlink())
-        .map(|entry| entry.object_id());
+    let blob = blob_in(objects, &head, path).map_err(setup)?;
     Ok((model_id(&head)?, blob))
 }
 
 /// The tree-ish amend's staged list compares the index with — `HEAD`'s parent, or the empty
-/// tree for a root commit (`Repository::amend_parent`) — and the blob it has at `path`.
+/// tree for a root commit (`Repository::amend_parent`) — and the blob it has at `path`, read
+/// as git reads it (`Grafted`).
 fn parent_side(
     repo: &Repository,
+    objects: &Grafted<'_>,
     path: &RepoPath,
 ) -> Result<(Oid, Option<gix::hash::ObjectId>), Error> {
     let inner = repo.inner();
@@ -780,40 +780,52 @@ fn parent_side(
         return Ok((model_id(&empty)?, None));
     };
     let setup = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffSetup { source };
-    let tree = inner
-        .find_object(object_id(&parent)?)
-        .map_err(|e| setup(Box::new(e)))?
-        .peel_to_tree()
-        .map_err(|e| setup(Box::new(e)))?;
-    let entry = tree
-        .lookup_entry(path.as_bytes().split_str("/"))
-        .map_err(|e| setup(Box::new(e)))?;
-    let blob = entry
-        .filter(|entry| entry.mode().is_blob_or_symlink())
-        .map(|entry| entry.object_id());
+    let blob = blob_in(objects, &object_id(&parent)?, path).map_err(setup)?;
     Ok((parent, blob))
 }
 
+/// The blob or link `commit`'s tree has at `path`, if it has one there.
+fn blob_in(
+    objects: &Grafted<'_>,
+    commit: &gix::oid,
+    path: &RepoPath,
+) -> Result<Option<gix::hash::ObjectId>, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(objects
+        .entry_in_commit(commit, path.as_bytes())?
+        .filter(|entry| entry.mode.is_blob_or_symlink())
+        .map(|entry| entry.oid))
+}
+
 /// The size of one side of a pair, from the id git named for it: zero for an absent side.
-fn side_size(repo: &gix::Repository, id: &Option<Oid>, path: &RepoPath) -> Result<u64, Error> {
+fn side_size(objects: &Grafted<'_>, id: &Option<Oid>, path: &RepoPath) -> Result<u64, Error> {
     match not_null(*id) {
-        Some(id) => size_of(repo, object_id(&id)?, path),
+        Some(id) => size_of(objects, object_id(&id)?, path),
         None => Ok(0),
     }
 }
 
-fn size_of(repo: &gix::Repository, id: gix::hash::ObjectId, path: &RepoPath) -> Result<u64, Error> {
-    repo.find_header(id)
-        .map(|header| header.size())
-        .map_err(|source| Error::DiffFile {
-            path: path.to_string(),
-            source: Box::new(source),
-        })
+/// A blob's size from its header, as git reads the blob: its replacement's (`Grafted`).
+fn size_of(objects: &Grafted<'_>, id: gix::hash::ObjectId, path: &RepoPath) -> Result<u64, Error> {
+    use gix::objs::FindHeader as _;
+    let unreadable = |source| Error::DiffFile {
+        path: path.to_string(),
+        source,
+    };
+    match objects.try_header(&id).map_err(unreadable)? {
+        Some(header) => Ok(header.size),
+        None => Err(unreadable(Box::new(
+            gix::objs::find::existing::Error::NotFound { oid: id },
+        ))),
+    }
 }
 
-fn blob(repo: &gix::Repository, id: &Oid, path: &RepoPath) -> Result<Vec<u8>, Error> {
-    repo.find_blob(object_id(id)?)
-        .map(|mut blob| blob.take_data())
+/// A blob's bytes as git reads them: its replacement's (`Grafted`).
+fn blob(objects: &Grafted<'_>, id: &Oid, path: &RepoPath) -> Result<Vec<u8>, Error> {
+    use gix::objs::FindExt as _;
+    let mut buffer = Vec::new();
+    objects
+        .find_blob(&object_id(id)?, &mut buffer)
+        .map(|blob| blob.data.to_vec())
         .map_err(|source| Error::DiffFile {
             path: path.to_string(),
             source: Box::new(source),

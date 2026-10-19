@@ -56,11 +56,11 @@ fn drawn(source: impl Into<ImageSource>, size: f32, colour: Color) -> Element {
 mod tests {
     use super::*;
 
-    /// Every icon named here is one of the set's SVGs, compiled in. Caught by: the feature
-    /// turned off, or a name that resolves to something other than an SVG.
     /// An icon's name in the set and its SVG's bytes.
     type Source = (&'static str, fn() -> Vec<u8>);
 
+    /// Every icon named here is one of the set's SVGs, compiled in. Caught by: the feature
+    /// turned off, or a name that resolves to something other than an SVG.
     #[test]
     fn every_icon_is_an_svg_of_the_set() {
         let sources: [Source; 7] = [

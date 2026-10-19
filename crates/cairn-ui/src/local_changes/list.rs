@@ -440,7 +440,7 @@ fn heading_control(
                 .fill(if enabled {
                     tones::BUTTON_BORDER
                 } else {
-                    tones::DISABLED_FILL
+                    tones::DISABLED_BORDER
                 })
                 .width(1.),
         )

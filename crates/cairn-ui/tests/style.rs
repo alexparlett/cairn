@@ -129,12 +129,14 @@ fn the_launch_theme_carries_fork_darks_tones_into_freyas_components() {
     assert_eq!(button.border_fill, specific(tones::BUTTON_BORDER));
     assert_eq!(button.disabled_background, specific(tones::DISABLED_FILL));
     assert_eq!(button.disabled_color, specific(tones::DISABLED_TEXT));
+    assert_eq!(button.disabled_border_fill, specific(colour("#383838")));
 
     let menu = theme
         .get::<MenuContainerThemePreference>("menu_container")
         .unwrap_or_else(|| panic!("no menu theme"));
     assert_eq!(menu.background, specific(tones::MENU));
     assert_eq!(menu.border_fill, specific(tones::MENU_BORDER));
+    assert_eq!(menu.shadow, specific(colour("#1E1E1E")));
     let item = theme
         .get::<MenuItemThemePreference>("menu_item")
         .unwrap_or_else(|| panic!("no menu item theme"));

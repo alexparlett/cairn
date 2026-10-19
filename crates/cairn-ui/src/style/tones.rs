@@ -64,8 +64,6 @@ pub const SELECTION_UNFOCUSED: Color = hex(0x525252);
 pub const MENU: Color = hex(0x2C2C2C);
 /// A menu's 1 px border.
 pub const MENU_BORDER: Color = hex(0x525252);
-/// A menu's soft drop shadow, ~4 px at its right and bottom, fading to the ground.
-pub const MENU_SHADOW: Color = hex(0x1E1E1E);
 /// A menu item under the pointer.
 pub const MENU_HOVER: Color = hex(0x424242);
 /// The rule between a menu's groups.
@@ -126,6 +124,10 @@ pub const LINK: Color = hex(0x3E9FF8);
 pub const ADDED_BADGE: Color = hex(0x28CD41);
 /// A modified file's badge.
 pub const MODIFIED_BADGE: Color = hex(0xFFCC00);
+/// A menu's soft drop shadow, ~4 px at its right and bottom, fading to the ground.
+pub const MENU_SHADOW: Color = hex(0x1E1E1E);
+/// A disabled button's 1 px border.
+pub const DISABLED_BORDER: Color = hex(0x383838);
 
 /// The dark shade of a lane's colour a branch's or a remote's chip is filled with, as Fork
 /// fills its first lane's orange (`#FF9502`) with `#5D3D14`: the colour taken most of the way
@@ -183,8 +185,8 @@ pub fn sheet() -> ColorsSheet {
 }
 
 /// The theme the window launches with: Freya's `dark_theme` over [`sheet`], with the parts of
-/// its components the sheet cannot say set to Fork Dark's — a disabled button's fill, the
-/// menus' ground, border, hover and square corners, a field's fill and placeholder, the
+/// its components the sheet cannot say set to Fork Dark's — a disabled button's fill and
+/// border, the menus' ground, border, shadow, hover and square corners, a field's fill and placeholder, the
 /// splitters' rule and the dialogs' ground — and the tooltips at the body's size rather than
 /// Freya's 14 px.
 pub fn theme() -> Theme {
@@ -198,7 +200,7 @@ pub fn theme() -> Theme {
             border_fill: Preference::Specific(BUTTON_BORDER),
             hover_border_fill: Preference::Specific(BUTTON_BORDER),
             focus_border_fill: Preference::Specific(ACCENT),
-            disabled_border_fill: Preference::Specific(DISABLED_FILL),
+            disabled_border_fill: Preference::Specific(DISABLED_BORDER),
             color: Preference::Specific(TEXT),
             hover_color: Preference::Specific(TEXT),
             disabled_color: Preference::Specific(DISABLED_TEXT),
@@ -216,7 +218,7 @@ pub fn theme() -> Theme {
             border_fill: Preference::Specific(SELECTION_FOCUSED),
             hover_border_fill: Preference::reference("tertiary"),
             focus_border_fill: Preference::Specific(ACCENT),
-            disabled_border_fill: Preference::Specific(DISABLED_FILL),
+            disabled_border_fill: Preference::Specific(DISABLED_BORDER),
             color: Preference::Specific(SELECTED_TEXT),
             hover_color: Preference::Specific(SELECTED_TEXT),
             disabled_color: Preference::Specific(DISABLED_TEXT),
@@ -227,7 +229,7 @@ pub fn theme() -> Theme {
         MenuContainerThemePreference {
             background: Preference::Specific(MENU),
             padding: Preference::Specific(Gaps::new_all(3.)),
-            shadow: Preference::reference("shadow"),
+            shadow: Preference::Specific(MENU_SHADOW),
             border_fill: Preference::Specific(MENU_BORDER),
             corner_radius: Preference::Specific(CornerRadius::new_all(0.)),
         },

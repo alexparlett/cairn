@@ -74,7 +74,7 @@ impl AnswerColours {
             border: tones::BUTTON_BORDER,
             focus_ring: tones::ACCENT,
             background: tones::BUTTON,
-            border_disabled: tones::DISABLED_FILL,
+            border_disabled: tones::DISABLED_BORDER,
             text_disabled: tones::DISABLED_TEXT,
         }
     }

@@ -493,7 +493,7 @@ fn control(caption: String, name: String, enabled: bool, pressed: impl Fn() + 's
                 .fill(if enabled {
                     tones::BUTTON_BORDER
                 } else {
-                    tones::DISABLED_FILL
+                    tones::DISABLED_BORDER
                 })
                 .width(1.)
                 .alignment(BorderAlignment::Inner),

@@ -19,7 +19,7 @@ writes past. Intent: `docs/design/ui.md`, "Palette and type". Spec:
   text, selection, menu, dialog, button, diff band and chip tone of the PRD's table, then the
   few more the same survey sampled that the table does not name (a field's fill and
   placeholder, a check box's border, a banner, a link, the badges of an added and a modified
-  file, a menu's shadow, the sidebar's chosen entry). The lanes keep Cairn's eight
+  file, a menu's shadow, a disabled button's border, the sidebar's chosen entry). The lanes keep Cairn's eight
   (`history::lane_palette`); a branch's and a remote's chip is filled with a dark shade of its
   lane (`chip_fill`).
 - **`style::icons`** — the Lucide icons, compiled in by Freya's `icons-lucide` feature

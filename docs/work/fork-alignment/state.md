@@ -2,9 +2,8 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: planned, 2026-10-16. Not started.** It waits on `history-topo-order` (roadmap 5c)
-merging to `main`, which phase 04 relies on. Phases 01-03 don't touch the walk and could start
-from `main` sooner, but only if the user says so.
+**Status: in progress, 2026-10-19.** `history-topo-order` (roadmap 5c) merged as #142; the
+integration branch `feature/fork-alignment` was cut from it. Phase 01 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -42,19 +41,47 @@ from `main` sooner, but only if the user says so.
 
 ## Interfaces introduced so far
 
-None yet. Phases record here what they add:
-- module paths;
-- public types;
-- new `cairn-model` vocabulary;
-- accelerator actions;
-- guard names;
-- `deny.toml` pins.
+Phases record here what they add: module paths, public types, new `cairn-model` vocabulary,
+accelerator actions, guard names, `deny.toml` pins.
+
+**Phase 01:**
+- `cairn_ui::style` (`crates/cairn-ui/src/style.rs` beside `style/`), public:
+  - `style::metrics` — R1.2's table (`BODY`, `TOOLBAR_LABEL`, `CAPTION_ROW`, `TOOLBAR`,
+    `HISTORY_ROW`, `SIDEBAR_ROW`, `LOCAL_CHANGES_ROW`, `MENU_ITEM`, `DIFF_ROW`,
+    `SIDEBAR_WIDTH`, `SIDEBAR_INDENT`) plus `HEADING`, `DIFF_TEXT`, `DIFF_LINE_NUMBER`,
+    `DETAIL_SUBJECT`, `CAPTION`, `TITLE`, `SWAP_GLYPH`, `ENTIRE_FILE_GLYPH`. Only the font sizes
+    are read today; `HISTORY_ROW` (23), `LOCAL_CHANGES_ROW`, `MENU_ITEM`, `CAPTION_ROW`,
+    `TOOLBAR`, `SIDEBAR_WIDTH` and `SIDEBAR_INDENT` (12; the sidebar still indents 14) wait for
+    the phases that lay those regions out. `SIDEBAR_ROW_HEIGHT` and `DIFF_ROW_HEIGHT` now read
+    their metric. The history's `ROW_HEIGHT` is still 26.
+  - `style::tones` — R1.3's table as `pub const Color`s, extras sampled in FS2 §1
+    (`PLACEHOLDER`, `SIDEBAR_CHOSEN`, `BANNER`, `FIELD`, `CHECK_BOX_BORDER`, `LINK`,
+    `ADDED_BADGE`, `MODIFIED_BADGE`, `MENU_SHADOW`, `DISABLED_BORDER`), `Selected` and
+    `selected(focused)`, `chip_fill(lane)`, `sheet()` and `theme()` (the launch theme, installed
+    in `crates/cairn-app/src/main.rs`).
+  - `style::icons` — `branch`, `cloud`, `archive`, `folder`, `gear`, `magnifier`, `sidebar`
+    (Lucide), each `fn(size, colour) -> Element`; none drawn by a view yet.
+- `RowRender::focused` and `CommitRow::focused(bool)`: a history row's selection tone. The
+  sidebar's list is focusable and takes focus on a row press (no keys yet: phase 05, C14).
+- `diff_palette::HUNK_HEADER`; the diff palette no longer retunes (Cairn's diff ground is
+  Fork's `#282828`), and its bands and hunk header are R1.3's — R7.5 is met already.
+- Chips: tags and stashes toned by kind, branches and remotes bordered by lane and filled with
+  `chip_fill` (R1.3's chip rows); the chip's height and shape stay for phase 04 (R5.5).
+- The window root sets `font_size(metrics::BODY)` and `background(tones::HISTORY)`.
+- Guards: `chrome_sizes_and_tones_come_from_the_style_module` (`STYLE_EXCEPTIONS`:
+  `diff/palette.rs`, `history/lane_palette.rs`; tones only) and
+  `every_icon_is_named_through_the_icon_module`, matchers `style_literals`,
+  `names_an_icon_set`, rosters `COLOUR_CONSTRUCTORS`, `COLOUR_CONSTANTS`, `ICON_SET_IDENTS`.
+- `deny.toml`: `[[bans.features]] crate = "freya"`, exact `["default", "engine", "icons",
+  "icons-lucide", "winit"]` — phase 02 adds `titlebar` and `borderless` to it in the same change
+  that enables them (exact refuses an allowed feature not enabled); Lucide's ISC licence noted
+  under `[licenses]`. Lockfile: `freya-icons` alone.
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
-| 01 | not started | — | — |
+| 01 | done (C1, C3, C4 met; C2 met but for `borderless`/`freya-borderless-plugin`, phase 02's) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 12 confirmed fixed, 3 deferred, 3 dismissed |
 | 02 | not started | — | — |
 | 03 | not started | — | — |
 | 04 | not started | — | — |

@@ -1503,6 +1503,24 @@ mod tests {
             crate::history::selection::show_main(MainView::AllCommits, view, Some(&submit));
         });
         assert_eq!(changes_asked(), 0, "asked again with nothing changed");
+
+        // Back to the history another way — a ref pressed choosing the same commit — asks too.
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+        });
+        applying(&test, view, &asked, refs(substituted(5)));
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            let mut main = view.sidebar.main;
+            main.set(MainView::AllCommits);
+            crate::history::selection::choose(RowId::Commit(oid(1)), view, Some(&submit));
+        });
+        assert_eq!(
+            changes_asked(),
+            1,
+            "a press choosing the commit drew the stale answer"
+        );
     }
 
     /// A reopen keeps the old rows drawn and usable until the new walk's first page replaces
@@ -1959,7 +1977,13 @@ mod tests {
             "the fixture's replace ref changes no count, so the counts decide nothing"
         );
 
+        let replaced_messages = fixture.recent_messages_now();
         fixture.use_replace_refs(false);
+        assert_ne!(
+            fixture.recent_messages_now(),
+            replaced_messages,
+            "the fixture's replace ref changes no recent message, so the messages decide nothing"
+        );
         assert_eq!(
             refresh(&mut updates),
             (1, 1),

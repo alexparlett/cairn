@@ -210,13 +210,15 @@ pub fn show_main(chosen: cairn_ui::MainView, view: View, submit: Option<&dyn Fn(
     }
 }
 
-/// Asks what `of` changed, unless it is what was asked last and its answer did not fail.
+/// Asks what `of` changed, unless it is what was asked last, its answer did not fail and what
+/// git substitutes has not changed since ([`crate::diff::state::DiffState::changes_stale`]).
 fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut diff = view.diff;
-    let asked = diff
-        .peek()
-        .changes()
-        .is_some_and(|(asked, answer)| asked == of && !matches!(answer, Answer::Failed(_)));
+    let asked = !diff.peek().changes_stale()
+        && diff
+            .peek()
+            .changes()
+            .is_some_and(|(asked, answer)| asked == of && !matches!(answer, Answer::Failed(_)));
     if asked {
         return;
     }

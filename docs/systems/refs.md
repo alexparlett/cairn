@@ -72,7 +72,9 @@ none at all with `core.useReplaceRefs` false, and kept in id order, so two reads
 files compare equal. A replace ref that reaches no object replaces its object with the null id,
 as git registers it, so only a read that meets that object fails, as git dies there
 (`a_replacement_that_is_not_there_fails_only_what_meets_it`); a graft file git cannot open or
-read grafts nothing, as git warns and goes on. A read that fails — two replace refs for one
+read grafts nothing, as git warns and goes on, and a shallow file git cannot open makes no
+shallow repository, as `is_repository_shallow` decides (a line that is not an id fails the read,
+as git dies on it). A read that fails — two replace refs for one
 object, git's `duplicate replace ref` — is kept as that failure, which the walk fails on too;
 the refs are listed regardless. A history walked under other substitutions is another
 history though no ref moved, so a replace ref added, moved or deleted, `core.useReplaceRefs`

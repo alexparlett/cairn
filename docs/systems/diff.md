@@ -1444,8 +1444,9 @@ device, or that it is missing — in three tiers, and reads what git substitutes
 - **What git substitutes**: the replace refs git reads and the grafts, a shallow clone's
   boundary among them (`Repository::substitutions`, the same value a refs snapshot keeps),
   read again whenever a file they are read from moved — the graft file, the shallow file, the
-  packed refs and `refs/replace/` with every directory and loose ref under it
-  (`Repository::substitution_files`), stamped like the rest — and compared by value: a replaced
+  packed refs and `refs/replace/` with every directory and loose ref under it, and each loose
+  ref a symbolic replace ref names (`Repository::substitution_files`), stamped like the rest —
+  and compared by value: a replaced
   commit reads with another author, message, tree and parents, a replaced blob with other
   lines. When they changed, the session and every kept answer go (a graft written, in
   `each_tier_lets_go_of_what_its_move_makes_stale`). A read is about 4 µs on the bench
@@ -2405,8 +2406,9 @@ is stat-clean is read by `git diff-tree -p` from the working tree instead
 (`Error::ContentReadsDisagree`) rather than either. And the window asks the chosen commit's
 changes again when a refresh's snapshot names other substitutions
 (`history::selection::ask_again`); while Local Changes holds the main region, whose primary's
-diff holds the file-diff lane, the answer kept is marked stale and asked again when the
-history is shown (`selection::show_main`,
+diff holds the file-diff lane, the answer kept is marked stale (`DiffState::changes_stale`) and
+asked again when the history is shown, by the sidebar's switch or by a row chosen again
+(`selection::show_main`, `selection::choose`;
 `a_substitution_change_asks_the_chosen_commits_changes_again_when_the_history_is_shown`).
 Local Changes' own diff of a blob replaced alone is redrawn only when it is next asked.
 It sits beside the history's rows rather than replacing them — a kept row holds a

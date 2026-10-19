@@ -98,6 +98,7 @@ pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell:
                 show_lost: State::create(false),
                 activity: crate::operations::activity::ActivityView::created(),
                 branch: crate::operations::create_branch::CreateBranchView::created(),
+                frame: crate::frame::FrameView::created(),
             })
         },
         1.,

@@ -20,7 +20,10 @@ cairn-askpass.workspace = true
 cairn-git.workspace = true
 cairn-model.workspace = true
 cairn-ui.workspace = true
-freya.workspace = true
+# `borderless` compiles in the resize edges of a window whose frame Cairn draws, one crate,
+# `freya-borderless-plugin`, from the same pinned source (fork-alignment L10; the feature set
+# pinned in `deny.toml`).
+freya = { workspace = true, features = ["borderless"] }
 
 [dev-dependencies]
 freya-testing.workspace = true

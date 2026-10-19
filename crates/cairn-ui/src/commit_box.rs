@@ -37,6 +37,7 @@ use freya::prelude::*;
 
 use crate::accelerators::{Action, FieldScope, RecallStep};
 use crate::diff::palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
+use crate::menu::{Item, context_menu};
 use crate::style::{metrics, tones};
 use crate::text_field::{text_field_in, text_field_recalling};
 
@@ -540,20 +541,14 @@ fn recent_button(recent: Rc<Vec<String>>, open: bool, on_recall: EventHandler<us
         RECENT_MESSAGES_CAPTION.to_owned(),
         enabled,
         move || {
-            let mut menu = Menu::new();
-            for (at, message) in recent.iter().enumerate() {
-                let on_recall = on_recall.clone();
-                let subject = message.lines().next().unwrap_or_default().to_owned();
-                menu = menu.child(
-                    MenuButton::new()
-                        .on_press(move |_: Event<PressEventData>| {
-                            ContextMenu::close();
-                            on_recall.call(at);
-                        })
-                        .child(subject),
-                );
-            }
-            ContextMenu::open(menu);
+            let items = recent
+                .iter()
+                .enumerate()
+                .map(|(at, message)| {
+                    Item::new(message.lines().next().unwrap_or_default().to_owned(), at)
+                })
+                .collect();
+            ContextMenu::open(context_menu(vec![items], on_recall.clone()));
         },
     )
 }

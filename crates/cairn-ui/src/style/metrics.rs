@@ -23,6 +23,21 @@ pub const SIDEBAR_ROW: f32 = 22.0;
 pub const LOCAL_CHANGES_ROW: f32 = 20.0;
 /// A menu item: the pitch between items of a context menu and a menu bar's menu.
 pub const MENU_ITEM: f32 = 23.0;
+/// A menu's narrowest width: Cairn's, so a menu of short items is not a sliver; Fork's own are
+/// as wide as their longest item.
+pub const MENU_MIN_WIDTH: f32 = 180.0;
+/// How far a menu item's label stands in from the band's left, and its chord from the right.
+pub const MENU_INSET: f32 = 24.0;
+/// The gutter a ticked item's ✓ sits in, opened before every label of a menu that holds one:
+/// Fork's labels move 18 px right while one is ticked
+/// (`docs/research/ui-review/fork-menu-toggles-2026-10-19.md`).
+pub const MENU_TICK_GUTTER: f32 = 18.0;
+/// The least room between a menu item's label and its chord.
+pub const MENU_CHORD_GAP: f32 = 40.0;
+/// The width a greyed menu item's reason wraps at, drawn under it while the pointer is on it.
+pub const MENU_REASON_WIDTH: f32 = 300.0;
+/// The room either side of a menu bar's name.
+pub const MENU_BAR_PADDING: f32 = 8.0;
 /// A diff row: Cairn's measured choice, kept (`diff::view`).
 pub const DIFF_ROW: f32 = 17.0;
 
@@ -48,8 +63,6 @@ pub const DETAIL_SUBJECT: f32 = 15.0;
 /// The Commit tab's captions (AUTHOR, PARENTS, …), the activity popover's times and a check
 /// box's tick: Cairn's size, a step under the body; Fork's survey does not size them.
 pub const CAPTION: f32 = 11.0;
-/// The product's name in the title row: Cairn's size.
-pub const TITLE: f32 = 16.0;
 
 /// The diff bar's swap glyph, `↕` in IBM Plex Mono: Cairn's size, filling the bar's glyph box.
 pub const SWAP_GLYPH: f32 = 14.0;

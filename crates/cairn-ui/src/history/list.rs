@@ -5,10 +5,11 @@ use std::sync::Arc;
 use cairn_model::{History, HistoryRow, Oid, RefsSnapshot, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
-use crate::accelerators::{self, Action, HeldKeys, Scope};
+use crate::accelerators::{self, Action, HeldKeys};
 use crate::history::commit_row::label_room;
 use crate::history::graph_geometry::ROW_HEIGHT;
 use crate::history::ref_chips::{Chip, chips_of_row};
+use crate::menu::{Item, context_menu};
 use crate::style::tones;
 
 pub const PREFETCH_ROWS: usize = 24;
@@ -55,7 +56,6 @@ pub struct HistoryList {
     on_select: EventHandler<RowId>,
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
-    on_action: EventHandler<Action>,
     on_new_branch: EventHandler<(Oid, String)>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
@@ -75,7 +75,6 @@ impl HistoryList {
             on_select: EventHandler::new(|_| {}),
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
-            on_action: EventHandler::new(|_: Action| {}),
             on_new_branch: EventHandler::new(|_: (Oid, String)| {}),
             row: Callback::new(row),
             controller: None,
@@ -149,13 +148,6 @@ impl HistoryList {
     /// more than once for the same end.
     pub fn on_reach_end(mut self, on_reach_end: impl Into<EventHandler<()>>) -> Self {
         self.on_reach_end = on_reach_end.into();
-        self
-    }
-
-    /// A chord of the history's own scope pressed while the list has focus ([`Scope::History`]:
-    /// Show Lost Commits), resolved through the accelerator table. What it does is the caller's.
-    pub fn on_action(mut self, on_action: impl Into<EventHandler<Action>>) -> Self {
-        self.on_action = on_action.into();
         self
     }
 
@@ -308,18 +300,11 @@ impl HistoryList {
         let rows = self.rows;
         let selected = self.selected;
         let on_select = self.on_select.clone();
-        let on_action = self.on_action.clone();
 
         move |e: Event<KeyboardEventData>| {
-            // The history's own chords: heard here, where its scope is.
-            if let Some(action) = accelerators::resolve_key(&e, Scope::History) {
-                e.stop_propagation();
-                on_action.call(action);
-                return;
-            }
             // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
             // "next commit", even while the pane that hears it does not have focus.
-            if accelerators::is_chord(&e, &[Scope::History]) {
+            if accelerators::is_chord(&e, &[]) {
                 return;
             }
             // Drop the read guard before calling out: a handler that reloads the list would panic.
@@ -442,16 +427,10 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                     RowContent::Stash(stash) => stash.message,
                 })
                 .unwrap_or_default();
-            ContextMenu::open_from_down(
-                Menu::new().child(
-                    MenuButton::new()
-                        .on_press(move |_: Event<PressEventData>| {
-                            ContextMenu::close();
-                            on_new_branch.call((commit, subject.clone()));
-                        })
-                        .child(NEW_BRANCH_CAPTION),
-                ),
-            );
+            ContextMenu::open_from_down(context_menu(
+                vec![vec![Item::new(NEW_BRANCH_CAPTION, ())]],
+                move |()| on_new_branch.call((commit, subject.clone())),
+            ));
         })
         .child(drawn)
         .into()

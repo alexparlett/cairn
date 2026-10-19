@@ -459,7 +459,14 @@ fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Sub
         | Action::Refresh
         | Action::Commit
         | Action::ShowLostCommits
-        | Action::NewBranch => {}
+        | Action::NewBranch
+        | Action::ShowLocalChanges
+        | Action::ShowAllCommits
+        | Action::ShowHead
+        | Action::ToggleDetails
+        | Action::Fetch
+        | Action::ZoomIn
+        | Action::ZoomOut => {}
     }
 }
 

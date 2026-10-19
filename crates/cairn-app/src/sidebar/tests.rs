@@ -180,6 +180,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     show_lost: State::create(false),
                     activity: crate::operations::activity::ActivityView::created(),
                     branch: crate::operations::create_branch::CreateBranchView::created(),
+                    frame: crate::frame::FrameView::created(),
                 }
             })
         },

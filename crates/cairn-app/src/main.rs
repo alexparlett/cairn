@@ -4,8 +4,10 @@ mod closing;
 mod commit_box;
 mod detail;
 mod diff;
+mod frame;
 mod history;
 mod local_changes;
+mod menu_bar;
 mod modal;
 mod operations;
 mod refresh;
@@ -47,12 +49,19 @@ fn main() {
         let closing = closing.clone();
         move || app(git.clone(), closing.clone())
     })
-    .with_title("Cairn")
+    .with_title(cairn_ui::CAPTION_TITLE)
+    // The Wayland app id, as X11's class already is: what a compositor's window rule names.
+    .with_app_id("cairn")
+    // Cairn draws Fork's caption row where the frame is its own (`cairn_ui::Frame`); macOS
+    // keeps the desktop's frame.
+    .with_decorations(cairn_ui::Frame::current() == cairn_ui::Frame::Native)
     // Closing the window closes its repository first: see `closing`.
     .with_on_close(move |_, _| closing.requested());
     launch(
         LaunchConfig::new()
             .with_font(DIFF_FONT_FAMILY, DIFF_FONT)
+            // The edges and corners of a window with no frame of the desktop's resize it.
+            .with_plugin(freya::borderless::BorderlessPlugin::new())
             .with_window(window),
     );
 }
@@ -105,6 +114,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let branch = operations::create_branch::CreateBranchView::used();
     // The activity popover's operations, for the session.
     let activity = operations::activity::ActivityView::used();
+    // The window's frame: its zoom and About Cairn, for the session.
+    let frame = frame::FrameView::used();
     let view = View {
         rows,
         progress,
@@ -136,6 +147,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         show_lost,
         branch,
         activity,
+        frame,
     };
 
     let opened = use_hook(|| {

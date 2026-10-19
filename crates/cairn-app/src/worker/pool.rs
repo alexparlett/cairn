@@ -39,6 +39,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use cairn_git::ops::GitBinary;
 use cairn_git::{CLOSE_BOUND, SharedRepository};
 use cairn_model::{Disclosure, RefsSnapshot};
 
@@ -202,6 +203,12 @@ fn open_paced(
                     return;
                 }
             };
+            outbox.send(
+                None,
+                Update::GitFound {
+                    described: described(&git),
+                },
+            );
             // As the git found above would find it: a bare repository planted in a
             // working tree is refused here, as that git refuses it under
             // `safe.bareRepository = explicit`, since every git run in it afterwards
@@ -289,6 +296,11 @@ fn open_paced(
 /// directory, when it is bare — which discovery has already made absolute and free of `.`
 /// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
 /// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
+/// The `git` found, as About Cairn names it: "git 2.47.1, at /usr/bin/git".
+fn described(git: &GitBinary) -> String {
+    format!("git {}, at {}", git.version(), git.path().display())
+}
+
 fn repository_name(shared: &SharedRepository) -> String {
     let root = shared.workdir().unwrap_or_else(|| shared.git_dir());
     root.file_name().map_or_else(
@@ -1384,6 +1396,15 @@ mod tests {
         }
     }
 
+    /// The update after the `git` found, which a git that was found is said first: what the
+    /// open says of the repository.
+    fn past_the_git_found(updates: &mut Updates) -> Option<Update> {
+        match block_on(updates.next()) {
+            Some(Update::GitFound { .. }) => block_on(updates.next()),
+            other => panic!("the open did not first say which git it found: {other:?}"),
+        }
+    }
+
     /// Arrives as an update, not as an error from `open`.
     #[test]
     fn opening_a_path_outside_a_repository_is_reported_and_names_the_path() {
@@ -1392,7 +1413,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        match block_on(updates.next()) {
+        match past_the_git_found(&mut updates) {
             Some(Update::Failed { message }) => assert!(
                 message.contains(&outside.display().to_string()),
                 "the message does not name the path: {message}"
@@ -1490,7 +1511,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        match block_on(updates.next()) {
+        match past_the_git_found(&mut updates) {
             Some(Update::Failed { message }) => assert!(
                 message.contains("safe.bareRepository"),
                 "the refusal does not say why: {message}"
@@ -1570,7 +1591,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        match block_on(updates.next()) {
+        match past_the_git_found(&mut updates) {
             Some(Update::Failed { message }) => assert!(
                 message.contains("dubious ownership") && message.contains("safe.directory"),
                 "the refusal does not say why, in git's words: {message}"
@@ -2430,7 +2451,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
-        match block_on(updates.next()) {
+        match past_the_git_found(&mut updates) {
             Some(Update::Failed { .. }) => {}
             other => panic!("expected the open to be reported, got {other:?}"),
         }

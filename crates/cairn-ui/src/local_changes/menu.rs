@@ -10,14 +10,14 @@
 //! folder and loses its history). A selection mixing any of them with paths that can be
 //! discarded discards those, and the confirmation says in one line what is left ([`Left`]),
 //! where Fork asks twice. A selection with nothing that can be discarded offers its Discard
-//! greyed, the reason wrapped beneath it and never cut ([`NoDiscard`]), and the discard chord
-//! over it does nothing, as Fork's does: there is no line under the lists to say it in.
+//! greyed, its reason as its tooltip ([`NoDiscard`]), and the discard chord over it does
+//! nothing, as Fork's does: there is no line under the lists to say it in.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::Action;
-use crate::style::metrics;
+use crate::menu::{Item, context_menu};
 
 /// The menu's words.
 pub const STAGE_CAPTION: &str = "Stage";
@@ -183,23 +183,13 @@ pub enum MenuChoice {
 }
 
 /// The menu for a selection in `list`: Stage or Unstage, Discard Changes… — greyed with its
-/// reason wrapped beneath it when `refusal` says why, as it always does on the staged side —
-/// Stage All or Unstage All, Copy Path. Each item closes the menu as it is chosen (Freya closes
-/// it on no choice of its own).
+/// reason as its tooltip when `refusal` says why, as it always does on the staged side — Stage
+/// All or Unstage All, Copy Path. Each item closes the menu as it is chosen.
 pub fn menu(
     list: ChangeList,
     refusal: Option<&NoDiscard>,
     chosen: EventHandler<MenuChoice>,
 ) -> Menu {
-    let item = |caption: &'static str, choice: MenuChoice| {
-        let chosen = chosen.clone();
-        MenuButton::new()
-            .on_press(move |_: Event<PressEventData>| {
-                ContextMenu::close();
-                chosen.call(choice);
-            })
-            .child(caption)
-    };
     let (one, all) = match list {
         ChangeList::Unstaged => (STAGE_CAPTION, STAGE_ALL_CAPTION),
         ChangeList::Staged => (UNSTAGE_CAPTION, UNSTAGE_ALL_CAPTION),
@@ -209,24 +199,16 @@ pub fn menu(
         ChangeList::Staged => Some(&NoDiscard::Staged),
         ChangeList::Unstaged => refusal,
     };
-    let discard: Vec<MenuButton> = match refusal {
-        None => vec![item(DISCARD_CAPTION, MenuChoice::Act(Action::Discard))],
-        // The reason wraps and is never cut.
-        Some(why) => vec![
-            MenuButton::new().enabled(false).child(DISCARD_CAPTION),
-            MenuButton::new().enabled(false).child(
-                label()
-                    .text(why.text())
-                    .width(Size::px(300.))
-                    .font_size(metrics::BODY),
-            ),
-        ],
-    };
-    Menu::new()
-        .child(item(one, MenuChoice::Act(Action::StageOrUnstage)))
-        .children(discard)
-        .child(item(all, MenuChoice::Act(Action::StageOrUnstageAll)))
-        .child(item(COPY_PATH_CAPTION, MenuChoice::CopyPaths))
+    context_menu(
+        vec![vec![
+            Item::new(one, MenuChoice::Act(Action::StageOrUnstage)),
+            Item::new(DISCARD_CAPTION, MenuChoice::Act(Action::Discard))
+                .greyed(refusal.map(NoDiscard::text)),
+            Item::new(all, MenuChoice::Act(Action::StageOrUnstageAll)),
+            Item::new(COPY_PATH_CAPTION, MenuChoice::CopyPaths),
+        ]],
+        chosen,
+    )
 }
 
 #[cfg(test)]

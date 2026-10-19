@@ -15,7 +15,9 @@ cairn-model.workspace = true
 # `engine` exposes Skia for painting the graph column; no new crate. `icons-lucide` compiles
 # in the Lucide icons `src/style/icons.rs` names, one crate, `freya-icons`, from the same
 # pinned source (user-approved, fork-alignment L10; the feature set pinned in `deny.toml`).
-freya = { workspace = true, features = ["engine", "icons-lucide"] }
+# `titlebar` compiles in the window controls the caption row draws (`src/caption_row.rs`), no
+# new crate (fork-alignment L10; pinned in `deny.toml`).
+freya = { workspace = true, features = ["engine", "icons-lucide", "titlebar"] }
 # Terminal column widths for tab stops (`src/diff/columns.rs`; user-approved 2026-10-03).
 unicode-width.workspace = true
 # The edge auto-scroll's timer (`src/edge_scroll.rs`; user-approved 2026-10-07, L5).

@@ -6,9 +6,9 @@ use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, W
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
-    ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
-    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running, StatusBox,
-    Tracking, current_branch,
+    CaptionRow, ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT,
+    DetailTab, DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running,
+    StatusBox, Tracking, current_branch,
 };
 use freya::prelude::*;
 
@@ -108,6 +108,8 @@ pub struct View {
     /// The activity popover: the session's operations, and whether it is open,
     /// in two states.
     pub activity: crate::operations::activity::ActivityView,
+    /// The window's frame: its zoom, About Cairn, and the `git` About names.
+    pub frame: crate::frame::FrameView,
 }
 
 impl std::fmt::Debug for View {
@@ -133,7 +135,7 @@ pub fn window(
     let counted = status_text::loaded_count(&view.progress.read());
     let placeholder = status_text::placeholder(&view.progress.read());
     let reading = status_text::reading_strip(&view.progress.read());
-    let fetch = view.fetch.read().clone();
+
     let prompt = view.prompt.read().clone();
     let confirming = view.confirming.read().clone();
     // The one banner about the window: which write it waits on to close.
@@ -155,6 +157,8 @@ pub fn window(
     });
     // Coming back to the window reads the refs and the working tree again.
     crate::refresh::focus::on_focus_gained(submit.clone());
+    // The desktop's title for the window names the repository.
+    crate::frame::use_title(view);
     // `Remove index.lock…`'s answer, read at its press, opens its confirmation.
     crate::operations::leftover_lock::use_lock_confirmation(view, submit.clone());
     // A scroll of the list supersedes a find in the sidebar: subscribed to the list's
@@ -215,6 +219,16 @@ pub fn window(
             let mut held = view.held_keys;
             held.write().heard(&e, false);
         })
+        // Fork's caption row on Linux — the menus, "Cairn" and the window's controls — and on
+        // macOS the same menus as a row inside the desktop's frame.
+        .child({
+            let choosing = submit.clone();
+            CaptionRow::new(crate::menu_bar::menus(view, submit.is_some()))
+                .on_choose(move |choice| {
+                    crate::menu_bar::choose(choice, view, choosing.as_deref());
+                })
+                .on_frame(crate::frame::ask)
+        })
         .child(title_bar(
             // Fork's: the status box opens the activity popover, which hangs from where the box
             // is laid out.
@@ -234,9 +248,7 @@ pub fn window(
                 ))
                 .into(),
             &counted,
-            &fetch,
-            view.fetch,
-            &view.remotes.read(),
+            view,
             submit.clone(),
         ))
         // The two banners: the leftover lock, about the repository, and closing, about
@@ -272,6 +284,7 @@ pub fn window(
             Some(Modal::Popover) => {
                 Some(crate::operations::activity::ActivityLayer::new(view, popping).into())
             }
+            Some(Modal::About) => crate::frame::about(view),
             None => None,
         })
         // Every context menu opens here, so none panics for want of a host.
@@ -402,7 +415,6 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let mut progress = view.progress;
     let choosing = submit.clone();
     let extending = submit.clone();
-    let acting = submit.clone();
     let second = view
         .pair
         .read()
@@ -457,10 +469,6 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     // "New Branch…" on a commit row opens Create Branch.
     .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
         crate::operations::create_branch::open(view, at, subject);
-    })
-    // The history's own chord, Show Lost Commits.
-    .on_action(move |action| {
-        crate::history::lost_commits::history_action(action, view, acting.as_deref())
     })
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
@@ -548,9 +556,7 @@ fn running(view: View) -> Vec<Running> {
 fn title_bar(
     status: Element,
     counted: &str,
-    fetch: &FetchStatus,
-    fetch_state: State<FetchStatus>,
-    remotes: &[RemoteSummary],
+    view: View,
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Element {
     rect()
@@ -561,12 +567,6 @@ fn title_bar(
         .spacing(10.)
         .padding(Gaps::new(8., 12., 8., 12.))
         .background(tones::CHROME)
-        .child(
-            label()
-                .text("Cairn")
-                .color(tones::TEXT)
-                .font_size(metrics::TITLE),
-        )
         .child(
             rect()
                 .width(Size::flex(1.))
@@ -580,39 +580,23 @@ fn title_bar(
                 .font_size(metrics::BODY)
                 .color(tones::TOOLBAR_TEXT),
         )
-        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
+        .maybe_child(fetch_button(view, submit))
         .into()
 }
 
 /// "Fetch <remote>" for the default remote, greyed while a fetch is in flight, so a second
 /// fetch is never asked and the network lane's refusal never drawn; nothing when the repository
-/// has no remote to fetch. The press itself marks the fetch as starting, so a second press before
-/// the worker answers lands on a greyed button. A running fetch is cancelled from the activity
-/// popover, as in Fork.
-fn fetch_button(
-    fetch: &FetchStatus,
-    mut fetch_state: State<FetchStatus>,
-    remotes: &[RemoteSummary],
-    submit: Option<Rc<dyn Fn(Request)>>,
-) -> Option<Element> {
+/// has no remote to fetch. A running fetch is cancelled from the activity popover, as in Fork.
+fn fetch_button(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
     let submit = submit?;
-    let remote = remotes.first()?.name.clone();
-    let caption = format!("Fetch {remote}");
-    let in_flight = fetch.is_in_flight();
+    let remote = crate::operations::fetch::default_remote(view)?;
+    let in_flight = view.fetch.read().is_in_flight();
     Some(
         Button::new()
             .compact()
             .enabled(!in_flight)
-            .on_press(move |_| {
-                if fetch_state.peek().is_in_flight() {
-                    return;
-                }
-                fetch_state.write().starting(remote.clone());
-                submit(Request::Fetch {
-                    remote: remote.clone(),
-                });
-            })
-            .child(caption)
+            .on_press(move |_| crate::operations::fetch::start(view, Some(&*submit)))
+            .child(format!("Fetch {remote}"))
             .into(),
     )
 }
@@ -878,6 +862,7 @@ pub(crate) mod tests {
             show_lost: State::create(false),
             activity: crate::operations::activity::ActivityView::created(),
             branch: crate::operations::create_branch::CreateBranchView::created(),
+            frame: crate::frame::FrameView::created(),
         }
     }
 

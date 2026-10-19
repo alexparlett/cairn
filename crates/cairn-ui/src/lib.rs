@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod caption_row;
 mod check_box;
 mod commit_box;
 mod detail;
@@ -10,11 +11,13 @@ mod edge_scroll;
 mod end_room;
 mod history;
 mod local_changes;
+pub mod menu;
 mod sidebar;
 pub mod style;
 mod text_field;
 mod title_bar;
 
+pub use caption_row::{CAPTION_TITLE, CaptionRow, Frame, FrameRequest};
 pub use commit_box::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, AMEND_TITLE, Busy, CANCEL_COMMIT_CAPTION, CANCELLING,
     CommitBox, CommitButton, DESCRIPTION_PLACEHOLDER, DETACHED_LINE, RECENT_MESSAGES_CAPTION,
@@ -36,6 +39,7 @@ pub use detail::file_filter::ShownFiles;
 pub use detail::tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,
 };
+pub use dialogs::about::{ABOUT_TITLE, AboutDialog, NO_GIT_FOUND, licence_line, version_line};
 pub use dialogs::confirm::{
     CANCEL_CAPTION, COUNTING_TEXT, ConfirmDialog, DialogAnswer, NOTHING_CHANGED,
     SHOW_FILES_CAPTION, SHOWN_FILE_HEIGHT,

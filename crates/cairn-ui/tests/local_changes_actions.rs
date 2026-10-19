@@ -202,6 +202,19 @@ fn press_each_chord(test: &mut TestingRunner, action: Action) -> usize {
     pressed
 }
 
+/// Every text drawn once the pointer has rested on the open menu's Discard Changes… long enough
+/// for its tooltip.
+fn said_over_discard(test: &mut TestingRunner) -> Vec<String> {
+    let discard = labels(test)
+        .into_iter()
+        .rfind(|(text, ..)| text == DISCARD_CAPTION)
+        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y) + 2.))
+        .unwrap_or_else(|| panic!("no Discard Changes… in the menu"));
+    test.move_cursor(discard);
+    test.poll(Duration::from_millis(50), Duration::from_millis(900));
+    texts(test)
+}
+
 fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
     test.move_cursor(at);
     for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
@@ -502,11 +515,11 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
 
 /// An unstaged row's menu offers Stage, Discard Changes…, Stage All and Copy Path, each closing
 /// the menu as it is chosen; a submodule's and a conflicted row's offer Stage and their Discard
-/// greyed, saying why; a staged row's offers Unstage, Unstage All and Copy Path, and its
-/// Discard greyed with "Staged changes can't be discarded. Unstage them first." beneath it. A
-/// right-press on an unselected row chooses it first. Caught by: a discard offered on Staged,
-/// for a submodule or a conflict, a reason missing, or a menu left open after its item was
-/// chosen.
+/// greyed, saying why in its tooltip; a staged row's offers Unstage, Unstage All and Copy Path,
+/// and its Discard greyed with "Staged changes can't be discarded. Unstage them first." as its
+/// tooltip. A right-press on an unselected row chooses it first. Caught by: a discard offered on
+/// Staged, for a submodule or a conflict, a reason missing, or a menu left open after its item
+/// was chosen.
 #[test]
 fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let (mut test, _, log) = launch(lists());
@@ -553,7 +566,7 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
         log.borrow_mut().clear();
         let pressed = at(&test, row);
         right_click(&mut test, pressed);
-        let drawn = texts(&test);
+        let drawn = said_over_discard(&mut test);
         assert!(
             drawn.iter().any(|t| t == why),
             "{row}'s menu does not say why it offers no discard: {drawn:?}"
@@ -582,6 +595,7 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let drawn = texts(&test);
     assert!(drawn.iter().any(|t| t == UNSTAGE_CAPTION));
     assert!(drawn.iter().any(|t| t == UNSTAGE_ALL_CAPTION));
+    let drawn = said_over_discard(&mut test);
     assert!(
         drawn
             .iter()

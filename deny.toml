@@ -56,16 +56,19 @@ allow = []
 
 # freya's features compile whole parts of the toolkit, and the crate allowlist in cairn-guards
 # reads names, never features, so the set Cairn links is pinned here: `winit` (the window, by
-# `default`), `engine` (the Skia canvas the graph and the glyphs paint on), and `icons-lucide`
-# (with the `icons` it implies), the Lucide icons `cairn_ui::style::icons` names. `icons-lucide`
-# adds one crate to the lockfile, `freya-icons`, from the same pinned Freya source; its icons
-# are Lucide's, under the licence recorded under `[licenses]` below. Another feature — another
-# icon set, the window decorations, the zoom shortcuts that bind a literal modifier — is a
-# decision to surface, not a default move.
+# `default`), `engine` (the Skia canvas the graph and the glyphs paint on), `icons-lucide`
+# (with the `icons` it implies), the Lucide icons `cairn_ui::style::icons` names, and the
+# caption row Cairn draws on Linux in place of the desktop's frame — `titlebar`, the window
+# controls `cairn_ui::CaptionRow` draws (no crate of its own), and `borderless`, the resize
+# edges of a window with no frame, one crate, `freya-borderless-plugin` (fork-alignment L10).
+# `icons-lucide` adds one crate to the lockfile, `freya-icons`, from the same pinned Freya
+# source; its icons are Lucide's, under the licence recorded under `[licenses]` below. Another
+# feature — another icon set, the native menu bar (`menu`, which pulls muda), the zoom shortcuts
+# that bind a literal modifier — is a decision to surface, not a default move.
 [[bans.features]]
 crate = "freya"
 exact = true
-allow = ["default", "engine", "icons", "icons-lucide", "winit"]
+allow = ["borderless", "default", "engine", "icons", "icons-lucide", "titlebar", "winit"]
 
 [licenses]
 # Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's

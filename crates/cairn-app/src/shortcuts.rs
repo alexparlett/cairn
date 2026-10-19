@@ -7,7 +7,7 @@
 //! [`Scope::Detail`]: cairn_ui::accelerators::Scope::Detail
 
 use cairn_ui::accelerators::Action;
-use cairn_ui::{DetailTab, HeaderAction};
+use cairn_ui::{DetailTab, HeaderAction, MainView};
 use freya::prelude::*;
 
 use crate::diff;
@@ -73,13 +73,9 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         | Action::SelectRange
         | Action::ExtendSelectionUp
         | Action::ExtendSelectionDown => {}
-        // Heard only in their own scopes — Local Changes' lists and diff, the commit box, the
-        // history list — by the view that has focus there, never by the window.
-        Action::StageOrUnstage
-        | Action::StageOrUnstageAll
-        | Action::Discard
-        | Action::Commit
-        | Action::ShowLostCommits => {}
+        // Heard only in their own scopes — Local Changes' lists and diff, the commit box — by
+        // the view that has focus there, never by the window.
+        Action::StageOrUnstage | Action::StageOrUnstageAll | Action::Discard | Action::Commit => {}
         // Fork's New Branch, at `HEAD`, wherever focus is.
         Action::NewBranch => crate::operations::create_branch::open_at_head(view),
         // Read again on the worker; the window only asks.
@@ -88,6 +84,19 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
                 submit(Request::Refresh);
             }
         }
+        Action::ShowLostCommits => crate::history::lost_commits::toggle(view, submit),
+        Action::ShowLocalChanges => {
+            crate::history::selection::show_main(MainView::LocalChanges, view, submit);
+        }
+        Action::ShowAllCommits => {
+            crate::history::selection::show_main(MainView::AllCommits, view, submit);
+        }
+        Action::ShowHead => crate::history::head::show(view, submit),
+        // The pane collapses to its tab strip, or opens again at the height it had.
+        Action::ToggleDetails => pane_collapsed.toggle(),
+        Action::Fetch => crate::operations::fetch::start(view, submit),
+        Action::ZoomIn => crate::frame::zoom(view, true),
+        Action::ZoomOut => crate::frame::zoom(view, false),
     }
 }
 

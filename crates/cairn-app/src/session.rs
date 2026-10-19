@@ -85,6 +85,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::history::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
+        Update::GitFound { described } => {
+            let mut git = view.frame.git;
+            git.set(Some(described));
+        }
         Update::Opened { name } => repository.set(Some(name)),
         // The leftover lock's stat, from every refresh.
         Update::IndexLock { changed } => {
@@ -589,6 +593,7 @@ mod tests {
                         show_lost: State::create(false),
                         activity: crate::operations::activity::ActivityView::created(),
                         branch: crate::operations::create_branch::CreateBranchView::created(),
+                        frame: crate::frame::FrameView::created(),
                     }
                 })
             },

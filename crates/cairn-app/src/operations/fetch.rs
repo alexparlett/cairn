@@ -1,6 +1,60 @@
-//! View state for a fetch and the credential prompt it may raise.
+//! View state for a fetch and the credential prompt it may raise, and Fetch asked of the
+//! default remote — by the title row's button, the Repository menu and the chord alike.
 
-use crate::worker::PromptId;
+use crate::window::View;
+use crate::worker::{PromptId, Request};
+
+/// Why Fetch is greyed with no repository open.
+pub const NO_REPOSITORY: &str = "No repository is open.";
+/// Why Fetch is greyed in a repository with no remote.
+pub const NO_REMOTE: &str = "This repository has no remote to fetch.";
+/// Why Fetch is greyed while one runs: a second is never asked.
+pub const FETCH_RUNNING: &str = "A fetch is running.";
+
+/// The remote Fetch fetches: the default remote, the first listed.
+pub fn default_remote(view: View) -> Option<String> {
+    view.remotes
+        .read()
+        .first()
+        .map(|remote| remote.name.clone())
+}
+
+/// Why Fetch cannot be asked now, if it cannot: no repository open (`open` false), no remote,
+/// or a fetch in flight.
+pub fn refusal(view: View, open: bool) -> Option<&'static str> {
+    if !open {
+        Some(NO_REPOSITORY)
+    } else if view.remotes.read().is_empty() {
+        Some(NO_REMOTE)
+    } else if view.fetch.read().is_in_flight() {
+        Some(FETCH_RUNNING)
+    } else {
+        None
+    }
+}
+
+/// Fetches the default remote, marking the fetch as starting at once so a second ask before
+/// the worker answers lands on a greyed Fetch; nothing while one is in flight, with no remote or
+/// no repository.
+pub fn start(view: View, submit: Option<&dyn Fn(Request)>) {
+    let Some(submit) = submit else {
+        return;
+    };
+    let mut fetch = view.fetch;
+    if fetch.peek().is_in_flight() {
+        return;
+    }
+    let Some(remote) = view
+        .remotes
+        .peek()
+        .first()
+        .map(|remote| remote.name.clone())
+    else {
+        return;
+    };
+    fetch.write().starting(remote.clone());
+    submit(Request::Fetch { remote });
+}
 
 /// The one fetch the window shows; a second is not offered while one is in flight.
 #[derive(Debug, Clone, PartialEq, Eq)]

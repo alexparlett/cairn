@@ -1497,6 +1497,7 @@ dependencies = [
  "cfg-if",
  "freya-android",
  "freya-animation",
+ "freya-borderless-plugin",
  "freya-clipboard",
  "freya-components",
  "freya-core",
@@ -1529,6 +1530,17 @@ dependencies = [
  "async-io",
  "easer",
  "freya-core",
+]
+
+[[package]]
+name = "freya-borderless-plugin"
+version = "0.5.0-rc.4"
+source = "git+https://github.com/alexparlett/freya?rev=caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0#caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0"
+dependencies = [
+ "freya-core",
+ "freya-engine",
+ "freya-winit",
+ "torin",
 ]
 
 [[package]]

@@ -93,6 +93,7 @@ fn kind(update: &Update) -> &'static str {
         Update::DiffFailed { .. } => "diff failed",
         Update::ConfiguredContext { .. } => "configured context",
         Update::Remotes { .. } => "remotes",
+        Update::GitFound { .. } => "git found",
         Update::Opened { .. } => "opened",
         Update::Refs { .. } => "refs",
         Update::AheadBehind { .. } => "ahead/behind",
@@ -431,6 +432,7 @@ fn launch(path: &str) -> Harness {
                 show_lost: State::create(false),
                 activity: crate::operations::activity::ActivityView::created(),
                 branch: crate::operations::create_branch::CreateBranchView::created(),
+                frame: crate::frame::FrameView::created(),
             })
         },
         1.,

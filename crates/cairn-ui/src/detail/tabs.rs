@@ -1,10 +1,13 @@
-//! The detail pane's strip: its tabs, and the control that collapses the pane. Fork draws
+//! The detail pane's strip: its tabs, and the icon that hides the pane's body. Fork draws
 //! the tabs as text with no count on either; the strip stays when the pane collapses, so
-//! the pane can be opened again from where it went.
+//! the pane can be opened again from where it went. The icon at the strip's right is Fork's
+//! "Hide commit details" (`docs/research/ui-review/fork-window-survey-2-2026-10-16.md`, section
+//! 2), lit in the accent while the pane is hidden, as Fork's is (section 3); Fork's pop-out icon
+//! beside it is not drawn.
 
 use freya::prelude::*;
 
-use crate::style::{metrics, tones};
+use crate::style::{icons, metrics, tones};
 
 /// Height of the strip, which is what a collapsed pane keeps.
 pub const DETAIL_STRIP_HEIGHT: f32 = 30.0;
@@ -28,10 +31,9 @@ impl DetailTab {
     }
 }
 
-/// The caption of the control that collapses an open pane.
-pub const COLLAPSE_CAPTION: &str = "Collapse";
-/// The caption of the control that opens a collapsed pane.
-pub const EXPAND_CAPTION: &str = "Expand";
+/// The tooltip of the icon that hides the pane's body and brings it back, Fork's words, and its
+/// name for assistive technology.
+pub const HIDE_DETAILS_TOOLTIP: &str = "Hide commit details";
 
 pub struct DetailTabs {
     selected: DetailTab,
@@ -181,14 +183,17 @@ impl Component for DetailTabs {
                     .height(Size::fill())
                     .main_align(Alignment::Center)
                     .child(
-                        Button::new()
-                            .compact()
-                            .on_press(move |_| on_collapse.call(!collapsed))
-                            .child(if collapsed {
-                                EXPAND_CAPTION
-                            } else {
-                                COLLAPSE_CAPTION
-                            }),
+                        TooltipContainer::new(Tooltip::new_text(HIDE_DETAILS_TOOLTIP)).child(
+                            rect()
+                                .a11y_role(AccessibilityRole::Button)
+                                .a11y_builder(|node| node.set_value(HIDE_DETAILS_TOOLTIP))
+                                .padding(4.)
+                                .on_press(move |_| on_collapse.call(!collapsed))
+                                .child(icons::bottom_pane(
+                                    metrics::STRIP_ICON,
+                                    if collapsed { accent } else { tones::TEXT },
+                                )),
+                        ),
                     ),
             )
     }

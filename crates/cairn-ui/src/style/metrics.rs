@@ -35,6 +35,8 @@ pub const STATUS_BOX_WIDTH: f32 = 300.0;
 pub const STATUS_BOX_HEIGHT: f32 = 36.0;
 /// The narrowest the status box shrinks to as the window narrows, before anything else gives.
 pub const STATUS_BOX_MIN_WIDTH: f32 = 200.0;
+/// The detail pane's Hide commit details icon, at its tab strip's right.
+pub const STRIP_ICON: f32 = 14.0;
 /// The status box's list glyph, at its left.
 pub const STATUS_BOX_GLYPH: f32 = 14.0;
 

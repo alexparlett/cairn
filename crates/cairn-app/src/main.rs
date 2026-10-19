@@ -51,6 +51,8 @@ fn main() {
         move || app(git.clone(), closing.clone())
     })
     .with_title(cairn_ui::CAPTION_TITLE)
+    .with_size(frame::OPENING_SIZE.0, frame::OPENING_SIZE.1)
+    .with_min_size(frame::MIN_SIZE.0, frame::MIN_SIZE.1)
     // The Wayland app id, the same name as the X11 class winit already gives the window.
     .with_app_id("cairn")
     // Cairn draws Fork's caption row where the frame is its own (`cairn_ui::Frame`); macOS
@@ -86,7 +88,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // Session state: the tab and the pane's shape outlive every selection.
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
-    let pane_height = use_state(|| window::PANE_HEIGHT);
+    let pane_split = use_state(detail::split::PaneSplit::default);
     // Session state of every diff view: its settings, its scroll, the change moved to.
     let diff_settings = use_state(DiffSettings::default);
     let diff_scroll = use_scroll_controller(ScrollConfig::default);
@@ -131,7 +133,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         history_cursor,
         detail_tab,
         pane_collapsed,
-        pane_height,
+        pane_split,
         diff_settings,
         diff_scroll,
         change_cursor,

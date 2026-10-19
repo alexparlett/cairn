@@ -258,27 +258,27 @@ impl Component for Toolbar {
                 Tip::Sentence(COMES_WITH_STASHING.to_owned()),
                 never(),
             ))
-            // The status box, ~300 px at 1024 px wide, centred in the room between the groups
-            // and the first thing to shrink as the window narrows.
+            // The status box, ~300 px at 1024 px wide, and Branch beside it, centred in the room
+            // between the groups; the box is the first thing to shrink as the window narrows.
             .child(
                 rect()
+                    .horizontal()
+                    .content(Content::Flex)
                     .width(Size::flex(1.))
                     .min_width(Size::px(
                         metrics::STATUS_BOX_MIN_WIDTH + 2. * metrics::TOOLBAR_GROUP_GAP,
                     ))
                     .height(Size::fill())
-                    .padding(Gaps::new(
-                        0.,
-                        metrics::TOOLBAR_GROUP_GAP,
-                        0.,
-                        metrics::TOOLBAR_GROUP_GAP,
-                    ))
-                    .center()
+                    .padding(Gaps::new(0., 0., 0., metrics::TOOLBAR_GROUP_GAP))
+                    .main_align(Alignment::center())
+                    .cross_align(Alignment::center())
                     .child(
                         rect()
-                            .width(Size::fill())
+                            .width(Size::flex(1.))
+                            .min_width(Size::px(metrics::STATUS_BOX_MIN_WIDTH))
                             .max_width(Size::px(metrics::STATUS_BOX_WIDTH))
                             .height(Size::px(metrics::STATUS_BOX_HEIGHT))
+                            .margin(Gaps::new(0., metrics::TOOLBAR_GROUP_GAP, 0., 0.))
                             .corner_radius(4.)
                             .background(tones::STATUS_BOX)
                             .padding(Gaps::new(
@@ -305,15 +305,15 @@ impl Component for Toolbar {
                                     )),
                             )
                             .child(self.status.clone()),
-                    ),
+                    )
+                    .child(branch.element())
+                    .child(chevron(
+                        BRANCH_MENU_NAME,
+                        branching,
+                        branch_tip(),
+                        branch_menu,
+                    )),
             )
-            .child(branch.element())
-            .child(chevron(
-                BRANCH_MENU_NAME,
-                branching,
-                branch_tip(),
-                branch_menu,
-            ))
             .child(gap())
             .child(
                 ToolButton {

@@ -29,10 +29,12 @@ use crate::sidebar::state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, shortcuts};
 
-/// The detail pane's height until the splitter is dragged.
-pub const PANE_HEIGHT: f32 = 260.0;
-/// The least a drag leaves the pane; pulled past it, the pane collapses (Fork's gesture).
-const PANE_MIN_HEIGHT: f32 = 90.0;
+/// The least share of the main region's height a drag leaves the pane, of a hundred; pulled past
+/// it, the pane collapses (Fork's gesture).
+const PANE_MIN_SHARE: f32 = 10.0;
+/// The least the pane keeps when the window is squeezed: its strip and the Commit tab of a
+/// one-line commit with refs down to Expand All, so the history gives way first.
+const PANE_MIN_HEIGHT: f32 = DETAIL_STRIP_HEIGHT + 10. * cairn_ui::DETAIL_ROW_HEIGHT;
 /// The least the commit list keeps when the window is squeezed.
 const LIST_MIN_HEIGHT: f32 = 80.0;
 /// The least the main region keeps beside the sidebar when the window is squeezed.
@@ -65,8 +67,9 @@ pub struct View {
     /// The detail pane's tab, kept for the session.
     pub detail_tab: State<DetailTab>,
     pub pane_collapsed: State<bool>,
-    /// The pane's height as last dragged; read when the pane is laid out again.
-    pub pane_height: State<f32>,
+    /// The history's and the pane's shares of the height, as last dragged; read when the pane
+    /// is laid out again.
+    pub pane_split: State<crate::detail::split::PaneSplit>,
     /// The settings every diff view shares, kept for the session.
     pub diff_settings: State<DiffSettings>,
     /// The diff view's scroll, shared so previous and next change can move it.
@@ -321,12 +324,13 @@ fn beside(sidebar: Element, main: Element, view: View) -> Element {
         .into()
 }
 
-/// The commit list over the detail pane, behind a draggable splitter; a collapsed
-/// pane keeps only its strip, under a list that takes the rest.
+/// The commit list over the detail pane, behind a draggable splitter, sharing the height by
+/// proportion so both grow with the window; a collapsed pane keeps only its strip, under a list
+/// that takes the rest.
 fn split(list: Rect, pane: Element, view: View) -> Element {
     let View {
         mut pane_collapsed,
-        mut pane_height,
+        mut pane_split,
         ..
     } = view;
     if *pane_collapsed.read() {
@@ -342,20 +346,22 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
             )
             .into();
     }
-    // Peeked: the height only matters when the pane is laid out anew, and reading it would
+    // Peeked: the proportion only matters when the pane is laid out anew, and reading it would
     // redraw the window on every step of a drag.
-    let height = *pane_height.peek();
+    let (list_share, pane_share) = pane_split.peek().weights();
     ResizableContainer::new()
         .direction(Direction::Vertical)
         .panel(
-            ResizablePanel::new(PanelSize::percent(100.))
+            ResizablePanel::new(PanelSize::percent(list_share))
                 .min_pixels(LIST_MIN_HEIGHT)
+                .on_resized(move |dragged: f32| pane_split.write().list_dragged(dragged))
                 .child(list),
         )
         .panel(
-            ResizablePanel::new(PanelSize::px(height))
-                .min_size(PANE_MIN_HEIGHT)
-                .on_resized(move |dragged: f32| pane_height.set(dragged))
+            ResizablePanel::new(PanelSize::percent(pane_share))
+                .min_size(PANE_MIN_SHARE)
+                .min_pixels(PANE_MIN_HEIGHT)
+                .on_resized(move |dragged: f32| pane_split.write().pane_dragged(dragged))
                 .on_collapse(move |()| pane_collapsed.set(true))
                 .child(pane),
         )
@@ -556,8 +562,8 @@ pub(crate) mod tests {
         ChangeSet, ChangeStatus, ChangedFile, CommitDetails, Context, FileMode, GraphRow, Lane,
         Oid, PagedCommit, RenameDetection, RepoPath, RowsPage, Signature, Timestamp,
     };
+    use cairn_ui::HIDE_DETAILS_TOOLTIP;
     use cairn_ui::accelerators::Action;
-    use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
@@ -655,6 +661,27 @@ pub(crate) mod tests {
         fetch: FetchStatus,
         prompt: Option<PromptView>,
     ) -> (TestingRunner, View, Submitted, Answered) {
+        launch_at(initial, progress, fetch, prompt, (WINDOW_WIDTH, HEIGHT))
+    }
+
+    /// A window `size` wide and tall, `initial` rows loaded.
+    fn launch_sized(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        size: (f32, f32),
+    ) -> (TestingRunner, View, Submitted) {
+        let (test, view, submitted, _) =
+            launch_at(initial, progress, FetchStatus::Idle, None, size);
+        (test, view, submitted)
+    }
+
+    fn launch_at(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        fetch: FetchStatus,
+        prompt: Option<PromptView>,
+        size: (f32, f32),
+    ) -> (TestingRunner, View, Submitted, Answered) {
         let submitted = Submitted::default();
         let answered = Answered::default();
         let app = {
@@ -677,7 +704,7 @@ pub(crate) mod tests {
         };
         let (mut test, view) = TestingRunner::new(
             app,
-            (WINDOW_WIDTH, HEIGHT).into(),
+            size.into(),
             move |runner| {
                 runner.provide_root_context(|| test_view(initial, progress, fetch, prompt))
             },
@@ -714,7 +741,7 @@ pub(crate) mod tests {
             history_cursor: State::create(0),
             detail_tab: State::create(DetailTab::default()),
             pane_collapsed: State::create(false),
-            pane_height: State::create(PANE_HEIGHT),
+            pane_split: State::create(crate::detail::split::PaneSplit::default()),
             diff_settings: State::create(DiffSettings::default()),
             diff_scroll: ScrollController::new(0, 0, Vec::new()),
             change_cursor: State::create(None),
@@ -1340,9 +1367,10 @@ pub(crate) mod tests {
     }
 
     /// A text given no size of its own — a button's caption, a menu's item — is drawn at the
-    /// body's size the window's root sets, never Freya's 16 px: the detail strip's Collapse
-    /// button stands as tall as the All Commits entry, which is sized explicitly. Caught by: the
-    /// root's size gone, so every unsized caption is drawn at 16 px.
+    /// body's size, never Freya's 16 px: the window's root sets it, and the caption row's title,
+    /// the one unsized label of the window as it opens, stands as tall as the All Commits entry,
+    /// which is sized explicitly. Caught by: the root's size gone, so every unsized caption
+    /// outside a row that sets its own is drawn at 16 px.
     #[test]
     fn a_text_given_no_size_is_drawn_at_the_bodys() {
         let (test, _, _) = launch((0..3).map(row).collect(), received(3, true));
@@ -1354,13 +1382,24 @@ pub(crate) mod tests {
             })
             .unwrap_or_else(|| panic!("no label reads {text:?}"))
         };
-        let (caption, own) = height(COLLAPSE_CAPTION);
+        let (caption, own) = height(cairn_ui::CAPTION_TITLE);
         let (sized, size) = height(cairn_ui::ALL_COMMITS_CAPTION);
         assert_eq!(own, None, "the caption was given a size of its own");
         assert_eq!(size, Some(FontSize::from(metrics::BODY)));
         assert_eq!(
             caption, sized,
             "an unsized caption is not at the body's size"
+        );
+        let root = test.find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| area.width() >= WINDOW_WIDTH && area.height() >= HEIGHT)
+                .and_then(|rect| rect.text_style_data.font_size)
+        });
+        assert_eq!(
+            root,
+            Some(FontSize::from(metrics::BODY)),
+            "the window's root sets no body size"
         );
     }
 
@@ -2096,7 +2135,7 @@ pub(crate) mod tests {
         );
 
         let open_top = pane_top(&test);
-        click_label(&mut test, COLLAPSE_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
 
         assert!(*view.pane_collapsed.read());
         assert!(
@@ -2105,7 +2144,7 @@ pub(crate) mod tests {
         );
         assert!(!texts(&test).iter().any(|t| t == READING));
 
-        click_label(&mut test, EXPAND_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
             pane(&test).iter().any(|t| t == READING),
@@ -2188,8 +2227,8 @@ pub(crate) mod tests {
             test.sync_and_update();
             test.sync_and_update();
         };
-        // The history list, then the strip's Collapse control, then the files.
-        tab(&mut test, Modifiers::empty());
+        // The history list, then the files: the strip's icon is no Tab stop, its chord being
+        // Hide Commit Details'.
         tab(&mut test, Modifiers::empty());
         for _ in 0..26 {
             arrow(&mut test);
@@ -2205,7 +2244,6 @@ pub(crate) mod tests {
             pane(&test)
         );
 
-        tab(&mut test, Modifiers::SHIFT);
         tab(&mut test, Modifiers::SHIFT);
         arrow(&mut test);
         assert_eq!(
@@ -2309,9 +2347,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// The splitter between the list and the pane drags, and the height dragged to is
+    /// The splitter between the list and the pane drags, and the proportion dragged to is
     /// the one the pane opens at again after a collapse. Caught by: a fixed pane, or one
-    /// that forgets its height when it collapses.
+    /// that forgets its share when it collapses.
     #[test]
     fn the_splitter_drags_and_the_pane_keeps_its_height() {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
@@ -2340,15 +2378,369 @@ pub(crate) mod tests {
             "dragging the splitter up did not grow the pane: {top} then {dragged}"
         );
 
-        click_label(&mut test, COLLAPSE_CAPTION);
-        click_label(&mut test, EXPAND_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
         test.sync_and_update();
         assert!(
             (pane_top(&test) - dragged).abs() < 2.,
             "the pane opened at {} rather than where it was dragged to, {dragged}",
             pane_top(&test)
         );
-        assert!(*view.pane_height.read() > PANE_HEIGHT);
+        let (_, pane_share) = view.pane_split.read().weights();
+        assert!(
+            pane_share > 50.,
+            "the drag left the pane's share at {pane_share}"
+        );
+    }
+
+    /// Where the label reading `text` is laid out, if one is drawn.
+    fn label_at(test: &TestingRunner, text: &str) -> Option<Area> {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area)
+        })
+    }
+
+    /// The least room the history keeps for a subject at the window's minimum size: a dozen
+    /// characters or a chip and a few.
+    const MIN_SUBJECT_ROOM: f32 = 100.;
+
+    /// The top of the main region: the caption row and the toolbar above it.
+    const MAIN_TOP: f32 = cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR;
+
+    /// The history and the detail pane share the main region's height half each, both growing
+    /// with the window: the pane is half the room in a short window and in a tall one. Caught
+    /// by: a pane of a fixed height, which is the same in both.
+    #[test]
+    fn the_detail_pane_grows_with_the_window() {
+        let mut heights = Vec::new();
+        for height in [HEIGHT, 1200.] {
+            let (test, _, _) = launch_sized(
+                (0..10).map(row).collect(),
+                received(10, true),
+                (WINDOW_WIDTH, height),
+            );
+            let pane = height - pane_top(&test);
+            let main = height - MAIN_TOP;
+            assert!(
+                (pane - main / 2.).abs() < 12.,
+                "the pane is {pane} of {main} in a window {height} tall"
+            );
+            heights.push(pane);
+        }
+        assert!(
+            heights[1] > heights[0] + 250.,
+            "the pane did not grow with the window: {heights:?}"
+        );
+    }
+
+    /// Expand All, over a commit's files, stands inside the pane and the window at the window's
+    /// minimum size and at 1024 × 1200. Caught by: a minimum too short for the Commit tab's
+    /// header, or a pane that does not grow.
+    #[test]
+    fn expand_all_is_visible_at_the_minimum_size_and_at_1024_by_1200() {
+        let (min_width, min_height) = crate::frame::MIN_SIZE;
+        for (width, height) in [(min_width as f32, min_height as f32), (1024., 1200.)] {
+            let (mut test, view, _) = launch_sized(
+                (0..10).map(row).collect(),
+                received(10, true),
+                (width, height),
+            );
+            click_row(&mut test, 1);
+            arrives(&mut test, view, 1, vec![oid(2)]);
+            let expand = label_at(&test, cairn_ui::EXPAND_ALL_CAPTION)
+                .unwrap_or_else(|| panic!("no Expand All at {width}×{height}: {:?}", pane(&test)));
+            assert!(
+                expand.min_y() >= pane_top(&test) && expand.max_y() <= height,
+                "Expand All at {expand:?} is cut off at {width}×{height}"
+            );
+            assert!(expand.max_x() <= width, "Expand All past the right edge");
+        }
+    }
+
+    /// Hide Commit Details' chord leaves the pane's tab strip alone at the window's bottom, the
+    /// history taking the rest, and again brings the pane back at its share; the strip's icon stays
+    /// to bring it back. Caught by: the strip hidden with the pane, the chord not
+    /// heard, or the pane brought back at another height.
+    #[test]
+    fn hiding_the_details_leaves_the_tab_strip() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let open = pane_top(&test);
+        let toggle = |test: &mut TestingRunner| {
+            if accelerators::chords(Action::ToggleDetails, accelerators::Os::current()).is_empty() {
+                test.run_in(|| shortcuts::act(Action::ToggleDetails, view, None));
+                test.sync_and_update();
+            } else {
+                press_chord(test, Action::ToggleDetails);
+            }
+        };
+        toggle(&mut test);
+        assert!(
+            *view.pane_collapsed.read(),
+            "the chord did not hide the pane"
+        );
+        let strip = pane_top(&test);
+        assert!(
+            (HEIGHT - strip) <= DETAIL_STRIP_HEIGHT + 2.,
+            "the strip is not at the window's bottom: {strip}"
+        );
+        for tab in DetailTab::ALL {
+            let in_strip = test.find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == tab.caption())
+                    .map(|_| node.layout().area.min_y() >= strip - 2.)
+            });
+            assert!(
+                in_strip.contains(&true),
+                "the {tab:?} tab left with the pane"
+            );
+        }
+        let lit = test.find(|_, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(HIDE_DETAILS_TOOLTIP))
+                .map(|_| ())
+        });
+        assert!(lit.is_some(), "the strip's icon left with the pane");
+        toggle(&mut test);
+        assert!(!*view.pane_collapsed.read());
+        assert!(
+            (pane_top(&test) - open).abs() < 2.,
+            "the pane came back at {} rather than {open}",
+            pane_top(&test)
+        );
+    }
+
+    /// The banners — the leftover lock and a close waiting on a write — stand directly under the
+    /// toolbar across the whole window, above the sidebar and the main region. Caught by: a
+    /// banner drawn inside the main region, beside the sidebar, or over the toolbar.
+    #[test]
+    fn the_banners_stand_under_the_toolbar() {
+        let banner_of = |test: &TestingRunner, starts: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text.starts_with(starts))
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no banner says {starts:?}: {:?}", texts(test)))
+        };
+        let check = |test: &TestingRunner, starts: &str| {
+            let banner = banner_of(test, starts);
+            assert!(
+                banner.min_y() >= MAIN_TOP && banner.min_y() < MAIN_TOP + 12.,
+                "{starts:?} is not under the toolbar: {banner:?}"
+            );
+            assert!(
+                banner.min_x() < 20.,
+                "{starts:?} does not span the window: {banner:?}"
+            );
+            let sidebar = label_at(test, cairn_ui::ALL_COMMITS_CAPTION).unwrap();
+            assert!(
+                sidebar.min_y() >= banner.max_y(),
+                "the sidebar is not under {starts:?}: {sidebar:?}"
+            );
+        };
+
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let mut lock = view.lock;
+        lock.write().stated(Some(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(60),
+        ));
+        test.sync_and_update();
+        check(&test, cairn_ui::LOCK_BANNER_TEXT);
+
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let id = crate::worker::OperationId::for_tests(3);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        );
+        writes.write().started(id);
+        writes.write().closing();
+        test.sync_and_update();
+        check(&test, "Closing after");
+    }
+
+    /// As the window narrows the history's subject column gives the room: the author, the id and
+    /// the date keep their widths and their places from the right edge, and the graph its place
+    /// from the left. Caught by: the columns shrunk evenly, or the date pushed off the window.
+    #[test]
+    fn the_subject_column_shrinks_first() {
+        let columns = |width: f32| {
+            let (test, _, _) = launch_sized(
+                (0..3).map(row).collect(),
+                received(3, true),
+                (width, HEIGHT),
+            );
+            let author = label_at(&test, "Ada").unwrap_or_else(|| panic!("no author"));
+            let id = label_at(&test, oid(0).short().as_str()).unwrap_or_else(|| panic!("no id"));
+            let subject = label_at(&test, "commit 0").unwrap_or_else(|| panic!("no subject"));
+            (
+                width - author.min_x(),
+                width - id.min_x(),
+                subject.min_x(),
+                author.min_x() - subject.min_x(),
+            )
+        };
+        let wide = columns(WINDOW_WIDTH);
+        let narrow = columns(WINDOW_WIDTH - 200.);
+        assert!(
+            (wide.0 - narrow.0).abs() < 1. && (wide.1 - narrow.1).abs() < 1.,
+            "the author or the id moved from the right edge: {wide:?} then {narrow:?}"
+        );
+        assert!(
+            (wide.2 - narrow.2).abs() < 1.,
+            "the subject moved: {wide:?} {narrow:?}"
+        );
+        assert!(
+            narrow.3 < wide.3 - 150.,
+            "the subject column did not give the room: {wide:?} then {narrow:?}"
+        );
+    }
+
+    /// Where the rect assistive technology reads as `name` is laid out.
+    fn named_at(test: &TestingRunner, name: &str) -> Option<Area> {
+        test.find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|_| node.layout().area)
+        })
+    }
+
+    /// At the window's minimum size every region keeps its content whole: the toolbar's
+    /// buttons side by side inside the window, the status box no narrower than its least, the
+    /// history's author, id and date columns inside the window with room left for a subject, and
+    /// every button of the Changes tab's diff bar inside the window. Caught by: a minimum set
+    /// narrower than the window's layout needs, which clips one of them.
+    #[test]
+    fn the_window_keeps_every_region_whole_at_its_minimum_size() {
+        let (width, height) = (
+            crate::frame::MIN_SIZE.0 as f32,
+            crate::frame::MIN_SIZE.1 as f32,
+        );
+        let (mut test, view, submitted) = launch_sized(
+            (0..10).map(row).collect(),
+            received(10, true),
+            (width, height),
+        );
+
+        let mut toolbar: Vec<(String, Area)> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Label::try_downcast(element)
+                .filter(|_| {
+                    area.max_y() <= MAIN_TOP
+                        && area.min_y() >= cairn_ui::style::metrics::CAPTION_ROW
+                })
+                .map(|label| (label.text.to_string(), area))
+        });
+        toolbar.sort_by(|a, b| a.1.min_x().total_cmp(&b.1.min_x()));
+        let buttons = [
+            cairn_ui::QUICK_LAUNCH_CAPTION,
+            cairn_ui::FETCH_CAPTION,
+            cairn_ui::PULL_CAPTION,
+            cairn_ui::PUSH_CAPTION,
+            cairn_ui::STASH_CAPTION,
+            cairn_ui::BRANCH_CAPTION,
+            cairn_ui::APPEARANCE_CAPTION,
+        ];
+        let captions: Vec<&Area> = buttons
+            .iter()
+            .map(|caption| {
+                toolbar
+                    .iter()
+                    .find(|(text, _)| text == caption)
+                    .map(|(_, at)| at)
+                    .unwrap_or_else(|| panic!("no {caption} in the toolbar: {toolbar:?}"))
+            })
+            .collect();
+        for pair in captions.windows(2) {
+            assert!(
+                pair[0].max_x() <= pair[1].min_x(),
+                "two toolbar captions overlap: {:?} {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            captions.iter().all(|at| at.max_x() <= width),
+            "a toolbar caption is past the window's edge: {captions:?}"
+        );
+        let status = test
+            .find(|node, element| {
+                Rect::try_downcast(element)
+                    .filter(|rect| {
+                        rect.style.background.as_color() == Some(cairn_ui::style::tones::STATUS_BOX)
+                    })
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no status box"));
+        assert!(
+            status.width() >= cairn_ui::style::metrics::STATUS_BOX_MIN_WIDTH - 0.5,
+            "the status box is narrower than its least: {status:?}"
+        );
+
+        let date = test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text.starts_with("1970") || label.text.contains(':'))
+                .map(|_| node.layout().area.max_x())
+        });
+        let author = label_at(&test, "Ada").unwrap_or_else(|| panic!("no author"));
+        let subject = label_at(&test, "commit 0").unwrap_or_else(|| panic!("no subject"));
+        assert!(
+            date.iter().all(|right| *right <= width),
+            "a date is past the window's edge: {date:?}"
+        );
+        assert!(
+            author.min_x() - subject.min_x() >= MIN_SUBJECT_ROOM,
+            "the subject column keeps {} px",
+            author.min_x() - subject.min_x()
+        );
+
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        for name in [
+            cairn_ui::PREVIOUS_CHANGE_LABEL,
+            cairn_ui::NEXT_CHANGE_LABEL,
+            cairn_ui::IGNORE_WHITESPACE_LABEL,
+            cairn_ui::FEWER_LINES_LABEL,
+            cairn_ui::MORE_LINES_LABEL,
+            cairn_ui::ENTIRE_FILE_LABEL,
+            cairn_ui::SIDE_BY_SIDE_LABEL,
+        ] {
+            let at = named_at(&test, name).unwrap_or_else(|| panic!("no {name:?} in the bar"));
+            assert!(
+                at.max_x() <= width && at.max_y() <= height,
+                "{name:?} is cut off at {at:?}"
+            );
+        }
+    }
+
+    /// The toolbar's sidebar toggle hides the sidebar, the main region taking the window's
+    /// width, and shows it again at its width. Caught by: a toggle that does nothing, or a
+    /// sidebar that comes back at another width.
+    #[test]
+    fn the_sidebar_toggle_hides_and_shows_the_sidebar() {
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let subject = label_at(&test, "commit 0").unwrap().min_x();
+        click_named(&mut test, cairn_ui::SIDEBAR_TOGGLE_NAME);
+        assert!(!*view.sidebar.shown.read());
+        assert!(label_at(&test, cairn_ui::ALL_COMMITS_CAPTION).is_none());
+        let hidden = label_at(&test, "commit 0").unwrap().min_x();
+        assert!(
+            hidden < subject - 200.,
+            "the history did not take the room: {hidden}"
+        );
+        click_named(&mut test, cairn_ui::SIDEBAR_TOGGLE_NAME);
+        assert!(label_at(&test, cairn_ui::ALL_COMMITS_CAPTION).is_some());
+        let back = label_at(&test, "commit 0").unwrap().min_x();
+        assert!(
+            (back - subject).abs() < 1.,
+            "the sidebar came back at {back}, not {subject}"
+        );
     }
 
     /// Row `n`'s one file, `file-of-{n}.rs`, as a text diff of `lines` lines with one line in

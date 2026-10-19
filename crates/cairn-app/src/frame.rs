@@ -7,6 +7,16 @@ use freya::winit::dpi::LogicalPosition;
 
 use crate::window::View;
 
+/// The window's size as it opens: the 1024 × 768 Fork's layout was measured at.
+pub const OPENING_SIZE: (f64, f64) = (1024., 768.);
+
+/// The least the window shrinks to, at the zoom's own size: the narrowest and shortest at which
+/// every region keeps its content whole — the toolbar's buttons, the status box at its narrowest,
+/// the history's columns with room for a subject, the detail pane's bar, and the Commit tab down
+/// to Expand All under the pane's even share (`docs/systems/window-frame.md`, "The minimum size").
+/// Fork clips below about 600 px instead; Cairn does not.
+pub const MIN_SIZE: (f64, f64) = (880., 620.);
+
 /// The steps the zoom moves through, the window's own size at `1.0`: Cairn's, a tenth at a time
 /// near the window's size and a quarter further out, as far as half and twice.
 pub const ZOOM_STEPS: [f64; 9] = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];

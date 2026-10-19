@@ -9,8 +9,8 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, Os, Scope};
 use cairn_ui::{
-    AUTHOR_CAPTION, COLLAPSE_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab,
-    DetailTabs, EXPAND_ALL_CAPTION, EXPAND_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION,
+    AUTHOR_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab, DetailTabs,
+    EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, NO_FILES, PARENTS_CAPTION,
     cut_short_notice,
 };
 use freya::prelude::*;
@@ -612,9 +612,23 @@ fn click_label(test: &mut TestingRunner, caption: &str) {
     test.sync_and_update();
 }
 
-/// Commit is the default and both tabs report themselves; the strip's control asks to
-/// collapse an open pane and to open a collapsed one. Caught by: Changes as the default, a
-/// tab reporting the other, or a control that only ever collapses.
+/// Presses the control assistive technology reads as `name`.
+fn press_named(test: &mut TestingRunner, name: &str) {
+    let centre = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no control is named {name:?}"));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+}
+
+/// Commit is the default and both tabs report themselves; the strip's Hide commit details icon —
+/// Fork's, with Fork's words as its tooltip and no "Collapse" caption — asks to collapse an open
+/// pane and to open a collapsed one. Caught by: Changes as the default, a tab reporting the
+/// other, a control that only ever collapses, or the caption kept.
 #[test]
 fn the_strip_reports_its_tabs_and_its_collapse() {
     let (mut test, strip) = launch_strip();
@@ -624,11 +638,33 @@ fn the_strip_reports_its_tabs_and_its_collapse() {
     assert_eq!(*strip.tab.read(), DetailTab::Changes);
     click_label(&mut test, "Commit");
     assert_eq!(*strip.tab.read(), DetailTab::Commit);
+    assert!(
+        !texts(&test).iter().any(|text| text == "Collapse"),
+        "{:?}",
+        texts(&test)
+    );
 
-    click_label(&mut test, COLLAPSE_CAPTION);
+    press_named(&mut test, HIDE_DETAILS_TOOLTIP);
     assert!(*strip.collapsed.read());
-    click_label(&mut test, EXPAND_CAPTION);
+    press_named(&mut test, HIDE_DETAILS_TOOLTIP);
     assert!(!*strip.collapsed.read());
+
+    let at = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(HIDE_DETAILS_TOOLTIP))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no icon"));
+    test.move_cursor((f64::from(at.x), f64::from(at.y)));
+    test.poll(
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(900),
+    );
+    assert!(
+        texts(&test).iter().any(|text| text == HIDE_DETAILS_TOOLTIP),
+        "no tooltip reads {HIDE_DETAILS_TOOLTIP:?}"
+    );
 }
 
 /// A file's row — disclosure, status letter, path — starts at its left padding and is centred

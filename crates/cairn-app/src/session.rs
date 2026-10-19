@@ -578,7 +578,7 @@ mod tests {
                         history_cursor: State::create(0),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
-                        pane_height: State::create(crate::window::PANE_HEIGHT),
+                        pane_split: State::create(crate::detail::split::PaneSplit::default()),
                         diff_settings: State::create(cairn_ui::DiffSettings::default()),
                         diff_scroll: ScrollController::new(0, 0, Vec::new()),
                         change_cursor: State::create(None),

@@ -36,9 +36,7 @@ pub use detail::commit_tab::{
 };
 pub use detail::expansion::{Expansion, Opened};
 pub use detail::file_filter::ShownFiles;
-pub use detail::tabs::{
-    COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,
-};
+pub use detail::tabs::{DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, HIDE_DETAILS_TOOLTIP};
 pub use dialogs::about::{ABOUT_TITLE, AboutDialog, NO_GIT_FOUND, licence_line, version_line};
 pub use dialogs::confirm::{
     CANCEL_CAPTION, COUNTING_TEXT, ConfirmDialog, DialogAnswer, NOTHING_CHANGED,

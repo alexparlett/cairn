@@ -1,16 +1,17 @@
-//! The title bar's status box, Fork's: the repository's name — its folder's, as the worker that
-//! opened it names it — marked `*` while status reports a change; a branch glyph and the current
-//! branch; and how far it is from its upstream — behind, then ahead, Fork's `18↓1↑`, a count of
-//! nothing left out as Fork leaves it — or that its upstream is gone. A detached `HEAD` names
+//! The toolbar's status box, Fork's (`docs/research/ui-review/fork-window-survey-2026-10-16.md`,
+//! section 1): two centred lines, the repository's name bold — its folder's, as the worker that
+//! opened it names it — over the branch glyph and the current branch. A detached `HEAD` names
 //! its short id, an unborn branch its name and that it has no commit yet, each in git's own
-//! words. The arrows are drawn in IBM Plex Mono, the typeface the application embeds, which
-//! carries them.
+//! words; a branch whose upstream is gone says so after it, git's `[gone]`. How far the branch is
+//! from its upstream is not said here: the toolbar draws it as badges on Push and Pull.
 //!
-//! It is also where progress shows: a spinner and the running operation's one name — a local
-//! write, " · N waiting" behind it while writes queue, and a fetch with git's latest progress
-//! line — each only once it has run [`PROGRESS_AFTER`], so a write that is over at once draws
-//! nothing. The wait is a task on the toolkit's executor
-//! (`async_io::Timer`), never a sleep.
+//! It is also where progress shows, as Fork's does while an operation runs
+//! (`docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`, ar22z): a
+//! spinner and the running operation's one name — a local write, " · N waiting" behind it while
+//! writes queue, or a fetch — over git's latest progress line, in place of the repository's
+//! lines, each operation only once it has run [`PROGRESS_AFTER`], so a write that is over at once
+//! draws nothing. The wait is a task on the toolkit's executor (`async_io::Timer`), never a
+//! sleep.
 
 use std::time::{Duration, Instant};
 
@@ -18,9 +19,7 @@ use async_io::Timer;
 use cairn_model::{AheadBehind, HeadState, RefName};
 use freya::prelude::*;
 
-use crate::diff::palette::DIFF_FONT_FAMILY;
-use crate::history::ref_glyphs::RefGlyph;
-use crate::style::{metrics, tones};
+use crate::style::{icons, metrics, tones};
 
 /// Said after an unborn branch's name: `git status`'s "No commits yet".
 pub const NO_COMMITS_YET: &str = "no commits yet";
@@ -44,16 +43,12 @@ pub struct Running {
     pub progress: Option<String>,
 }
 
-/// What the status box says of `running`: "Commit 1 file · 1 waiting", "Fetch 'origin'
-/// Receiving objects: 40%".
+/// What the status box's first line says of `running`: its name, and "· N waiting" while writes
+/// queue behind it — "Commit 1 file · 1 waiting".
 pub fn running_text(running: &Running) -> String {
     let mut text = running.name.clone();
     if running.waiting > 0 {
         text.push_str(&format!(" · {} waiting", running.waiting));
-    }
-    if let Some(line) = &running.progress {
-        text.push_str("  ");
-        text.push_str(line);
     }
     text
 }
@@ -68,13 +63,13 @@ pub fn progress_shown(elapsed: Duration) -> bool {
 pub enum Tracking {
     /// No upstream, `HEAD` on no branch, or the counts not read yet: nothing is said.
     Untold,
-    /// The counts of the branch against its upstream.
+    /// The counts of the branch against its upstream: Push's and Pull's badges.
     Counts(AheadBehind),
     /// The upstream is configured but no such ref exists.
     Gone,
 }
 
-/// What the title bar says of `HEAD`: the branch's name, `HEAD detached at <short id>`, or
+/// What the status box says of `HEAD`: the branch's name, `HEAD detached at <short id>`, or
 /// an unborn branch's name and that it has no commit.
 pub fn head_text(head: &HeadState) -> String {
     match head {
@@ -84,28 +79,11 @@ pub fn head_text(head: &HeadState) -> String {
     }
 }
 
-/// `n↓m↑` as Fork prints it — behind first, no space between, a zero count left out — empty
-/// when the branch is level with its upstream.
-pub fn counts_text(counts: AheadBehind) -> String {
-    let behind = (counts.behind > 0).then(|| format!("{}↓", counts.behind));
-    let ahead = (counts.ahead > 0).then(|| format!("{}↑", counts.ahead));
-    behind.into_iter().chain(ahead).collect::<Vec<_>>().concat()
-}
-
-/// The repository's name, `*` after it while the working tree has changes.
-pub fn name_text(name: &str, dirty: bool) -> String {
-    if dirty {
-        format!("{name}*")
-    } else {
-        name.to_owned()
-    }
-}
-
-/// The status box: no handler, so equal content compares equal and is not redrawn.
+/// The status box's lines: no handler, so equal content compares equal and is not redrawn. The
+/// toolbar draws the box around them and the glyph that opens the activity popover.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusBox {
     name: Option<String>,
-    dirty: bool,
     head: Option<HeadState>,
     tracking: Tracking,
     running: Vec<Running>,
@@ -118,7 +96,6 @@ impl StatusBox {
     pub fn new(name: Option<String>, head: Option<HeadState>) -> Self {
         Self {
             name,
-            dirty: false,
             head,
             tracking: Tracking::Untold,
             running: Vec::new(),
@@ -129,12 +106,6 @@ impl StatusBox {
     /// The operations running: the local write, and a fetch.
     pub fn running(mut self, running: Vec<Running>) -> Self {
         self.running = running;
-        self
-    }
-
-    /// Whether the last status read listed any change.
-    pub fn dirty(mut self, dirty: bool) -> Self {
-        self.dirty = dirty;
         self
     }
 
@@ -152,67 +123,16 @@ impl KeyExt for StatusBox {
 
 impl ComponentOwned for StatusBox {
     fn render(self) -> impl IntoElement {
-        // The gone upstream keeps the theme's warning tone, which Fork Dark's table does not
-        // name.
-        let warning = get_theme_or_default().read().colors().warning;
-        let (primary, secondary) = (tones::TEXT, tones::DETAIL_LABEL);
-        let on_branch = match &self.head {
-            Some(HeadState::Branch(_) | HeadState::Unborn(_)) => true,
-            Some(HeadState::Detached(_)) | None => false,
-        };
-        let tracked = match self.tracking {
-            Tracking::Untold => None,
-            Tracking::Counts(counts) => Some(counts_text(counts))
-                .filter(|text| !text.is_empty())
-                .map(|text| {
-                    label()
-                        .text(text)
-                        .max_lines(1)
-                        .font_family(DIFF_FONT_FAMILY)
-                        .font_size(metrics::BODY)
-                        .color(secondary)
-                }),
-            Tracking::Gone => Some(
-                label()
-                    .text(UPSTREAM_GONE)
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .color(warning),
-            ),
-        };
-        rect()
-            .horizontal()
-            .cross_align(Alignment::center())
-            .spacing(8.)
-            .maybe_child(self.name.as_deref().map(|name| {
-                label()
-                    .text(name_text(name, self.dirty))
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .font_weight(FontWeight::BOLD)
-                    .color(primary)
-            }))
-            .maybe_child(on_branch.then(|| RefGlyph::Branch.draw(secondary)))
-            .maybe_child(self.head.as_ref().map(|head| {
-                label()
-                    .text(head_text(head))
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .color(primary)
-            }))
-            .maybe_child(tracked)
-            .children(
-                self.running
-                    .iter()
-                    .map(|running| {
-                        RunningLine {
-                            running: running.clone(),
-                            key: DiffKey::U64(running.serial),
-                        }
-                        .into_element()
-                    })
-                    .collect::<Vec<_>>(),
-            )
+        // One component per set of operations running, so each set waits out its own
+        // `PROGRESS_AFTER` from a fresh scope.
+        let serials: Vec<u64> = self.running.iter().map(|running| running.serial).collect();
+        Lines {
+            name: self.name,
+            head: self.head,
+            gone: self.tracking == Tracking::Gone,
+            running: self.running,
+        }
+        .key(DiffKey::from(&serials))
     }
 
     fn render_key(&self) -> DiffKey {
@@ -220,54 +140,148 @@ impl ComponentOwned for StatusBox {
     }
 }
 
-/// One operation running: nothing until it has run [`PROGRESS_AFTER`], then a spinner and its
-/// text.
+/// The box's two lines: the repository's, or the operations' once one has run
+/// [`PROGRESS_AFTER`].
 #[derive(PartialEq)]
-struct RunningLine {
-    running: Running,
+struct Lines {
+    name: Option<String>,
+    head: Option<HeadState>,
+    gone: bool,
+    running: Vec<Running>,
+}
+
+impl Lines {
+    fn key(self, key: DiffKey) -> KeyedLines {
+        KeyedLines { lines: self, key }
+    }
+}
+
+#[derive(PartialEq)]
+struct KeyedLines {
+    lines: Lines,
     key: DiffKey,
 }
 
-impl Component for RunningLine {
+impl Component for KeyedLines {
     fn render_key(&self) -> DiffKey {
         self.key.clone()
     }
 
     fn render(&self) -> impl IntoElement {
-        let started = self.running.started;
-        let mut shown = use_state(move || progress_shown(started.elapsed()));
-        // A task of this line's scope: it ends with the operation's line.
+        let lines = &self.lines;
+        // Bumped as each operation's wait runs out, so the box is drawn again then.
+        let mut woken = use_state(|| 0u32);
+        let waits: Vec<Duration> = lines
+            .running
+            .iter()
+            .map(|running| PROGRESS_AFTER.saturating_sub(running.started.elapsed()))
+            .filter(|left| !left.is_zero())
+            .collect();
+        // Tasks of this scope: they end with this set of operations' lines.
         use_hook(move || {
-            if *shown.peek() {
-                return;
+            for left in waits {
+                spawn(async move {
+                    Timer::after(left).await;
+                    *woken.write() += 1;
+                });
             }
-            let left = PROGRESS_AFTER.saturating_sub(started.elapsed());
-            spawn(async move {
-                Timer::after(left).await;
-                shown.set(true);
-            });
         });
-        if !*shown.read() {
-            return rect().into_element();
+        let _woken = *woken.read();
+        let shown: Vec<&Running> = lines
+            .running
+            .iter()
+            .filter(|running| progress_shown(running.started.elapsed()))
+            .collect();
+        match shown.as_slice() {
+            [] => repository_lines(lines),
+            [first, rest @ ..] => {
+                let second = first
+                    .progress
+                    .clone()
+                    .or_else(|| rest.first().map(|other| running_text(other)));
+                two_lines(
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::center())
+                        .spacing(6.)
+                        .child(CircularLoader::new().size(metrics::BODY))
+                        .child(line_label(running_text(first), true, tones::TEXT))
+                        .into(),
+                    match second {
+                        Some(text) => line_label(text, false, tones::DETAIL_LABEL).into(),
+                        None => branch_line(lines),
+                    },
+                )
+            }
         }
-        let secondary = tones::DETAIL_LABEL;
-        rect()
-            .horizontal()
-            .cross_align(Alignment::center())
-            .spacing(6.)
-            .child(CircularLoader::new().size(14.))
-            .child(
-                label()
-                    .text(running_text(&self.running))
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .color(secondary),
-            )
-            .into_element()
     }
 }
 
-/// The branch `HEAD` is on, when it has a commit: the one whose upstream the box measures.
+/// The repository's name over the branch.
+fn repository_lines(lines: &Lines) -> Element {
+    two_lines(
+        match &lines.name {
+            Some(name) => line_label(name.clone(), true, tones::TEXT).into(),
+            None => rect().into(),
+        },
+        branch_line(lines),
+    )
+}
+
+/// The branch glyph and `HEAD` in git's words, and "upstream gone" after a gone upstream.
+fn branch_line(lines: &Lines) -> Element {
+    // The gone upstream keeps the theme's warning tone, which Fork Dark's table does not
+    // name.
+    let warning = get_theme_or_default().read().colors().warning;
+    let on_branch = match &lines.head {
+        Some(HeadState::Branch(_) | HeadState::Unborn(_)) => true,
+        Some(HeadState::Detached(_)) | None => false,
+    };
+    rect()
+        .horizontal()
+        .cross_align(Alignment::center())
+        .spacing(4.)
+        .maybe_child(on_branch.then(|| icons::branch(metrics::BODY, tones::TEXT)))
+        .maybe_child(
+            lines
+                .head
+                .as_ref()
+                .map(|head| line_label(head_text(head), false, tones::TEXT)),
+        )
+        .maybe_child(
+            lines
+                .gone
+                .then(|| line_label(UPSTREAM_GONE.to_owned(), false, warning)),
+        )
+        .into()
+}
+
+fn two_lines(first: Element, second: Element) -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::fill())
+        .center()
+        .spacing(2.)
+        .child(first)
+        .child(second)
+        .into()
+}
+
+fn line_label(text: String, bold: bool, colour: Color) -> Label {
+    label()
+        .text(text)
+        .max_lines(1)
+        .text_overflow(TextOverflow::Ellipsis)
+        .font_size(metrics::BODY)
+        .font_weight(if bold {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        })
+        .color(colour)
+}
+
+/// The branch `HEAD` is on, when it has a commit: the one whose upstream the badges measure.
 pub fn current_branch(head: &HeadState) -> Option<&RefName> {
     match head {
         HeadState::Branch(name) => Some(name),
@@ -300,21 +314,25 @@ mod tests {
         );
     }
 
-    /// Fork's counts: behind then ahead, each with its arrow after it, a zero left out, and
-    /// nothing at all for a branch level with its upstream. Caught by: the two swapped, a
-    /// zero drawn, or an arrow on the wrong count.
+    /// The first line names the operation and the writes queued behind it, and nothing else:
+    /// git's progress line is the second. Caught by: the progress line run into the name, or a
+    /// count of nothing waiting drawn.
     #[test]
-    fn counts_are_behind_then_ahead_and_a_zero_is_left_out() {
-        let counted = |ahead, behind| AheadBehind { ahead, behind };
-        assert_eq!(counts_text(counted(1, 18)), "18↓1↑");
-        assert_eq!(counts_text(counted(0, 853)), "853↓");
-        assert_eq!(counts_text(counted(2, 0)), "2↑");
-        assert_eq!(counts_text(counted(0, 0)), "");
-    }
-
-    #[test]
-    fn a_dirty_repository_is_starred() {
-        assert_eq!(name_text("swift", true), "swift*");
-        assert_eq!(name_text("swift", false), "swift");
+    fn the_running_line_is_the_name_and_what_waits() {
+        let running = |waiting, progress: Option<&str>| Running {
+            serial: 1,
+            name: "Fetch 'origin'".to_owned(),
+            started: Instant::now(),
+            waiting,
+            progress: progress.map(str::to_owned),
+        };
+        assert_eq!(
+            running_text(&running(0, Some("Receiving objects: 40%"))),
+            "Fetch 'origin'"
+        );
+        assert_eq!(
+            running_text(&running(2, None)),
+            "Fetch 'origin' · 2 waiting"
+        );
     }
 }

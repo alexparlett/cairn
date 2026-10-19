@@ -9,7 +9,7 @@
 //! name bold; a branch whose upstream is gone the warning triangle Fork draws in place of its
 //! glyph — the current branch's at its right, beside the check mark, as Fork marks an active
 //! branch with an invalid upstream; any other branch with an upstream its behind and ahead
-//! counts, as the title bar prints them (`counts_text`). A line under the filter says what a
+//! counts, as Fork prints them (`counts_text`). A line under the filter says what a
 //! press is doing — "Finding <ref>…" — or why it found nothing.
 
 use std::sync::Arc;
@@ -24,7 +24,6 @@ use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::style::{metrics, tones};
 use crate::text_field::text_field;
-use crate::toolbar::status_box::counts_text;
 
 /// A row's height in the sidebar's list.
 pub const SIDEBAR_ROW_HEIGHT: f32 = metrics::SIDEBAR_ROW;
@@ -538,9 +537,29 @@ fn glyph(glyph: RefGlyph, colour: Color) -> Element {
         .into()
 }
 
+/// `n↓m↑` as Fork prints a branch's distance from its upstream — behind first, no space
+/// between, a zero count left out — empty when the branch is level with its upstream.
+pub fn counts_text(counts: AheadBehind) -> String {
+    let behind = (counts.behind > 0).then(|| format!("{}↓", counts.behind));
+    let ahead = (counts.ahead > 0).then(|| format!("{}↑", counts.ahead));
+    behind.into_iter().chain(ahead).collect::<Vec<_>>().concat()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fork's counts: behind then ahead, each with its arrow after it, a zero left out, and
+    /// nothing at all for a branch level with its upstream. Caught by: the two swapped, a
+    /// zero drawn, or an arrow on the wrong count.
+    #[test]
+    fn counts_are_behind_then_ahead_and_a_zero_is_left_out() {
+        let counted = |ahead, behind| AheadBehind { ahead, behind };
+        assert_eq!(counts_text(counted(1, 18)), "18↓1↑");
+        assert_eq!(counts_text(counted(0, 853)), "853↓");
+        assert_eq!(counts_text(counted(2, 0)), "2↑");
+        assert_eq!(counts_text(counted(0, 0)), "");
+    }
 
     #[test]
     fn local_changes_says_its_count_and_leaves_out_none() {

@@ -110,7 +110,7 @@ pub use local_changes::selection::{LocalSelection, nearest_remaining};
 pub use sidebar::{
     ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
     MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,
-    SidebarTarget, drawn_row, local_changes_text, section_caption,
+    SidebarTarget, counts_text, drawn_row, local_changes_text, section_caption,
 };
 pub use text_field::{text_field, text_field_in, text_field_recalling};
 pub use toolbar::activity_popover::{
@@ -120,6 +120,12 @@ pub use toolbar::activity_popover::{
 };
 pub use toolbar::lock_banner::{LOCK_BANNER_TEXT, LOCK_STALE_AFTER, LockBanner, lock_is_stale};
 pub use toolbar::status_box::{
-    NO_COMMITS_YET, PROGRESS_AFTER, Running, StatusBox, Tracking, UPSTREAM_GONE, counts_text,
-    current_branch, head_text, name_text, progress_shown, running_text,
+    NO_COMMITS_YET, PROGRESS_AFTER, Running, StatusBox, Tracking, UPSTREAM_GONE, current_branch,
+    head_text, progress_shown, running_text,
+};
+pub use toolbar::{
+    ACTIVITY_GLYPH_NAME, APPEARANCE_CAPTION, BRANCH_CAPTION, BRANCH_MENU_NAME,
+    COMES_WITH_PREFERENCES, COMES_WITH_PULL_AND_PUSH, COMES_WITH_QUICK_LAUNCH, FETCH_CAPTION,
+    PULL_CAPTION, PUSH_CAPTION, QUICK_LAUNCH_CAPTION, SIDEBAR_TOGGLE_NAME, STASH_CAPTION,
+    STASH_MENU_NAME, Toolbar, ToolbarPress,
 };

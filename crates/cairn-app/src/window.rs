@@ -2,13 +2,12 @@
 
 use std::rc::Rc;
 
-use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
+use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     CaptionRow, ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT,
-    DetailTab, DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running,
-    StatusBox, Tracking, current_branch,
+    DetailTab, DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender,
 };
 use freya::prelude::*;
 
@@ -132,7 +131,6 @@ pub fn window(
     let status = view.progress.read().status().clone();
     let lanes = view.progress.read().lanes();
     let has_rows = view.progress.read().has_rows();
-    let counted = status_text::loaded_count(&view.progress.read());
     let placeholder = status_text::placeholder(&view.progress.read());
     let reading = status_text::reading_strip(&view.progress.read());
 
@@ -229,28 +227,8 @@ pub fn window(
                 })
                 .on_frame(crate::frame::ask)
         })
-        .child(title_bar(
-            // Fork's: the status box opens the activity popover, which hangs from where the box
-            // is laid out.
-            rect()
-                .on_press(move |_| view.activity.open())
-                .on_sized(move |e: Event<SizedEventData>| {
-                    let anchor = (e.area.min_x(), e.area.max_y());
-                    let mut log = view.activity.log;
-                    if log.peek().anchor_moved(anchor) {
-                        log.write().set_anchor(anchor);
-                    }
-                })
-                .child(status_box(
-                    view.repository.read().clone(),
-                    &view.refreshed.read(),
-                    running(view),
-                ))
-                .into(),
-            &counted,
-            view,
-            submit.clone(),
-        ))
+        // Fork's toolbar: its buttons, the status box in its middle and the badges.
+        .child(crate::toolbar::toolbar(view, submit.clone()))
         // The two banners: the leftover lock, about the repository, and closing, about
         // the window.
         .maybe_child(crate::operations::leftover_lock::banner(view, unlocking))
@@ -317,8 +295,12 @@ fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> E
         .into()
 }
 
-/// The sidebar left of the main region, behind a draggable splitter.
+/// The sidebar left of the main region, behind a draggable splitter; the main region alone
+/// while the toolbar's toggle hides the sidebar.
 fn beside(sidebar: Element, main: Element, view: View) -> Element {
+    if !*view.sidebar.shown.read() {
+        return rect().expanded().child(main).into();
+    }
     let mut width = view.sidebar.width;
     // Peeked: the width only matters when the split is laid out anew, and reading it would
     // redraw the window on every step of a drag.
@@ -486,119 +468,6 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         }
     })
     .into()
-}
-
-/// The status box for the repository called `name` — none until it is open — `*` while the last
-/// status listed a change, the current branch and its distance from its upstream, from what the
-/// last refresh answered — each as old as the answer it is read from (a status may be one
-/// refresh behind).
-fn status_box(name: Option<String>, refreshed: &RefreshState, running: Vec<Running>) -> StatusBox {
-    let refs = refreshed.refs();
-    let head = refs.map(|refs| refs.head.clone());
-    let tracking = refs
-        .and_then(|refs| {
-            let branch = current_branch(&refs.head)?;
-            Some(match refs.find(branch)?.upstream.as_ref()? {
-                Upstream::Gone { .. } => Tracking::Gone,
-                Upstream::Exists { .. } => refreshed
-                    .ahead_behind_of(branch)
-                    .map_or(Tracking::Untold, Tracking::Counts),
-            })
-        })
-        .unwrap_or(Tracking::Untold);
-    let dirty = match refreshed.status() {
-        Some(WorkingTreeStatus::Listed(entries)) => !entries.is_empty(),
-        Some(WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree) | None => {
-            false
-        }
-    };
-    StatusBox::new(name, head)
-        .dirty(dirty)
-        .tracking(tracking)
-        .running(running)
-}
-
-/// What runs, for the status box: the local write by its one name with the writes
-/// waiting behind it, and a fetch with git's latest progress line — each shown by the box once
-/// it has run 250 ms.
-fn running(view: View) -> Vec<Running> {
-    let writes = view.writes.read();
-    let write = writes
-        .running()
-        .zip(writes.running_since())
-        .map(|(asked, started)| Running {
-            serial: asked.id.number(),
-            name: asked.name.clone(),
-            started,
-            waiting: writes.queued().count(),
-            progress: None,
-        });
-    let fetch = view.fetch.read();
-    let progress = match &*fetch {
-        FetchStatus::Running { line, .. } => line.clone(),
-        _ => None,
-    };
-    let fetching = fetch
-        .is_in_flight()
-        // Read without subscribing: the fetch's own state draws the box again as it changes.
-        .then(|| view.activity.log.peek().fetch_running())
-        .flatten()
-        .map(|(serial, name, started)| Running {
-            serial: u64::MAX - serial,
-            name,
-            started,
-            waiting: 0,
-            progress,
-        });
-    write.into_iter().chain(fetching).collect()
-}
-
-fn title_bar(
-    status: Element,
-    counted: &str,
-    view: View,
-    submit: Option<Rc<dyn Fn(Request)>>,
-) -> Element {
-    rect()
-        .horizontal()
-        .content(Content::Flex)
-        .width(Size::fill())
-        .cross_align(Alignment::center())
-        .spacing(10.)
-        .padding(Gaps::new(8., 12., 8., 12.))
-        .background(tones::CHROME)
-        .child(
-            rect()
-                .width(Size::flex(1.))
-                .overflow(Overflow::Clip)
-                .child(status),
-        )
-        .child(
-            label()
-                .text(counted.to_owned())
-                .max_lines(1)
-                .font_size(metrics::BODY)
-                .color(tones::TOOLBAR_TEXT),
-        )
-        .maybe_child(fetch_button(view, submit))
-        .into()
-}
-
-/// "Fetch <remote>" for the default remote, greyed while a fetch is in flight, so a second
-/// fetch is never asked and the network lane's refusal never drawn; nothing when the repository
-/// has no remote to fetch. A running fetch is cancelled from the activity popover, as in Fork.
-fn fetch_button(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
-    let submit = submit?;
-    let remote = crate::operations::fetch::default_remote(view)?;
-    let in_flight = view.fetch.read().is_in_flight();
-    Some(
-        Button::new()
-            .compact()
-            .enabled(!in_flight)
-            .on_press(move |_| crate::operations::fetch::start(view, Some(&*submit)))
-            .child(format!("Fetch {remote}"))
-            .into(),
-    )
 }
 
 fn notice(message: impl Into<String>, path: &str) -> Element {
@@ -960,7 +829,7 @@ pub(crate) mod tests {
                 Vec::new(),
                 received(0, true),
                 &["No commits yet.", PATH],
-                &["0 commits"],
+                &[],
             ),
             (
                 "failed before any rows",
@@ -974,14 +843,14 @@ pub(crate) mod tests {
                 (0..3).map(row).collect(),
                 failed(3, "failed to read commit abc"),
                 &["failed to read commit abc", "commit 0"],
-                &["3 commits"],
+                &[],
             ),
             (
                 "ready",
                 (0..3).map(row).collect(),
                 received(3, false),
                 &["commit 0", "commit 2"],
-                &["3 commits…"],
+                &[],
             ),
         ];
 
@@ -1001,6 +870,17 @@ pub(crate) mod tests {
                     "the {state} window does not show {sentence:?}; it shows {everywhere:?}"
                 );
             }
+            // The loaded count is gone with the title row, as in Fork.
+            let counted = |text: &str| {
+                text.split_once(' ').is_some_and(|(number, noun)| {
+                    number.parse::<usize>().is_ok()
+                        && ["commit", "commits", "commits…"].contains(&noun)
+                })
+            };
+            assert!(
+                !everywhere.iter().any(|text| counted(text)),
+                "the {state} window counts its commits: {everywhere:?}"
+            );
         }
     }
 
@@ -1661,12 +1541,20 @@ pub(crate) mod tests {
                 .write()
                 .progressed("Receiving objects: 40%".to_owned());
         });
-        let shown: Vec<String> = test.run_in(|| running(view).iter().map(running_text).collect());
+        let shown: Vec<(String, Option<String>)> = test.run_in(|| {
+            crate::toolbar::running(view)
+                .iter()
+                .map(|running| (running_text(running), running.progress.clone()))
+                .collect()
+        });
         assert_eq!(
             shown,
             [
-                "Stage 1 File · 1 waiting",
-                "Fetch 'origin'  Receiving objects: 40%"
+                ("Stage 1 File · 1 waiting".to_owned(), None),
+                (
+                    "Fetch 'origin'".to_owned(),
+                    Some("Receiving objects: 40%".to_owned())
+                )
             ]
         );
     }
@@ -1795,7 +1683,7 @@ pub(crate) mod tests {
     #[test]
     fn fetch_is_greyed_while_a_fetch_is_in_flight() {
         let (mut test, view, submitted) = launch(Vec::new(), received(0, true));
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         let fetches = |submitted: &Submitted| {
             submitted
                 .borrow()
@@ -1810,11 +1698,11 @@ pub(crate) mod tests {
                 remote: "origin".to_owned()
             }
         );
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         let mut fetch = view.fetch;
         fetch.write().started("origin".to_owned());
         test.sync_and_update();
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         assert_eq!(
             fetches(&submitted),
             1,
@@ -1825,7 +1713,7 @@ pub(crate) mod tests {
             remote: "origin".to_owned(),
         });
         test.sync_and_update();
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         assert_eq!(fetches(&submitted), 2, "Fetch did not come back");
     }
 
@@ -2882,19 +2770,30 @@ pub(crate) mod tests {
         (selected, other)
     }
 
-    /// The title bar's texts: every label above the column headings.
+    /// The toolbar's texts, left to right: every label inside its band under the caption row.
     fn title(test: &TestingRunner) -> Vec<String> {
-        let headings = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Author")
-                    .map(|_| node.layout().area.min_y())
-            })
-            .unwrap_or_else(|| panic!("no column headings"));
-        test.find_many(|node, element| {
+        let (top, bottom) = (
+            cairn_ui::style::metrics::CAPTION_ROW,
+            cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR,
+        );
+        let mut found = test.find_many(|node, element| {
+            let area = node.layout().area;
             Label::try_downcast(element)
-                .filter(|_| node.layout().area.max_y() <= headings)
-                .map(|label| label.text.to_string())
+                .filter(|_| area.min_y() >= top && area.max_y() <= bottom)
+                .map(|label| (area.min_x(), area.min_y(), label.text.to_string()))
+        });
+        found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        found.into_iter().map(|(_, _, text)| text).collect()
+    }
+
+    /// Where the toolbar's label reading `text` is laid out.
+    fn toolbar_label(test: &TestingRunner, text: &str) -> Option<Area> {
+        let bottom = cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR;
+        test.find(|node, element| {
+            let area = node.layout().area;
+            Label::try_downcast(element)
+                .filter(|label| label.text == text && area.max_y() <= bottom)
+                .map(|_| area)
         })
     }
 
@@ -2950,7 +2849,7 @@ pub(crate) mod tests {
             let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
         }
         let _ = state.status_arrived(std::sync::Arc::new(cairn_model::LocalChanges::new(
-            WorkingTreeStatus::Listed(
+            cairn_model::WorkingTreeStatus::Listed(
                 (0..changed)
                     .map(|n| {
                         StatusEntry::Untracked(cairn_model::RepoPath::from(
@@ -2964,14 +2863,14 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// The title bar names the repository — `*` while status lists a
-    /// change — the current branch and its counts behind then ahead; a gone upstream says so
-    /// and draws no counts; a detached `HEAD` its short id; an unborn branch its name and that
-    /// it has no commit. Caught by: the star drawn for a clean tree or missed for a dirty one,
-    /// another branch's counts, counts drawn for a gone upstream, or a detached or unborn
-    /// `HEAD` drawn as a branch.
+    /// The status box names the repository, bold, over the current branch — no star, however
+    /// much status lists, and no counts: those are Push's and Pull's badges — a gone upstream
+    /// said after the branch and no badge drawn; a detached `HEAD` its short id; an unborn
+    /// branch its name and that it has no commit. Caught by: the star or the counts left in the
+    /// box, the name beside the branch rather than over it, badges drawn for a gone upstream, or
+    /// a detached or unborn `HEAD` drawn as a branch.
     #[test]
-    fn the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream() {
+    fn the_status_box_names_the_repository_over_the_branch() {
         use cairn_model::{AheadBehind, HeadState, RefName};
         let main = || HeadState::Branch(RefName::new("refs/heads/main"));
 
@@ -2993,12 +2892,26 @@ pub(crate) mod tests {
             2,
         );
         let shown = title(&test);
-        for wanted in ["engine*", "main", "18↓1↑"] {
+        for wanted in ["engine", "main"] {
             assert!(
                 shown.contains(&wanted.to_owned()),
                 "no {wanted:?} in {shown:?}"
             );
         }
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.ends_with('*') || text.contains('↓') || text.contains('↑')),
+            "the star or the counts are still drawn: {shown:?}"
+        );
+        let (name, branch) = (
+            toolbar_label(&test, "engine").unwrap_or_else(|| panic!("no name")),
+            toolbar_label(&test, "main").unwrap_or_else(|| panic!("no branch")),
+        );
+        assert!(
+            name.max_y() <= branch.min_y() + 1.,
+            "the name is not over the branch: {name:?} {branch:?}"
+        );
 
         let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
         refreshed_with(
@@ -3021,10 +2934,8 @@ pub(crate) mod tests {
             );
         }
         assert!(
-            !shown
-                .iter()
-                .any(|text| text.contains('↓') || text.contains('↑')),
-            "{shown:?}"
+            !shown.iter().any(|text| text == "1" || text == "18"),
+            "badges drawn for a gone upstream: {shown:?}"
         );
 
         let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
@@ -3046,9 +2957,9 @@ pub(crate) mod tests {
             shown.contains(&"trunk (no commits yet)".to_owned()),
             "{shown:?}"
         );
-        assert!(shown.contains(&"engine*".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"engine".to_owned()), "{shown:?}");
 
-        // QC1: the name is the one the worker says it opened, never the path given.
+        // The name is the one the worker says it opened, never the path given.
         let mut repository = view.repository;
         repository.set(None);
         test.sync_and_update();
@@ -3074,7 +2985,55 @@ pub(crate) mod tests {
         });
         test.sync_and_update();
         let shown = title(&test);
-        assert!(shown.contains(&"folder*".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"folder".to_owned()), "{shown:?}");
+    }
+
+    /// Each refresh's ahead/behind redraws the badges: the commits ahead on Push, those behind on
+    /// Pull, each absent at zero, and both gone when a refresh says the branch is level. Caught
+    /// by: the counts swapped between the buttons, a zero drawn, or a badge kept from an earlier
+    /// refresh.
+    #[test]
+    fn each_refresh_redraws_the_badges_on_push_and_pull() {
+        use cairn_model::{AheadBehind, HeadState, RefName};
+        let main = || HeadState::Branch(RefName::new("refs/heads/main"));
+        let upstream = Some(("refs/remotes/origin/main", true));
+        let badge_over = |test: &TestingRunner, count: &str, button: &str| {
+            let (badge, caption) = (
+                toolbar_label(test, count).unwrap_or_else(|| panic!("no badge {count:?}")),
+                toolbar_label(test, button).unwrap_or_else(|| panic!("no {button}")),
+            );
+            assert!(
+                badge.max_y() <= caption.min_y()
+                    && badge.min_x() >= caption.min_x() - 10.
+                    && badge.max_x() <= caption.max_x() + 20.,
+                "{count:?} is not {button}'s badge: {badge:?} over {caption:?}"
+            );
+        };
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let counted = |ahead, behind| Some(AheadBehind { ahead, behind });
+        refreshed_with(&mut test, view, main(), upstream, counted(3, 18), 0);
+        badge_over(&test, "3", cairn_ui::PUSH_CAPTION);
+        badge_over(&test, "18", cairn_ui::PULL_CAPTION);
+
+        refreshed_with(&mut test, view, main(), upstream, counted(0, 2), 0);
+        badge_over(&test, "2", cairn_ui::PULL_CAPTION);
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text == "3" || text == "0" || text == "18"),
+            "an old or a zero badge is drawn: {shown:?}"
+        );
+
+        refreshed_with(&mut test, view, main(), upstream, counted(0, 0), 0);
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.chars().all(|c| c.is_ascii_digit())),
+            "a level branch has a badge: {shown:?}"
+        );
     }
 
     /// Through the window: a row's chips are laid out against the refresh's snapshot — the
@@ -4693,8 +4652,17 @@ pub(crate) mod tests {
         assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
         assert!(view.confirming.peek().is_some());
 
-        // A press behind it, on a row: the row is not chosen, and the dialog is cancelled.
-        click_row(&mut test, 5);
+        // A press behind it, on a row's date at the window's right, clear of the dialog: the
+        // row is not chosen, and the dialog is cancelled.
+        let row_y = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 5")
+                    .map(|_| node.layout().area.center().y)
+            })
+            .unwrap_or_else(|| panic!("no row 5"));
+        test.click_cursor((f64::from(WINDOW_WIDTH - 20.), f64::from(row_y)));
+        test.sync_and_update();
         assert_eq!(selection(view), (Some(RowId::Commit(oid(2))), None));
         assert!(view.confirming.peek().is_none(), "a press outside kept it");
         assert!(tokens.borrow().is_empty());

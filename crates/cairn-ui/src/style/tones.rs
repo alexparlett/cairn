@@ -128,6 +128,12 @@ pub const MODIFIED_BADGE: Color = hex(0xFFCC00);
 pub const MENU_SHADOW: Color = hex(0x1E1E1E);
 /// A disabled button's 1 px border.
 pub const DISABLED_BORDER: Color = hex(0x383838);
+/// The status box's fill, in the toolbar.
+pub const STATUS_BOX: Color = hex(0x303030);
+/// A count badge on Push's or Pull's icon.
+pub const BADGE: Color = hex(0x606060);
+/// A count badge's figures: white.
+pub const BADGE_TEXT: Color = hex(0xFFFFFF);
 
 /// The dark shade of a lane's colour a branch's or a remote's chip is filled with, as Fork
 /// fills its first lane's orange (`#FF9502`) with `#5D3D14`: the colour taken most of the way

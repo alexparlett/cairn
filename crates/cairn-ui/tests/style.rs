@@ -22,6 +22,13 @@ fn the_style_module_holds_forks_metrics_and_fork_darks_tones() {
         ("Toolbar labels", metrics::TOOLBAR_LABEL, 11.),
         ("Caption row", metrics::CAPTION_ROW, 26.),
         ("Toolbar", metrics::TOOLBAR, 41.),
+        ("Toolbar icon", metrics::TOOLBAR_ICON, 20.),
+        (
+            "Status box width at 1024 px",
+            metrics::STATUS_BOX_WIDTH,
+            300.,
+        ),
+        ("Status box height", metrics::STATUS_BOX_HEIGHT, 36.),
         ("History row", metrics::HISTORY_ROW, 23.),
         ("Sidebar row", metrics::SIDEBAR_ROW, 22.),
         ("Local Changes row", metrics::LOCAL_CHANGES_ROW, 20.),
@@ -85,6 +92,13 @@ fn the_style_module_holds_forks_metrics_and_fork_darks_tones() {
         ("Chip: stash", tones::STASH_CHIP, "#545454"),
         ("Chip: stash, border", tones::STASH_CHIP_BORDER, "#929292"),
         ("Chip text", tones::CHIP_TEXT, "#F0F0F0"),
+        ("Status box", tones::STATUS_BOX, "#303030"),
+        ("Push's count badge", tones::BADGE, "#606060"),
+        (
+            "Push's count badge: white figures",
+            tones::BADGE_TEXT,
+            "#FFFFFF",
+        ),
     ] {
         assert_eq!(value, colour(expected), "{row}");
     }

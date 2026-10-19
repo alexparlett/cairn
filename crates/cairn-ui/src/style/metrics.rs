@@ -14,6 +14,29 @@ pub const HEADING: f32 = 14.0;
 pub const CAPTION_ROW: f32 = 26.0;
 /// The toolbar under it.
 pub const TOOLBAR: f32 = 41.0;
+/// A toolbar button's icon, over its label: ~20 px in Fork.
+pub const TOOLBAR_ICON: f32 = 20.0;
+/// The least width of a toolbar button: Fork's narrowest, ~45 px.
+pub const TOOLBAR_BUTTON_MIN_WIDTH: f32 = 44.0;
+/// The room either side of a toolbar button's icon and label.
+pub const TOOLBAR_BUTTON_PADDING: f32 = 6.0;
+/// The gap between the toolbar's groups (Fork's sidebar and Quick Launch, the remote's three,
+/// Stash, the status box, Branch, Appearance).
+pub const TOOLBAR_GROUP_GAP: f32 = 14.0;
+/// The ⌄ beside Stash, Branch and Appearance.
+pub const TOOLBAR_CHEVRON: f32 = 12.0;
+/// A count badge on Push's or Pull's icon: its diameter, a grey circle at the icon's top right.
+pub const TOOLBAR_BADGE: f32 = 14.0;
+/// A count badge's figures.
+pub const TOOLBAR_BADGE_TEXT: f32 = 9.0;
+/// The status box: ~300 × 36 px at 1024 px wide in Fork, centred in the toolbar.
+pub const STATUS_BOX_WIDTH: f32 = 300.0;
+/// The status box's height.
+pub const STATUS_BOX_HEIGHT: f32 = 36.0;
+/// The narrowest the status box shrinks to as the window narrows, before anything else gives.
+pub const STATUS_BOX_MIN_WIDTH: f32 = 200.0;
+/// The status box's list glyph, at its left.
+pub const STATUS_BOX_GLYPH: f32 = 14.0;
 
 /// A history row: Fork's row pitch.
 pub const HISTORY_ROW: f32 = 23.0;

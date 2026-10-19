@@ -15,6 +15,7 @@ mod repository_path;
 mod session;
 mod shortcuts;
 mod sidebar;
+mod toolbar;
 mod window;
 #[cfg(test)]
 mod window_check;

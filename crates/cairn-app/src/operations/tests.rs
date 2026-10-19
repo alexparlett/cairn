@@ -14,9 +14,9 @@ use cairn_model::{
     UnstagedChange,
 };
 use cairn_ui::{
-    ACTIVITY_TITLE, CANCEL_CAPTION, CANCELLED_GLYPH, CLOSE_CAPTION, EARLIER_NOT_KEPT, FAILED_GLYPH,
-    GIT_ERROR_TITLE, LOCK_BANNER_TEXT, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
-    SHOW_IN_LOST_COMMITS_CAPTION,
+    ACTIVITY_GLYPH_NAME, ACTIVITY_TITLE, CANCEL_CAPTION, CANCELLED_GLYPH, CLOSE_CAPTION,
+    EARLIER_NOT_KEPT, FAILED_GLYPH, GIT_ERROR_TITLE, LOCK_BANNER_TEXT, MainView, NO_ACTIVITY,
+    REMOVE_LOCK_CAPTION, SHOW_IN_LOST_COMMITS_CAPTION,
 };
 
 use crate::operations::leftover_lock::REMOVE_LOCK_TITLE;
@@ -50,6 +50,19 @@ fn centre(test: &TestingRunner, text: &str) -> (f64, f64) {
         })
         .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)));
     (f64::from(at.x), f64::from(at.y))
+}
+
+/// Presses the status box's list glyph: the one place on the box that opens the popover.
+fn press_glyph(test: &mut TestingRunner) {
+    let at = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(ACTIVITY_GLYPH_NAME))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no status box glyph"));
+    test.click_cursor((f64::from(at.x), f64::from(at.y)));
+    settle(test);
 }
 
 /// Clicks the lowest label reading `text`: a dialog's button under its title of the same words.
@@ -123,23 +136,30 @@ fn failed_on_the_lock() -> WriteEnding {
     })
 }
 
-/// Opens the popover by pressing the status box: the repository's name in the title bar —
-/// once every ending's dialog over the window is closed, as the one modal state asks.
+/// Opens the popover by pressing the status box's list glyph — once every ending's dialog over
+/// the window is closed, as the one modal state asks.
 fn open(test: &mut TestingRunner) {
     while drawn(test, GIT_ERROR_TITLE) || labels(test).iter().any(|l| l.starts_with("Couldn't")) {
         click_lowest(test, CLOSE_CAPTION);
     }
-    click(test, "engine");
+    press_glyph(test);
 }
 
-/// The status box opens the popover; before anything has run it says so; a write that ran draws its
+/// The status box's glyph opens the popover, and a press on the box's centre opens nothing, as
+/// Fork's; before anything has run it says so; a write that ran draws its
 /// name, its status, its `$ git` and what git said — as the engine hands them on, git's text in
 /// `ScrubbedLines` and the arguments scrubbed as they were recorded, so no token anywhere — and
-/// Escape closes it. Caught by: a status box that opens nothing, a popover drawing an operation
-/// without its `git`, or git's text drawn other than through the type.
+/// Escape closes it. Caught by: a status box that opens nothing, or opens from its centre, a
+/// popover drawing an operation without its `git`, or git's text drawn other than through the
+/// type.
 #[test]
 fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     let (mut test, view, submitted) = launch();
+    click(&mut test, "engine");
+    assert!(
+        !drawn(&test, ACTIVITY_TITLE),
+        "the box's centre opened the popover"
+    );
     open(&mut test);
     assert!(drawn(&test, ACTIVITY_TITLE), "{:?}", labels(&test));
     assert!(drawn(&test, NO_ACTIVITY));
@@ -717,13 +737,24 @@ fn area(test: &TestingRunner, text: &str) -> Area {
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
 }
 
+/// Where the status box's list glyph is laid out: at the box's left edge, its bottom near the
+/// box's.
+fn glyph_area(test: &TestingRunner) -> Area {
+    test.find(|node, element| {
+        Rect::try_downcast(element)
+            .filter(|rect| rect.accessibility.builder.value() == Some(ACTIVITY_GLYPH_NAME))
+            .map(|_| node.layout().area)
+    })
+    .unwrap_or_else(|| panic!("no status box glyph"))
+}
+
 /// The popover hangs from the status box as the window lays it out — its title just under the box,
-/// at the box's left edge — never centred. Caught by: a popover placed without the box's laid-out
-/// position.
+/// never right of the box's left edge, where its glyph is. Caught by: a popover placed without
+/// the box's laid-out position.
 #[test]
 fn the_popover_hangs_under_the_status_box() {
     let (mut test, _, _) = launch();
-    let status_box = area(&test, "engine");
+    let status_box = glyph_area(&test);
     open(&mut test);
     let title = area(&test, ACTIVITY_TITLE);
     assert!(
@@ -732,8 +763,10 @@ fn the_popover_hangs_under_the_status_box() {
         title.min_y(),
         status_box.max_y()
     );
+    // The panel is wider than the room right of the box in the middle of the toolbar, so it
+    // moves left to fit the window, its left edge never right of the box's.
     assert!(
-        (title.min_x() - status_box.min_x()).abs() < 40.,
+        title.min_x() < status_box.min_x() + 40.,
         "the title at {}, the box at {}",
         title.min_x(),
         status_box.min_x()
@@ -763,8 +796,7 @@ fn while_the_popover_is_open_the_keys_do_nothing_but_close_it() {
         status(vec![changed("a.rs", None, Some(UnstagedChange::Modified))]),
     );
     press_row(&mut test, "a.rs", 0);
-    // The repository's name, starred: status lists a change.
-    click(&mut test, "engine*");
+    press_glyph(&mut test);
     submitted.borrow_mut().clear();
     for key in [
         NamedKey::Enter,

@@ -974,9 +974,11 @@ import — are rejected outside `cairn-model` by
 ### Chips on a row
 
 A row draws the refs pointing at its commit as Fork's chips between the graph and the
-subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): outlined, filled with a
-tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
-glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
+subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): a branch's and a
+remote's outlined in the row's lane colour and filled with a dark shade of it
+(`style::tones::chip_fill`), as Fork tints them by lane; a tag's and a stash's in Fork Dark's
+tones for their kind (`style::tones::TAG_CHIP`, `STASH_CHIP` and their borders), the glyph's
+cap unfilled and the text Fork's chip text; each kind told by its glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
 before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud
 (whatever the forge) and a tag — in a cap of their own at the chip's left; a
 stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
@@ -1146,7 +1148,8 @@ chord the accelerator table lists, spelled for the platform (`HistoryHeader::sho
 `the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
 keeps the keyboard through the reopen: its old rows stay drawn until the reopened walk's first
 page replaces them, so the chord is heard again with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
-author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
+author, short id and date in Fork Dark's grey for a row `HEAD` cannot reach
+(`style::tones::UNREACHABLE_TEXT`), and nothing else dimmed —
 its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
 `a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
 that gains a ref is reached at the reopen that follows and drawn as any other.

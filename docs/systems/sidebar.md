@@ -46,7 +46,10 @@ with an upstream draws its behind and ahead counts at its right, unspaced as For
 them and as the title bar prints them (`counts_text`: `18↓1↑`, a zero left out).
 What one row draws is `cairn_ui::drawn_row`, read out of the snapshot for that row alone.
 The entry last pressed is drawn chosen, by identity (a ref by its name, a stash by its
-place and commit), and is let go of when a row is chosen in the history.
+place and commit), and is let go of when a row is chosen in the history. A press on a row
+gives the list focus, so the chosen row is drawn as a selection says its list's focus
+(`docs/systems/style.md`, "The selection"): Fork's blue while the sidebar has focus, its grey
+once focus is elsewhere.
 
 ## Where its rows are laid out
 

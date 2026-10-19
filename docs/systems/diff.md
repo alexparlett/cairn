@@ -2073,9 +2073,9 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Previous and next change chords | Ctrl+↑/↓, ⌘↑/↓, heard in the detail pane | Fork-measured: `fork-shortcuts.md`. |
 | Keys in a focused diff | ↑/↓ a row, Page Up/Down a view, Home/End either end, ←/→ four columns | Cairn-chosen: Fork's diff is a text control (`NSTextView`, AvalonEdit) whose keys move a caret, and Fork documents none of its own beyond the chords above; Cairn's diff has no caret, so the keys scroll as a list's do. |
 | Tab stops | eight columns, counted in terminal widths | Cairn-chosen (the user's decision "terminal widths"): what `git diff` shows in a terminal. Fork's tab width is a setting whose default is not established (Finding 17). |
-| Colours | Fork's dark values, retuned | Fork-measured values (Finding 25), moved by a Cairn-chosen rule: each keeps its offset from Fork's ground, channel by channel, on Cairn's darker ground, so a tint stands out as much as in Fork (`retuned`, below). |
-| `CURRENT_CHANGE` | the dark theme's `text_highlight` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; the theme's accent, pinned equal by `the_current_change_is_the_themes_accent`. |
-| Side-by-side columns | two equal columns, each half the view, one gutter each, grey filler, the hunk header at the top of each | Fork-measured: Finding 11 (equal, not resizable, the vendor; one gutter per pane; grey filler; the header repeated). Filler's grey is Fork's `#424242` (Finding 25), retuned. |
+| Colours | Fork Dark's values, on Fork's own ground | Fork-measured values (Finding 25; Fork Dark's table, `docs/research/ui-review/fork-window-survey-2-2026-10-16.md` §1), on Fork's `#282828`, which is Cairn's diff ground (`style::tones::DIFF_BODY`); the added word's emphasis alone is moved off Fork's value, so the text reads on it (below). |
+| `CURRENT_CHANGE` | Fork's blue, `#0078D7` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; Fork Dark's blue (`style::tones::ACCENT`, a focused field's border and the chosen tab's caption), pinned equal to the launch theme's `text_highlight` by `the_current_change_is_the_themes_accent`. |
+| Side-by-side columns | two equal columns, each half the view, one gutter each, grey filler, the hunk header at the top of each | Fork-measured: Finding 11 (equal, not resizable, the vendor; one gutter per pane; grey filler; the header repeated). Filler's grey is Fork's `#424242` (Finding 25). |
 | Side-by-side sideways scroll | both columns' text slides together; each gutter stays | User decision (2026-10-03), kept as built: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
 | `-`/`+` marker column | none, in either view | User decision (2026-10-04): no marker column, as Fork's default (Finding 12: an opt-in preference); in unified the gutter (which number is blank) still says added/removed without colour; in side-by-side a changed pair is told from context by tint alone, as in Fork — stated residual. Reverses the 2026-10-03 decision that drew it always (L11). |
 | Line-number size (`NUMBER_FONT_SIZE`) | 9 px, Plex Mono, Fork's muted grey | Fork-measured: Mac numbers 6.5 pt tall (Finding 24) ÷ Plex Mono's 0.698 em figure height ≈ 9.3 px; the user-supplied Fork capture, 2026-10-04 (Windows, unified), agrees — its digits advance 0.84 of its code's, 0.84 × 11 ≈ 9.3. Whole pixels because Freya's `FontSize` is an `i32`. The face is Cairn-chosen: Fork's numbers use another font (Finding 12); Plex Mono's figures are tabular. |
@@ -2125,31 +2125,36 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Keys held when the window loses focus | let go of: a press after focus comes back is a plain press | User's decision, 2026-10-04: a release made while another window has focus is never heard, and without this the next plain press would compare two commits. |
 
 **Colours and typeface** (`cairn_ui::diff_palette`). Named tokens, never literals at a
-call site. Fork's measured dark values (`docs/research/diff-engine/fork-detail-and-diff-ui.md`,
-Finding 25, Windows 2023-2026) sit on Fork's `#282828`; Cairn's ground is Freya's dark
-background, `rgb(20, 20, 20)`, so each is retuned by keeping its offset from the ground
-channel by channel (`retuned`, computed from the Fork value written beside it):
+call site (`chrome_sizes_and_tones_come_from_the_style_module`, which excuses this file for
+the tokens Fork Dark's table does not name). Fork's measured dark values
+(`docs/research/diff-engine/fork-detail-and-diff-ui.md`, Finding 25, Windows 2023-2026, and
+Fork Dark's table in the 2026-10-16 survey) sit on Fork's `#282828`, which is the diff's
+ground here too (`GROUND`, `style::tones::DIFF_BODY`); the tokens the table names are read
+from `style::tones`:
 
 | Token | Fork's value | Cairn's |
 | --- | --- | --- |
-| `REMOVED_TINT` | `#633F3E` | `rgb(79, 43, 42)` |
-| `ADDED_TINT` | `#3A5C3F` | `rgb(38, 72, 43)` |
-| `REMOVED_EMPHASIS` | `#9F4247` | `rgb(139, 46, 51)` |
-| `ADDED_EMPHASIS` | `#388442` | `rgb(36, 112, 46)` |
-| `GUTTER_SEPARATOR` | `#4B4B4B` | `rgb(55, 55, 55)` |
-| `HEADER_BAR` | `#333333` | `rgb(31, 31, 31)` |
+| `GROUND` | `#282828` | `style::tones::DIFF_BODY` |
+| `REMOVED_TINT` | `#633F3E` | `style::tones::REMOVED_LINE` |
+| `ADDED_TINT` | `#3A5C3F` | `style::tones::ADDED_LINE` |
+| `REMOVED_EMPHASIS` | `#9F4247` | `style::tones::CHANGED_WORD` |
+| `ADDED_EMPHASIS` | `#388442` | `rgb(36, 112, 46)`: Fork's, 20 down in each channel, since at Fork's value the text reads under 4.5:1 |
+| `HUNK_HEADER` (hunk headers, the end-of-file marker) | `#959595` | `style::tones::HUNK_HEADER_TEXT` |
+| `GUTTER_SEPARATOR` | `#4B4B4B` | kept |
+| `FILLER` | `#424242` | kept |
+| `HEADER_BAR` | `#333333` | `style::tones::DETAIL` |
 | `DIFF_TEXT` | `#DDDDDD` | kept |
-| `DIFF_MUTED` (numbers, headers, the end-of-file marker) | `#A0A0A0` | kept |
-| `CURRENT_CHANGE` | the system accent | the theme's `text_highlight`, `rgb(96, 145, 224)` |
+| `DIFF_MUTED` (numbers, the notices) | `#A0A0A0` | kept |
+| `CURRENT_CHANGE` | the system accent | Fork's blue, `style::tones::ACCENT` |
 
-`each_tint_is_forks_measured_value_moved_to_cairns_ground` pins the rule;
+`each_tint_is_forks_measured_value_on_forks_ground` pins the values;
 `the_text_reads_on_every_tint_and_an_emphasis_is_stronger_than_its_line` requires the
 text at WCAG AA's 4.5:1 on the ground, every tint and every emphasis, and each emphasis
 further from the ground than its line. Diff text, the bar's path, and the Commit tab's
 id, parents and paths are drawn in IBM Plex Mono (R6.6, L16): Regular from IBM's release
 `@ibm/plex-mono@2.5.0` (`crates/cairn-app/assets/fonts/IBMPlexMono-Regular.ttf`, with
 `IBMPlexMono-LICENSE.txt`, the SIL Open Font License 1.1, beside it), embedded with
-`LaunchConfig::with_font` under `DIFF_FONT_FAMILY` at 11 px; its advance is 0.6 em
+`LaunchConfig::with_font` under `DIFF_FONT_FAMILY` at 11 px (`style::metrics::DIFF_TEXT`); its advance is 0.6 em
 (`MONO_ADVANCE_EM`, read from its `hmtx` table). The download was the user's approval;
 no other weight is embedded. Provenance: both files extracted from `ibm-plex-mono.zip`
 (SHA-256 `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c`) of IBM/plex's

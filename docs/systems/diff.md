@@ -2216,7 +2216,8 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
 | stage or unstage the selection | Enter; Ctrl+S, Ctrl+Shift+S | Return; ⌘S | Enter and Return in Local Changes' lists alone; the rest in its lists and diff |
 | stage all or unstage all | Ctrl+Alt+Shift+S; Shift+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
-| discard the selection | Backspace, Delete, Ctrl+Shift+D | ⌫, ⇧⌘D | in Local Changes' lists and diff |
+| discard the selection | Backspace, Delete | ⌫, ⇧⌘D | in Local Changes' lists and diff |
+| Hide Commit Details: the detail pane to its tab strip and back | Ctrl+Shift+D | none (the View menu's item alone) | anywhere |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
 | Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |
 | New Branch, Create Branch at `HEAD` (staging-and-commit R11.3) | Ctrl+Shift+B | ⇧⌘B | anywhere |
@@ -2232,7 +2233,10 @@ is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md` ⌘
 `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows row, as it
 does for every chord here, and F5 is bound by no Linux desktop nor by any other action. Fork
 keeps alternates for staging — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
-discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. In Fork's diff Return
+discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. On Linux Fork for
+Windows' Ctrl+Shift+D is its View menu's Hide Commit Details instead (fork-alignment L9), and
+discard keeps Backspace and Delete; macOS keeps ⇧⌘D for discard and gives Hide Commit Details no
+chord until Fork for macOS is observed (⌥⌘D is the desktop's Dock toggle). In Fork's diff Return
 does nothing and ⌘S or Ctrl+S stages the whole selection (observed in Fork for Windows 2.21.1,
 `lc3`, `lc4`; staging-and-commit R7.3), so the stage's bare Return is
 heard from the file lists alone. No chord is listed twice on one platform, within one list or

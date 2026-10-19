@@ -21,7 +21,8 @@
 //! F5 elsewhere (Fork's own lists, `fork-dev/Docs` `keyboard-shortcuts-mac.md` and
 //! `keyboard-shortcuts-windows.md`: Linux takes Fork's Windows row, whose F5 is no desktop's
 //! and no other action's). In Local Changes, Fork keeps alternates — stage on Return and ⌘S
-//! (Ctrl+S on Windows, and Ctrl+Shift+S), discard on Backspace, Delete and Ctrl+Shift+D — so
+//! (Ctrl+S on Windows, and Ctrl+Shift+S), discard on Backspace and Delete (and ⇧⌘D on macOS;
+//! Fork for Windows' Ctrl+Shift+D is its View menu's Hide Commit Details, which Linux takes) — so
 //! an action holds a LIST of chords. The bare Backspace and Delete are heard in exactly one
 //! scope, a focused file list or diff in Local Changes ([`Scope::LocalChanges`]), and the bare
 //! Return or Enter in a narrower one, a focused file list alone ([`Scope::LocalChangesLists`]):
@@ -239,8 +240,8 @@ pub struct Chord {
     trigger: Trigger,
 }
 
-/// The most chords one action holds on one platform: Fork's discard on Windows, Backspace,
-/// Delete and Ctrl+Shift+D, and its stage, Enter, Ctrl+S and Ctrl+Shift+S.
+/// The most chords one action holds on one platform: Fork's stage on Windows, Enter, Ctrl+S and
+/// Ctrl+Shift+S.
 const MOST_CHORDS: usize = 3;
 
 /// An action's chords on one platform, in the order the table lists them; empty for an
@@ -345,12 +346,12 @@ pub fn chords(action: Action, platform: Os) -> Chords {
                 Trigger::HeadingPress,
             ),
         ]),
-        // ⌫ or ⇧⌘D on macOS; Backspace, Delete or Ctrl+Shift+D on Windows.
+        // ⌫ or ⇧⌘D on macOS; Backspace or Delete on Linux, where Fork for Windows' Ctrl+Shift+D
+        // is Hide Commit Details ([`Action::ToggleDetails`]).
         Action::Discard => match platform {
             Os::Linux => Chords::of([
                 (bare, key(NamedKey::Backspace)),
                 (bare, key(NamedKey::Delete)),
-                (command | shift, at(Code::KeyD)),
             ]),
             Os::MacOs => Chords::of([
                 (bare, key(NamedKey::Backspace)),
@@ -374,9 +375,13 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         Action::Fetch => Chords::of([(command | shift, at(Code::KeyF))]),
         Action::ZoomIn => Chords::of([(command, at(Code::Equal))]),
         Action::ZoomOut => Chords::of([(command, at(Code::Minus))]),
-        // Fork's Ctrl+Shift+D is Local Changes' discard here until it moves to this action; on
-        // macOS ⌥⌘D is the desktop's own Dock toggle. The View menu's item alone, meanwhile.
-        Action::ToggleDetails => Chords::of([]),
+        // Fork for Windows' View menu's Ctrl+Shift+D, the D matched where it sits. On macOS
+        // ⇧⌘D stays Local Changes' discard and ⌥⌘D is the desktop's own Dock toggle, so the
+        // View menu's item alone until Fork for macOS is observed.
+        Action::ToggleDetails => match platform {
+            Os::Linux => Chords::of([(command | shift, at(Code::KeyD))]),
+            Os::MacOs => Chords::of([]),
+        },
         Action::ToggleSideBySide
         | Action::ToggleIgnoreWhitespace
         | Action::MoreLines
@@ -1090,7 +1095,6 @@ mod tests {
                         Os::Linux => vec![
                             keyed(none, NamedKey::Backspace),
                             keyed(none, NamedKey::Delete),
-                            placed(command | shift, Code::KeyD),
                         ],
                         Os::MacOs => vec![
                             keyed(none, NamedKey::Backspace),
@@ -1129,7 +1133,14 @@ mod tests {
                     vec![placed(command, Code::Digit0)],
                     Scope::Window,
                 ),
-                unbound(Action::ToggleDetails),
+                (
+                    Action::ToggleDetails,
+                    match platform {
+                        Os::Linux => vec![placed(command | shift, Code::KeyD)],
+                        Os::MacOs => Vec::new(),
+                    },
+                    Scope::Window,
+                ),
                 (
                     Action::Fetch,
                     vec![placed(command | shift, Code::KeyF)],
@@ -1472,6 +1483,28 @@ mod tests {
                     .iter()
                     .any(|v| v.contains("StageOrUnstage and StageOrUnstage")),
                 "a chord listed twice for one action passed on {platform:?}"
+            );
+            // Fork's Shift+D chord on both Discard and Hide Commit Details fails, though one is
+            // heard in Local Changes and the other window-wide: on Linux it is Hide Commit
+            // Details' alone, on macOS Discard's alone.
+            let mut shift_d = rows.clone();
+            let held = chords(Action::NewBranch, platform).first().unwrap().held;
+            let chord = Chord {
+                held,
+                trigger: Trigger::Physical(Code::KeyD),
+            };
+            for (action, _, list) in shift_d.iter_mut() {
+                if matches!(action, Action::Discard | Action::ToggleDetails)
+                    && !list.contains(&chord)
+                {
+                    list.push(chord);
+                }
+            }
+            assert!(
+                pin_violations(&shift_d)
+                    .iter()
+                    .any(|v| v.contains("Discard and ToggleDetails")),
+                "Shift+D on both Discard and Hide Commit Details passed on {platform:?}"
             );
             // Two actions sharing a chord fail, even in different scopes.
             let mut shared = rows.clone();

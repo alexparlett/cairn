@@ -160,11 +160,11 @@ fn the_menu_bar_holds_only_what_works_in_forks_order() {
         shape(&menus_now(&test, view, true)),
         expected(("Fetch".to_owned(), Some(no_remote)))
     );
-    // Hide Commit Details shows no chord while its action has none.
-    assert!(
-        cairn_ui::accelerators::chords(Action::ToggleDetails, cairn_ui::accelerators::Os::Linux)
-            .is_empty()
-    );
+    // Hide Commit Details shows the chord the table lists for it on Linux, Fork for Windows'
+    // (the table's own tests spell it), and none on macOS, where its menu item stands alone.
+    let toggle = |os| cairn_ui::accelerators::chords(Action::ToggleDetails, os);
+    assert!(!toggle(cairn_ui::accelerators::Os::Linux).is_empty());
+    assert!(toggle(cairn_ui::accelerators::Os::MacOs).is_empty());
 
     // With a remote, Fetch names it; while it runs, it is greyed.
     let mut remotes = view.remotes;

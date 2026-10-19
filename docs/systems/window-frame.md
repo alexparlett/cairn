@@ -116,10 +116,10 @@ its order and groups (`fork-window-survey-2026-10-16.md`, the menu bar) with onl
 Every item but Exit and About Cairn is an action of the accelerator table, chosen through
 `shortcuts::act` exactly as its chord is, so a menu item and its key are one thing: Show
 Uncommitted Changes and Show All Commits switch the main region; Hide Commit Details collapses
-the detail pane to its tab strip and opens it again (no chord yet: Ctrl+Shift+D is Local
-Changes' discard on Linux); Show HEAD selects `HEAD`'s row as a press of its ref does
+the detail pane to its tab strip and opens it again (Ctrl+Shift+D on Linux, Fork for Windows';
+the item alone on macOS); Show HEAD selects `HEAD`'s row as a press of its ref does
 (`history::head`); Show Lost Commits reopens the history; Refresh asks the worker; Fetch fetches
-the default remote, as the title row's button does (`operations::fetch::start`); New Branch…
+the default remote, as the toolbar's button does (`operations::fetch::start`); New Branch…
 opens Create Branch at `HEAD`; Zoom In and Out step the zoom. Hide Commit Details and Show Lost
 Commits are ticked while on, their labels unchanged
 (`fork-menu-toggles-2026-10-19.md`, questions 1 and 2). An item that cannot act is greyed with

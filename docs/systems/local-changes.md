@@ -276,8 +276,8 @@ file are left as they are.", "1 nested repository is left as it is." (`cairn_ui:
 `cairn_ui::Left`, `Confirming::leaving`; the redesign's D1, where Fork asks twice) — the button
 counting only what it discards.
 
-**The dialog opens at the press** (R7.4, the redesign's rule 3): the discard chord (Backspace,
-Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D), the menu or a chunk's or a selection's Discard… opens the
+**The dialog opens at the press** (R7.4, the redesign's rule 3): the discard chord (Backspace
+or Delete; ⌫ or ⇧⌘D), the menu or a chunk's or a selection's Discard… opens the
 confirmation at once, counting (`Confirming::counting`, `cairn_ui::DialogAnswer::Counting`):
 "Counting…", its button greyed and reading "Discard Changes", Cancel focused — and asks the
 engine what it would lose: `Request::DiscardConsequence`, computed by

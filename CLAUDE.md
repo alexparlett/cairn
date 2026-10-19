@@ -1080,7 +1080,8 @@ Project invariants:
   keyboard shortcut is an `Action` mapped to a list of distinct chords per
   platform (`accelerators::chords`, staging-and-commit R7.2: Fork keeps alternates —
   stage on Return or ⌘S on macOS, Enter, Ctrl+S or Ctrl+Shift+S on Linux; discard on
-  Backspace or ⇧⌘D, and Backspace, Delete or Ctrl+Shift+D), and
+  Backspace or ⇧⌘D, and Backspace or Delete, Fork for Windows' Ctrl+Shift+D being Hide Commit
+  Details on Linux, fork-alignment L9), and
   to the scope it is heard in — each chord its action's scope but the stage's bare
   Return, heard from the file lists alone (`accelerators::chord_heard_in`) — in the
   accelerator table,

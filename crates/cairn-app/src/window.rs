@@ -1463,6 +1463,40 @@ pub(crate) mod tests {
             backgrounds(&test, third),
             "the clicked row looks like the one below it"
         );
+        // The press gave the history focus, which the window's rows are told: Fork's blue.
+        test.sync_and_update();
+        let band = tones::selected(true).band;
+        assert!(
+            backgrounds(&test, second)
+                .iter()
+                .any(|background| background.as_color() == Some(band)),
+            "the clicked row is not drawn in the focused selection's band"
+        );
+    }
+
+    /// A text given no size of its own — a button's caption, a menu's item — is drawn at the
+    /// body's size the window's root sets, never Freya's 16 px: the detail strip's Collapse
+    /// button stands as tall as the All Commits entry, which is sized explicitly. Caught by: the
+    /// root's size gone, so every unsized caption is drawn at 16 px.
+    #[test]
+    fn a_text_given_no_size_is_drawn_at_the_bodys() {
+        let (test, _, _) = launch((0..3).map(row).collect(), received(3, true));
+        let height = |text: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|label| (node.layout().area.height(), label.text_style_data.font_size))
+            })
+            .unwrap_or_else(|| panic!("no label reads {text:?}"))
+        };
+        let (caption, own) = height(COLLAPSE_CAPTION);
+        let (sized, size) = height(cairn_ui::ALL_COMMITS_CAPTION);
+        assert_eq!(own, None, "the caption was given a size of its own");
+        assert_eq!(size, Some(FontSize::from(metrics::BODY)));
+        assert_eq!(
+            caption, sized,
+            "an unsized caption is not at the body's size"
+        );
     }
 
     #[test]

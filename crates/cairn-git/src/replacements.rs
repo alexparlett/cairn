@@ -9,8 +9,9 @@
 //! setting as off, and false as on), so its object database is told to read none
 //! (`walk::Grafted`) and the replacements are read here, as git reads them: every ref under
 //! `refs/replace/` whose name ends, after its last `/`, in an id of the repository's hash
-//! (`register_replace_ref`), a symbolic one resolved, and two for one object refused as git
-//! refuses them. `GIT_NO_REPLACE_OBJECTS` and `GIT_REPLACE_REF_BASE` in Cairn's own
+//! (`register_replace_ref`), a symbolic one resolved — one that reaches nothing naming the
+//! null id, which fails only the reads that meet it, as in git — and two for one object
+//! refused as git refuses them. `GIT_NO_REPLACE_OBJECTS` and `GIT_REPLACE_REF_BASE` in Cairn's own
 //! environment are not honoured, as no other variable naming a repository's state is.
 
 use std::collections::HashMap;
@@ -36,29 +37,24 @@ pub(crate) struct TooDeep(gix::ObjectId);
 #[error("duplicate replace ref: {0}")]
 struct Duplicate(gix::bstr::BString);
 
-/// What a symbolic replace ref that never reaches an object fails with.
-#[derive(Debug, thiserror::Error)]
-#[error("the replace ref {0} names no object")]
-struct Unresolved(gix::bstr::BString);
-
 /// The object a replace ref names as git reads it (`ref->oid`): a symbolic ref resolved to the
 /// ref it names, as far as git follows one (`SYMREF_MAXDEPTH`, five), and an annotated tag
-/// never peeled.
-fn resolved(
-    reference: gix::Reference<'_>,
-) -> Result<gix::ObjectId, Box<dyn std::error::Error + Send + Sync>> {
-    let name = reference.name().as_bstr().to_owned();
+/// never peeled. A ref that reaches no object names the null id: git lists a broken ref too
+/// (`DO_FOR_EACH_INCLUDE_BROKEN`) with the null id, registers it as the replacement
+/// (`register_replace_ref` in `replace-object.c`), and dies only where the object it replaces
+/// is read ("replacement ... not found") — which `walk::Grafted` answers the same way.
+fn resolved(reference: gix::Reference<'_>, hash: gix::hash::Kind) -> gix::ObjectId {
     let mut current = reference;
     for _ in 0..=5 {
         if let Some(id) = current.target().try_id() {
-            return Ok(id.to_owned());
+            return id.to_owned();
         }
         current = match current.follow() {
-            Some(next) => next?,
-            None => break,
+            Some(Ok(next)) => next,
+            Some(Err(_)) | None => break,
         };
     }
-    Err(Box::new(Unresolved(name)))
+    hash.null()
 }
 
 impl Replacements {
@@ -86,7 +82,7 @@ impl Replacements {
                 else {
                     continue;
                 };
-                let replacement = resolved(reference)?;
+                let replacement = resolved(reference, repo.object_hash());
                 if by.insert(original, replacement).is_some() {
                     return Err(Box::new(Duplicate(name.into())));
                 }

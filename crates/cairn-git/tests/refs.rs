@@ -1056,6 +1056,19 @@ fn the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_
     );
     std::fs::remove_file(fixture.path().join(".git/info/grafts")).unwrap_or_else(|e| panic!("{e}"));
     assert!(read().walks_as(&plain), "the graft file removed");
+    // A graft file git cannot read — here a directory — grafts nothing: git warns and goes on.
+    std::fs::create_dir_all(fixture.path().join(".git/info/grafts"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        oracle(fixture.path(), &["log", "--format=%H", "HEAD"], None)
+            .status
+            .success()
+    );
+    assert!(
+        read().walks_as(&plain),
+        "an unreadable graft file was read as grafts"
+    );
+    std::fs::remove_dir(fixture.path().join(".git/info/grafts")).unwrap_or_else(|e| panic!("{e}"));
 
     write(&fixture, ".git/shallow", &format!("{third}\n"));
     let shallow = read();
@@ -1069,23 +1082,117 @@ fn the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_
     );
     std::fs::remove_file(fixture.path().join(".git/shallow")).unwrap_or_else(|e| panic!("{e}"));
 
+    // A replace ref that names nothing replaces its object with the null id, as git registers
+    // it; two for one object are git's `duplicate replace ref`, kept as unreadable.
     write(
         &fixture,
         &format!(".git/refs/replace/{third}"),
         "ref: refs/heads/nothing\n",
     );
     let unresolved = read();
-    assert!(
-        unresolved.substitutions.unreadable_reason().is_some(),
-        "a replace ref naming nothing: {:?}",
+    assert_eq!(
+        unresolved.substitutions.replacements(),
+        &[(oid(&third), oid(&"0".repeat(40)))],
+        "{:?}",
         unresolved.substitutions
     );
     assert!(!unresolved.walks_as(&plain));
+    write(
+        &fixture,
+        &format!(".git/refs/replace/{third}"),
+        &format!("{side}\n"),
+    );
+    write(
+        &fixture,
+        &format!(".git/refs/replace/again/{third}"),
+        &format!("{first}\n"),
+    );
+    let duplicated = read();
+    assert!(
+        duplicated.substitutions.unreadable_reason().is_some(),
+        "two replace refs for one object: {:?}",
+        duplicated.substitutions
+    );
+    assert!(!duplicated.walks_as(&plain));
     assert_eq!(
-        listed(&unresolved),
+        listed(&duplicated),
         listed(&plain),
         "the refs are still listed"
     );
+}
+
+/// A stash's base is its first parent as `git stash list` reads `stash@{0}^1` — through a replace
+/// ref — and its row in the history is its replacement's, author and all, as `git log -g` shows
+/// it. Caught by: the stash commit read as stored.
+#[test]
+fn a_replaced_stash_has_the_base_and_author_git_reads() {
+    let fixture = fixtures::unborn();
+    pin_configuration_read(&fixture);
+    let mut clock = fixtures::EPOCH;
+    write(&fixture, "file.txt", "one\n");
+    fixture.git(&["add", "file.txt"]);
+    commit(&fixture, &mut clock, "first");
+    let first = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    commit(&fixture, &mut clock, "second");
+    write(&fixture, "file.txt", "stashed\n");
+    fixture.git(&["stash", "push", "-q", "-m", "wip"]);
+    let stash = ask(fixture.path(), &["rev-parse", "refs/stash"])
+        .trim()
+        .to_owned();
+    // The stash commit replaced by one on `first`, by someone else.
+    let tree = ask(fixture.path(), &["rev-parse", "refs/stash^{tree}"])
+        .trim()
+        .to_owned();
+    let object = format!(
+        "tree {tree}\nparent {first}\nauthor R Eplacer <r@example.com> 1700000000 +0000\n\
+         committer R Eplacer <r@example.com> 1700000000 +0000\n\nreplaced stash\n"
+    );
+    let output = oracle(
+        fixture.path(),
+        &["hash-object", "-t", "commit", "-w", "--stdin"],
+        Some(object.as_bytes()),
+    );
+    let replacement = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert!(output.status.success(), "{output:?}");
+    fixture.git(&["replace", &stash, &replacement]);
+
+    let snapshot = snapshot(fixture.path());
+    let base = ask(fixture.path(), &["rev-parse", "stash@{0}^1"]);
+    assert_eq!(
+        snapshot.stashes.first().map(|entry| entry.base),
+        Some(oid(&base))
+    );
+    assert_eq!(
+        base.trim(),
+        first,
+        "the fixture's replacement is on `first`"
+    );
+
+    let repo = Repository::discover(fixture.path()).unwrap();
+    let page = repo
+        .history(
+            &cairn_git::HistoryRequest::from_refs(&snapshot, 100),
+            &CancelSignal::new(),
+        )
+        .unwrap();
+    let mut history = cairn_model::History::new();
+    history.append(page.rows).unwrap();
+    let author = history.rows().find_map(|row| match row.content() {
+        cairn_model::RowContent::Stash(stash) => Some(stash.author_name.clone()),
+        cairn_model::RowContent::Commit(_) => None,
+    });
+    let theirs = ask(
+        fixture.path(),
+        &["log", "-g", "-1", "--format=%an", "refs/stash"],
+    );
+    assert_eq!(
+        theirs.trim(),
+        "R Eplacer",
+        "git reads the replacement's author"
+    );
+    assert_eq!(author.as_deref(), Some(theirs.trim()));
 }
 
 /// With `core.useReplaceRefs` false, a tag object a replace ref replaces peels to the commit the

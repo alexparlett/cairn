@@ -126,6 +126,39 @@ impl Repository {
     pub fn substitutions(&self) -> cairn_model::Substitutions {
         substitutions_of(self.inner()).1
     }
+
+    /// The files [`Repository::substitutions`] is read from, existing or not: the graft file,
+    /// the shallow file, the packed refs, and `refs/replace/` with every directory and loose ref
+    /// beneath it — each a file or directory a replace ref, a graft or a shallow boundary is
+    /// written in, so
+    /// whoever keeps what was read under them can tell when to read them again. Whether git
+    /// reads replace refs at all is the configuration's (`core.useReplaceRefs`), which the
+    /// caller stamps with the rest of it ([`crate::DiffInputs::configuration`]).
+    pub fn substitution_files(&self) -> Vec<std::path::PathBuf> {
+        let repo = self.inner();
+        let common = repo.common_dir();
+        let mut files = vec![
+            common.join("info").join("grafts"),
+            repo.shallow_file(),
+            common.join("packed-refs"),
+        ];
+        let mut directories = vec![common.join("refs").join("replace")];
+        while let Some(directory) = directories.pop() {
+            if let Ok(entries) = std::fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                        directories.push(entry.path());
+                    } else {
+                        files.push(entry.path());
+                    }
+                }
+            }
+            files.push(directory);
+        }
+        // In one order whatever order the directories were listed in.
+        files.sort();
+        files
+    }
 }
 
 /// The repository's substitutions, read once: for reading objects through, and as the

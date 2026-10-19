@@ -37,20 +37,17 @@ pub(crate) struct Grafts {
 pub(crate) enum GraftsError {
     #[error(transparent)]
     Shallow(#[from] gix::shallow::read::Error),
-    #[error("could not read {path}: {source}")]
-    GraftFile {
-        path: std::path::PathBuf,
-        source: std::io::Error,
-    },
 }
 
 impl Grafts {
     pub(crate) fn read(repo: &gix::Repository) -> Result<Self, GraftsError> {
         let path = repo.common_dir().join("info").join("grafts");
+        // A graft file git cannot open or read — a directory, one it may not read — is no
+        // graft file: git warns and grafts nothing (`read_graft_file` in `commit.c`, through
+        // `fopen_or_warn`), and Cairn shows none of git's warnings.
         let mut parents = match std::fs::read(&path) {
             Ok(bytes) => graft_file(&bytes, repo.object_hash()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-            Err(source) => return Err(GraftsError::GraftFile { path, source }),
+            Err(_) => HashMap::new(),
         };
         for commit in repo
             .shallow_commits()?

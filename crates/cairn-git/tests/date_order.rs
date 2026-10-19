@@ -1081,6 +1081,78 @@ fn a_replacement_that_is_not_there_fails_the_walk() {
     );
 }
 
+/// A detached `HEAD` no ref reaches, its commit replaced by an object that is not there, fails
+/// the walk from the refs as `git log HEAD` dies, rather than leaving `HEAD` out and walking the
+/// rest; and a replace ref naming nothing fails only the reads that meet the object it replaces,
+/// as git registers it with the null id: the walk from a ref that does not reach it is
+/// `git log`'s, and a commit beside it reads as `git show` reads it. Caught by: a detached
+/// `HEAD` whose replacement cannot be read taken for no commit, or a replace ref naming nothing
+/// failing every read.
+#[test]
+fn a_replacement_that_is_not_there_fails_only_what_meets_it() {
+    let (fixture, [a, b, ..]) = substituted("missing-head-replacement", false);
+    fixture.git(&["checkout", "-q", "--detach", &a]);
+    fixture.write("f", "detached");
+    fixture.git_at(30_000, &["commit", "-q", "-am", "detached"]);
+    let detached = fixture.rev("HEAD");
+    let missing = "1234567890123456789012345678901234567890";
+    fixture.write(
+        &format!(".git/refs/replace/{detached}"),
+        &format!("{missing}\n"),
+    );
+    let git_log = |rev: &str| {
+        Command::new("git")
+            .current_dir(&fixture.path)
+            .args(["log", "--date-order", "--format=%H", rev])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap_or_else(|error| panic!("running git log: {error}"))
+    };
+    assert!(
+        !git_log("HEAD").status.success(),
+        "git itself walked past HEAD's missing replacement"
+    );
+    let repo = ok(Repository::discover(&fixture.path), "opening the fixture");
+    let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+    let walked = repo.history(
+        &HistoryRequest::from_refs(&snapshot, 100),
+        &CancelSignal::new(),
+    );
+    assert!(walked.is_err(), "HEAD was left out of the walk: {walked:?}");
+
+    // The same object replaced by a ref that names nothing: `main`, which does not reach it, and
+    // a commit beside it read as git reads them.
+    fixture.write(
+        &format!(".git/refs/replace/{detached}"),
+        "ref: refs/heads/nothing\n",
+    );
+    let theirs: Vec<String> = String::from_utf8_lossy(&git_log("main").stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(!theirs.is_empty(), "git refused the walk from main");
+    let page = ok(
+        repo.history(
+            &HistoryRequest::from_commits([ok(Oid::parse(&fixture.rev("main")), "an id")], 100),
+            &CancelSignal::new(),
+        ),
+        "the walk from main",
+    );
+    let ours: Vec<String> = page.rows.ids().map(|id| id.to_string()).collect();
+    assert_eq!(ours, theirs);
+    let details = ok(
+        repo.commit_details(&ok(Oid::parse(&b), "an id")),
+        "a commit beside the broken replace ref",
+    );
+    assert_eq!(details.subject(), "B");
+    assert!(
+        repo.commit_details(&ok(Oid::parse(&detached), "an id"))
+            .is_err(),
+        "the replaced commit read as if its replace ref named something"
+    );
+}
+
 /// A cancel that takes a fifth of a millisecond to answer, so an opening pass is slow enough
 /// to report, and reaches its 256th commit — where the pass first looks at the clock — well
 /// before 100 ms.

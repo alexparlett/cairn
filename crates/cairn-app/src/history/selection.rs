@@ -178,6 +178,26 @@ pub fn swap(view: View, submit: Option<&dyn Fn(Request)>) {
     ask(of, view, submit);
 }
 
+/// What the selection compares, asked again though its answer is kept: what git substitutes
+/// as it reads a commit — a replace ref, a graft — changed, so the commit's details and what it
+/// changed may no longer be the answer kept. Nothing while Local Changes holds the main region,
+/// whose primary's diff holds the file-diff lane a changes query would take.
+pub fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
+    if *view.sidebar.main.peek() == cairn_ui::MainView::LocalChanges {
+        return;
+    }
+    let Some(of) = selected_comparison(view) else {
+        return;
+    };
+    let mut diff = view.diff;
+    let requests = diff.write().select_changes(of);
+    if let Some(submit) = submit {
+        for request in requests {
+            submit(request);
+        }
+    }
+}
+
 /// Asks what `of` changed, unless it is what was asked last and its answer did not fail.
 fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut diff = view.diff;

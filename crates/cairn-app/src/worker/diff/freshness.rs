@@ -10,6 +10,11 @@
 //!   ([`cairn_git::StagedInputs`], read again only when the index file or `HEAD` moved,
 //!   and compared by value, so a stat-only refresh keeps everything). Moved, the session
 //!   and every kept answer go ([`Moved::Answers`]).
+//! - **What git substitutes** — the replace refs it reads and the grafts, a shallow clone's
+//!   boundary among them ([`cairn_git::Repository::substitutions`]), read on every query and
+//!   compared by value: a commit replaced reads with another author, message, tree and
+//!   parents, and a blob replaced with other lines. Moved, the session and every kept answer
+//!   go ([`Moved::Answers`]).
 //! - **What one path reads** — the working tree's `.gitattributes` in each directory above
 //!   it. Each kept answer records the directories it read ([`Dependence`]) and is checked
 //!   on every hit; the session records the ones it has read, and goes when one moved.
@@ -82,11 +87,11 @@ impl Stamp {
     }
 }
 
-fn stamps(paths: &[PathBuf], started: SystemTime) -> Vec<Stamp> {
+pub(crate) fn stamps(paths: &[PathBuf], started: SystemTime) -> Vec<Stamp> {
     paths.iter().map(|path| Stamp::of(path, started)).collect()
 }
 
-fn all_still(then: &[Stamp], now: &[Stamp]) -> bool {
+pub(crate) fn all_still(then: &[Stamp], now: &[Stamp]) -> bool {
     then.len() == now.len() && then.iter().zip(now).all(|(then, now)| then.still(now))
 }
 
@@ -234,6 +239,8 @@ pub(crate) struct Freshness {
     configuration: Vec<Stamp>,
     global: Option<Vec<Stamp>>,
     staged: Option<Staged>,
+    /// What git substituted when the last query was read.
+    substitutions: Option<cairn_model::Substitutions>,
 }
 
 impl Freshness {
@@ -244,6 +251,7 @@ impl Freshness {
             configuration: stamps(inputs.configuration(), opened_at),
             global: None,
             staged: None,
+            substitutions: None,
         }
     }
 
@@ -271,6 +279,13 @@ impl Freshness {
             .is_some_and(|then| !all_still(then, &global));
         let settled = configuration.iter().chain(&global).all(Stamp::is_settled);
         self.global = Some(global);
+
+        let substitutions = repo.substitutions();
+        moved |= self
+            .substitutions
+            .as_ref()
+            .is_some_and(|then| *then != substitutions);
+        self.substitutions = Some(substitutions);
 
         let index = Stamp::of(inputs.index(), started);
         let head = repo.head_id();

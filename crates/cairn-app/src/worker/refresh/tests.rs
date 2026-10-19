@@ -110,6 +110,84 @@ impl Refreshable {
     }
 }
 
+impl Refreshable {
+    /// Writes `.git/<path>` with `text`, making its directory.
+    fn write(&self, path: &str, text: &str) {
+        let file = self.git_dir().join(path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|error| panic!("making {}: {error}", parent.display()));
+        }
+        std::fs::write(&file, text)
+            .unwrap_or_else(|error| panic!("writing {}: {error}", file.display()));
+    }
+
+    /// Removes `.git/<path>`.
+    fn remove(&self, path: &str) {
+        let file = self.git_dir().join(path);
+        std::fs::remove_file(&file)
+            .unwrap_or_else(|error| panic!("removing {}: {error}", file.display()));
+    }
+
+    /// Replaces `original` by `replacement`, as `git replace` records it: a ref under
+    /// `refs/replace/` named by the replaced id.
+    pub(crate) fn replace(&self, original: Oid, replacement: Oid) {
+        self.write(
+            &format!("refs/replace/{original}"),
+            &format!("{replacement}\n"),
+        );
+    }
+
+    pub(crate) fn unreplace(&self, original: Oid) {
+        self.remove(&format!("refs/replace/{original}"));
+    }
+
+    /// The graft file: `commit` shown with `parents`; or none, with `None`.
+    pub(crate) fn graft(&self, graft: Option<(Oid, &[Oid])>) {
+        match graft {
+            Some((commit, parents)) => {
+                let mut line = commit.to_string();
+                for parent in parents {
+                    line.push(' ');
+                    line.push_str(&parent.to_string());
+                }
+                line.push('\n');
+                self.write("info/grafts", &line);
+            }
+            None => self.remove("info/grafts"),
+        }
+    }
+
+    /// The shallow file: `commit` a boundary; or none, with `None`.
+    pub(crate) fn shallow(&self, boundary: Option<Oid>) {
+        match boundary {
+            Some(commit) => self.write("shallow", &format!("{commit}\n")),
+            None => self.remove("shallow"),
+        }
+    }
+
+    /// Appends `[core] useReplaceRefs = <on>` to the repository's configuration, the last
+    /// value of a key being the one read.
+    pub(crate) fn use_replace_refs(&self, on: bool) {
+        let config = self.git_dir().join("config");
+        let mut text = std::fs::read_to_string(&config)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", config.display()));
+        text.push_str(&format!("[core]\n\tuseReplaceRefs = {on}\n"));
+        std::fs::write(&config, text)
+            .unwrap_or_else(|error| panic!("writing {}: {error}", config.display()));
+    }
+
+    /// `commit`'s subject as the engine reads it on a handle opened now — git's, through every
+    /// substitution under the configuration as it is (`cairn-git`'s own tests hold that
+    /// reading to `git show`).
+    pub(crate) fn subject_now(&self, commit: Oid) -> String {
+        match Repository::discover(self.path()).and_then(|repo| repo.commit_details(&commit)) {
+            Ok(details) => details.subject().to_owned(),
+            Err(error) => panic!("reading {commit}: {error}"),
+        }
+    }
+}
+
 /// What one refresh's three answers were, read until all three have arrived.
 #[derive(Debug, Default)]
 pub(crate) struct Answered {

@@ -33,6 +33,7 @@ use cairn_git::{
 };
 use cairn_model::{Oid, RefsSnapshot, RowsPage};
 
+use crate::worker::configured::{Configured, Reopening};
 use crate::worker::epoch::{Epoch, Epochs, QueryLane, Superseded};
 use crate::worker::history::reading::{Pacing, ReadingPace};
 use crate::worker::history::refs::WalkedRefs;
@@ -79,74 +80,110 @@ pub(crate) struct Answering<'a> {
 }
 
 /// What the history thread is handed to serve with: the epochs it is cancelled by, its queue,
-/// its outbox, the refs it shares with the repository thread, and the pace it tells the window
-/// an opening pass's count on.
+/// its outbox, the refs it shares with the repository thread, the pace it tells the window
+/// an opening pass's count on, and how it opens the repository again when the configuration
+/// moves.
 pub(crate) struct Serving<'a> {
     pub epochs: &'a Epochs,
     pub jobs: &'a Receiver<HistoryJob>,
     pub outbox: &'a Outbox,
     pub refs: WalkedRefs,
     pub pacing: Pacing,
+    pub reopening: &'a Reopening,
+}
+
+/// Why serving on one handle ended.
+enum Ended {
+    Stopped,
+    /// The configuration moved before an open: the handle is opened again and the open — the
+    /// job carried — served on the new one.
+    ConfigurationMoved,
 }
 
 /// Serves the history lane until told to stop, or until every sender has gone. A find in
 /// progress walks one page whenever no other job is waiting, so the next page, find or stop —
-/// whose number supersedes it — is taken up between its pages.
+/// whose number supersedes it — is taken up between its pages. Each open is walked under the
+/// configuration as it is now — whether the walk follows the replace refs is
+/// `core.useReplaceRefs`' — so a moved configuration opens the handle again first
+/// (`super::super::configured`); a scroll's or a find's page goes on in the walk it belongs to.
 pub(crate) fn serve_history(shared: &SharedRepository, serving: &Serving<'_>) {
+    let mut configured = Configured::open(shared, serving.reopening);
+    let mut finding: Option<(Epoch, Finding)> = None;
+    let mut carried: Option<HistoryJob> = None;
+    loop {
+        match serve_handle(&configured, serving, &mut finding, &mut carried) {
+            Ended::Stopped => return,
+            Ended::ConfigurationMoved => configured.reopen(),
+        }
+    }
+}
+
+/// Serves on `configured`'s handle until the thread stops or an open finds the configuration
+/// moved, which it hands back in `carried`.
+fn serve_handle(
+    configured: &Configured<'_>,
+    serving: &Serving<'_>,
+    finding: &mut Option<(Epoch, Finding)>,
+    carried: &mut Option<HistoryJob>,
+) -> Ended {
     let epochs = serving.epochs;
-    let repo = shared.to_worker();
-    // Once, outside the loop: the scroll's session borrows `repo` across turns.
+    let repo = configured.handle();
+    // Once per handle: the scroll's session borrows `repo` across turns.
     let mut lane = HistoryLane::new(serving.refs.clone());
     lane.pacing = serving.pacing;
     let answering = Answering {
         epochs,
         outbox: serving.outbox,
     };
-    let mut finding: Option<(Epoch, Finding)> = None;
     loop {
-        let job = match finding {
-            Some((epoch, find)) => match serving.jobs.try_recv() {
+        let job = match (carried.take(), *finding) {
+            (Some(job), _) => job,
+            (None, Some((epoch, find))) => match serving.jobs.try_recv() {
                 Ok(job) => job,
                 Err(TryRecvError::Empty) => {
-                    finding = (!epochs.is_stopping()
+                    *finding = (!epochs.is_stopping()
                         && epochs.is_current(epoch)
-                        && lane.find_page(&repo, find, epoch, &answering))
+                        && lane.find_page(repo, find, epoch, &answering))
                     .then_some((epoch, find));
                     continue;
                 }
-                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Disconnected) => return Ended::Stopped,
             },
-            None => match serving.jobs.recv() {
+            (None, None) => match serving.jobs.recv() {
                 Ok(job) => job,
-                Err(_) => break,
+                Err(_) => return Ended::Stopped,
             },
         };
         if epochs.is_stopping() {
-            break;
+            return Ended::Stopped;
         }
         let HistoryJob::Page { epoch, page } = job else {
-            break;
+            return Ended::Stopped;
         };
         match page {
             // Whatever the history lane has asked since — a find, a stop — an open whose walk is
             // still the window's runs: its pass is superseded by the next open alone.
             Page::Open { rows, walk, lost } => {
                 if epochs.is_current(walk) {
-                    lane.open_walk(&repo, rows, walk, lost, &answering);
+                    if configured.moved() {
+                        *carried = Some(HistoryJob::Page { epoch, page });
+                        return Ended::ConfigurationMoved;
+                    }
+                    lane.open_walk(repo, rows, walk, lost, &answering);
                 }
             }
             Page::More { rows } => {
                 if epochs.is_current(epoch) {
-                    lane.more(&repo, rows, epoch, &answering);
+                    lane.more(repo, rows, epoch, &answering);
                 }
             }
             Page::Find { target, rows } => {
                 if epochs.is_current(epoch) {
-                    finding = Some((epoch, Finding { target, rows }));
+                    *finding = Some((epoch, Finding { target, rows }));
                 }
             }
             // Its number superseded the find; there is nothing to walk.
-            Page::Stop => finding = None,
+            Page::Stop => *finding = None,
         }
     }
 }
@@ -586,6 +623,7 @@ mod tests {
         }
         let (outbox, sent) = Outbox::watched();
         let epochs = epochs.clone();
+        let reopening = crate::worker::configured::Reopening::for_tests();
         let thread = std::thread::spawn(move || {
             let serving = Serving {
                 epochs: &epochs,
@@ -593,6 +631,7 @@ mod tests {
                 outbox: &outbox,
                 refs: WalkedRefs::default(),
                 pacing: Pacing::UNTOLD,
+                reopening: &reopening,
             };
             serve_history(&shared, &serving);
         });

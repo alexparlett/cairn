@@ -273,8 +273,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if !worker.closing {
                 (worker.submit)(asked);
             }
+            // What git substitutes as it reads a commit changed: the chosen commit's details and
+            // changes are asked again, as git would answer them now.
+            let substituted = refreshed
+                .peek()
+                .refs()
+                .is_some_and(|kept| kept.substitutions != snapshot.substitutions);
             let replaced = refreshed.write().refs_arrived(snapshot);
             retire(replaced, worker);
+            if substituted && !worker.closing {
+                crate::history::selection::ask_again(view, Some(worker.submit));
+            }
             // What the commit box reads is asked again: a merge begun, a hook added, a commit
             // made.
             if !worker.closing {
@@ -1737,6 +1746,121 @@ mod tests {
         assert_eq!(refresh(), 1, "a moved ref did not reopen");
 
         assert_eq!(refresh(), 0, "nothing changed, yet the history reopened");
+        drop(handle);
+    }
+
+    /// Through the real boundary, counting reopens: what git substitutes as it walks — a replace
+    /// ref added and moved, `core.useReplaceRefs` turned off and on, the graft file written and
+    /// removed, the shallow file written — each reopens the history though no ref moved, and a
+    /// refresh that finds nothing changed reopens nothing. Each reopened history draws the
+    /// replaced commit's row as git reads it under the configuration as it is then — its own
+    /// subject with replace refs off, its replacement's on — so the history thread read the
+    /// configuration again; and the chosen commit's changes are asked again each time. Caught by:
+    /// a comparison of the refs alone (no step reopens), a walk on a handle that keeps the
+    /// configuration of its first open (the row keeps its replacement's subject with replace
+    /// refs off), or the chosen commit's answer kept across a substitution.
+    #[test]
+    fn a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now() {
+        use cairn_model::{RowContent, RowId};
+
+        use crate::worker::{Refreshable, next_update};
+
+        let fixture = Refreshable::new("cairn-session-substitutions");
+        let [newest, replaced, replacement, other] = [0, 1, 2, 3].map(|n| fixture.commits[n]);
+        let (handle, mut updates) = fixture.open();
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        // Asks for a refresh and applies what arrives, handing on what applying asks, until
+        // the refresh's refs have been applied and — if they reopened the history — its first
+        // page has too. Returns how many reopens and how many changes queries the window asked.
+        let mut refresh = || -> (usize, usize) {
+            handle.submit(Request::Refresh);
+            let mut refs_seen = false;
+            let mut reopening = false;
+            let (mut opens, mut changes) = (0, 0);
+            loop {
+                for request in asked.submitted.borrow_mut().drain(..) {
+                    match request {
+                        Request::OpenHistory { .. } => {
+                            opens += 1;
+                            reopening = true;
+                        }
+                        Request::Changes { .. } => changes += 1,
+                        _ => {}
+                    }
+                    handle.submit(request);
+                }
+                if refs_seen && !reopening {
+                    return (opens, changes);
+                }
+                let update = next_update(&mut updates);
+                match &update {
+                    Update::Refs { .. } => refs_seen = true,
+                    Update::Rows { .. } => reopening = false,
+                    _ => {}
+                }
+                applying(&test, view, &asked, update);
+            }
+        };
+        let subject_drawn = |commit: Oid| -> Option<String> {
+            let rows = view.rows.peek();
+            let at = rows.position(RowId::Commit(commit))?;
+            match rows.row(at)?.content() {
+                RowContent::Commit(summary) => Some(summary.summary),
+                RowContent::Stash(stash) => panic!("a commit drawn as a stash: {stash:?}"),
+            }
+        };
+
+        assert_eq!(refresh().0, 1, "the first refresh did not open the history");
+        assert_eq!(
+            refresh(),
+            (0, 0),
+            "a refresh that found nothing changed reopened"
+        );
+        test.run_in(|| {
+            let mut selected = view.selected;
+            selected.set(Some(RowId::Commit(replaced)));
+        });
+        let own = fixture.subject_now(replaced);
+
+        fixture.replace(replaced, replacement);
+        assert_eq!(refresh(), (1, 1), "a replace ref added");
+        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+        assert_ne!(
+            subject_drawn(replaced),
+            Some(own.clone()),
+            "the replacement was not drawn"
+        );
+
+        fixture.replace(replaced, other);
+        assert_eq!(refresh(), (1, 1), "a replace ref moved");
+        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+
+        fixture.use_replace_refs(false);
+        assert_eq!(refresh(), (1, 1), "core.useReplaceRefs turned off");
+        assert_eq!(
+            subject_drawn(replaced),
+            Some(own.clone()),
+            "the walk kept reading the replace refs the configuration turned off"
+        );
+        fixture.use_replace_refs(true);
+        assert_eq!(refresh(), (1, 1), "core.useReplaceRefs turned on");
+        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+        fixture.unreplace(replaced);
+        assert_eq!(refresh(), (1, 1), "the replace ref deleted");
+        assert_eq!(subject_drawn(replaced), Some(own));
+
+        fixture.graft(Some((newest, &[replacement])));
+        assert_eq!(refresh(), (1, 1), "the graft file written");
+        fixture.graft(None);
+        assert_eq!(refresh(), (1, 1), "the graft file removed");
+
+        fixture.shallow(Some(newest));
+        assert_eq!(refresh(), (1, 1), "the shallow file written");
+        assert_eq!(
+            refresh(),
+            (0, 0),
+            "nothing changed, yet the history reopened"
+        );
         drop(handle);
     }
 }

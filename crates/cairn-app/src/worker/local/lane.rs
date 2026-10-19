@@ -62,6 +62,7 @@ use cairn_model::{
     RepoPath, ScrubbedLines, Selection,
 };
 
+use crate::worker::configured::{Configured, Reopening};
 use crate::worker::epoch::{Epoch, Superseded};
 use crate::worker::output_tap::OutputTap;
 use crate::worker::pool::Outbox;
@@ -1291,6 +1292,10 @@ impl cairn_git::Cancel for Counting<'_> {
 /// What the local lane serves with.
 pub(crate) struct Local<'a> {
     pub git: &'a GitBinary,
+    /// How the lane opens the repository again when the configuration moves: what it reads —
+    /// an amend's cost, the recent messages, amend's parent — goes through the replace refs
+    /// `core.useReplaceRefs` says git reads.
+    pub reopening: &'a Reopening,
     /// `None` when no channel could be opened; `prompting` says why.
     pub channel: Option<&'a Arc<Channel>>,
     pub prompting: &'a Result<(), String>,
@@ -1303,8 +1308,9 @@ pub(crate) struct Local<'a> {
 /// left when a close gave up on it is found by the leftover lock's `stat` on the next open's
 /// refresh, not here.
 pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
-    let repo = shared.to_worker();
+    let mut configured = Configured::open(shared, serving.reopening);
     while let Ok(job) = serving.jobs.recv() {
+        let repo = configured.follow();
         match job {
             LocalJob::Stop => break,
             LocalJob::Write { id, write } if serving.lane.is_closing() => {
@@ -1320,7 +1326,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     },
                 );
             }
-            LocalJob::Write { id, write } => run(&repo, id, *write, serving),
+            LocalJob::Write { id, write } => run(repo, id, *write, serving),
             LocalJob::Consequence {
                 asked,
                 paths,
@@ -1330,7 +1336,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     superseded: &cancel,
                     lane: serving.lane,
                 };
-                let outcome = ops::discard_files_consequence(serving.git, &repo, &paths, &counting);
+                let outcome = ops::discard_files_consequence(serving.git, repo, &paths, &counting);
                 drop(paths);
                 let outcome = match outcome {
                     // Superseded, let go of or closing: nobody waits on it.
@@ -1354,7 +1360,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     continue;
                 }
                 let outcome =
-                    ops::discard_lines_consequence(serving.git, &repo, &diff, selection, chunk)
+                    ops::discard_lines_consequence(serving.git, repo, &diff, selection, chunk)
                         .map_err(|error| refused_while_counting(&error));
                 drop(diff);
                 serving
@@ -1366,7 +1372,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     superseded: &cancel,
                     lane: serving.lane,
                 };
-                if let Some(reads) = commit_reads(serving.git, &repo, &reading) {
+                if let Some(reads) = commit_reads(serving.git, repo, &reading) {
                     serving
                         .outbox
                         .send(Some(epoch), Update::CommitReads(Box::new(reads)));
@@ -1398,7 +1404,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
             LocalJob::LockConsequence { asked } => {
                 // Read now, at the press: its age is current, and a git
                 // of Cairn's running is said rather than the offer lost.
-                let outcome = ops::remove_lock_consequence(&repo)
+                let outcome = ops::remove_lock_consequence(repo)
                     .map_err(|error| crate::worker::ending_words::sentence(&error));
                 serving
                     .outbox
@@ -1414,7 +1420,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 if cairn_git::Cancel::is_cancelled(&cancel) || serving.lane.is_closing() {
                     continue;
                 }
-                let outcome = match ops::checkout_discarding_consequence(&repo, &name, at) {
+                let outcome = match ops::checkout_discarding_consequence(repo, &name, at) {
                     Ok(consequence) => Ok(consequence),
                     Err(Error::CheckoutRefused {
                         why: cairn_git::CheckoutRefusal::InProgress(operation),
@@ -1437,7 +1443,7 @@ pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     superseded: &cancel,
                     lane: serving.lane,
                 };
-                if let Some(read) = amend_read(serving.git, &repo, &status, &reading) {
+                if let Some(read) = amend_read(serving.git, repo, &status, &reading) {
                     serving.outbox.send(
                         Some(epoch),
                         Update::Amending {

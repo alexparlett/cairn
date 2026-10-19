@@ -43,6 +43,7 @@ use cairn_git::{CLOSE_BOUND, SharedRepository};
 use cairn_model::{Disclosure, RefsSnapshot};
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
+use super::configured::{Configured, Reopening};
 use super::diff::lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
@@ -226,6 +227,11 @@ fn open_paced(
                     name: repository_name(&shared),
                 },
             );
+            // How each thread opens the repository again when its configuration moves.
+            let reopening = Reopening {
+                git: git.clone(),
+                startup: discovery.startup().clone(),
+            };
             // This repository's channel, and git pointed at it.
             let backend = Backend::open(discovery.startup(), &git);
             // Read here, walked from on the history thread.
@@ -236,11 +242,11 @@ fn open_paced(
                 answered,
                 (network_outbox, acceptor_outbox),
                 (history, diff, refresh, local),
-                (&walked, &worker_wake),
+                (&walked, &worker_wake, &reopening),
                 worker_control,
             );
             serve(
-                &shared,
+                (&shared, &reopening),
                 incoming,
                 outbox,
                 worker_epochs,
@@ -409,7 +415,7 @@ impl Threads {
         answered: Receiver<Reply>,
         (network_outbox, acceptor_outbox): (Outbox, Outbox),
         (history, diff, refresh, local): (HistoryThread, DiffThread, RefreshThread, LocalThread),
-        (walked, wake): (&WalkedRefs, &Arc<Wake>),
+        (walked, wake, reopening): (&WalkedRefs, &Arc<Wake>, &Reopening),
         control: FetchControl,
     ) -> Self {
         let (network, queued) = channel::<Operation>();
@@ -458,6 +464,7 @@ impl Threads {
         };
         let history_shared = Arc::clone(&shared);
         let history_refs = walked.clone();
+        let history_reopening = reopening.clone();
         let closing_epochs = history_epochs.clone();
         // As the diff thread: one that cannot be started ends its part of the stream, and a
         // page asked of it is never answered.
@@ -471,6 +478,7 @@ impl Threads {
                         outbox,
                         refs: history_refs,
                         pacing: history_pacing,
+                        reopening: &history_reopening,
                     };
                     serve_history(&history_shared, &serving);
                 }
@@ -523,6 +531,7 @@ impl Threads {
         };
         let refresh_shared = Arc::clone(&shared);
         let refresh_git = git.clone();
+        let refresh_reopening = reopening.clone();
         // As the diff thread: one that cannot be started ends its part of the stream, and
         // a refresh asked of it is never answered.
         let _ = std::thread::Builder::new()
@@ -531,6 +540,7 @@ impl Threads {
                 if let Some(outbox) = refresh_exit.outbox.as_ref() {
                     let serving = Refreshing {
                         git: &refresh_git,
+                        reopening: &refresh_reopening,
                         epochs: &refresh_epochs,
                         lane: &refresh_lane,
                         jobs: &refresh_jobs,
@@ -553,6 +563,7 @@ impl Threads {
         };
         let local_shared = Arc::clone(&shared);
         let local_git = git.clone();
+        let local_reopening = reopening.clone();
         let local_channel = channel.clone();
         let local_prompting = prompting.clone();
         let local_lane = lane.clone();
@@ -564,6 +575,7 @@ impl Threads {
                 if let Some(outbox) = local_exit.outbox.as_ref() {
                     let serving = Local {
                         git: &local_git,
+                        reopening: &local_reopening,
                         channel: local_channel.as_ref(),
                         prompting: &local_prompting,
                         lane: &local_lane,
@@ -1133,13 +1145,15 @@ impl Drop for WorkerExit {
 }
 
 fn serve(
-    shared: &SharedRepository,
+    (shared, reopening): (&SharedRepository, &Reopening),
     jobs: Receiver<(Option<Epoch>, RepositoryJob)>,
     outbox: &Outbox,
     epochs: Epochs,
     (threads, walked): (&Threads, &WalkedRefs),
 ) {
-    let repo = shared.to_worker();
+    // The refs a refresh reads — their upstreams, and whether the walk follows the replace
+    // refs — are read under the configuration as it is now.
+    let mut configured = Configured::open(shared, reopening);
     let answering = Answering {
         epochs: &epochs,
         outbox,
@@ -1154,7 +1168,7 @@ fn serve(
             RepositoryJob::Refs { ahead_behind } => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
                     refs::refresh(
-                        &repo,
+                        configured.follow(),
                         walked,
                         (epoch, ahead_behind),
                         &threads.refresh,
@@ -1176,7 +1190,7 @@ fn serve(
             RepositoryJob::ListRemotes => outbox.send(
                 None,
                 Update::Remotes {
-                    remotes: repo.remotes(),
+                    remotes: configured.follow().remotes(),
                 },
             ),
             RepositoryJob::Fetch { remote } => {

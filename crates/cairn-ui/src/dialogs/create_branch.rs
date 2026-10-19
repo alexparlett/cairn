@@ -342,7 +342,11 @@ impl Component for CreateBranchDialog {
             });
         let mut content = PopupContent::new()
             .child(row(CREATE_BRANCH_AT, commit.into()))
-            .child(row(BRANCH_NAME_CAPTION, field.into()))
+            // The field's text at the body's size, not the 15 px `PopupContent` sets.
+            .child(row(
+                BRANCH_NAME_CAPTION,
+                rect().font_size(metrics::BODY).child(field).into(),
+            ))
             .child(row(
                 "",
                 check_box(

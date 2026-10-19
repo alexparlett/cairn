@@ -170,19 +170,22 @@ impl Component for CredentialPrompt {
                         .font_size(metrics::BODY)
                         .color(secondary),
                 )
+                // The field's text at the body's size, not the 15 px `PopupContent` sets.
                 .child(
-                    text_field(typed)
-                        .width(Size::fill())
-                        .auto_focus(true)
-                        .mode(if kind.is_shown() {
-                            InputMode::Shown
-                        } else {
-                            InputMode::new_password()
-                        })
-                        .on_submit({
-                            let submit = submit.clone();
-                            move |_: String| submit.call(())
-                        }),
+                    rect().width(Size::fill()).font_size(metrics::BODY).child(
+                        text_field(typed)
+                            .width(Size::fill())
+                            .auto_focus(true)
+                            .mode(if kind.is_shown() {
+                                InputMode::Shown
+                            } else {
+                                InputMode::new_password()
+                            })
+                            .on_submit({
+                                let submit = submit.clone();
+                                move |_: String| submit.call(())
+                            }),
+                    ),
                 );
             primary = Button::new()
                 .filled()

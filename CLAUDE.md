@@ -1316,7 +1316,12 @@ Project invariants:
     a submit and nothing else — on focus gained (`refresh::focus::on_focus_gained`, a side
     effect on the toolkit's focus state), after a fetch ends, on the Refresh chord —
     and a refresh's answers are kept by moving them in (`RefreshState`), the one
-    each replaces handed to the repository thread to free (`Request::Retire`). A
+    each replaces handed to the repository thread to free (`Request::Retire`); a refs
+    answer is first compared with the snapshot kept by its substitutions (`session::apply`:
+    two sorted lists, proportional to the replace refs and grafts — a shallow clone's
+    boundary among them — once per refresh, never per frame), and when they differ the
+    chosen commit's changes are asked again (`history::selection::ask_again`, one
+    `Request::Changes` and the `Request::Retire` of what it replaces). A
     reopen (`session::reopen_history`) asks the new walk and leaves the loaded
     `History` drawn, marking it to be replaced (`Progress::reopen`); the new walk's
     first page (`session::apply`'s `Update::Rows`) moves the loaded `History` out,

@@ -1443,11 +1443,14 @@ device, or that it is missing — in three tiers, and reads what git substitutes
   every kept answer go.
 - **What git substitutes**: the replace refs git reads and the grafts, a shallow clone's
   boundary among them (`Repository::substitutions`, the same value a refs snapshot keeps),
-  read on every query and compared by value — a replaced commit reads with another author,
-  message, tree and parents, a replaced blob with other lines. When they changed, the session
-  and every kept answer go (a graft written, in
-  `each_tier_lets_go_of_what_its_move_makes_stale`). The read is about 4 µs on the bench
-  repository.
+  read again whenever a file they are read from moved — the graft file, the shallow file, the
+  packed refs and `refs/replace/` with every directory and loose ref under it
+  (`Repository::substitution_files`), stamped like the rest — and compared by value: a replaced
+  commit reads with another author, message, tree and parents, a replaced blob with other
+  lines. When they changed, the session and every kept answer go (a graft written, in
+  `each_tier_lets_go_of_what_its_move_makes_stale`). A read is about 4 µs on the bench
+  repository; a shallow clone's boundary can be tens of thousands of commits, which the stamps
+  keep from being read again on every query.
 - **What one path reads**: the working tree's `.gitattributes` in each directory
   above it. A file's diff records the directories above both its paths; a change
   set records them for every path git's rename search could pair — added, deleted,
@@ -2401,9 +2404,11 @@ is stat-clean is read by `git diff-tree -p` from the working tree instead
 `git show` gives the replacement's; the content query then answers the disagreement
 (`Error::ContentReadsDisagree`) rather than either. And the window asks the chosen commit's
 changes again when a refresh's snapshot names other substitutions
-(`history::selection::ask_again`) — not while Local Changes holds the main region, whose
-primary's diff holds the file-diff lane, nor for Local Changes' diff itself, which a blob
-replaced alone redraws only when it is next asked.
+(`history::selection::ask_again`); while Local Changes holds the main region, whose primary's
+diff holds the file-diff lane, the answer kept is marked stale and asked again when the
+history is shown (`selection::show_main`,
+`a_substitution_change_asks_the_chosen_commits_changes_again_when_the_history_is_shown`).
+Local Changes' own diff of a blob replaced alone is redrawn only when it is next asked.
 It sits beside the history's rows rather than replacing them — a kept row holds a
 subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
 keeps"), and carrying every parent, both addresses, a committer, an offset and a whole
@@ -2480,7 +2485,12 @@ per way git reads a commit's text, by
   worker threads follow the same stamps (`worker/configured.rs`), checked before the work
   that reads the configuration: the repository thread before a refresh's refs, the history
   thread before an open — a page of a walk already open goes on under the configuration it
-  opened with — and the refresh and local threads before each job.
+  opened with, and an open is put off for one reopening at most — and the refresh and local
+  threads before each job but a close's. A moved file opens the handle again at once; a stamp
+  that is merely unsettled — within `SETTLING` of an edit, or a file whose times are in the
+  future — at most once per `SETTLING`; and a configuration that cannot be opened again leaves
+  the old handle, its files stamped as they are, so only the next edit tries again
+  (`a_handle_follows_a_configuration_that_moved_and_keeps_one_that_did_not`).
 - **A commit's encoding is read as glibc's iconv reads it, and only as far as was
   measured.** Where `encoding_rs` and glibc still differ, Cairn's text is not git's:
   EUC-JP sequences glibc reads and `encoding_rs` refuses (lone C1 bytes, some JIS X 0212

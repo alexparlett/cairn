@@ -388,7 +388,10 @@ commit-time and graph-order routes, Show Lost Commits' reflog dates, ahead and b
 a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`);
 the rows' subjects, authors and dates against `git log`
 (`a_substituted_commit_is_described_and_compared_as_git_shows_it`); a replace ref whose
-replacement is missing failing the walk
+replacement is missing failing the walk — and a detached `HEAD` no ref reaches, replaced by
+an object that is not there, failing it too rather than being left out, while a replace ref
+naming nothing fails only the reads that meet its object
+(`a_replacement_that_is_not_there_fails_only_what_meets_it`) —
 as git dies (`a_replacement_that_is_not_there_fails_the_walk`);
 the pushed check's graph stepping aside under each
 (`the_graph_does_not_answer_where_git_would_not_read_it`); the header rewrite by

@@ -69,9 +69,12 @@ its ref names, and each grafted commit with the parents git shows for it — the
 and a shallow clone's boundary, the shallow file winning for one commit — read exactly as the
 walk reads them (`history::walk::Substitutions`, `crate::replacements`, `crate::grafts`), so
 none at all with `core.useReplaceRefs` false, and kept in id order, so two reads of the same
-files compare equal. A read that fails — a symbolic replace ref that names nothing, two for one
-object, a graft file that cannot be read — is kept as that failure, which the walk fails on
-too; the refs are listed regardless. A history walked under other substitutions is another
+files compare equal. A replace ref that reaches no object replaces its object with the null id,
+as git registers it, so only a read that meets that object fails, as git dies there
+(`a_replacement_that_is_not_there_fails_only_what_meets_it`); a graft file git cannot open or
+read grafts nothing, as git warns and goes on. A read that fails — two replace refs for one
+object, git's `duplicate replace ref` — is kept as that failure, which the walk fails on too;
+the refs are listed regardless. A history walked under other substitutions is another
 history though no ref moved, so a replace ref added, moved or deleted, `core.useReplaceRefs`
 turned off or on, and the graft or shallow file written or removed each reopen it, where a
 read that finds nothing changed does not
@@ -86,7 +89,8 @@ before an open (`crates/cairn-app/src/worker/configured.rs`). The read costs abo
 bench repository (`docs/research/history-topo-order/measured.md`).
 
 A stash's base — its first parent — is read through the substitutions, as `git stash list`
-reads `stash@{n}^1`. A ref's target is told apart and a tag peeled from the objects as they are
+reads `stash@{n}^1`, and its row's author and dates are its replacement's, as `git log -g`
+shows them (`a_replaced_stash_has_the_base_and_author_git_reads`). A ref's target is told apart and a tag peeled from the objects as they are
 stored: git looks a replacement up there too (`peel_object_ext` in git's `object.c`), and dies
 where it is missing, but a ref hidden for a replacement the repository lacks would make a pushed
 `HEAD` read as unpublished (`an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement`).

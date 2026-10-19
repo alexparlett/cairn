@@ -10,8 +10,8 @@
 //! git also reads `<common dir>/info/grafts`, one `commit parent...` line each, and shows
 //! a grafted commit with the graft's parents in place of its own (`parse_commit_buffer` in
 //! git's `commit.c`, at v2.30.9 and v2.56.0 alike; deprecated, but still read). gitoxide
-//! reads no graft file. Every read that reports a commit's parents asks here, so Cairn shows
-//! what git shows.
+//! reads no graft file. Every read that reports a commit's parents reads it through
+//! `history::walk::Grafted`, which asks here, so Cairn shows what git shows.
 //!
 //! A line is read as git's `read_graft_line` reads it: trailing white space trimmed, an
 //! empty line or one starting `#` skipped, then an id of the repository's hash and each
@@ -23,12 +23,8 @@
 
 use std::collections::HashMap;
 
-use cairn_model::Oid;
-
-use crate::Error;
-use crate::object_id::model_id;
-
 /// The repository's grafts as they were read once, for one query.
+#[derive(Clone, Default)]
 pub(crate) struct Grafts {
     /// The parents git shows for each grafted commit: none for a shallow commit.
     parents: HashMap<gix::ObjectId, Vec<gix::ObjectId>>,
@@ -75,24 +71,19 @@ impl Grafts {
         self.parents.is_empty() && !self.shallow
     }
 
+    /// Each grafted commit and the parents git shows for it, in no order.
+    pub(crate) fn grafted(&self) -> impl Iterator<Item = (&gix::ObjectId, &[gix::ObjectId])> {
+        self.parents
+            .iter()
+            .map(|(commit, parents)| (commit, parents.as_slice()))
+    }
+
     /// The parents git shows for `id` in place of its own, when it grafts `id`.
     pub(crate) fn of(&self, id: &gix::oid) -> Option<&[gix::ObjectId]> {
         if self.parents.is_empty() {
             return None;
         }
         self.parents.get(id).map(Vec::as_slice)
-    }
-
-    /// The parents git shows for `id`: the ones its object names, or the graft's.
-    pub(crate) fn parents_of<'a>(
-        &self,
-        id: &gix::oid,
-        named: impl IntoIterator<Item = &'a gix::oid>,
-    ) -> Result<Vec<Oid>, Error> {
-        match self.of(id) {
-            Some(grafted) => grafted.iter().map(|parent| model_id(parent)).collect(),
-            None => named.into_iter().map(model_id).collect(),
-        }
     }
 }
 

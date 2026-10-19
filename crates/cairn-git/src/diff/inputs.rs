@@ -249,11 +249,13 @@ impl Repository {
         let head_gitmodules = if entries.iter().any(|(path, _, _)| path == b".gitmodules") {
             None
         } else {
-            match repo.head_tree() {
-                Ok(tree) => tree
-                    .find_entry(".gitmodules")
-                    .map(|entry| model_id(&entry.object_id()))
-                    .transpose()?,
+            // `HEAD`'s tree as git reads it, through a replace ref.
+            let objects = crate::history::walk::Grafted::read(repo)?;
+            match repo.head_id() {
+                Ok(head) => match objects.entry_in_commit(&head, b".gitmodules") {
+                    Ok(entry) => entry.map(|entry| model_id(&entry.oid)).transpose()?,
+                    Err(_) => None,
+                },
                 Err(_) => None,
             }
         };

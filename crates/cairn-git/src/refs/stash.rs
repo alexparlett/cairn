@@ -9,6 +9,8 @@
 use cairn_model::StashEntry;
 
 use super::Reading;
+use gix::objs::Find as _;
+
 use crate::object_id::model_id;
 use crate::{Cancel, Error};
 
@@ -57,15 +59,21 @@ pub(super) fn list(
         }
     }
     let mut entries = Vec::with_capacity(oldest_first.len());
+    let mut buffer = Vec::new();
     for (index, (commit, message)) in oldest_first.into_iter().rev().enumerate() {
         if cancel.is_cancelled() {
             return Err(Error::RefsCancelled);
         }
         reading.cost.objects_read += 1;
-        let base = repo
-            .find_commit(commit)
+        // The stash's first parent as git reads `stash@{n}^1`: through a replace ref and a
+        // graft (`Reading::objects`).
+        let base = reading
+            .objects
+            .try_find(&commit, &mut buffer)
             .ok()
-            .and_then(|found| found.parent_ids().next().map(|parent| parent.detach()));
+            .flatten()
+            .and_then(|found| found.try_into_commit_iter())
+            .and_then(|found| found.parent_ids().next());
         match (model_id(&commit), base.map(|base| model_id(&base))) {
             (Ok(commit), Some(Ok(base))) => entries.push(StashEntry {
                 index,

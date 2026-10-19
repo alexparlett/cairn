@@ -234,7 +234,11 @@ impl HistorySession<'_> {
             // Unreachable: one entry is pushed per row past the prefix.
             return Ok(());
         };
-        let laid = Laid::read(self.repo, entry)?;
+        let Some(stream) = self.stream.as_ref() else {
+            // Unreachable: a row is placed only from the walk the stream holds.
+            return Ok(());
+        };
+        let laid = Laid::read(stream.objects(), entry)?;
         if matches!(laid, Laid::Commit { .. }) {
             self.decoded += 1;
         }

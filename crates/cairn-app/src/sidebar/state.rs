@@ -201,6 +201,7 @@ mod tests {
             head: HeadState::Branch(RefName::new(head)),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         })
     }
 

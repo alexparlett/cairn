@@ -20,7 +20,7 @@ use cairn_model::Oid;
 
 use super::reach::Reach;
 use super::seeds::Decoration;
-use super::walk::{CommitWalk, Step};
+use super::walk::{CommitWalk, Grafted, Step};
 use crate::{Cancel, Error};
 
 /// One entry of the stream, in the order the lane assigner lays them out.
@@ -47,6 +47,9 @@ pub(super) enum Next {
 
 pub(super) struct Stream<'repo> {
     walk: CommitWalk<'repo>,
+    /// The repository's objects under the substitutions the walk was opened with: what each
+    /// row's commit is read through.
+    objects: Grafted<'repo>,
     /// Whether the walk yields the stashes' rows itself (date order).
     stashes_walked: bool,
     /// Stashes by base, each list newest committed first: what goes directly above it, in an
@@ -81,6 +84,7 @@ impl<'repo> Stream<'repo> {
     /// commits no ref reaches, for a walk with tips only reflogs name.
     pub(super) fn new(
         walk: CommitWalk<'repo>,
+        objects: Grafted<'repo>,
         decoration: Arc<Decoration>,
         stashes_walked: bool,
         reach: Option<Reach>,
@@ -105,6 +109,7 @@ impl<'repo> Stream<'repo> {
         }
         Self {
             walk,
+            objects,
             stashes_walked,
             by_base,
             by_commit,
@@ -114,6 +119,11 @@ impl<'repo> Stream<'repo> {
             reach,
             decoration,
         }
+    }
+
+    /// The repository's objects as the walk reads them.
+    pub(super) fn objects(&self) -> &Grafted<'repo> {
+        &self.objects
     }
 
     /// Commits pulled off the walk so far.

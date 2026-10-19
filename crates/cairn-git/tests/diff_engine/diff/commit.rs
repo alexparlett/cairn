@@ -855,6 +855,77 @@ fn an_amend_git_logs_and_no_remote_has_runs_at_once() {
     assert_eq!(shown_by_show_lost_commits(&repo, &replaced), Some(true));
 }
 
+/// An amend of a commit git reads with other parents is made as git makes it, and said to be
+/// made: `git commit --amend` writes the parents git reads for `HEAD` — none at a shallow
+/// boundary, the graft's under a graft file, the replacement's under `git replace --graft` — so
+/// the amended commit is a root, or on the graft's parent. Caught by: the check after git is
+/// reaped comparing the new commit's parents with the replaced commit's as stored, which calls
+/// a made amend not made.
+#[test]
+fn an_amend_of_a_commit_git_reads_with_other_parents_is_made_as_git_makes_it() {
+    type Substitute = fn(&Repo, &str, &str);
+    let substitutions: [(&str, Substitute, &str); 3] = [
+        (
+            "shallow boundary",
+            |repo, head, _| repo.write(".git/shallow", format!("{head}\n").as_bytes()),
+            "",
+        ),
+        (
+            "graft file",
+            |repo, head, root| {
+                repo.write(".git/info/grafts", format!("{head} {root}\n").as_bytes());
+            },
+            "root",
+        ),
+        (
+            "git replace --graft",
+            |repo, head, root| {
+                repo.git(&["replace", "--graft", head, root]);
+            },
+            "root",
+        ),
+    ];
+    for (name, substitute, parent) in substitutions {
+        let repo = identified(&format!(
+            "amend-substituted-{}",
+            name.replace([' ', '-'], "")
+        ));
+        repo.write("a.txt", b"a\n");
+        let root = repo.commit("root").to_string();
+        repo.write("a.txt", b"b\n");
+        repo.commit("middle");
+        repo.write("a.txt", b"c\n");
+        let head = repo.commit("head").to_string();
+        substitute(&repo, &head, &root);
+        repo.write("a.txt", b"d\n");
+        repo.git(&["add", "a.txt"]);
+        match amend_at_press(&repo, "head, amended", Hooks::Run) {
+            Ok(AmendAnswer::Amended { replaced, .. }) => {
+                assert_eq!(replaced.to_string(), head, "{name}");
+            }
+            Ok(AmendAnswer::NeedsConfirming(consequence)) => {
+                panic!("{name}: a recoverable amend asked to be confirmed: {consequence:?}")
+            }
+            Err(error) => panic!("{name}: the amend git made was not said to be made: {error}"),
+        }
+        let written = repo.git(&["cat-file", "-p", "HEAD"]);
+        let parents: Vec<&str> = written
+            .lines()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .collect();
+        let expected: Vec<&str> = match parent {
+            "" => Vec::new(),
+            _ => vec![root.as_str()],
+        };
+        assert_eq!(parents, expected, "{name}: the parents git wrote");
+        assert_eq!(
+            repo.git(&["log", "-1", "--format=%s", "HEAD"]),
+            "head, amended\n",
+            "{name}"
+        );
+    }
+}
+
 /// The same press on a commit a remote has, and on a repository whose `core.logAllRefUpdates` is
 /// false with no log yet — and one whose include sets it only for a linked worktree — runs no git:
 /// `HEAD`, the index and the git directory's refs as they were, the `Consequence` answered for the

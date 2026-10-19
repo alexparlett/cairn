@@ -211,10 +211,8 @@ impl SharedRepository {
                 now: fresh.git_dir,
             });
         }
-        let mut inner = fresh.inner.to_thread_local();
-        inner.object_cache_size_if_unset(Repository::OBJECT_CACHE_BYTES);
         Ok(Repository {
-            inner,
+            inner: worker_handle(&fresh.inner),
             workdir: fresh.workdir,
             processes: Arc::clone(&self.processes),
         })
@@ -228,10 +226,8 @@ impl SharedRepository {
 
     /// Call once per worker thread and keep it: each call rebuilds the object cache and pack snapshot.
     pub fn to_worker(&self) -> Repository {
-        let mut inner = self.inner.to_thread_local();
-        inner.object_cache_size_if_unset(Repository::OBJECT_CACHE_BYTES);
         Repository {
-            inner,
+            inner: worker_handle(&self.inner),
             workdir: self.workdir.clone(),
             processes: Arc::clone(&self.processes),
         }
@@ -282,6 +278,18 @@ impl SharedRepository {
     pub fn workdir(&self) -> Option<&Path> {
         self.workdir.as_deref()
     }
+}
+
+/// A thread's handle on `shared`: its object cache sized, and reading every object as it is
+/// stored. gitoxide 0.87.1 reads `core.useReplaceRefs` the wrong way round — replacing nothing
+/// when it is unset or true, and replacing by its own rules when it is false — so its
+/// replacement is turned off on every handle, and a read git makes through a replace ref is
+/// made through `history::walk::Grafted`, which applies git's (`crate::replacements`).
+fn worker_handle(shared: &gix::ThreadSafeRepository) -> gix::Repository {
+    let mut inner = shared.to_thread_local();
+    inner.object_cache_size_if_unset(Repository::OBJECT_CACHE_BYTES);
+    inner.objects.ignore_replacements = true;
+    inner
 }
 
 pub struct Repository {

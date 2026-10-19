@@ -51,6 +51,7 @@ fn refs(born: bool) -> Update {
             },
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         }),
         reopen: false,
     }
@@ -556,6 +557,7 @@ fn a_detached_head_commits_under_one_line() {
                 head: HeadState::Detached(oid(0xab)),
                 stashes: Vec::new(),
                 unreadable: 0,
+                substitutions: cairn_model::Substitutions::default(),
             }),
             reopen: false,
         },
@@ -1391,6 +1393,7 @@ fn the_detached_line_wins_over_amends_unread_one() {
                 head: HeadState::Detached(oid(0xab)),
                 stashes: Vec::new(),
                 unreadable: 0,
+                substitutions: cairn_model::Substitutions::default(),
             }),
             reopen: false,
         },

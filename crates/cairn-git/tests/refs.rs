@@ -950,6 +950,190 @@ fn a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
     assert_eq!(replaced, read());
 }
 
+/// What git substitutes as it walks is part of the snapshot a refresh compares, and nothing
+/// else about it is: a replace ref added, a replace ref moved, `core.useReplaceRefs` turned off
+/// (and on again), the graft file written and the shallow file written each make the next read
+/// walk as another history, though no ref moved — and a read with nothing changed walks as the
+/// one before; a replace ref the repository cannot resolve is kept as unreadable; and a replace
+/// ref is never listed among the refs, which stay the ones `git for-each-ref` lists under
+/// `refs/heads/`, `refs/remotes/` and `refs/tags/`. Each read opens the repository afresh, as a
+/// handle reopened for a moved configuration reads it. Caught by: a comparison of the refs
+/// alone (each change walks as the same history), the replace refs read whatever
+/// `core.useReplaceRefs` says, or a replace ref listed as a ref.
+#[test]
+fn the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_as_another_history()
+{
+    let fixture = fixtures::unborn();
+    pin_configuration_read(&fixture);
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    let first = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    commit(&fixture, &mut clock, "second");
+    commit(&fixture, &mut clock, "third");
+    let third = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    fixture.git(&["checkout", "-q", "-b", "side", &first]);
+    commit(&fixture, &mut clock, "side");
+    let side = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    fixture.git(&["checkout", "-q", "main"]);
+    let read = || snapshot(fixture.path());
+    let listed = |snapshot: &RefsSnapshot| -> Vec<String> {
+        snapshot
+            .refs
+            .iter()
+            .map(|listed| listed.name.as_str().to_owned())
+            .collect()
+    };
+
+    let plain = read();
+    assert!(plain.substitutions.is_empty(), "{:?}", plain.substitutions);
+    assert!(
+        read().walks_as(&plain),
+        "a read with nothing changed reopened"
+    );
+
+    fixture.git(&["replace", "--graft", &third, &side]);
+    let replaced = read();
+    assert!(
+        !replaced.walks_as(&plain),
+        "a replace ref added was not seen"
+    );
+    assert_eq!(
+        replaced.substitutions.replacements().len(),
+        1,
+        "{:?}",
+        replaced.substitutions
+    );
+    assert_eq!(
+        listed(&replaced),
+        listed(&plain),
+        "a replace ref was listed"
+    );
+    assert_eq!(
+        listed(&replaced),
+        git_refs(fixture.path())
+            .iter()
+            .map(|r| r.name.as_str().to_owned())
+            .collect::<Vec<_>>()
+    );
+    assert!(read().walks_as(&replaced));
+
+    fixture.git(&["replace", "-f", "--graft", &third, &first]);
+    let moved = read();
+    assert!(
+        !moved.walks_as(&replaced),
+        "a replace ref moved was not seen"
+    );
+
+    fixture.git(&["config", "core.useReplaceRefs", "false"]);
+    let ignored = read();
+    assert!(
+        !ignored.walks_as(&moved),
+        "core.useReplaceRefs turned off was not seen"
+    );
+    assert!(
+        ignored.walks_as(&plain),
+        "with replace refs off, git walks the stored history"
+    );
+    fixture.git(&["config", "core.useReplaceRefs", "true"]);
+    assert!(
+        read().walks_as(&moved),
+        "core.useReplaceRefs turned on again"
+    );
+    fixture.git(&["replace", "-d", &third]);
+    assert!(read().walks_as(&plain), "the replace ref deleted");
+
+    write(&fixture, ".git/info/grafts", &format!("{third} {side}\n"));
+    let grafted = read();
+    assert!(
+        !grafted.walks_as(&plain),
+        "the graft file written was not seen"
+    );
+    std::fs::remove_file(fixture.path().join(".git/info/grafts")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(read().walks_as(&plain), "the graft file removed");
+
+    write(&fixture, ".git/shallow", &format!("{third}\n"));
+    let shallow = read();
+    assert!(
+        !shallow.walks_as(&plain),
+        "the shallow file written was not seen"
+    );
+    assert!(
+        !shallow.walks_as(&grafted),
+        "a shallow boundary walks as no graft does"
+    );
+    std::fs::remove_file(fixture.path().join(".git/shallow")).unwrap_or_else(|e| panic!("{e}"));
+
+    write(
+        &fixture,
+        &format!(".git/refs/replace/{third}"),
+        "ref: refs/heads/nothing\n",
+    );
+    let unresolved = read();
+    assert!(
+        unresolved.substitutions.unreadable_reason().is_some(),
+        "a replace ref naming nothing: {:?}",
+        unresolved.substitutions
+    );
+    assert!(!unresolved.walks_as(&plain));
+    assert_eq!(
+        listed(&unresolved),
+        listed(&plain),
+        "the refs are still listed"
+    );
+}
+
+/// With `core.useReplaceRefs` false, a tag object a replace ref replaces peels to the commit the
+/// stored tag names, as `git for-each-ref` peels it — gitoxide's own replacement, which reads that
+/// setting the wrong way round and would replace here, is off on every handle. Caught by: a handle
+/// left to apply gitoxide's replacements.
+#[test]
+fn with_replace_refs_off_a_replaced_tag_object_peels_as_stored() {
+    let fixture = fixtures::unborn();
+    pin_configuration_read(&fixture);
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    let first = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    commit(&fixture, &mut clock, "second");
+    fixture.git(&["tag", "-a", "stored", "-m", "stored", &first]);
+    fixture.git(&["tag", "-a", "other", "-m", "other", "HEAD"]);
+    let stored = ask(fixture.path(), &["rev-parse", "refs/tags/stored"])
+        .trim()
+        .to_owned();
+    let other = ask(fixture.path(), &["rev-parse", "refs/tags/other"])
+        .trim()
+        .to_owned();
+    fixture.git(&["replace", &stored, &other]);
+    fixture.git(&["config", "core.useReplaceRefs", "false"]);
+    let peeled = ask(
+        fixture.path(),
+        &[
+            "for-each-ref",
+            "--format=%(*objectname)",
+            "refs/tags/stored",
+        ],
+    );
+    assert_eq!(peeled.trim(), first, "git peels the stored tag");
+    let tag = snapshot(fixture.path())
+        .refs
+        .into_iter()
+        .find(|listed| listed.name.as_str() == "refs/tags/stored");
+    assert_eq!(
+        tag.map(|tag| tag.target),
+        Some(RefTarget::Tag {
+            object: oid(&stored),
+            commit: Some(oid(&first)),
+        })
+    );
+}
+
 /// A chain of `hops` symbolic refs, `refs/heads/{prefix}-1` → ... → `refs/heads/main`.
 fn symbolic_chain(fixture: &Fixture, prefix: &str, hops: usize) {
     for hop in 1..=hops {
@@ -1757,10 +1941,17 @@ fn measures_the_refs_snapshot_and_ahead_behind() {
         let counts = repo
             .ahead_behind(&read.snapshot, &CancelSignal::new())
             .unwrap();
+        // What the snapshot's read of the substitutions alone costs, inside the refs median.
+        let mut substitutions = Vec::new();
+        for _ in 0..7 {
+            let started = Instant::now();
+            std::hint::black_box(repo.substitutions());
+            substitutions.push(started.elapsed());
+        }
         eprintln!(
             "{label}: {} refs, {} stashes, {} unreadable, {} counted branches; \
              refs median {:?}; refs + ahead/behind median {:?}; cost {:?}; \
-             ahead/behind read {} commits",
+             ahead/behind read {} commits; substitutions median {:?}",
             read.snapshot.refs.len(),
             read.snapshot.stashes.len(),
             read.snapshot.unreadable,
@@ -1769,6 +1960,7 @@ fn measures_the_refs_snapshot_and_ahead_behind() {
             median(with_counts),
             read.cost,
             counts.commits_read,
+            median(substitutions),
         );
     }
 
@@ -1794,6 +1986,7 @@ fn measures_the_refs_snapshot_and_ahead_behind() {
             head: HeadState::Detached(tip),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         };
         let mut runs = Vec::new();
         let mut answer = None;

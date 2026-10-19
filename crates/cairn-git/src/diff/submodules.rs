@@ -42,6 +42,8 @@ use gix::bstr::{BString, ByteSlice};
 
 use super::git_config::{invalid, last_value, parse_bool};
 use crate::Error;
+use crate::history::walk::Grafted;
+use gix::objs::Find as _;
 
 /// What the user's configuration hides of a list of changed paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,20 +329,27 @@ fn gitmodules_bytes(repo: &gix::Repository) -> Source {
             .entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
             .map(|entry| entry.id)
     });
+    // The index's blob, or `HEAD`'s tree and its blob, each read as git reads it: through a
+    // replace ref (`Grafted`).
+    let Ok(objects) = Grafted::read(repo) else {
+        return Source::Unreadable;
+    };
     let id = match staged {
         Some(id) => Some(id),
-        None => match repo.head_tree() {
-            Ok(tree) => tree
-                .find_entry(".gitmodules")
-                .map(|entry| entry.object_id()),
+        None => match repo.head_id() {
+            Ok(head) => match objects.entry_in_commit(&head, b".gitmodules") {
+                Ok(entry) => entry.map(|entry| entry.oid),
+                Err(_) => None,
+            },
             Err(_) => None,
         },
     };
+    let mut buffer = Vec::new();
     match id {
         None => Source::None,
-        Some(id) => match repo.find_object(id) {
-            Ok(object) if object.kind == gix::object::Kind::Blob => {
-                Source::Bytes(object.detach().data)
+        Some(id) => match objects.try_find(&id, &mut buffer) {
+            Ok(Some(object)) if object.kind == gix::object::Kind::Blob => {
+                Source::Bytes(object.data.to_vec())
             }
             Ok(_) | Err(_) => Source::Unreadable,
         },

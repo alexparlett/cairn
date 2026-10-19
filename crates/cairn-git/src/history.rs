@@ -149,11 +149,17 @@ fn open_stream<'repo>(
         stashes: &stashes,
         reflogs,
     };
-    let Some(walk) = walk::open_from(repo, walk_tips, order, cancel, report, every)? else {
+    // One read of what git substitutes, for the walk and for each row's commit read after it,
+    // so a row's subject and author are the replacement's wherever its place is.
+    let substitutions = walk::Substitutions::read(repo)?;
+    let objects = walk::Grafted::new(&repo.objects, substitutions.clone());
+    let Some(walk) = walk::open_from(repo, substitutions, walk_tips, order, cancel, report, every)?
+    else {
         return Ok(None);
     };
     Ok(Some(Stream::new(
         walk,
+        objects,
         Arc::clone(decoration),
         stashes_walked,
         reach,
@@ -378,7 +384,7 @@ fn read_page(
             Next::Cancelled => return Err(Error::Cancelled { walked }),
         };
         if walked >= skip && walked < target {
-            let laid = Laid::read(repo.inner(), Pending::of(&entry))?;
+            let laid = Laid::read(stream.objects(), Pending::of(&entry))?;
             if matches!(laid, Laid::Commit { .. }) {
                 decoded += 1;
             }
@@ -455,12 +461,12 @@ impl Pending {
 }
 
 impl Laid {
-    /// A commit's row reads its commit; a stash's reads nothing.
-    fn read(repo: &gix::Repository, pending: Pending) -> Result<Self, Error> {
+    /// A commit's row reads its commit, as git reads it (`objects`); a stash's reads nothing.
+    fn read(objects: &walk::Grafted<'_>, pending: Pending) -> Result<Self, Error> {
         Ok(match pending {
             Pending::Commit { id, parents, lost } => Self::Commit {
                 id,
-                commit: summary_of_commit(repo, &id, parents)?,
+                commit: summary_of_commit(objects, &id, parents)?,
                 lost,
             },
             Pending::Stash(at) => Self::Stash(at),
@@ -654,26 +660,23 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
 }
 
 /// The one place a walk step reads a commit object, by id: the walk hands over ids only,
-/// and `parents` counts the parents it read for it (`parents_of`).
-fn summary_of_commit(repo: &gix::Repository, id: &Oid, parents: usize) -> Result<Commit, Error> {
-    let commit = repo
-        .find_commit(object_id(id)?)
-        .map_err(|source| Error::ReadCommit {
-            id: id.to_string(),
-            source: Box::new(source),
-        })?;
-    summary_from(&commit, id, parents)
-}
-
-fn summary_from(commit: &gix::Commit<'_>, id: &Oid, parents: usize) -> Result<Commit, Error> {
+/// and `parents` counts the parents it read for it (`parents_of`). Read through `objects`, so
+/// a replaced commit's row is its replacement's subject, author and date, as `git log` shows
+/// it (`crate::commit::details_of`).
+fn summary_of_commit(
+    objects: &walk::Grafted<'_>,
+    id: &Oid,
+    parents: usize,
+) -> Result<Commit, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
+    let mut buffer = Vec::new();
     // Decoded once: the encoding header, the author and the message are all read from it.
-    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
+    let (decoded, bytes) = crate::commit::read_commit(objects, id, &mut buffer)?;
     // The characters git shows, as the Commit tab reads them (`crate::commit_encoding`).
-    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let encoding = CommitEncoding::of_decoded(&decoded, bytes);
     let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
     Ok(Commit {

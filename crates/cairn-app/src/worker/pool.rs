@@ -2092,6 +2092,7 @@ mod tests {
             head: HeadState::Unborn(RefName::new("refs/heads/main")),
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         });
         let counts = vec![(
             RefName::new("refs/heads/main"),

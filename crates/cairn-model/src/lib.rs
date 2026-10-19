@@ -40,6 +40,7 @@ mod scrub;
 mod secret;
 mod sidebar_rows;
 mod status;
+mod substitutions;
 mod text_filter;
 
 pub use action_patch::{PatchAction, action_patch};
@@ -93,6 +94,7 @@ pub use status::{
     ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
     UnreadableIndex, UnstagedChange, WorkingTreeStatus,
 };
+pub use substitutions::Substitutions;
 
 /// A commit as the history list draws it, read out of a [`History`]: no parents beyond
 /// their count and no author address, which the list never draws — the details query

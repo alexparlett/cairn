@@ -293,6 +293,7 @@ pub(super) fn many_refs(count: usize) -> Arc<RefsSnapshot> {
         head: HeadState::Detached(id),
         stashes: Vec::new(),
         unreadable: 0,
+        substitutions: cairn_model::Substitutions::default(),
     })
 }
 

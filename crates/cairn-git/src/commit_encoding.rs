@@ -237,9 +237,9 @@ fn is_c1(c: char) -> bool {
 }
 
 impl CommitEncoding {
-    /// How git reads `commit`, already `decoded`.
-    pub(crate) fn of_commit(commit: &gix::Commit<'_>, decoded: &gix::objs::CommitRef<'_>) -> Self {
-        Self::of(decoded.encoding.map(|label| &**label), &commit.data)
+    /// How git reads the commit object `data`, already `decoded`.
+    pub(crate) fn of_decoded(decoded: &gix::objs::CommitRef<'_>, data: &[u8]) -> Self {
+        Self::of(decoded.encoding.map(|label| &**label), data)
     }
 
     /// How git reads the commit object `data`, whose `encoding` header is `label`.

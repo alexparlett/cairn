@@ -459,6 +459,7 @@ mod tests {
                 })
                 .collect(),
             unreadable: 0,
+            substitutions: crate::Substitutions::default(),
         }
     }
 

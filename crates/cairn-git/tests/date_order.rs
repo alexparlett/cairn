@@ -912,7 +912,8 @@ fn the_commit_graph_is_used_only_where_git_uses_it() {
 /// order list the commits git lists, each with the parents git shows; Show Lost Commits, which
 /// walks in date order, is `git log --date-order`'s order over the same reflog ids, each read
 /// as git reads it; a branch's ahead and behind are `git rev-list --left-right --count`'s; and a commit's
-/// details carry `git log --format=%P`'s parents under a graft and a shallow boundary.
+/// details carry `git log --format=%P`'s parents under every substitution, a replace ref's
+/// among them.
 /// Caught by: a route reading the objects as stored, or the graph where git reads none.
 #[test]
 fn every_route_sees_the_substitutions_git_sees() {
@@ -921,9 +922,6 @@ fn every_route_sees_the_substitutions_git_sees() {
         .into_iter()
         .flat_map(|graph| substitutions().map(|substitution| (graph, substitution)))
     {
-        // The Commit tab reads through gitoxide's own handle, which applies no replace ref;
-        // the replace-ref cases are held to the walks and the counts alone.
-        let details_too = !name.starts_with("replace ref");
         let name = format!("{name}, commit-graph {graph}");
         let (fixture, commits) = substituted(&name.replace([' ', ','], "-"), graph);
         substitute(&fixture, &commits);
@@ -1019,23 +1017,21 @@ fn every_route_sees_the_substitutions_git_sees() {
                 "{name}, ahead and behind: git {theirs:?}, cairn {ours:?}"
             ));
         }
-        if details_too {
-            for commit in &commits {
-                let details = ok(
-                    repo.commit_details(&ok(Oid::parse(commit), "an id")),
-                    "details",
-                );
-                let ours: Vec<String> = details.parents.iter().map(Oid::to_string).collect();
-                let theirs: Vec<String> = fixture
-                    .git(&["log", "-1", "--format=%P", commit])
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect();
-                if ours != theirs {
-                    found.push(format!(
-                        "{name}, {commit}'s parents: git {theirs:?}, cairn {ours:?}"
-                    ));
-                }
+        for commit in &commits {
+            let details = ok(
+                repo.commit_details(&ok(Oid::parse(commit), "an id")),
+                "details",
+            );
+            let ours: Vec<String> = details.parents.iter().map(Oid::to_string).collect();
+            let theirs: Vec<String> = fixture
+                .git(&["log", "-1", "--format=%P", commit])
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            if ours != theirs {
+                found.push(format!(
+                    "{name}, {commit}'s parents: git {theirs:?}, cairn {ours:?}"
+                ));
             }
         }
     }

@@ -174,11 +174,23 @@ impl<'repo> DateOrder<'repo> {
         report: &mut dyn FnMut(usize),
         every: Duration,
     ) -> Result<Option<Self>, Error> {
+        let substitutions = walk::Substitutions::read(repo)?;
+        Self::open_substituted(repo, substitutions, tips, cancel, report, every)
+    }
+
+    /// [`DateOrder::open`] under `substitutions`, read by the caller for the walk.
+    pub(crate) fn open_substituted(
+        repo: &'repo gix::Repository,
+        substitutions: walk::Substitutions,
+        tips: Tips<'_>,
+        cancel: &impl Cancel,
+        report: &mut dyn FnMut(usize),
+        every: Duration,
+    ) -> Result<Option<Self>, Error> {
         let mut progress = Progress {
             pace: Pace::starting(Instant::now(), every),
             report,
         };
-        let substitutions = walk::Substitutions::read(repo)?;
         let graph = walk::commit_graph(repo, &substitutions)?;
         let mut walk = Self {
             // Each commit is read once and kept, so an object cache would only be filled.

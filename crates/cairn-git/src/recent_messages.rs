@@ -35,6 +35,8 @@ impl Repository {
         else {
             return Err(cancelled(0));
         };
+        // Each message as `git log` prints it: a replaced commit's is its replacement's.
+        let objects = walk::Grafted::read(self.inner())?;
         let mut messages = Vec::with_capacity(RECENT_MESSAGES);
         while messages.len() < RECENT_MESSAGES {
             if cancel.is_cancelled() {
@@ -48,7 +50,7 @@ impl Repository {
                 walk::Step::Cancelled => return Err(cancelled(messages.len())),
             };
             let id = crate::object_id::model_id(&commit.id)?;
-            messages.push(self.commit_details(&id)?.message);
+            messages.push(crate::commit::details_of(&objects, &id)?.message);
         }
         Ok(messages)
     }

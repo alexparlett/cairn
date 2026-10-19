@@ -19,6 +19,7 @@ use std::collections::HashMap;
 const DEPTH: usize = 5;
 
 /// The repository's replace refs as they were read once, for one query.
+#[derive(Clone, Default)]
 pub(crate) struct Replacements {
     /// Each replaced object and the object its ref names.
     by: HashMap<gix::ObjectId, gix::ObjectId>,
@@ -92,6 +93,11 @@ impl Replacements {
             }
         }
         Ok(Self { by })
+    }
+
+    /// Each replaced object and the object its ref names, in no order.
+    pub(crate) fn pairs(&self) -> impl Iterator<Item = (&gix::ObjectId, &gix::ObjectId)> {
+        self.by.iter()
     }
 
     /// Whether git replaces no object: one of the conditions under which git reads the

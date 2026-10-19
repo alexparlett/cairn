@@ -27,6 +27,7 @@ use std::rc::Rc;
 use gix::objs::FindExt as _;
 
 use crate::grafts::Grafts;
+use crate::object_id::model_id;
 use crate::replacements::Replacements;
 use crate::{Cancel, Error};
 
@@ -105,6 +106,7 @@ pub(crate) fn open<'repo>(
     };
     open_from(
         repo,
+        Substitutions::read(repo)?,
         tips,
         order,
         cancel,
@@ -120,6 +122,7 @@ pub(crate) fn open<'repo>(
 /// reflogs' commits alone, given no stash, and report nothing.
 pub(crate) fn open_from<'repo>(
     repo: &'repo gix::Repository,
+    substitutions: Substitutions,
     tips: date_order::Tips<'_>,
     order: HistoryOrder,
     cancel: &impl Cancel,
@@ -128,11 +131,12 @@ pub(crate) fn open_from<'repo>(
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
     let Some(sorting) = order.sorting() else {
-        return Ok(DateOrder::open(repo, tips, cancel, report, every)?
-            .map(|walk| CommitWalk::DateOrder(Box::new(walk))));
+        return Ok(
+            DateOrder::open_substituted(repo, substitutions, tips, cancel, report, every)?
+                .map(|walk| CommitWalk::DateOrder(Box::new(walk))),
+        );
     };
     let tips: Vec<gix::hash::ObjectId> = tips.refs.iter().chain(tips.reflogs).copied().collect();
-    let substitutions = Substitutions::read(repo)?;
     let graph = commit_graph(repo, &substitutions)?;
     let objects = Grafted::new(&repo.objects, substitutions);
     let mut dates = HashMap::new();
@@ -401,10 +405,59 @@ impl<'repo> Grafted<'repo> {
         grafted.objects.unset_object_cache();
         grafted
     }
+
+    /// The repository's objects as git reads them now: its substitutions read afresh, for one
+    /// query. Every read Cairn shows of an object git would read through a replace ref or a
+    /// graft goes through one of these — a commit's details, a row's subject, a stash's base,
+    /// a file's blob — since the repository's own handle reads what is stored
+    /// (`Repository::to_worker`).
+    pub(crate) fn read(repo: &'repo gix::Repository) -> Result<Self, Error> {
+        Ok(Self::new(&repo.objects, Substitutions::read(repo)?))
+    }
+
+    /// The hash the repository names its objects by.
+    pub(crate) fn object_hash(&self) -> gix::hash::Kind {
+        self.objects.store_ref().object_hash()
+    }
+
+    /// The entry at `path` — its components split at `/` — in `commit`'s tree, as git reads
+    /// it: the commit's replacement's tree, and each tree on the way its replacement's. `None`
+    /// where the tree has nothing at `path`; an error where `commit` is not a commit.
+    pub(crate) fn entry_in_commit(
+        &self,
+        commit: &gix::oid,
+        path: &[u8],
+    ) -> Result<Option<gix::objs::tree::Entry>, gix::objs::find::Error> {
+        use gix::objs::Find as _;
+        let mut buffer = Vec::new();
+        let tree = match self.try_find(commit, &mut buffer)? {
+            Some(found) => match found.try_into_commit_iter() {
+                Some(mut found) => found.tree_id().map_err(Box::new)?,
+                None => return Err(Box::new(NotACommit(commit.to_owned()))),
+            },
+            None => return Err(Box::new(NotACommit(commit.to_owned()))),
+        };
+        let mut root = Vec::new();
+        let Some(found) = self.try_find(&tree, &mut root)? else {
+            return Ok(None);
+        };
+        let hash = found.object_hash;
+        gix::objs::TreeRefIter::from_bytes(found.data, hash).lookup_entry(
+            self,
+            &mut buffer,
+            path.split(|byte| *byte == b'/'),
+        )
+    }
 }
+
+/// What looking in a commit's tree fails with where the id names no commit.
+#[derive(Debug, thiserror::Error)]
+#[error("{0} is not a commit in this repository")]
+struct NotACommit(gix::ObjectId);
 
 /// What git reads in place of what is stored, read once for one walk: the grafts and the
 /// replace refs.
+#[derive(Clone, Default)]
 pub(crate) struct Substitutions {
     pub(crate) grafts: Grafts,
     pub(crate) replacements: Replacements,
@@ -417,6 +470,56 @@ impl Substitutions {
             grafts: Grafts::read(repo).map_err(|e| walk_error(Box::new(e)))?,
             replacements: Replacements::read(repo).map_err(walk_error)?,
         })
+    }
+
+    /// These substitutions as a refs snapshot keeps them, for a refresh to compare.
+    pub(crate) fn model(&self) -> Result<cairn_model::Substitutions, Error> {
+        let replacements = self
+            .replacements
+            .pairs()
+            .map(|(original, replacement)| Ok((model_id(original)?, model_id(replacement)?)))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let grafts = self
+            .grafts
+            .grafted()
+            .map(|(commit, parents)| {
+                Ok((
+                    model_id(commit)?,
+                    parents
+                        .iter()
+                        .map(|parent| model_id(parent))
+                        .collect::<Result<Vec<_>, Error>>()?,
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(cairn_model::Substitutions::new(replacements, grafts))
+    }
+}
+
+impl gix::objs::FindHeader for Grafted<'_> {
+    /// The header git reads for `id`: its replacement's, and for a grafted commit the size of
+    /// the object as it reads with the graft's parents.
+    fn try_header(
+        &self,
+        id: &gix::oid,
+    ) -> Result<Option<gix::objs::Header>, gix::objs::find::Error> {
+        if self.grafts.of(id).is_some() {
+            let mut buffer = Vec::new();
+            return Ok(
+                gix::objs::Find::try_find(self, id, &mut buffer)?.map(|data| gix::objs::Header {
+                    kind: data.kind,
+                    size: data.data.len() as u64,
+                }),
+            );
+        }
+        let stored = self.replacements.of(id).map_err(Box::new)?;
+        match self.objects.try_header(&stored)? {
+            None if stored != id => Err(Box::new(ReplacementMissing {
+                original: id.to_owned(),
+                replacement: stored,
+            })),
+            found => Ok(found),
+        }
     }
 }
 

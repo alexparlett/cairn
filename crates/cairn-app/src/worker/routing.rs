@@ -445,6 +445,7 @@ mod tests {
                     )),
                     stashes: Vec::new(),
                     unreadable: 0,
+                    substitutions: cairn_model::Substitutions::default(),
                 }),
                 text: "main".to_owned(),
                 disclosure: Arc::new(cairn_model::Disclosure::default()),

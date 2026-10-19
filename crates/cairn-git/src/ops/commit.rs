@@ -74,7 +74,8 @@ use cairn_model::{AskpassToken, Confirmed, Consequence, Oid, ScrubbedLines};
 use super::amend::{amend_after, amend_consequence};
 use super::local_write::{locks_around, locks_now};
 use super::{GitBinary, Invalidated, Performed, WriteAuthority};
-use crate::object_id::{model_id, object_id};
+use crate::history::walk::Grafted;
+use crate::object_id::model_id;
 use crate::process::KillHandle;
 use crate::{Cancel, CancelSignal, CommitRefusal, Error, Repository};
 
@@ -363,20 +364,15 @@ fn head_commit(repo: &Repository) -> Result<Option<Oid>, Error> {
     }
 }
 
-/// `commit`'s parents as the object names them — not as a shallow clone's boundary hides them,
-/// since an amend of the boundary commit writes the parents the object holds.
+/// `commit`'s parents as git reads them, through a replace ref and a graft — what `git commit
+/// --amend` writes as the new commit's parents (`current_head->parents`, parsed by
+/// `parse_commit_buffer` in git's `commit.c`, at v2.30.9 and v2.56.0 alike), so an amend of a
+/// shallow clone's boundary commit writes a root, and an amend of a grafted commit the graft's
+/// parents. A commit git has just written is neither replaced nor grafted, so its parents read
+/// the same through either.
 fn parents_of(repo: &Repository, commit: &Oid) -> Result<Vec<Oid>, Error> {
-    let found = repo
-        .inner()
-        .find_commit(object_id(commit)?)
-        .map_err(|source| Error::ReadCommit {
-            id: commit.to_string(),
-            source: Box::new(source),
-        })?;
-    found
-        .parent_ids()
-        .map(|parent| model_id(&parent.detach()))
-        .collect()
+    let objects = Grafted::read(repo.inner())?;
+    Ok(crate::commit::details_of(&objects, commit)?.parents)
 }
 
 /// What `HEAD` is once the commit or amend was made (module docs).

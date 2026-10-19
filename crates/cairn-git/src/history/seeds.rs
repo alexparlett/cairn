@@ -19,6 +19,9 @@ use crate::Error;
 use crate::commit_encoding::CommitEncoding;
 use crate::object_id::object_id;
 
+use super::walk::Grafted;
+use gix::objs::FindHeader as _;
+
 /// One ref labelling a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SeedLabel {
@@ -158,13 +161,16 @@ pub(super) fn resolve(
     repo: &gix::Repository,
     seeds: &RefSeeds,
 ) -> Result<(Vec<Oid>, Decoration), Error> {
+    // Read as git reads them, through a replace ref and a graft: a detached `HEAD`'s object
+    // and each stash's commit.
+    let objects = Grafted::read(repo)?;
     let mut tips = seeds.tips.clone();
     let mut head = seeds.head;
     // Every tip labels its commit, so a commit with no label is no tip yet.
     if let Some(id) = seeds.head
         && !seeds.labels.contains_key(&id)
     {
-        if seeds.detached && !is_commit(repo, &id)? {
+        if seeds.detached && !is_commit(&objects, &id)? {
             head = None;
         } else {
             tips.push(id);
@@ -178,7 +184,7 @@ pub(super) fn resolve(
         .stashes
         .iter()
         .filter(|entry| seen.insert(entry.commit))
-        .filter_map(|entry| stash_of(repo, entry).ok())
+        .filter_map(|entry| stash_of(&objects, entry).ok())
         .collect();
     Ok((
         tips,
@@ -190,24 +196,26 @@ pub(super) fn resolve(
     ))
 }
 
-fn is_commit(repo: &gix::Repository, id: &Oid) -> Result<bool, Error> {
-    Ok(repo
-        .find_header(object_id(id)?)
-        .is_ok_and(|header| header.kind() == gix::object::Kind::Commit))
+/// Whether `id` is a commit as git reads it. A replacement git would die on is taken as one, so
+/// the walk reads it and fails as git does rather than leave `HEAD` out.
+fn is_commit(objects: &Grafted<'_>, id: &Oid) -> Result<bool, Error> {
+    Ok(match objects.try_header(&object_id(id)?) {
+        Ok(Some(header)) => header.kind == gix::object::Kind::Commit,
+        Ok(None) => false,
+        Err(_) => true,
+    })
 }
 
 /// The stash `entry` names, its commit read for its author and its dates.
-fn stash_of(repo: &gix::Repository, entry: &StashEntry) -> Result<Stash, Error> {
+fn stash_of(objects: &Grafted<'_>, entry: &StashEntry) -> Result<Stash, Error> {
     let id = entry.commit;
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
-    let found = repo
-        .find_commit(object_id(&id)?)
-        .map_err(|source| read(Box::new(source)))?;
-    let decoded = found.decode().map_err(|e| read(Box::new(e)))?;
-    let encoding = CommitEncoding::of_commit(&found, &decoded);
+    let mut buffer = Vec::new();
+    let (decoded, bytes) = crate::commit::read_commit(objects, &id, &mut buffer)?;
+    let encoding = CommitEncoding::of_decoded(&decoded, bytes);
     let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let author_time = author.time().map_err(|e| read(Box::new(e)))?.seconds;
     let committed = decoded

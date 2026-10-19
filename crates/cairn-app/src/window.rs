@@ -2906,6 +2906,7 @@ pub(crate) mod tests {
             head,
             stashes: Vec::new(),
             unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
         }));
         if let Some(counts) = counts {
             let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
@@ -3119,6 +3120,7 @@ pub(crate) mod tests {
                 head: HeadState::Branch(RefName::new("refs/heads/main")),
                 stashes: Vec::new(),
                 unreadable: 0,
+                substitutions: cairn_model::Substitutions::default(),
             }));
         test.sync_and_update();
         test.sync_and_update();

@@ -2887,8 +2887,9 @@ const COLOUR_TYPES: &[&str] = &["Color", "SkColor"];
 /// - `"colour constant"`: `Color::new` or one of [`COLOUR_CONSTANTS`] after a colour type;
 /// - `"colour type renamed"`: `use .. Color as ..` or `type .. = Color`, past which a
 ///   constant is reached by another name;
-/// - `"colour tuple"`: a tuple of three or four integer literals — `(0x28, 0x28, 0x28)` —
-///   which Freya turns into a colour wherever one is taken;
+/// - `"colour tuple"`: a tuple of three integer literals and an optional alpha, an integer or
+///   a fraction — `(0x28, 0x28, 0x28)`, `(0, 0, 0, 0.3)` — which Freya turns into a colour
+///   wherever one is taken;
 /// - `"colour string"`: a string literal that is a hex colour (`"#1A1A1A"`).
 pub fn style_literals(source: &str) -> Vec<(usize, &'static str)> {
     let code = code_without_test_modules(&code_without_strings(source));
@@ -2995,8 +2996,9 @@ fn numeric_constants(code: &str) -> Vec<(String, usize)> {
 }
 
 /// The opening parentheses of every tuple of three or four integer literals in `code`
-/// (decimal or hex, an integer suffix allowed): a parenthesis that follows no name, closing
-/// bracket or `!`, so a call's arguments (`Gaps::new(0, 8, 0, 8)`) are not one.
+/// (decimal or hex, an integer suffix allowed), the fourth also a float literal — Freya's
+/// `(u8, u8, u8, f32)` colour, its alpha a fraction: a parenthesis that follows no name,
+/// closing bracket or `!`, so a call's arguments (`Gaps::new(0, 8, 0, 8)`) are not one.
 fn colour_tuples(code: &str) -> Vec<usize> {
     let bytes = code.as_bytes();
     let is_integer = |item: &str| {
@@ -3034,7 +3036,15 @@ fn colour_tuples(code: &str) -> Vec<usize> {
             .split(',')
             .filter(|item| !item.trim().is_empty())
             .collect();
-        if matches!(items.len(), 3 | 4) && items.iter().all(|item| is_integer(item)) {
+        let is_fraction = |item: &str| {
+            let item = item.trim().trim_end_matches("f32");
+            item.contains('.') && item.parse::<f32>().is_ok()
+        };
+        let channels = items.iter().take(3).all(|item| is_integer(item));
+        let alpha = items
+            .get(3)
+            .is_none_or(|item| is_integer(item) || is_fraction(item));
+        if matches!(items.len(), 3 | 4) && channels && alpha {
             found.push(open);
         }
     }

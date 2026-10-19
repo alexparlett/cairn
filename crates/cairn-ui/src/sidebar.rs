@@ -27,7 +27,7 @@ use crate::text_field::text_field;
 use crate::title_bar::status_box::counts_text;
 
 /// A row's height in the sidebar's list.
-pub const SIDEBAR_ROW_HEIGHT: f32 = 22.0;
+pub const SIDEBAR_ROW_HEIGHT: f32 = metrics::SIDEBAR_ROW;
 /// How far each folder level indents what it holds.
 pub const SIDEBAR_INDENT: f32 = 14.0;
 /// The filter box's placeholder.

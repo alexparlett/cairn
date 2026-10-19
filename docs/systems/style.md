@@ -1,8 +1,10 @@
 # The window's look
 
 How Cairn's window gets its sizes, tones and icons today: one module, `cairn_ui::style`
-(`crates/cairn-ui/src/style.rs` beside `style/`), which every render file reads and none
-writes past. Intent: `docs/design/ui.md`, "Palette and type". Spec:
+(`crates/cairn-ui/src/style.rs` beside `style/`), from which every render file takes its font
+sizes, tones and icons. Layout sizes — row heights, widths, paddings — are still written in the
+views, and `style::metrics`' row heights, bars and sidebar width are read as the phases that
+lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spec:
 `docs/prd/fork-alignment.md` R1.
 
 ## One module
@@ -68,9 +70,12 @@ from a press on one of its rows; the history also as the window opens.
   matcher `style_literals`, self-test `the_style_literal_matcher_catches_the_shapes_it_claims`):
   no render file outside the module passes a numeric literal to `font_size` or a constant it
   declares from one, declares a `FONT` constant from one, or builds a colour from a literal —
-  a constructor, a named `Color`, a three- or four-integer tuple or a `"#…"` string — beyond
-  `STYLE_EXCEPTIONS`: `diff/palette.rs` and `history/lane_palette.rs`, each row failing once
-  its file no longer needs it.
+  a constructor, a named `Color`, a tuple of three integers and an optional alpha, or a `"#…"`
+  string — beyond `STYLE_EXCEPTIONS`: `diff/palette.rs` and `history/lane_palette.rs`, which
+  excuse a file's tones and never a size, each row failing once its file builds no tone. It
+  does not read layout sizes, and the routes a spelling-reader misses (a size through a local
+  binding or a parameter, a colour from a `u32` or a variable, a literal alpha) are stated in
+  the root `CLAUDE.md`.
 - `every_icon_is_named_through_the_icon_module` (matcher `names_an_icon_set`, self-test
   `the_icon_set_matcher_catches_the_shapes_it_claims`): only `style/icons.rs` names the icon
   set, `freya::icons`, `SvgViewer` or Freya's drawn icons.

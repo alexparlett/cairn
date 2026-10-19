@@ -5857,6 +5857,9 @@ const STYLE_EXCEPTIONS: &[(&str, &str)] = &[
 #[test]
 fn chrome_sizes_and_tones_come_from_the_style_module() {
     let mut tones_seen = false;
+    // Files seen setting a font size: none would mean the size half reads a name nothing
+    // calls any more.
+    let mut sized = 0usize;
     let mut exceptions_seen = BTreeSet::new();
     for dir in RENDER_SOURCE_DIRS {
         let sources = rust_sources(dir);
@@ -5869,6 +5872,9 @@ fn chrome_sizes_and_tones_come_from_the_style_module() {
             scanned += 1;
             let shown = path.to_string_lossy().replace('\\', "/");
             let hits = style_literals(source);
+            if code_without_test_modules(&code_without_strings(source)).contains(".font_size(") {
+                sized += 1;
+            }
             if shown == STYLE_TONES {
                 tones_seen = true;
                 assert!(
@@ -5881,7 +5887,19 @@ fn chrome_sizes_and_tones_come_from_the_style_module() {
                 continue;
             }
             if STYLE_EXCEPTIONS.iter().any(|(file, _)| *file == shown) {
-                if !hits.is_empty() {
+                // An exception excuses the file's tones alone: a size written there still
+                // fails, and only a tone keeps the row needed.
+                let (tones, sizes): (Vec<&(usize, &str)>, Vec<&(usize, &str)>) = hits
+                    .iter()
+                    .partition(|(_, kind)| kind.starts_with("colour"));
+                assert!(
+                    sizes.is_empty(),
+                    "{shown}:{} writes a {} outside the style module: STYLE_EXCEPTIONS excuses \
+                     its tones, never a size. Read it from `cairn_ui::style::metrics`.",
+                    sizes[0].0,
+                    sizes[0].1
+                );
+                if !tones.is_empty() {
                     exceptions_seen.insert(shown.clone());
                 }
                 continue;
@@ -5905,11 +5923,16 @@ fn chrome_sizes_and_tones_come_from_the_style_module() {
         tones_seen,
         "{STYLE_TONES} does not exist, so nothing proves the style matcher reads real code"
     );
+    assert!(
+        sized > 0,
+        "no render file sets a font size with `.font_size(..)`: the toolkit's name for it moved, \
+         so the size half of the style matcher reads nothing — move it to the new name"
+    );
     for (file, _) in STYLE_EXCEPTIONS {
         assert!(
             exceptions_seen.contains(*file),
-            "STYLE_EXCEPTIONS excuses {file}, which writes no size or tone of its own any more \
-             (or is gone): remove the row"
+            "STYLE_EXCEPTIONS excuses {file}, which builds no tone of its own any more (or is \
+             gone): remove the row"
         );
     }
 }
@@ -6019,6 +6042,16 @@ fn the_style_literal_matcher_catches_the_shapes_it_claims() {
             "colour tuple",
         ),
         (
+            "a tuple with a fractional alpha",
+            ".background((0, 0, 0, 0.12))",
+            "colour tuple",
+        ),
+        (
+            "a hex tuple with a typed fractional alpha",
+            ".background((0x28, 0x28, 0x28, 0.5f32))",
+            "colour tuple",
+        ),
+        (
             "a tuple kept for a colour",
             "const GROUND: (u8, u8, u8) = (20u8, 20, 20);",
             "colour tuple",
@@ -6069,6 +6102,8 @@ fn the_style_literal_matcher_catches_the_shapes_it_claims() {
         ("a call's arguments", "Gaps::new(0., 8., 0., 8.)"),
         ("integer arguments", "Gaps::new(0, 8, 0, 8)"),
         ("a pair", "let at = (3, 4);"),
+        ("three fractions", "let at = (0.5, 1.5, 2.5);"),
+        ("a fraction among the channels", "let at = (1, 0.5, 2, 3);"),
         ("five numbers", "let five = (1, 2, 3, 4, 5);"),
         ("a macro's arguments", "assert_eq!(1, 2, 3)"),
         (

@@ -39,7 +39,7 @@ use crate::diff::{side_by_side_rows, unified_rows};
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
 /// on the Mac (a vendor screenshot at 2×), the hunk header the same.
 /// Fork's Windows pitch is not established at a known scale.
-pub const DIFF_ROW_HEIGHT: f32 = 17.0;
+pub const DIFF_ROW_HEIGHT: f32 = crate::style::metrics::DIFF_ROW;
 
 /// [`DIFF_ROW_HEIGHT`] in whole pixels, for scroll arithmetic: a row's offset is computed in
 /// integers, which an `f32` cannot hold exactly past 2^24 pixels — about 987,000 rows.

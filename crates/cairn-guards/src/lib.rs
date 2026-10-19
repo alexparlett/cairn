@@ -2840,6 +2840,265 @@ pub fn embedded_font_violations(files: &[String], roster: &[(&str, &str)]) -> Ve
     violations
 }
 
+/// The constructors that build a colour from its channels or its text: Freya's `Color` and
+/// Skia's alike (`from_rgb`, `from_argb`), Freya's fractional-alpha, hex and HSV forms. Matched
+/// as an identifier wherever it appears, so a colour type renamed on import is still caught.
+pub const COLOUR_CONSTRUCTORS: &[&str] = &[
+    "from_rgb",
+    "from_argb",
+    "from_af32rgb",
+    "from_hex",
+    "from_hsv",
+];
+
+/// The named colours Freya's `Color` carries (`Color::WHITE`), each a tone written in the
+/// toolkit rather than the style module; matched after `Color::` or `SkColor::`.
+pub const COLOUR_CONSTANTS: &[&str] = &[
+    "TRANSPARENT",
+    "BLACK",
+    "DARK_GRAY",
+    "GRAY",
+    "LIGHT_GRAY",
+    "DARK_GREY",
+    "GREY",
+    "LIGHT_GREY",
+    "WHITE",
+    "RED",
+    "GREEN",
+    "BLUE",
+    "YELLOW",
+    "CYAN",
+    "MAGENTA",
+];
+
+/// The colour types whose paths and names the style matcher reads.
+const COLOUR_TYPES: &[&str] = &["Color", "SkColor"];
+
+/// What a size or a tone written outside the style module looks like, each 1-based line of
+/// the production code of `source` (comments, strings and test modules blanked) with the
+/// kind it read:
+///
+/// - `"font size literal"`: `font_size(..)` given an argument holding a numeric literal;
+/// - `"font size constant"`: `font_size(..)` given a constant or static this file declares
+///   from a numeric literal;
+/// - `"font constant"`: a constant or static whose name holds `FONT`, declared from a numeric
+///   literal, which another file could pass to `font_size`;
+/// - `"colour constructor"`: one of [`COLOUR_CONSTRUCTORS`];
+/// - `"colour constant"`: `Color::new` or one of [`COLOUR_CONSTANTS`] after a colour type;
+/// - `"colour type renamed"`: `use .. Color as ..` or `type .. = Color`, past which a
+///   constant is reached by another name;
+/// - `"colour tuple"`: a tuple of three or four integer literals — `(0x28, 0x28, 0x28)` —
+///   which Freya turns into a colour wherever one is taken;
+/// - `"colour string"`: a string literal that is a hex colour (`"#1A1A1A"`).
+pub fn style_literals(source: &str) -> Vec<(usize, &'static str)> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let bytes = code.as_bytes();
+    let mut found = BTreeSet::new();
+    let numeric_constants = numeric_constants(&code);
+
+    for offset in ident_offsets(&code, "font_size") {
+        let open = skip_whitespace(bytes, offset + "font_size".len());
+        if bytes.get(open) != Some(&b'(') {
+            continue;
+        }
+        let argument = &code[open + 1..balanced_end(bytes, open).saturating_sub(1).max(open + 1)];
+        if holds_numeric_literal(argument) {
+            found.insert((line_at(&code, offset), "font size literal"));
+        } else if numeric_constants
+            .iter()
+            .any(|(name, _)| !ident_offsets(argument, name).is_empty())
+        {
+            found.insert((line_at(&code, offset), "font size constant"));
+        }
+    }
+    for (name, line) in &numeric_constants {
+        if name.contains("FONT") {
+            found.insert((*line, "font constant"));
+        }
+    }
+    for constructor in COLOUR_CONSTRUCTORS {
+        for offset in ident_offsets(&code, constructor) {
+            found.insert((line_at(&code, offset), "colour constructor"));
+        }
+    }
+    for colour in COLOUR_TYPES {
+        for constant in COLOUR_CONSTANTS.iter().chain(&["new"]) {
+            for (start, _) in path_offsets(&code, &[colour, constant]) {
+                found.insert((line_at(&code, start), "colour constant"));
+            }
+        }
+        for line in renames_type(source, colour) {
+            if code
+                .lines()
+                .nth(line - 1)
+                .is_some_and(|l| !l.trim().is_empty())
+            {
+                found.insert((line, "colour type renamed"));
+            }
+        }
+    }
+    for open in colour_tuples(&code) {
+        found.insert((line_at(&code, open), "colour tuple"));
+    }
+    for (line, text) in production_string_literals(source) {
+        let digits = text.strip_prefix('#').unwrap_or_default();
+        if matches!(digits.len(), 3 | 4 | 6 | 8) && digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            found.insert((line, "colour string"));
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// Whether `text` holds a numeric literal: a digit that starts a token, not one inside a name
+/// (`x1`) or a tuple field (`pair.0`).
+fn holds_numeric_literal(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.iter().enumerate().any(|(at, byte)| {
+        byte.is_ascii_digit()
+            && (at == 0 || !is_ident_byte(bytes[at - 1]))
+            && !(at >= 2 && bytes[at - 1] == b'.' && is_ident_byte(bytes[at - 2]))
+    })
+}
+
+/// The constants and statics `code` declares from an initialiser holding a numeric literal,
+/// each with the 1-based line of its name.
+fn numeric_constants(code: &str) -> Vec<(String, usize)> {
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    for keyword in ["const", "static"] {
+        for offset in ident_offsets(code, keyword) {
+            let mut at = skip_whitespace(bytes, offset + keyword.len());
+            if code[at..].starts_with("mut")
+                && !bytes.get(at + 3).is_some_and(|b| is_ident_byte(*b))
+            {
+                at = skip_whitespace(bytes, at + 3);
+            }
+            let name: String = code[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let after = skip_whitespace(bytes, at + name.len());
+            // `const fn`, `const {` and `*const T` declare no constant.
+            if name.is_empty() || name == "fn" || bytes.get(after) != Some(&b':') {
+                continue;
+            }
+            let Some(equals) = code[after..].find('=').map(|e| after + e) else {
+                continue;
+            };
+            let end = code[equals..].find(';').map_or(code.len(), |e| equals + e);
+            if holds_numeric_literal(&code[equals + 1..end]) {
+                found.push((name, line_at(code, at)));
+            }
+        }
+    }
+    found
+}
+
+/// The opening parentheses of every tuple of three or four integer literals in `code`
+/// (decimal or hex, an integer suffix allowed): a parenthesis that follows no name, closing
+/// bracket or `!`, so a call's arguments (`Gaps::new(0, 8, 0, 8)`) are not one.
+fn colour_tuples(code: &str) -> Vec<usize> {
+    let bytes = code.as_bytes();
+    let is_integer = |item: &str| {
+        let item = item.trim();
+        let digits = item
+            .strip_suffix("u8")
+            .or_else(|| item.strip_suffix("u32"))
+            .or_else(|| item.strip_suffix("i32"))
+            .unwrap_or(item);
+        let digits = digits.trim_end_matches('_');
+        match digits
+            .strip_prefix("0x")
+            .or_else(|| digits.strip_prefix("0X"))
+        {
+            Some(hex) => !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit() || b == b'_'),
+            None => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit() || b == b'_'),
+        }
+    };
+    let mut found = Vec::new();
+    for (open, byte) in bytes.iter().enumerate() {
+        if *byte != b'(' {
+            continue;
+        }
+        let before = code[..open].trim_end();
+        let called = before
+            .bytes()
+            .last()
+            .is_some_and(|b| is_ident_byte(b) || matches!(b, b')' | b']' | b'>' | b'!'));
+        if called {
+            continue;
+        }
+        let end = balanced_end(bytes, open);
+        let inside = &code[open + 1..end.saturating_sub(1).max(open + 1)];
+        let items: Vec<&str> = inside
+            .split(',')
+            .filter(|item| !item.trim().is_empty())
+            .collect();
+        if matches!(items.len(), 3 | 4) && items.iter().all(|item| is_integer(item)) {
+            found.push(open);
+        }
+    }
+    found
+}
+
+/// The ways a file names an icon set rather than the icon module: Freya's re-export of its
+/// icon crate (`freya::icons`, matched as a path and in a braced `use freya::{..}`), the crate
+/// itself, the Lucide set, the component that draws an SVG, and Freya's own drawn icons.
+pub const ICON_SET_IDENTS: &[&str] = &[
+    "freya_icons",
+    "lucide",
+    "SvgViewer",
+    "ArrowIcon",
+    "TickIcon",
+];
+
+/// The 1-based lines where the production code of `source` (comments, strings and test
+/// modules blanked) names an icon set: one of [`ICON_SET_IDENTS`], or `freya::icons`.
+pub fn names_an_icon_set(source: &str) -> Vec<(usize, &'static str)> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let bytes = code.as_bytes();
+    let mut found = BTreeSet::new();
+    for ident in ICON_SET_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            found.insert((line_at(&code, offset), *ident));
+        }
+    }
+    for (start, _) in path_offsets(&code, &["freya", "icons"]) {
+        found.insert((line_at(&code, start), "freya::icons"));
+    }
+    // `use freya::{icons, ..}`: `icons` inside the braces after `freya::`.
+    for offset in ident_offsets(&code, "freya") {
+        let separator = skip_whitespace(bytes, offset + "freya".len());
+        if !code[separator..].starts_with("::") {
+            continue;
+        }
+        let brace = skip_whitespace(bytes, separator + 2);
+        if bytes.get(brace) != Some(&b'{') {
+            continue;
+        }
+        let end = balanced_end(bytes, brace);
+        let group = &code[brace + 1..end.saturating_sub(1).max(brace + 1)];
+        let mut depth = 0usize;
+        for (at, byte) in group.bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 0 && group[at..].starts_with("icons") {
+                let after = group.as_bytes().get(at + "icons".len());
+                let before = at.checked_sub(1).and_then(|b| group.as_bytes().get(b));
+                if !after.is_some_and(|b| is_ident_byte(*b))
+                    && !before.is_some_and(|b| is_ident_byte(*b) || *b == b':')
+                {
+                    found.insert((line_at(&code, brace + 1 + at), "freya::icons"));
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

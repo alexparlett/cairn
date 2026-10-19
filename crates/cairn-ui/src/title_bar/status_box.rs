@@ -20,13 +20,13 @@ use freya::prelude::*;
 
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::ref_glyphs::RefGlyph;
+use crate::style::{metrics, tones};
 
 /// Said after an unborn branch's name: `git status`'s "No commits yet".
 pub const NO_COMMITS_YET: &str = "no commits yet";
 /// Said for a branch whose upstream is configured but gone: git's `[gone]`.
 pub const UPSTREAM_GONE: &str = "upstream gone";
 
-const FONT_SIZE: f32 = 13.0;
 /// How long an operation runs before the status box shows it.
 pub const PROGRESS_AFTER: Duration = Duration::from_millis(250);
 
@@ -152,10 +152,10 @@ impl KeyExt for StatusBox {
 
 impl ComponentOwned for StatusBox {
     fn render(self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let primary = colours.read().colors().text_primary;
-        let secondary = colours.read().colors().text_secondary;
-        let warning = colours.read().colors().warning;
+        // The gone upstream keeps the theme's warning tone, which Fork Dark's table does not
+        // name.
+        let warning = get_theme_or_default().read().colors().warning;
+        let (primary, secondary) = (tones::TEXT, tones::DETAIL_LABEL);
         let on_branch = match &self.head {
             Some(HeadState::Branch(_) | HeadState::Unborn(_)) => true,
             Some(HeadState::Detached(_)) | None => false,
@@ -169,14 +169,14 @@ impl ComponentOwned for StatusBox {
                         .text(text)
                         .max_lines(1)
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(FONT_SIZE)
+                        .font_size(metrics::BODY)
                         .color(secondary)
                 }),
             Tracking::Gone => Some(
                 label()
                     .text(UPSTREAM_GONE)
                     .max_lines(1)
-                    .font_size(FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .color(warning),
             ),
         };
@@ -188,7 +188,7 @@ impl ComponentOwned for StatusBox {
                 label()
                     .text(name_text(name, self.dirty))
                     .max_lines(1)
-                    .font_size(FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .font_weight(FontWeight::BOLD)
                     .color(primary)
             }))
@@ -197,7 +197,7 @@ impl ComponentOwned for StatusBox {
                 label()
                     .text(head_text(head))
                     .max_lines(1)
-                    .font_size(FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .color(primary)
             }))
             .maybe_child(tracked)
@@ -250,7 +250,7 @@ impl Component for RunningLine {
         if !*shown.read() {
             return rect().into_element();
         }
-        let secondary = get_theme_or_default().read().colors().text_secondary;
+        let secondary = tones::DETAIL_LABEL;
         rect()
             .horizontal()
             .cross_align(Alignment::center())
@@ -260,7 +260,7 @@ impl Component for RunningLine {
                 label()
                     .text(running_text(&self.running))
                     .max_lines(1)
-                    .font_size(FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .color(secondary),
             )
             .into_element()

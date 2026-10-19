@@ -20,6 +20,7 @@ use crate::accelerators::Os;
 use crate::dialogs::answer_button::{AnswerColours, answer};
 use crate::dialogs::button_order::ordered;
 
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
 /// Width of the dialog, wide enough for a URL to stay on one line.
@@ -97,8 +98,7 @@ impl Component for CredentialPrompt {
         let mut typed = use_state(String::new);
         let cancel_id = use_a11y();
         let kind = PromptKind::of(&self.text);
-        let colours = get_theme_or_default();
-        let secondary = colours.read().colors().text_secondary;
+        let secondary = tones::DETAIL_LABEL;
 
         let on_cancel = self.on_cancel.clone();
         let cancel = move |_| on_cancel.call(());
@@ -136,14 +136,14 @@ impl Component for CredentialPrompt {
             label()
                 .text(asking(kind, &self.text))
                 .width(Size::fill())
-                .font_size(14.),
+                .font_size(metrics::BODY),
         );
         if kind == PromptKind::Confirmation {
             content = content.child(
                 label()
                     .text(self.text.trim_end().to_owned())
                     .width(Size::fill())
-                    .font_size(12.)
+                    .font_size(metrics::BODY)
                     .color(secondary),
             );
             // What accepting costs, which the question itself does not say: ssh writes
@@ -153,7 +153,7 @@ impl Component for CredentialPrompt {
                 label()
                     .text(ACCEPTING_IS_PERMANENT.to_owned())
                     .width(Size::fill())
-                    .font_size(12.)
+                    .font_size(metrics::BODY)
                     .color(secondary),
             );
             primary = Button::new()
@@ -167,7 +167,7 @@ impl Component for CredentialPrompt {
                     label()
                         .text(self.text.trim_end().to_owned())
                         .width(Size::fill())
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .color(secondary),
                 )
                 .child(

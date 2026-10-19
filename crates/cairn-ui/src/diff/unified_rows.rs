@@ -10,7 +10,7 @@
 use cairn_model::{ByteRange, LineNumber, ShownDiff, UnifiedRow};
 use freya::prelude::*;
 
-use crate::diff::palette::DIFF_MUTED;
+use crate::diff::palette::HUNK_HEADER;
 use crate::diff::row_parts::{LineKind, TEXT_PADDING, line_text, number, separator, words};
 use crate::diff::view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
@@ -131,7 +131,7 @@ fn note_row(row: Rect, number_width: f32, current: bool, text: String) -> Elemen
                 .height(Size::fill())
                 .padding(Gaps::new(0., 0., 0., TEXT_PADDING))
                 .cross_align(Alignment::Center)
-                .child(words(text, DIFF_MUTED)),
+                .child(words(text, HUNK_HEADER)),
         )
         .into()
 }

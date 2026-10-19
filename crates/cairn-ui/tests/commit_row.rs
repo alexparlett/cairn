@@ -210,10 +210,10 @@ fn lost_app() -> impl IntoElement {
         .child(CommitRow::new(lost, graph, 3).lost(true))
 }
 
-/// As Fork draws a lost commit: its subject, author, short id and date in the placeholder grey
-/// — about half — and nothing else dimmed: no element of the row is drawn translucent, so the
+/// As Fork draws a commit `HEAD` cannot reach: its subject, author, short id and date in Fork
+/// Dark's grey for such a row, and nothing else dimmed: no element of the row is drawn translucent, so the
 /// graph's lanes, edges and node and its chips keep their own colours; a reached row's subject
-/// is the primary text. Caught by: the whole row drawn at an opacity, a text left undimmed, or
+/// is the body's text. Caught by: the whole row drawn at an opacity, a text left undimmed, or
 /// a reached row dimmed.
 #[test]
 fn a_lost_rows_text_alone_is_dimmed() {
@@ -227,7 +227,7 @@ fn a_lost_rows_text_alone_is_dimmed() {
         })
         .unwrap_or_else(|| panic!("no label reads {text:?}"))
     };
-    let placeholder = Some(Fill::from(LIGHT_COLORS.text_placeholder));
+    let placeholder = Some(Fill::from(cairn_ui::style::tones::UNREACHABLE_TEXT));
     for text in [
         &format!("lost {SUBJECT}"),
         "Lost Author",
@@ -236,7 +236,10 @@ fn a_lost_rows_text_alone_is_dimmed() {
     ] {
         assert_eq!(colour(text), placeholder, "{text:?} is not dimmed");
     }
-    assert_eq!(colour(SUBJECT), Some(Fill::from(LIGHT_COLORS.text_primary)));
+    assert_eq!(
+        colour(SUBJECT),
+        Some(Fill::from(cairn_ui::style::tones::TEXT))
+    );
     let translucent = test.find_many(|_, element| {
         Rect::try_downcast(element)
             .and_then(|rect| rect.effect)

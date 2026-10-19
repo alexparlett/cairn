@@ -17,6 +17,7 @@ use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::Action;
+use crate::style::metrics;
 
 /// The menu's words.
 pub const STAGE_CAPTION: &str = "Stage";
@@ -217,7 +218,7 @@ pub fn menu(
                 label()
                     .text(why.text())
                     .width(Size::px(300.))
-                    .font_size(12.),
+                    .font_size(metrics::BODY),
             ),
         ],
     };

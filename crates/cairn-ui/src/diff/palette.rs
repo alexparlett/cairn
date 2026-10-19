@@ -1,14 +1,12 @@
 //! The diff view's colours and typeface, as named tokens: a component reads these, never a
 //! literal at the call site.
 //!
-//! **Where each colour comes from.** Fork's measured dark values (Windows, which Mac matches) —
-//! GitHub's diff colours, the vendor says — drawn on Fork's ground, `#282828`. Cairn's ground
-//! is darker: Freya's dark theme paints `rgb(20, 20, 20)`, which is what the window and the
-//! diff view stand on. So each Fork colour is **retuned** to Cairn's ground by keeping its
-//! offset from Fork's ground, channel by channel ([`retuned`]): a removed line is as much
-//! redder than the ground here as it is in Fork, and the text keeps Fork's own value, which is
-//! lighter against a darker ground. The retuning is computed, not hand-picked, so the source
-//! value stays readable in the code.
+//! **Where each colour comes from.** Fork Dark's, measured on Fork for Windows (which Mac
+//! matches) — GitHub's diff colours, the vendor says — on Fork's diff ground, `#282828`, which
+//! is Cairn's too (`style::tones::DIFF_BODY`). The bands, the changed word, the hunk header's
+//! text and the header bar are read from `style::tones`, which holds Fork Dark's table; the
+//! tokens Fork Dark's table does not name — the text, the line numbers, an added word, the
+//! gutter's rule and the side-by-side filler — are Fork's measured values, written here.
 //!
 //! **Where colour carries the meaning.** There is no marker column, as Fork's default has
 //! none: in unified the blank gutter of the side a line is not on still says what the tint
@@ -16,76 +14,51 @@
 
 use freya::prelude::Color;
 
-/// Fork's dark diff ground, measured: `#282828`.
-const FORK_GROUND: (u8, u8, u8) = (0x28, 0x28, 0x28);
+use crate::style::{metrics, tones};
 
-/// Cairn's ground: Freya's dark theme background (`DARK_COLORS.background`), which the
-/// window paints and the diff view paints again under its rows.
-pub const GROUND: Color = rgb(GROUND_RGB);
-const GROUND_RGB: (u8, u8, u8) = (20, 20, 20);
+/// The diff's ground: Fork Dark's diff body, under every row.
+pub const GROUND: Color = tones::DIFF_BODY;
 
-/// A removed line's tint: Fork's `#633F3E`, retuned.
-pub const REMOVED_TINT: Color = retuned((0x63, 0x3F, 0x3E));
-/// An added line's tint: Fork's `#3A5C3F`, retuned.
-pub const ADDED_TINT: Color = retuned((0x3A, 0x5C, 0x3F));
-/// The stronger tint of an intra-line range on a removed line: Fork's `#9F4247`, retuned.
-pub const REMOVED_EMPHASIS: Color = retuned((0x9F, 0x42, 0x47));
-/// The stronger tint of an intra-line range on an added line: Fork's `#388442`, retuned.
-pub const ADDED_EMPHASIS: Color = retuned((0x38, 0x84, 0x42));
-/// The diff's text: Fork's default token colour, `#DDDDDD`, kept — on a darker ground it
-/// only gains contrast.
+/// A removed line's tint: Fork Dark's `#633F3E`.
+pub const REMOVED_TINT: Color = tones::REMOVED_LINE;
+/// An added line's tint: Fork Dark's `#3A5C3F`.
+pub const ADDED_TINT: Color = tones::ADDED_LINE;
+/// The stronger tint of an intra-line range on a removed line: Fork Dark's `#9F4247`.
+pub const REMOVED_EMPHASIS: Color = tones::CHANGED_WORD;
+/// The stronger tint of an intra-line range on an added line: Fork's `#388442` taken 20 down
+/// in each channel, since at Fork's own value the diff's text reads below WCAG AA's 4.5:1
+/// (`the_text_reads_on_every_tint_and_an_emphasis_is_stronger_than_its_line`).
+pub const ADDED_EMPHASIS: Color = rgb((0x38 - 20, 0x84 - 20, 0x42 - 20));
+/// The diff's text: Fork's default token colour, `#DDDDDD`.
 pub const DIFF_TEXT: Color = rgb((0xDD, 0xDD, 0xDD));
-/// Line numbers, hunk headers and git's end-of-file marker: Fork's `#A0A0A0`, kept.
+/// Line numbers and the notices beside the diff: Fork's `#A0A0A0`.
 pub const DIFF_MUTED: Color = rgb((0xA0, 0xA0, 0xA0));
-/// The line between the line-number gutter and the text: Fork's `#4B4B4B`, retuned.
-pub const GUTTER_SEPARATOR: Color = retuned((0x4B, 0x4B, 0x4B));
+/// A hunk header's text, and git's end-of-file marker drawn in its place: Fork Dark's
+/// `#959595`.
+pub const HUNK_HEADER: Color = tones::HUNK_HEADER_TEXT;
+/// The line between the line-number gutter and the text: Fork's `#4B4B4B`.
+pub const GUTTER_SEPARATOR: Color = rgb((0x4B, 0x4B, 0x4B));
 /// A side-by-side column's filler, where its side has no line beside the other's: Fork's
-/// grey filler rows, `#424242` (Windows), retuned.
-pub const FILLER: Color = retuned((0x42, 0x42, 0x42));
-/// The header bar over the diff: Fork's `#333333`, retuned.
-pub const HEADER_BAR: Color = retuned((0x33, 0x33, 0x33));
-/// The change last moved to with previous or next change: Fork outlines its active chunk
-/// in the system accent (Mac, `#126CFB`); Cairn has no system accent to read, so
-/// its accent is the dark theme's `text_highlight`, `rgb(96, 145, 224)` — Cairn's choice —
-/// which the detail pane's strip already marks its tab with and the diff bar lights an
-/// active toggle with. A copy, so a row reads no theme; pinned equal to the theme's.
-pub const CURRENT_CHANGE: Color = rgb((96, 145, 224));
+/// grey filler rows, `#424242` (Windows).
+pub const FILLER: Color = rgb((0x42, 0x42, 0x42));
+/// The header bar over the diff: Fork Dark's `#333333`, the detail pane's.
+pub const HEADER_BAR: Color = tones::DETAIL;
+/// The change last moved to with previous or next change, and an active toggle on the diff
+/// bar: Fork outlines its active chunk in the system accent; Cairn's accent is Fork's blue
+/// (`style::tones::ACCENT`), which the detail pane's strip marks its chosen tab with too.
+pub const CURRENT_CHANGE: Color = tones::ACCENT;
 
 /// The diff's typeface: IBM Plex Mono, embedded by the application with its licence.
 /// Diff text, ids and paths are drawn in it.
 pub const DIFF_FONT_FAMILY: &str = "IBM Plex Mono";
-/// The diff's text size: Fork's, measured. Fork's Mac default diff font is Menlo at 11 pt
-/// (`Menlo-Regular - 11.0` in two screenshots four years apart) with a 6.6 pt advance; a
-/// point on macOS is a logical pixel, and IBM Plex Mono's 0.6 em advance at 11 px is the same
-/// 6.6. Fork's Windows size is not established.
-pub const DIFF_FONT_SIZE: f32 = 11.0;
+/// The diff's text size (`style::metrics::DIFF_TEXT`, where its measurement is told).
+pub const DIFF_FONT_SIZE: f32 = metrics::DIFF_TEXT;
 /// IBM Plex Mono's advance, as a fraction of its size: every glyph is 600 of 1000 units
 /// wide (read from the font's `hmtx` table).
 pub const MONO_ADVANCE_EM: f32 = 0.6;
 
 const fn rgb((r, g, b): (u8, u8, u8)) -> Color {
     Color::from_rgb(r, g, b)
-}
-
-/// `fork`, measured on Fork's ground, moved to Cairn's: the same offset from the ground in
-/// each channel, clamped to the channel's range.
-pub const fn retuned(fork: (u8, u8, u8)) -> Color {
-    rgb((
-        shift(fork.0, FORK_GROUND.0, GROUND_RGB.0),
-        shift(fork.1, FORK_GROUND.1, GROUND_RGB.1),
-        shift(fork.2, FORK_GROUND.2, GROUND_RGB.2),
-    ))
-}
-
-const fn shift(value: u8, from: u8, to: u8) -> u8 {
-    let moved = value as i16 - from as i16 + to as i16;
-    if moved < 0 {
-        0
-    } else if moved > 255 {
-        255
-    } else {
-        moved as u8
-    }
 }
 
 #[cfg(test)]
@@ -114,27 +87,19 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
-    /// The retuning is the rule the module states, on Fork's measured values. Caught by: a
-    /// token typed in by hand that does not follow from Fork's value.
+    /// Every token is Fork's measured value on Fork's own ground, which Cairn's diff stands
+    /// on. Caught by: a token typed in wrong, or a tint moved off Fork's.
     #[test]
-    fn each_tint_is_forks_measured_value_moved_to_cairns_ground() {
-        assert_eq!(REMOVED_TINT, Color::from_rgb(79, 43, 42));
-        assert_eq!(ADDED_TINT, Color::from_rgb(38, 72, 43));
-        assert_eq!(REMOVED_EMPHASIS, Color::from_rgb(139, 46, 51));
+    fn each_tint_is_forks_measured_value_on_forks_ground() {
+        assert_eq!(GROUND, Color::from_rgb(0x28, 0x28, 0x28));
+        assert_eq!(REMOVED_TINT, Color::from_rgb(0x63, 0x3F, 0x3E));
+        assert_eq!(ADDED_TINT, Color::from_rgb(0x3A, 0x5C, 0x3F));
+        assert_eq!(REMOVED_EMPHASIS, Color::from_rgb(0x9F, 0x42, 0x47));
         assert_eq!(ADDED_EMPHASIS, Color::from_rgb(36, 112, 46));
-        assert_eq!(GUTTER_SEPARATOR, Color::from_rgb(55, 55, 55));
-        assert_eq!(FILLER, Color::from_rgb(46, 46, 46));
-        assert_eq!(
-            retuned(FORK_GROUND),
-            GROUND,
-            "Fork's ground lands on Cairn's"
-        );
-        assert_eq!(
-            shift(250, 40, 200),
-            255,
-            "a channel is clamped, not wrapped"
-        );
-        assert_eq!(shift(10, 40, 20), 0);
+        assert_eq!(HUNK_HEADER, Color::from_rgb(0x95, 0x95, 0x95));
+        assert_eq!(GUTTER_SEPARATOR, Color::from_rgb(0x4B, 0x4B, 0x4B));
+        assert_eq!(FILLER, Color::from_rgb(0x42, 0x42, 0x42));
+        assert_eq!(HEADER_BAR, Color::from_rgb(0x33, 0x33, 0x33));
     }
 
     /// The emphasis of an intra-line range stands further from the ground than its line's
@@ -154,12 +119,14 @@ mod tests {
             }
         }
         assert!(contrast(DIFF_MUTED, GROUND) >= 4.5);
+        assert!(contrast(HUNK_HEADER, GROUND) >= 4.5);
     }
 
-    /// The accent is the dark theme's, as its doc says: the change moved to and an active
-    /// toggle are lit in one colour. Caught by: a hand-typed accent drifting from the theme.
+    /// The accent is the launch theme's, as its doc says: the change moved to, an active
+    /// toggle and the chosen tab are lit in one colour. Caught by: an accent drifting from the
+    /// theme's.
     #[test]
     fn the_current_change_is_the_themes_accent() {
-        assert_eq!(CURRENT_CHANGE, freya::prelude::DARK_COLORS.text_highlight);
+        assert_eq!(CURRENT_CHANGE, crate::style::tones::sheet().text_highlight);
     }
 }

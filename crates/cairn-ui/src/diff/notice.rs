@@ -19,6 +19,7 @@ use crate::diff::palette::{
     ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, GROUND,
     REMOVED_EMPHASIS,
 };
+use crate::style::metrics;
 
 /// Fork's words for a file past the limits (Fork for Windows).
 pub const TOO_LARGE_TO_DISPLAY: &str = "Changes are too large to display";
@@ -463,11 +464,17 @@ impl KeyExt for DiffNoticeView {
 }
 
 fn title(text: impl Into<String>) -> Label {
-    label().text(text.into()).font_size(13.).color(DIFF_TEXT)
+    label()
+        .text(text.into())
+        .font_size(metrics::BODY)
+        .color(DIFF_TEXT)
 }
 
 fn muted(text: impl Into<String>) -> Label {
-    label().text(text.into()).font_size(12.).color(DIFF_MUTED)
+    label()
+        .text(text.into())
+        .font_size(metrics::BODY)
+        .color(DIFF_MUTED)
 }
 
 /// A line git prints, in the diff's typeface.
@@ -484,7 +491,7 @@ fn git_line(text: impl Into<String>, colour: Color) -> Label {
 fn side(caption: &'static str, colour: Color, lines: Vec<Label>) -> Rect {
     rect()
         .spacing(4.)
-        .child(label().text(caption).font_size(12.).color(colour))
+        .child(label().text(caption).font_size(metrics::BODY).color(colour))
         .children(lines.into_iter().map(Element::from))
 }
 

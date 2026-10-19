@@ -9,6 +9,7 @@ use crate::accelerators::{self, Action, HeldKeys, Scope};
 use crate::history::commit_row::label_room;
 use crate::history::graph_geometry::ROW_HEIGHT;
 use crate::history::ref_chips::{Chip, chips_of_row};
+use crate::style::tones;
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -38,6 +39,8 @@ pub struct RowRender {
     /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed.
     pub lost: bool,
     pub selected: bool,
+    /// Whether the list has focus, which a selected row's tone says.
+    pub focused: bool,
     /// Width of the graph column for the whole list, in lanes.
     pub lanes: usize,
 }
@@ -213,6 +216,7 @@ struct ListData {
     on_new_branch: EventHandler<(Oid, String)>,
     list_id: AccessibilityId,
     cursor: State<usize>,
+    focused: bool,
 }
 
 impl PartialEq for ListData {
@@ -223,6 +227,7 @@ impl PartialEq for ListData {
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
+            && self.focused == other.focused
             && self.length == other.length
             && self.list_id == other.list_id
     }
@@ -262,12 +267,13 @@ impl Component for HistoryList {
             on_new_branch: self.on_new_branch.clone(),
             list_id,
             cursor,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
-
-        let border = get_theme_or_default().read().colors().border_focus;
 
         rect()
             .expanded()
+            .background(tones::HISTORY)
             .a11y_id(list_id)
             .a11y_focusable(true)
             .a11y_auto_focus(true)
@@ -275,7 +281,7 @@ impl Component for HistoryList {
             .on_key_down(self.keyboard(cursor, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
             .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(border).width(1.))
+                el.border(Border::new().fill(tones::ACCENT).width(1.))
             })
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
@@ -470,6 +476,7 @@ fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
         head: row.labels().is_head(),
         lost: row.is_lost(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
+        focused: data.focused,
         lanes: data.lanes,
     }
 }
@@ -745,8 +752,11 @@ mod tests {
             },
             1.,
         );
-        test.sync_and_update();
-        test.sync_and_update();
+        // The list takes focus as it opens, which draws its rows once more in the focused
+        // tone: settled once that has happened.
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
         let settled = LAYOUTS.with(std::cell::Cell::get);
         assert!(settled > 0, "no row laid out its chips");
         for n in 1..=20u32 {

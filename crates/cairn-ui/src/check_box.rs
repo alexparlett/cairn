@@ -5,8 +5,7 @@
 
 use freya::prelude::*;
 
-/// The caption's size, the rows' and the commit box's.
-const CAPTION_SIZE: f32 = 13.;
+use crate::style::{metrics, tones};
 
 /// `caption`'s check box, ticked or not; pressed while `enabled`, it reports the state it is
 /// turned to through `on_toggle`.
@@ -17,7 +16,6 @@ pub fn check_box(
     on_toggle: EventHandler<bool>,
 ) -> Element {
     let caption = caption.into();
-    let colours = get_theme_or_default().read().colors().clone();
     let mark = rect()
         .width(Size::px(14.))
         .height(Size::px(14.))
@@ -27,19 +25,24 @@ pub fn check_box(
         .border(
             Border::new()
                 .fill(if enabled {
-                    colours.border
+                    tones::CHECK_BOX_BORDER
                 } else {
-                    colours.disabled
+                    tones::DISABLED_TEXT
                 })
                 .width(1.)
                 .alignment(BorderAlignment::Inner),
         )
         .background(if ticked {
-            colours.primary
+            tones::SELECTION_FOCUSED
         } else {
-            colours.surface_primary
+            tones::FIELD
         })
-        .maybe_child(ticked.then(|| label().text("✓").font_size(11.).color(colours.text_inverse)));
+        .maybe_child(ticked.then(|| {
+            label()
+                .text("✓")
+                .font_size(metrics::CAPTION)
+                .color(tones::SELECTED_TEXT)
+        }));
     let toggle = rect()
         .horizontal()
         .cross_align(Alignment::Center)
@@ -52,12 +55,12 @@ pub fn check_box(
         .child(
             label()
                 .text(caption)
-                .font_size(CAPTION_SIZE)
+                .font_size(metrics::BODY)
                 .max_lines(1)
                 .color(if enabled {
-                    colours.text_primary
+                    tones::TEXT
                 } else {
-                    colours.text_secondary
+                    tones::DISABLED_TEXT
                 }),
         );
     if enabled {

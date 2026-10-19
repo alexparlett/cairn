@@ -20,6 +20,7 @@ use crate::detail::file_filter::ShownFiles;
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::diff::toggle_glyphs::Glyph;
 use crate::history::date_text;
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
 /// The filter field's placeholder.
@@ -42,8 +43,6 @@ pub fn filter_count(shown: usize, total: usize) -> String {
 }
 /// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up.
 pub const SUMMARY_HEIGHT: f32 = crate::diff::header::DIFF_HEADER_HEIGHT;
-
-const FONT_SIZE: f32 = 13.0;
 
 /// The changed files of one change set, through a filter. `changes` and `shown` are handles,
 /// not copies: a row reads its file by index as it is built.
@@ -118,11 +117,16 @@ struct ListData {
     current: Option<usize>,
     on_file: EventHandler<usize>,
     list_id: AccessibilityId,
+    /// Whether the list has focus, which the chosen file's tone says.
+    focused: bool,
 }
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows && self.current == other.current && self.list_id == other.list_id
+        self.rows == other.rows
+            && self.current == other.current
+            && self.list_id == other.list_id
+            && self.focused == other.focused
     }
 }
 
@@ -150,8 +154,9 @@ impl Component for ChangesList {
             current: self.current,
             on_file: self.on_file.clone(),
             list_id,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
-        let colours = get_theme_or_default().read().colors().clone();
         let filtering = !self.filter.read().is_empty();
 
         let count = filtering.then(|| {
@@ -162,8 +167,8 @@ impl Component for ChangesList {
                     filter_count(rows, total)
                 })
                 .max_lines(1)
-                .font_size(12.)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(tones::DETAIL_LABEL)
         });
         let list: Element = if rows == 0 && filtering && !waiting {
             rect()
@@ -172,8 +177,8 @@ impl Component for ChangesList {
                 .child(
                     label()
                         .text(NO_FILE_MATCHES)
-                        .font_size(FONT_SIZE)
-                        .color(colours.text_placeholder),
+                        .font_size(metrics::BODY)
+                        .color(tones::PLACEHOLDER),
                 )
                 .into()
         } else {
@@ -206,11 +211,12 @@ impl Component for ChangesList {
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
+                    .background(tones::HISTORY)
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
                     .maybe(focus() == Focus::Keyboard, |el| {
-                        el.border(Border::new().fill(colours.border_focus).width(1.))
+                        el.border(Border::new().fill(tones::ACCENT).width(1.))
                     })
                     .on_key_down(keyboard(
                         self.shown.clone(),
@@ -314,13 +320,20 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let Some(index) = data.shown.read().file_at(item.index) else {
         return row.into();
     };
-    let Some(drawn) = data.changes.read().files.get(index).map(file_row) else {
+    let current = data.current == Some(index);
+    let chosen = tones::selected(data.focused);
+    let Some(drawn) = data
+        .changes
+        .read()
+        .files
+        .get(index)
+        .map(|file| file_row(file, current.then_some(chosen.text)))
+    else {
         // The count and the files can disagree for one frame.
         return row.into();
     };
     let (list_id, on_file) = (data.list_id, data.on_file.clone());
-    let highlight = get_theme_or_default().read().colors().surface_secondary;
-    row.maybe(data.current == Some(index), |el| el.background(highlight))
+    row.maybe(current, |el| el.background(chosen.band))
         .on_press(move |_| {
             list_id.request_focus();
             on_file.call(index);
@@ -358,13 +371,12 @@ fn short(id: Oid) -> String {
 
 impl Component for ChangesSummary {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let [author, id, date, subject] = summary_parts(&self.details);
         let part = |text: String, colour: Color| {
             label()
                 .text(text)
                 .max_lines(1)
-                .font_size(FONT_SIZE)
+                .font_size(metrics::BODY)
                 .color(colour)
         };
         rect()
@@ -375,11 +387,11 @@ impl Component for ChangesSummary {
             .cross_align(Alignment::Center)
             .padding(Gaps::new(0., 12., 0., 12.))
             .spacing(12.)
-            .child(part(author, colours.text_primary))
-            .child(part(id, colours.text_secondary).font_family(DIFF_FONT_FAMILY))
-            .child(part(date, colours.text_secondary))
+            .child(part(author, tones::TEXT))
+            .child(part(id, tones::DETAIL_LABEL).font_family(DIFF_FONT_FAMILY))
+            .child(part(date, tones::DETAIL_LABEL))
             .child(
-                part(subject, colours.text_primary)
+                part(subject, tones::TEXT)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
@@ -452,12 +464,11 @@ impl KeyExt for ComparisonHeader {
 
 impl Component for ComparisonHeader {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let part = |text: String, colour: Color| {
             label()
                 .text(text)
                 .max_lines(1)
-                .font_size(FONT_SIZE)
+                .font_size(metrics::BODY)
                 .color(colour)
         };
         let line = |caption: &'static str, commit: &CommitSummary| -> Element {
@@ -469,11 +480,11 @@ impl Component for ComparisonHeader {
                 .height(Size::px(SUMMARY_HEIGHT))
                 .cross_align(Alignment::Center)
                 .spacing(12.)
-                .child(part(caption.to_owned(), colours.text_placeholder).width(Size::px(32.)))
-                .child(part(id, colours.text_secondary).font_family(DIFF_FONT_FAMILY))
-                .child(part(author, colours.text_primary))
+                .child(part(caption.to_owned(), tones::PLACEHOLDER).width(Size::px(32.)))
+                .child(part(id, tones::DETAIL_LABEL).font_family(DIFF_FONT_FAMILY))
+                .child(part(author, tones::TEXT))
                 .child(
-                    part(subject, colours.text_primary)
+                    part(subject, tones::TEXT)
                         .width(Size::flex(1.))
                         .text_overflow(TextOverflow::Ellipsis),
                 )
@@ -502,7 +513,7 @@ impl Component for ComparisonHeader {
                         // The button takes its name from its first child's value.
                         .child(
                             Glyph::Swap
-                                .draw(colours.text_primary)
+                                .draw(tones::TEXT)
                                 .a11y_builder(move |node| node.set_value(SWAP_LABEL)),
                         ),
                 ),

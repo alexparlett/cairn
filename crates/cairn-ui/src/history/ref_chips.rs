@@ -28,13 +28,14 @@ use freya::prelude::*;
 
 use crate::history::lane_palette::lane_colour;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+use crate::style::{metrics, tones};
 
 /// A chip's height, inside a row's.
 pub const CHIP_HEIGHT: f32 = 18.0;
 /// The space between two chips, and between the last and the subject.
 pub const CHIP_GAP: f32 = 4.0;
 /// The chip's name text size.
-pub const CHIP_FONT_SIZE: f32 = 12.0;
+pub const CHIP_FONT_SIZE: f32 = metrics::BODY;
 /// The space either side of a chip's name.
 const NAME_PADDING: f32 = 5.0;
 /// A cap's width: its glyph and the space either side of it.
@@ -47,8 +48,8 @@ const CHECK_GAP: f32 = 3.0;
 const MIN_ADVANCE: f32 = 2.0;
 const CORNER_RADIUS: f32 = 3.0;
 
-/// Fork's tag colour: indigo, whatever the lane.
-pub const TAG_INDIGO: Color = Color::from_rgb(98, 92, 196);
+/// Fork Dark's tag chip's border: indigo, whatever the lane.
+pub const TAG_INDIGO: Color = tones::TAG_CHIP_BORDER;
 
 /// What kind of chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -240,35 +241,45 @@ fn branch_chip<'r>(
     }
 }
 
-/// The colour a chip of `kind` is tinted with on a row in `lane`.
+/// The border a chip of `kind` is drawn with on a row in `lane`: a branch's and a remote's
+/// its row's lane, as Fork tints them (the tint follows the lane, not the branch); a tag's and
+/// a stash's Fork Dark's tone for its kind.
 pub fn tint(kind: ChipKind, lane: Lane) -> Color {
     match kind {
         ChipKind::Tag => TAG_INDIGO,
-        ChipKind::Branch { .. } | ChipKind::Remote | ChipKind::Stash => lane_colour(lane),
+        ChipKind::Stash => tones::STASH_CHIP_BORDER,
+        ChipKind::Branch { .. } | ChipKind::Remote => lane_colour(lane),
     }
 }
 
-/// `chip` drawn: Fork's outlined, tinted chip, its glyph in a cap at its left, the current
-/// branch's check mark before its name. Keyed by what it draws, so a glyph is never left
-/// painted where another chip now stands (`ref_glyphs`).
+/// The fill a chip of `kind` is drawn with on a row in `lane`: a dark shade of its lane's
+/// colour for a branch and a remote, Fork Dark's tone for a tag and a stash.
+fn fill(kind: ChipKind, lane: Lane) -> Color {
+    match kind {
+        ChipKind::Tag => tones::TAG_CHIP,
+        ChipKind::Stash => tones::STASH_CHIP,
+        ChipKind::Branch { .. } | ChipKind::Remote => tones::chip_fill(lane_colour(lane)),
+    }
+}
+
+/// `chip` drawn: Fork's outlined, filled chip, its glyph in an unfilled cap at its left, the
+/// current branch's check mark before its name. Keyed by what it draws, so a glyph is never
+/// left painted where another chip now stands (`ref_glyphs`).
 pub fn chip_element(chip: &Chip, lane: Lane) -> Element {
     let colour = tint(chip.kind, lane);
-    let text = get_theme_or_default().read().colors().text_primary;
+    let text = tones::CHIP_TEXT;
     rect()
         .key(chip)
         .horizontal()
         .height(Size::px(CHIP_HEIGHT))
         .cross_align(Alignment::center())
         .corner_radius(CORNER_RADIUS)
-        .background(colour.with_a(56))
         .border(Border::new().fill(colour).width(1.))
         .maybe_child(chip.kind.cap().map(|glyph| {
             rect()
                 .width(Size::px(CAP_WIDTH))
                 .height(Size::fill())
                 .center()
-                .corner_radius(CORNER_RADIUS)
-                .background(colour.with_a(140))
                 .child(glyph.draw(text))
         }))
         .child(
@@ -276,6 +287,8 @@ pub fn chip_element(chip: &Chip, lane: Lane) -> Element {
                 .horizontal()
                 .height(Size::fill())
                 .cross_align(Alignment::center())
+                .corner_radius(CORNER_RADIUS)
+                .background(fill(chip.kind, lane))
                 .padding(Gaps::new(0., NAME_PADDING, 0., NAME_PADDING))
                 .spacing(CHECK_GAP)
                 .maybe_child(chip.kind.is_current().then(|| RefGlyph::Current.draw(text)))

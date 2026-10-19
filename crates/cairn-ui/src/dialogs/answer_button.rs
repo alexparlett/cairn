@@ -6,6 +6,8 @@
 
 use freya::prelude::*;
 
+use crate::style::{metrics, tones};
+
 /// One answer of a dialog: focusable, pressed by the pointer, Return or Space while it has
 /// focus, and — `focused_first` — holding focus as the dialog opens. Not Freya's `Button`, whose
 /// focus cannot be given to it as the dialog opens.
@@ -44,17 +46,17 @@ pub(crate) fn greyed_answer(caption: String, colours: &AnswerColours) -> Element
                 .width(1.)
                 .alignment(BorderAlignment::Inner),
         )
-        .background(colours.background)
+        .background(tones::DISABLED_FILL)
         .child(
             label()
                 .text(caption)
-                .font_size(14.)
+                .font_size(metrics::BODY)
                 .color(colours.text_disabled),
         )
         .into()
 }
 
-/// The theme's colours an answer is drawn in.
+/// The colours an answer is drawn in: Fork Dark's button.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct AnswerColours {
     border: Color,
@@ -65,17 +67,15 @@ pub(crate) struct AnswerColours {
 }
 
 impl AnswerColours {
-    /// The current theme's.
+    /// Fork Dark's: a button's fill and border, its blue as the focus ring, and its disabled
+    /// fill and text.
     pub(crate) fn of_theme() -> Self {
-        let theme = get_theme_or_default();
-        let theme = theme.read();
-        let sheet = theme.colors();
         Self {
-            border: sheet.border,
-            focus_ring: sheet.border_focus,
-            background: sheet.surface_primary,
-            border_disabled: sheet.border_disabled,
-            text_disabled: sheet.text_placeholder,
+            border: tones::BUTTON_BORDER,
+            focus_ring: tones::ACCENT,
+            background: tones::BUTTON,
+            border_disabled: tones::DISABLED_FILL,
+            text_disabled: tones::DISABLED_TEXT,
         }
     }
 }
@@ -125,6 +125,11 @@ impl Component for ChoiceButton {
                 e.stop_propagation();
                 pressed.call(());
             })
-            .child(label().text(self.caption.clone()).font_size(14.))
+            .child(
+                label()
+                    .text(self.caption.clone())
+                    .font_size(metrics::BODY)
+                    .color(tones::TEXT),
+            )
     }
 }

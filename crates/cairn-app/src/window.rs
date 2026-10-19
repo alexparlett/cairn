@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
     DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running, StatusBox,
@@ -197,7 +198,10 @@ pub fn window(
 
     rect()
         .expanded()
-        .theme_background()
+        .background(tones::HISTORY)
+        // Every text not given a size of its own — a menu's, a button's — takes the body's,
+        // never Freya's 16 px.
+        .font_size(metrics::BODY)
         // Every shortcut resolves through the accelerator table: here the ones heard
         // wherever focus is; the detail pane hears its own (`detail::pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
@@ -413,12 +417,14 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
                 .head(render.head)
                 .lost(render.lost)
                 .selected(render.selected)
+                .focused(render.focused)
                 .into(),
             // A stash's row: its `stash@{n}` chip and its message as the subject.
             RowContent::Stash(stash) => {
                 CommitRow::new(stash.as_commit(), render.graph, render.lanes)
                     .chips(render.chips)
                     .selected(render.selected)
+                    .focused(render.focused)
                     .into()
             }
         }
@@ -554,7 +560,13 @@ fn title_bar(
         .cross_align(Alignment::center())
         .spacing(10.)
         .padding(Gaps::new(8., 12., 8., 12.))
-        .child(label().text("Cairn").theme_color().font_size(16.))
+        .background(tones::CHROME)
+        .child(
+            label()
+                .text("Cairn")
+                .color(tones::TEXT)
+                .font_size(metrics::TITLE),
+        )
         .child(
             rect()
                 .width(Size::flex(1.))
@@ -565,8 +577,8 @@ fn title_bar(
             label()
                 .text(counted.to_owned())
                 .max_lines(1)
-                .font_size(13.)
-                .color(get_theme_or_default().read().colors().text_placeholder),
+                .font_size(metrics::BODY)
+                .color(tones::TOOLBAR_TEXT),
         )
         .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
         .into()
@@ -611,32 +623,36 @@ fn notice(message: impl Into<String>, path: &str) -> Element {
         .expanded()
         .center()
         .spacing(6.)
-        .child(label().text(message).theme_color().font_size(14.))
+        .child(
+            label()
+                .text(message)
+                .color(tones::TEXT)
+                .font_size(metrics::BODY),
+        )
         .child(
             label()
                 .text(path.to_owned())
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
-                .font_size(12.)
-                .color(get_theme_or_default().read().colors().text_placeholder),
+                .font_size(metrics::BODY)
+                .color(tones::PLACEHOLDER),
         )
         .into()
 }
 
 /// A banner across the window: wrapped, never cut.
 fn banner(message: String) -> Element {
-    let colours = get_theme_or_default();
     rect()
         .width(Size::fill())
         .cross_align(Alignment::center())
         .padding(Gaps::new(6., 12., 6., 12.))
-        .background(colours.read().colors().surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().text_secondary),
+                .color(tones::TEXT),
         )
         .into()
 }
@@ -644,26 +660,26 @@ fn banner(message: String) -> Element {
 /// The strip over the history's rows while a walk replacing them reads: "Reading history… N
 /// commits".
 fn reading_strip(message: String) -> Element {
-    let colours = get_theme_or_default();
     rect()
         .width(Size::fill())
         .min_height(Size::px(ROW_HEIGHT))
         .cross_align(Alignment::center())
         .padding(Gaps::new(0., 12., 0., 12.))
-        .background(colours.read().colors().surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().text_secondary),
+                .color(tones::DETAIL_LABEL),
         )
         .into()
 }
 
 /// The history's own line under its rows: why a page failed to load.
 fn list_line(message: String) -> Element {
-    let colours = get_theme_or_default();
+    // The theme's error tone, which Fork Dark's table does not name.
+    let error = get_theme_or_default().read().colors().error;
     rect()
         .width(Size::fill())
         .min_height(Size::px(ROW_HEIGHT))
@@ -672,9 +688,9 @@ fn list_line(message: String) -> Element {
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().error),
+                .color(error),
         )
         .into()
 }
@@ -701,6 +717,10 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::history::state;
+    /// Whether a label's colour is a ref chip's text: drawn in the chips' own tone.
+    fn is_chip_tone(colour: Option<&Fill>) -> bool {
+        colour.and_then(Fill::as_color) == Some(cairn_ui::style::tones::CHIP_TEXT)
+    }
 
     const HEIGHT: f32 = 600.;
     /// Where the main region begins: right of the sidebar at its opening width and the
@@ -1310,15 +1330,14 @@ pub(crate) mod tests {
                 })
                 .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
             // The chips name whatever refs the checkout has today: what the row drew before is
-            // its text past them.
-            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
+            // its text past them. A chip's text is told by its tone.
             let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
                 let area = node.layout().area;
                 Label::try_downcast(element)
                     .filter(|_| (area.center().y - centre_y).abs() < 1.0)
                     // The history's, not the sidebar's beside it.
                     .filter(|_| area.min_x() >= LEFT)
-                    .filter(|label| label.text_style_data.font_size != chip_size)
+                    .filter(|label| !is_chip_tone(label.text_style_data.color.as_ref()))
                     .map(|label| (area.min_x(), label.text.to_string()))
             });
             labels.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3133,10 +3152,9 @@ pub(crate) mod tests {
             })
             .unwrap_or_else(|| panic!("the labelled row was not drawn"));
         let chips: Vec<(f32, String)> = {
-            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
             let mut found = test.find_many(|node, element| {
                 Label::try_downcast(element)
-                    .filter(|label| label.text_style_data.font_size == chip_size)
+                    .filter(|label| is_chip_tone(label.text_style_data.color.as_ref()))
                     .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
                     .map(|label| (node.layout().area.min_x(), label.text.to_string()))
             });

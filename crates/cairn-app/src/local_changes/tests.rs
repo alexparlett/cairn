@@ -797,16 +797,22 @@ fn a_status_that_could_not_be_read_is_said() {
     );
 }
 
-/// The rows of the lists drawn highlighted: a list row's rect in the chosen colour.
+/// The rows of the lists drawn highlighted: a list row's rect in a selection's band, its list
+/// focused or not.
 fn highlighted_rows(test: &TestingRunner) -> usize {
-    let chosen = test.run_in(|| get_theme_or_default().read().colors().surface_secondary);
+    let bands = [true, false].map(|focused| cairn_ui::style::tones::selected(focused).band);
     test.find_many(|node, element| {
         let area = node.layout().area;
         Rect::try_downcast(element)
             .filter(|_| {
                 area.min_x() > SIDEBAR_WIDTH && area.height() == cairn_ui::DETAIL_ROW_HEIGHT
             })
-            .filter(|rect| rect.style.background.as_color() == Some(chosen))
+            .filter(|rect| {
+                rect.style
+                    .background
+                    .as_color()
+                    .is_some_and(|band| bands.contains(&band))
+            })
             .map(|_| ())
     })
     .len()

@@ -157,11 +157,13 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
     let stride = info.min_row_bytes();
     let mut pixels = vec![0u8; stride * height as usize];
     assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
-    let white_at = |x: f32, y: f32| {
+    // The history's ground, which an unpainted centre shows (the pixels are BGRA).
+    let ground = cairn_ui::style::tones::HISTORY;
+    let ground_at = |x: f32, y: f32| {
         let at = y.round() as usize * stride + x.round() as usize * 4;
         pixels
             .get(at..at + 3)
-            .is_some_and(|rgb| rgb.iter().all(|c| *c == 0xff))
+            .is_some_and(|bgr| [bgr[2], bgr[1], bgr[0]] == [ground.r(), ground.g(), ground.b()])
     };
 
     let rows = labels.iter().map(|(row, _, _)| *row + 1).max().unwrap_or(0);
@@ -176,7 +178,7 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
                 ROW_PADDING + lane_x(Lane::new(0)),
                 row as f32 * ROW_HEIGHT + row_middle(),
             );
-            (texts, white_at(centre.0, centre.1))
+            (texts, ground_at(centre.0, centre.1))
         })
         .collect()
 }

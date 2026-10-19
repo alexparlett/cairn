@@ -4,10 +4,10 @@
 
 use freya::prelude::*;
 
+use crate::style::{metrics, tones};
+
 /// Height of the strip, which is what a collapsed pane keeps.
 pub const DETAIL_STRIP_HEIGHT: f32 = 30.0;
-
-const TAB_FONT_SIZE: f32 = 12.0;
 
 /// The detail pane's tabs. Commit is the default; a File Tree tab is issue #31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,13 +106,8 @@ impl KeyExt for DetailTabs {
 
 impl Component for DetailTabs {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let border = colours.read().colors().border;
-        let primary = colours.read().colors().text_primary;
-        let muted = colours.read().colors().text_placeholder;
-        let accent = colours.read().colors().text_highlight;
-        let surface = colours.read().colors().surface_tertiary;
-        let disabled = colours.read().colors().disabled;
+        // Fork Dark's strip: the chosen tab's caption in its blue, the others in the body's.
+        let (border, accent, surface) = (tones::RULE, tones::ACCENT, tones::HEADING_BAR);
 
         let collapsed = self.collapsed;
         let on_collapse = self.on_collapse.clone();
@@ -169,13 +164,13 @@ impl Component for DetailTabs {
                         label()
                             .text(tab.caption())
                             .max_lines(1)
-                            .font_size(TAB_FONT_SIZE)
+                            .font_size(metrics::BODY)
                             .color(if !available {
-                                disabled
+                                tones::DISABLED_TEXT
                             } else if shown {
-                                primary
+                                accent
                             } else {
-                                muted
+                                tones::TEXT
                             }),
                     )
                     .into()

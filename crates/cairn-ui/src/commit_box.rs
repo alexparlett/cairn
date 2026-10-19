@@ -37,6 +37,7 @@ use freya::prelude::*;
 
 use crate::accelerators::{Action, FieldScope, RecallStep};
 use crate::diff::palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
+use crate::style::{metrics, tones};
 use crate::text_field::{text_field_in, text_field_recalling};
 
 /// The subject field's placeholder, as Fork's reads.
@@ -73,7 +74,7 @@ pub const SUBJECT_HARD_LIMIT: usize = 70;
 pub const RULER_COLUMN: usize = 72;
 
 /// The description's size: monospace, so the ruler stands at a column.
-const DESCRIPTION_FONT_SIZE: f32 = 12.;
+const DESCRIPTION_FONT_SIZE: f32 = metrics::BODY;
 const DESCRIPTION_MIN_HEIGHT: f32 = 64.;
 const DESCRIPTION_MAX_HEIGHT: f32 = 200.;
 /// The field's inner margin: the toolkit's `input_layout` theme's, which the text starts after.
@@ -346,7 +347,9 @@ fn edits(field: State<String>, on_edit: EventHandler<()>) -> impl Fn(InputValida
 
 impl Component for CommitBox {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
+        // The counter past its limit keeps the theme's error tone, which Fork Dark's table does
+        // not name.
+        let error = get_theme_or_default().read().colors().error;
         let open = !self.stopped;
         let subject = self.subject;
         let count = subject_count(&subject.read());
@@ -373,11 +376,11 @@ impl Component for CommitBox {
         .enabled(open);
         let counter = label()
             .text(count.left.to_string())
-            .font_size(12.)
+            .font_size(metrics::BODY)
             .color(if count.past_hard_limit {
-                colours.error
+                error
             } else {
-                colours.text_secondary
+                tones::DETAIL_LABEL
             })
             .a11y_alt(format!("{} characters left", count.left));
         let recent = recent_button(self.recent.clone(), open, self.on_recall.clone());
@@ -415,7 +418,7 @@ impl Component for CommitBox {
                     .layer(Layer::Relative(1))
                     .width(Size::px(1.))
                     .height(Size::px(*described.read()))
-                    .background(colours.border),
+                    .background(tones::RULE),
             );
 
         let toggle = amend_toggle(
@@ -449,8 +452,8 @@ impl Component for CommitBox {
             .width(Size::fill())
             .padding(Gaps::new(8., 8., 8., 8.))
             .spacing(6.)
-            .background(colours.surface_secondary)
-            .border(Border::new().fill(colours.border).width(BorderWidth {
+            .background(tones::HEADING_BAR)
+            .border(Border::new().fill(tones::RULE).width(BorderWidth {
                 top: 1.,
                 ..BorderWidth::default()
             }))
@@ -458,8 +461,8 @@ impl Component for CommitBox {
                 label()
                     .text(text)
                     .width(Size::fill())
-                    .font_size(12.)
-                    .color(colours.text_secondary)
+                    .font_size(metrics::BODY)
+                    .color(tones::DETAIL_LABEL)
             }))
             .child(subject_row)
             .child(description)
@@ -479,7 +482,6 @@ fn ruler_x() -> f32 {
 /// A plain button: named for assistive technology, pressed by the pointer or, focused, by
 /// Return or Space; disabled, it does nothing and is not focusable.
 fn control(caption: String, name: String, enabled: bool, pressed: impl Fn() + 'static) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
     let control = rect()
         .a11y_role(AccessibilityRole::Button)
         .a11y_alt(name)
@@ -489,19 +491,28 @@ fn control(caption: String, name: String, enabled: bool, pressed: impl Fn() + 's
         .border(
             Border::new()
                 .fill(if enabled {
-                    colours.border
+                    tones::BUTTON_BORDER
                 } else {
-                    colours.disabled
+                    tones::DISABLED_FILL
                 })
                 .width(1.)
                 .alignment(BorderAlignment::Inner),
         )
-        .background(colours.surface_primary)
-        .child(label().text(caption).font_size(13.).color(if enabled {
-            colours.text_primary
+        .background(if enabled {
+            tones::BUTTON
         } else {
-            colours.text_secondary
-        }));
+            tones::DISABLED_FILL
+        })
+        .child(
+            label()
+                .text(caption)
+                .font_size(metrics::BODY)
+                .color(if enabled {
+                    tones::TEXT
+                } else {
+                    tones::DISABLED_TEXT
+                }),
+        );
     if enabled {
         control
             .cursor(CursorIcon::Pointer)
@@ -550,12 +561,11 @@ fn recent_button(recent: Rc<Vec<String>>, open: bool, on_recall: EventHandler<us
 /// What stands in the button's place while a commit is asked: "Waiting for the commit to
 /// finish…", "Committing 0:03" and its Cancel, or "Cancelling…".
 fn busy_place(busy: Busy, on_cancel: EventHandler<()>) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
     let said = |text: String| -> Element {
         label()
             .text(text)
-            .font_size(12.)
-            .color(colours.text_secondary)
+            .font_size(metrics::BODY)
+            .color(tones::DETAIL_LABEL)
             .into()
     };
     match busy {
@@ -605,11 +615,10 @@ impl Component for Elapsed {
             })
         });
         let _ = tick.read();
-        let colours = get_theme_or_default().read().colors().clone();
         label()
             .text(elapsed_text(self.verb, self.started.elapsed()))
-            .font_size(12.)
-            .color(colours.text_secondary)
+            .font_size(metrics::BODY)
+            .color(tones::DETAIL_LABEL)
     }
 }
 

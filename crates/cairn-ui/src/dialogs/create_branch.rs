@@ -32,6 +32,7 @@ use crate::dialogs::button_order::ordered;
 
 use crate::check_box::check_box;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
 /// The dialog's title, Fork's.
@@ -67,7 +68,6 @@ pub const CANCEL_BRANCH_CAPTION: &str = "Cancel";
 const DIALOG_WIDTH: f32 = 520.0;
 /// The captions' column: Fork right-aligns them against the values.
 const CAPTION_WIDTH: f32 = 130.0;
-const FONT_SIZE: f32 = 13.0;
 
 /// What a checkout after create does with the working tree's changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +275,8 @@ impl KeyExt for CreateBranchDialog {
 
 impl Component for CreateBranchDialog {
     fn render(&self) -> impl IntoElement {
+        // The warning triangle keeps the theme's warning tone, which Fork Dark's table does
+        // not name.
         let colours = get_theme_or_default().read().colors().clone();
         let ready = self.ready;
         // Discard chosen: the press is the acknowledgement, and builds the token from the
@@ -304,8 +306,8 @@ impl Component for CreateBranchDialog {
                 .width(Size::px(CAPTION_WIDTH))
                 .text_align(TextAlign::End)
                 .max_lines(1)
-                .font_size(FONT_SIZE)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(tones::DETAIL_LABEL)
         };
         let row = |name: &'static str, value: Element| {
             rect()
@@ -320,15 +322,15 @@ impl Component for CreateBranchDialog {
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(6.)
-            .child(commit_glyph(colours.text_primary))
+            .child(commit_glyph(tones::TEXT))
             .child(
                 label()
                     .text(format!("{} {}", self.at.short().as_str(), self.subject))
                     .max_lines(1)
                     .text_overflow(TextOverflow::Ellipsis)
                     .width(Size::px(DIALOG_WIDTH - CAPTION_WIDTH - 60.))
-                    .font_size(FONT_SIZE)
-                    .color(colours.text_primary),
+                    .font_size(metrics::BODY)
+                    .color(tones::TEXT),
             );
         let field = text_field(self.name)
             .width(Size::px(DIALOG_WIDTH - CAPTION_WIDTH - 60.))
@@ -366,8 +368,8 @@ impl Component for CreateBranchDialog {
                 .child(
                     label()
                         .text(COMES_WITH_STASHING)
-                        .font_size(12.)
-                        .color(colours.text_secondary),
+                        .font_size(metrics::BODY)
+                        .color(tones::DETAIL_LABEL),
                 );
             let discard = rect()
                 .horizontal()
@@ -426,8 +428,8 @@ impl Component for CreateBranchDialog {
                         label()
                             .text(reason)
                             .width(Size::flex(1.))
-                            .font_size(12.)
-                            .color(colours.text_secondary)
+                            .font_size(metrics::BODY)
+                            .color(tones::DETAIL_LABEL)
                     }),
             );
         let buttons = rect()
@@ -472,8 +474,8 @@ impl Component for CreateBranchDialog {
                             .text(CREATE_BRANCH_SUBTITLE)
                             .width(Size::fill())
                             .padding(Gaps::new(0., 8., 4., 8.))
-                            .font_size(12.)
-                            .color(colours.text_secondary),
+                            .font_size(metrics::BODY)
+                            .color(tones::DETAIL_LABEL),
                     )
                     .child(content)
                     .child(buttons),
@@ -498,7 +500,6 @@ fn commit_glyph(colour: Color) -> Rect {
 /// pressed by the pointer or, focused, by Space or Return — or, given no press, greyed and
 /// inert, its caption in the disabled colour.
 fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'static>) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
     let enabled = pressed.is_some();
     let dot = rect()
         .width(Size::px(14.))
@@ -508,7 +509,7 @@ fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'sta
         .cross_align(Alignment::Center)
         .border(
             Border::new()
-                .fill(colours.border)
+                .fill(tones::CHECK_BOX_BORDER)
                 .width(1.)
                 .alignment(BorderAlignment::Inner),
         )
@@ -517,7 +518,7 @@ fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'sta
                 .width(Size::px(6.))
                 .height(Size::px(6.))
                 .corner_radius(3.)
-                .background(colours.primary)
+                .background(tones::SELECTION_FOCUSED)
         }));
     let choice = rect()
         .horizontal()
@@ -536,11 +537,11 @@ fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'sta
         .child(
             label()
                 .text(caption)
-                .font_size(FONT_SIZE)
+                .font_size(metrics::BODY)
                 .color(if enabled {
-                    colours.text_primary
+                    tones::TEXT
                 } else {
-                    colours.text_secondary
+                    tones::DISABLED_TEXT
                 }),
         );
     match pressed {

@@ -54,6 +54,19 @@ crate = "async-io"
 exact = true
 allow = []
 
+# freya's features compile whole parts of the toolkit, and the crate allowlist in cairn-guards
+# reads names, never features, so the set Cairn links is pinned here: `winit` (the window, by
+# `default`), `engine` (the Skia canvas the graph and the glyphs paint on), and `icons-lucide`
+# (with the `icons` it implies), the Lucide icons `cairn_ui::style::icons` names. `icons-lucide`
+# adds one crate to the lockfile, `freya-icons`, from the same pinned Freya source; its icons
+# are Lucide's, under the licence recorded under `[licenses]` below. Another feature — another
+# icon set, the window decorations, the zoom shortcuts that bind a literal modifier — is a
+# decision to surface, not a default move.
+[[bans.features]]
+crate = "freya"
+exact = true
+allow = ["default", "engine", "icons", "icons-lucide", "winit"]
+
 [licenses]
 # Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's
 # release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary
@@ -63,6 +76,13 @@ allow = []
 # cannot check, the guard does: the directory holds exactly `EMBEDDED_FONTS`
 # (`crates/cairn-guards/tests/invariants.rs`), each font beside its licence file
 # (`the_embedded_fonts_are_the_roster_each_with_its_licence`).
+#
+# Not read by cargo-deny either: the Lucide icons compiled into the binary by `freya-icons`
+# (the `icons-lucide` feature pinned above) are under Lucide's ISC licence, with an MIT notice
+# for the parts derived from Feather, at `freya-icons/external/lucide/LICENSE` in the pinned
+# Freya source; cargo-deny sees only the crate's declared MIT. Both are permissive and allowed
+# below; both ask that the copyright and permission notice accompany copies of the icons, which
+# a package of the binary carries beside it.
 #
 # Permissive only. Cairn ships as a binary, so a copyleft transitive dependency
 # is a licensing decision about the whole application, never a silent one.

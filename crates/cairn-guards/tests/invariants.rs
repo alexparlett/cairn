@@ -13,11 +13,11 @@ use cairn_guards::{
     gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_body,
     gate_function_calls, gate_function_commands, hand_typed_chords, implements_type,
     job_env_entries, mentions_crate, modifier_constants_blanked, mutates_the_filesystem,
-    names_a_literal_modifier, names_a_modifier_in_code, names_an_element, names_gitoxide_mutation,
-    production_char_literals, production_string_literals, reads_enum_partially,
-    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    names_a_literal_modifier, names_a_modifier_in_code, names_an_element, names_an_icon_set,
+    names_gitoxide_mutation, production_char_literals, production_string_literals,
+    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
     required_skip_violations, rust_sources, spawns_git, spells_a_chord,
-    structs_with_a_field_naming, types_containing, waits_on_work,
+    structs_with_a_field_naming, style_literals, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -5824,6 +5824,404 @@ fn the_element_matcher_catches_the_shapes_it_claims() {
         ),
         vec![(1, "x".to_owned())]
     );
+}
+
+/// The style module: the one place a render file's sizes, tones and icons are written
+/// (`cairn_ui::style`), its assembly file and its directory.
+const STYLE_MODULE_FILE: &str = "crates/cairn-ui/src/style.rs";
+const STYLE_MODULE_DIR: &str = "crates/cairn-ui/src/style/";
+/// The file of the style module that must be seen building colours, so a blind matcher fails.
+const STYLE_TONES: &str = "crates/cairn-ui/src/style/tones.rs";
+
+/// Render files allowed to build their own colours, each with its reason; a row fails once its
+/// file builds none, so an exception cannot outlive its need.
+const STYLE_EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        "crates/cairn-ui/src/diff/palette.rs",
+        "the diff's own tones where Fork Dark's table gives none — its text, its line numbers, \
+         an added word, the side-by-side filler and the gutter's rule — beside the bands it \
+         reads from the style module",
+    ),
+    (
+        "crates/cairn-ui/src/history/lane_palette.rs",
+        "Cairn's eight lane colours, the Okabe–Ito set and a neutral, kept over Fork's for \
+         colour-vision deficiencies",
+    ),
+];
+
+/// Every size handed to a font and every colour a render file draws comes from the style
+/// module (`cairn_ui::style`): a literal at the call site is a second source of the window's
+/// look, which drifts from Fork's measured sizes and Fork Dark's tones unseen. What it reads is
+/// `style_literals`'s list; the style module and `STYLE_EXCEPTIONS` are excused, each row
+/// required to still need its excuse.
+#[test]
+fn chrome_sizes_and_tones_come_from_the_style_module() {
+    let mut tones_seen = false;
+    let mut exceptions_seen = BTreeSet::new();
+    for dir in RENDER_SOURCE_DIRS {
+        let sources = rust_sources(dir);
+        let test_only = test_only_module_files(&sources);
+        let mut scanned = 0usize;
+        for (path, source) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            scanned += 1;
+            let shown = path.to_string_lossy().replace('\\', "/");
+            let hits = style_literals(source);
+            if shown == STYLE_TONES {
+                tones_seen = true;
+                assert!(
+                    hits.iter().any(|(_, kind)| *kind == "colour constructor"),
+                    "{STYLE_TONES} builds no colour the style matcher can see: either the tones \
+                     moved — move this guard with them — or the matcher has gone blind"
+                );
+            }
+            if shown == STYLE_MODULE_FILE || shown.starts_with(STYLE_MODULE_DIR) {
+                continue;
+            }
+            if STYLE_EXCEPTIONS.iter().any(|(file, _)| *file == shown) {
+                if !hits.is_empty() {
+                    exceptions_seen.insert(shown.clone());
+                }
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{shown}:{} writes a {} outside the style module. Read the size from \
+                 `cairn_ui::style::metrics` and the tone from `cairn_ui::style::tones`, adding \
+                 it there with where Fork's survey measured it (CLAUDE.md, Invariants).",
+                hits[0].0,
+                hits[0].1
+            );
+        }
+        assert!(
+            scanned > 0,
+            "the style guard read no production file under {dir}; it is scanning less than it \
+             claims"
+        );
+    }
+    assert!(
+        tones_seen,
+        "{STYLE_TONES} does not exist, so nothing proves the style matcher reads real code"
+    );
+    for (file, _) in STYLE_EXCEPTIONS {
+        assert!(
+            exceptions_seen.contains(*file),
+            "STYLE_EXCEPTIONS excuses {file}, which writes no size or tone of its own any more \
+             (or is gone): remove the row"
+        );
+    }
+}
+
+#[test]
+fn the_style_literal_matcher_catches_the_shapes_it_claims() {
+    for (shape, source, kind) in [
+        (
+            "a literal size",
+            "label().font_size(13.)",
+            "font size literal",
+        ),
+        (
+            "a size wrapped over lines",
+            "label()\n    .font_size(\n        13.0,\n    )",
+            "font size literal",
+        ),
+        (
+            "a size worked out from a literal",
+            "label().font_size(CAPTION + 1.)",
+            "font size literal",
+        ),
+        (
+            "a size kept in a constant beside it",
+            "const CAPTION_SIZE: f32 = 13.;\nfn f() { label().font_size(CAPTION_SIZE); }",
+            "font size constant",
+        ),
+        (
+            "a size kept in a static beside it",
+            "static SMALL: f32 = 9.;\nfn f() { label().font_size(SMALL); }",
+            "font size constant",
+        ),
+        (
+            "a font size another file could read",
+            "pub const ROW_FONT_SIZE: f32 = 13.0;",
+            "font constant",
+        ),
+        (
+            "an RGB colour",
+            "Color::from_rgb(98, 92, 196)",
+            "colour constructor",
+        ),
+        (
+            "an RGB colour split over lines",
+            "Color::from_rgb(\n    98,\n    92,\n    196,\n)",
+            "colour constructor",
+        ),
+        (
+            "an aliased colour type",
+            "use freya::prelude::Color as Tone;\nconst T: Tone = Tone::from_rgb(1, 2, 3);",
+            "colour constructor",
+        ),
+        (
+            "the alias itself",
+            "use freya::prelude::Color as Tone;",
+            "colour type renamed",
+        ),
+        ("a type alias", "type Tone = Color;", "colour type renamed"),
+        (
+            "an ARGB colour",
+            "Color::from_argb(255, 1, 2, 3)",
+            "colour constructor",
+        ),
+        (
+            "a Skia colour",
+            "SkColor::from_rgb(1, 2, 3)",
+            "colour constructor",
+        ),
+        (
+            "a fractional alpha",
+            "Color::from_af32rgb(0.5, 1, 2, 3)",
+            "colour constructor",
+        ),
+        (
+            "a hex colour parsed",
+            "Color::from_hex(text)",
+            "colour constructor",
+        ),
+        (
+            "an HSV colour",
+            "Color::from_hsv(0.1, 0.2, 0.3)",
+            "colour constructor",
+        ),
+        (
+            "a packed colour",
+            "Color::new(0xFF282828)",
+            "colour constant",
+        ),
+        (
+            "a named colour",
+            "paint(canvas, glyph, Color::WHITE)",
+            "colour constant",
+        ),
+        (
+            "a named colour, spaced",
+            "Color :: TRANSPARENT",
+            "colour constant",
+        ),
+        (
+            "an RGB tuple into a colour",
+            ".background((0x28, 0x28, 0x28))",
+            "colour tuple",
+        ),
+        (
+            "an RGBA tuple into a colour",
+            ".color((0, 0, 0, 30))",
+            "colour tuple",
+        ),
+        (
+            "a tuple kept for a colour",
+            "const GROUND: (u8, u8, u8) = (20u8, 20, 20);",
+            "colour tuple",
+        ),
+        (
+            "a hex string",
+            "const TONE: &str = \"#1A1A1A\";",
+            "colour string",
+        ),
+        (
+            "a short hex string",
+            "let tone = \"#fff\";",
+            "colour string",
+        ),
+    ] {
+        assert!(
+            style_literals(source)
+                .iter()
+                .any(|(_, found)| *found == kind),
+            "the style matcher missed {shape} (as {kind}): {source:?} gave {:?}",
+            style_literals(source)
+        );
+    }
+    for constructor in cairn_guards::COLOUR_CONSTRUCTORS {
+        assert!(
+            !style_literals(&format!("let x = Tone::{constructor}(a, b, c);")).is_empty(),
+            "`{constructor}` is on the roster but the matcher does not read it"
+        );
+    }
+    for constant in cairn_guards::COLOUR_CONSTANTS {
+        assert!(
+            !style_literals(&format!("let x = Color::{constant};")).is_empty(),
+            "`{constant}` is on the roster but the matcher does not read it"
+        );
+    }
+    for (shape, source) in [
+        ("a size from the module", "label().font_size(metrics::BODY)"),
+        (
+            "a size handed in",
+            "fn text(size: f32) { label().font_size(size); }",
+        ),
+        (
+            "a size named from the module",
+            "pub const ROW_FONT_SIZE: f32 = metrics::BODY;\nlabel().font_size(ROW_FONT_SIZE)",
+        ),
+        ("a row height", "const ROW_HEIGHT: f32 = 26.0;"),
+        ("a tone from the module", ".background(tones::HISTORY)"),
+        ("a call's arguments", "Gaps::new(0., 8., 0., 8.)"),
+        ("integer arguments", "Gaps::new(0, 8, 0, 8)"),
+        ("a pair", "let at = (3, 4);"),
+        ("five numbers", "let five = (1, 2, 3, 4, 5);"),
+        ("a macro's arguments", "assert_eq!(1, 2, 3)"),
+        (
+            "a comment",
+            "// Color::from_rgb(1, 2, 3) and font_size(13.)",
+        ),
+        ("a string", "const WHAT: &str = \"font_size(13.)\";"),
+        ("not a hex colour", "let tag = \"#hash\";"),
+        ("a heading anchor", "let link = \"#readme-section\";"),
+        ("a longer name", "let tone = from_rgb_table(x);"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { Color::from_rgb(1, 2, 3); label().font_size(13.); }\n}",
+        ),
+    ] {
+        assert!(
+            style_literals(source).is_empty(),
+            "the style matcher flagged {shape}: {source:?} gave {:?}",
+            style_literals(source)
+        );
+    }
+}
+
+/// The one module that names the icon set.
+const ICON_MODULE: &str = "crates/cairn-ui/src/style/icons.rs";
+
+/// Every icon is named through the icon module (`cairn_ui::style::icons`): a view asks for an
+/// icon by what it means, and only that module names the set, so turning on another set, or
+/// drawing an SVG of one's own, is a change to one file and the `deny.toml` pin beside it.
+#[test]
+fn every_icon_is_named_through_the_icon_module() {
+    let mut module_seen = false;
+    for dir in RENDER_SOURCE_DIRS {
+        let sources = rust_sources(dir);
+        let test_only = test_only_module_files(&sources);
+        let mut scanned = 0usize;
+        for (path, source) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            scanned += 1;
+            let shown = path.to_string_lossy().replace('\\', "/");
+            let hits = names_an_icon_set(source);
+            if shown == ICON_MODULE {
+                module_seen = true;
+                assert!(
+                    hits.iter().any(|(_, named)| *named == "lucide"),
+                    "{ICON_MODULE} does not name `lucide`: either the icons moved — move this \
+                     guard with them — or the matcher has gone blind"
+                );
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{shown}:{} names `{}`, an icon set, outside the icon module. Add the icon to \
+                 `cairn_ui::style::icons` ({ICON_MODULE}) and call it from there (CLAUDE.md, \
+                 Invariants).",
+                hits[0].0,
+                hits[0].1
+            );
+        }
+        assert!(
+            scanned > 0,
+            "the icon guard read no production file under {dir}; it is scanning less than it \
+             claims"
+        );
+    }
+    assert!(
+        module_seen,
+        "{ICON_MODULE} does not exist, so the guard exempts a file nobody can see"
+    );
+}
+
+#[test]
+fn the_icon_set_matcher_catches_the_shapes_it_claims() {
+    for (shape, source, named) in [
+        ("the set", "let svg = lucide::cloud();", "lucide"),
+        ("the set imported", "use freya::icons::lucide;", "lucide"),
+        ("Freya's re-export", "use freya::icons::*;", "freya::icons"),
+        (
+            "Freya's re-export, spaced",
+            "freya :: icons :: lucide :: tag()",
+            "freya::icons",
+        ),
+        (
+            "Freya's re-export in a braced import",
+            "use freya::{icons, prelude::*};",
+            "freya::icons",
+        ),
+        (
+            "Freya's re-export aliased",
+            "use freya::{prelude::*, icons as set};",
+            "freya::icons",
+        ),
+        (
+            "the icon crate",
+            "use freya_icons::lucide::tag;",
+            "freya_icons",
+        ),
+        ("the SVG component", "SvgViewer::new(bytes)", "SvgViewer"),
+        (
+            "the SVG component wrapped",
+            "SvgViewer\n    ::new(bytes)",
+            "SvgViewer",
+        ),
+        ("Freya's arrow", "ArrowIcon::new()", "ArrowIcon"),
+        ("Freya's tick", "TickIcon::new()", "TickIcon"),
+    ] {
+        assert!(
+            names_an_icon_set(source)
+                .iter()
+                .any(|(_, found)| *found == named),
+            "the icon matcher missed {shape}: {source:?} gave {:?}",
+            names_an_icon_set(source)
+        );
+    }
+    for ident in cairn_guards::ICON_SET_IDENTS {
+        assert!(
+            !names_an_icon_set(&format!("let x = {ident};")).is_empty(),
+            "`{ident}` is on the roster but the matcher does not read it"
+        );
+    }
+    for (shape, source) in [
+        (
+            "the icon module",
+            "use crate::style::icons;\nicons::cloud(12., tone)",
+        ),
+        (
+            "an icon called from it",
+            "cairn_ui::style::icons::branch(12., tone)",
+        ),
+        ("a longer name", "let lucidely = 1;"),
+        (
+            "another freya module",
+            "use freya::{prelude::*, text_edit};",
+        ),
+        (
+            "a nested icons module",
+            "use freya::{prelude::{icons_of, x}};",
+        ),
+        ("a comment", "// lucide::cloud() through SvgViewer"),
+        ("a string", "const WHAT: &str = \"freya::icons\";"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { SvgViewer::new(lucide::cloud()); }\n}",
+        ),
+    ] {
+        assert!(
+            names_an_icon_set(source).is_empty(),
+            "the icon matcher flagged {shape}: {source:?} gave {:?}",
+            names_an_icon_set(source)
+        );
+    }
 }
 
 /// The one key policy every text field takes: the one render file

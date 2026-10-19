@@ -43,6 +43,7 @@ use crate::local_changes::menu::{
     no_discard,
 };
 use crate::local_changes::selection::LocalSelection;
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
@@ -76,7 +77,6 @@ pub const NO_PATH_MATCHES: &str = "No path matches the filter.";
 /// A heading's height.
 pub const LIST_HEADER_HEIGHT: f32 = 26.0;
 
-const FONT_SIZE: f32 = 13.0;
 const BADGE_WIDTH: f32 = 18.0;
 
 /// The heading over `list`.
@@ -243,7 +243,6 @@ impl KeyExt for LocalChangesList {
 
 impl Component for LocalChangesList {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         // The split's height as last laid out, which turns a dragged height into a share; and
         // the share itself when the caller keeps none. Peeked: a measurement redraws nothing.
         let mut split_height = use_state(|| 0f32);
@@ -270,8 +269,8 @@ impl Component for LocalChangesList {
                     filter_count(self.shown_paths.unwrap_or(total), total)
                 })
                 .max_lines(1)
-                .font_size(12.)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(tones::DETAIL_LABEL)
         });
         let drag = ListDrag::used();
         let section = |list: ChangeList, shown: &Readable<ShownFiles>, rows: usize| ListSection {
@@ -293,8 +292,8 @@ impl Component for LocalChangesList {
                 .child(
                     label()
                         .text(NO_PATH_MATCHES)
-                        .font_size(FONT_SIZE)
-                        .color(colours.text_placeholder),
+                        .font_size(metrics::BODY)
+                        .color(tones::PLACEHOLDER),
                 )
                 .into()
         } else {
@@ -391,11 +390,16 @@ struct ListData {
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
     list_id: AccessibilityId,
+    /// Whether the list has focus, which a selected row's tone says.
+    focused: bool,
 }
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
-        self.list == other.list && self.rows == other.rows && self.list_id == other.list_id
+        self.list == other.list
+            && self.rows == other.rows
+            && self.list_id == other.list_id
+            && self.focused == other.focused
     }
 }
 
@@ -416,23 +420,27 @@ fn button_caption(list: ChangeList, all: bool) -> &'static str {
 }
 
 /// A small control of a list's heading: pressable without taking focus from the list, as
-/// Freya's `Button` would. Disabled, it reports nothing and draws dimmed.
+/// Freya's `Button` would. Disabled, it reports nothing and draws in Fork's disabled tones.
 fn heading_control(
     child: Element,
     name: &str,
     enabled: bool,
     pressed: impl Fn() + 'static,
 ) -> Rect {
-    let colours = get_theme_or_default().read().colors().clone();
     let control = rect()
         .padding(Gaps::new(1., 6., 1., 6.))
         .corner_radius(4.)
+        .background(if enabled {
+            tones::BUTTON
+        } else {
+            tones::DISABLED_FILL
+        })
         .border(
             Border::new()
                 .fill(if enabled {
-                    colours.border
+                    tones::BUTTON_BORDER
                 } else {
-                    colours.disabled
+                    tones::DISABLED_FILL
                 })
                 .width(1.),
         )
@@ -455,7 +463,6 @@ impl Component for ListSection {
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut edge = crate::edge_scroll::use_edge_scroll(controller);
         let doubled = use_state(|| false);
-        let colours = get_theme_or_default().read().colors().clone();
         let (list, drag) = (self.list, self.drag);
         // A drag from the other list scrolls this one at its edges while it is on: the list it
         // would drop on, never the one it came from.
@@ -480,6 +487,8 @@ impl Component for ListSection {
             on_choose: self.on_choose.clone(),
             on_intent: self.on_intent.clone(),
             list_id,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
         // The heading's button acts on the selection when it is in this list, and is greyed
         // while it is in the other or there is none; with the heading press held it is Stage
@@ -498,14 +507,19 @@ impl Component for ListSection {
         });
         let caption = button_caption(list, all);
         let acting = self.on_intent.clone();
+        let pressable = if all { listed } else { selected };
         let button = heading_control(
             label()
                 .text(caption)
-                .font_size(12.)
-                .color(colours.text_primary)
+                .font_size(metrics::BODY)
+                .color(if pressable {
+                    tones::TEXT
+                } else {
+                    tones::DISABLED_TEXT
+                })
                 .into(),
             caption,
-            if all { listed } else { selected },
+            pressable,
             move || {
                 let action = if all {
                     Action::StageOrUnstageAll
@@ -526,9 +540,9 @@ impl Component for ListSection {
         let chevron = TooltipContainer::new(Tooltip::new_text(all_caption)).child(heading_control(
             glyph
                 .draw(if listed {
-                    colours.text_primary
+                    tones::TEXT
                 } else {
-                    colours.disabled
+                    tones::DISABLED_TEXT
                 })
                 .into(),
             all_caption,
@@ -560,15 +574,15 @@ impl Component for ListSection {
                     .cross_align(Alignment::Center)
                     .padding(Gaps::new(0., 8., 0., 8.))
                     .spacing(6.)
-                    .background(colours.surface_tertiary)
+                    .background(tones::HEADING_BAR)
                     .child(
                         label()
                             .text(list_caption(list))
                             .width(Size::flex(1.))
                             .max_lines(1)
-                            .font_size(12.)
+                            .font_size(metrics::BODY)
                             .font_weight(FontWeight::BOLD)
-                            .color(colours.text_secondary),
+                            .color(tones::TEXT),
                     )
                     .child(chevron)
                     .child(button),
@@ -577,11 +591,12 @@ impl Component for ListSection {
                 edge.on(rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
+                    .background(tones::HISTORY)
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
                     .maybe(focus() == Focus::Keyboard || targeted, |el| {
-                        el.border(Border::new().fill(colours.border_focus).width(1.))
+                        el.border(Border::new().fill(tones::ACCENT).width(1.))
                     })
                     .on_key_down(keyboard(&data, controller)))
                     .child(
@@ -692,23 +707,27 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let Some(at) = data.shown.read().file_at(item.index) else {
         return row.into();
     };
-    let (drawn, path) = {
+    let list = data.list;
+    let chosen = tones::selected(data.focused);
+    let (drawn, path, selected) = {
         let changes = data.changes.read();
-        let Some(change) = changes.get(data.list, at) else {
+        let Some(change) = changes.get(list, at) else {
             // The count and the rows can disagree for one frame.
             return row.into();
         };
-        (change_row(&change), change.path.clone())
+        // Read, not peeked: the rows redraw when the selection changes.
+        let selected = data.selection.as_ref().is_some_and(|selection| {
+            selection
+                .read()
+                .as_ref()
+                .is_some_and(|selection| selection.holds(list, change.path))
+        });
+        (
+            change_row(&change, selected.then_some(chosen.text)),
+            change.path.clone(),
+            selected,
+        )
     };
-    let list = data.list;
-    // Read, not peeked: the rows redraw when the selection changes.
-    let selected = data.selection.as_ref().is_some_and(|selection| {
-        selection
-            .read()
-            .as_ref()
-            .is_some_and(|selection| selection.holds(list, &path))
-    });
-    let highlight = get_theme_or_default().read().colors().surface_secondary;
     let (list_id, on_choose, on_intent) =
         (data.list_id, data.on_choose.clone(), data.on_intent.clone());
     let (held, mut drag, mut doubled) = (data.held.clone(), data.drag, data.doubled);
@@ -716,7 +735,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let downing = (data.on_intent.clone(), data.on_choose.clone());
     let (changes, selection) = (data.changes.clone(), data.selection.clone());
     let menu_path = path.clone();
-    row.maybe(selected, |el| el.background(highlight))
+    row.maybe(selected, |el| el.background(chosen.band))
         .on_pointer_down(move |e: Event<PointerEventData>| {
             match e.button() {
                 Some(MouseButton::Right) => {
@@ -784,20 +803,24 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
-/// One path's row: its badge and its text.
-fn change_row(change: &LocalChange<'_>) -> Element {
+/// One path's row: its badge and its text, the text bold in `selected`'s tone when the row is
+/// selected.
+fn change_row(change: &LocalChange<'_>, selected: Option<Color>) -> Element {
+    // Fork Dark's badges where it gives one (an added path's green, a modified one's yellow);
+    // the theme's status tones for the rest. Colour reinforces the shape and never stands in
+    // for it.
     let colours = get_theme_or_default().read().colors().clone();
-    // Colour reinforces the shape and never stands in for it.
     let colour = match change.kind {
-        ChangeKind::Added => colours.success,
+        ChangeKind::Added => tones::ADDED_BADGE,
+        ChangeKind::Modified | ChangeKind::TypeChanged => tones::MODIFIED_BADGE,
         ChangeKind::Deleted => colours.error,
-        ChangeKind::Modified | ChangeKind::TypeChanged | ChangeKind::Conflicted => colours.warning,
+        ChangeKind::Conflicted => colours.warning,
         ChangeKind::Renamed | ChangeKind::Copied | ChangeKind::Submodule => colours.info,
     };
     let badge: Element = match change_badge(change.kind) {
         ChangeBadge::Letter(letter) => label()
             .text(letter)
-            .font_size(FONT_SIZE)
+            .font_size(metrics::BODY)
             .font_weight(FontWeight::BOLD)
             .color(colour)
             .into(),
@@ -818,8 +841,9 @@ fn change_row(change: &LocalChange<'_>) -> Element {
             label()
                 .text(change_text(change))
                 .max_lines(1)
-                .font_size(FONT_SIZE)
-                .color(colours.text_primary)
+                .font_size(metrics::BODY)
+                .color(selected.unwrap_or(tones::TEXT))
+                .maybe(selected.is_some(), |el| el.font_weight(FontWeight::BOLD))
                 .font_family(DIFF_FONT_FAMILY),
         )
         .into()

@@ -58,7 +58,8 @@ fn main() {
 }
 
 fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
-    use_init_theme(dark_theme);
+    // Fork Dark's tones, carried into Freya's own components (`cairn_ui::style::tones`).
+    use_init_theme(cairn_ui::style::tones::theme);
 
     // The one copy of the history; this scope must not read it, only `progress`.
     let rows = use_state(History::new);

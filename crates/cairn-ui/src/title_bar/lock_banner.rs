@@ -11,6 +11,7 @@ use async_io::Timer;
 use freya::prelude::*;
 
 use crate::dialogs::git_error::REMOVE_LOCK_CAPTION;
+use crate::style::{metrics, tones};
 
 /// What the banner says.
 pub const LOCK_BANNER_TEXT: &str = "index.lock is in this repository, so git can't change the \
@@ -85,7 +86,6 @@ impl Component for LockBanner {
         if !*stale.read() {
             return rect().into_element();
         }
-        let colours = get_theme_or_default().read().colors().clone();
         let on_remove = self.on_remove.clone();
         rect()
             .horizontal()
@@ -94,13 +94,13 @@ impl Component for LockBanner {
             .cross_align(Alignment::center())
             .spacing(12.)
             .padding(Gaps::new(6., 12., 6., 12.))
-            .background(colours.surface_tertiary)
+            .background(tones::BANNER)
             .child(
                 // Wrapped, never cut.
                 label()
                     .text(LOCK_BANNER_TEXT)
-                    .font_size(13.)
-                    .color(colours.text_primary)
+                    .font_size(metrics::BODY)
+                    .color(tones::TEXT)
                     .width(Size::flex(1.)),
             )
             .child(

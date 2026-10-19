@@ -25,6 +25,7 @@ use cairn_model::Oid;
 use freya::prelude::*;
 
 use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::style::{metrics, tones};
 
 /// The popover's title, Fork's word for its log.
 pub const ACTIVITY_TITLE: &str = "Activity";
@@ -259,7 +260,6 @@ impl PartialEq for Lines {
 }
 
 fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
     let index = item.index;
     let Some(entry) = list.entries.get(index) else {
         return rect().key(index).height(Size::px(item.size)).into();
@@ -276,7 +276,7 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
         .cross_align(Alignment::center())
         .spacing(6.)
         .padding(Gaps::new(2., 8., 2., 8.))
-        .maybe(selected, |row| row.background(colours.surface_secondary))
+        .maybe(selected, |row| row.background(tones::MENU_HOVER))
         .on_press(move |_| on_select.call(index))
         .child(
             rect()
@@ -286,30 +286,30 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
                         .text(entry.name.clone())
                         .max_lines(1)
                         .text_overflow(TextOverflow::Ellipsis)
-                        .font_size(13.)
-                        .color(colours.text_primary),
+                        .font_size(metrics::BODY)
+                        .color(tones::TEXT),
                 )
                 .maybe_child(entry.result.clone().map(|result| {
                     label()
                         .text(result)
                         .max_lines(1)
                         .text_overflow(TextOverflow::Ellipsis)
-                        .font_size(11.)
-                        .color(colours.text_secondary)
+                        .font_size(metrics::CAPTION)
+                        .color(tones::DETAIL_LABEL)
                 })),
         )
         .child(
             label()
                 .text(entry.started.clone())
                 .max_lines(1)
-                .font_size(11.)
-                .color(colours.text_secondary),
+                .font_size(metrics::CAPTION)
+                .color(tones::DETAIL_LABEL),
         )
         .maybe_child(entry.status.glyph().map(|glyph| {
             label()
                 .text(glyph)
-                .font_size(12.)
-                .color(colours.text_primary)
+                .font_size(metrics::BODY)
+                .color(tones::TEXT)
         }))
         .maybe_child(entry.cancellable.then(|| {
             Button::new()
@@ -378,13 +378,12 @@ impl Component for EntryLines {
 }
 
 fn line_row(item: VirtualItem, lines: &Lines) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
     let (text, colour) = match item.index.checked_sub(usize::from(lines.earlier_not_kept)) {
-        None => (EARLIER_NOT_KEPT.to_owned(), colours.text_secondary),
+        None => (EARLIER_NOT_KEPT.to_owned(), tones::DETAIL_LABEL),
         Some(index) => match lines.lines.get(index) {
-            Some(ActivityLine::Ran(command)) => (command.clone(), colours.text_primary),
-            Some(ActivityLine::Output(output)) => (output.clone(), colours.text_secondary),
-            None => (String::new(), colours.text_secondary),
+            Some(ActivityLine::Ran(command)) => (command.clone(), tones::TEXT),
+            Some(ActivityLine::Output(output)) => (output.clone(), tones::DETAIL_LABEL),
+            None => (String::new(), tones::DETAIL_LABEL),
         },
     };
     rect()
@@ -397,7 +396,7 @@ fn line_row(item: VirtualItem, lines: &Lines) -> Element {
                 .text(text)
                 .max_lines(1)
                 .font_family(DIFF_FONT_FAMILY)
-                .font_size(12.)
+                .font_size(metrics::BODY)
                 .color(colour),
         )
         .into()
@@ -413,7 +412,6 @@ fn header_line(entry: &ActivityEntry) -> String {
 
 impl Component for ActivityPopover {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let close = self.on_close.clone();
         let closing = self.on_close.clone();
         let list = EntryList {
@@ -429,8 +427,8 @@ impl Component for ActivityPopover {
                 .child(
                     label()
                         .text(NO_ACTIVITY)
-                        .font_size(12.)
-                        .color(colours.text_secondary),
+                        .font_size(metrics::BODY)
+                        .color(tones::DETAIL_LABEL),
                 )
                 .into()
         } else {
@@ -463,24 +461,24 @@ impl Component for ActivityPopover {
                     label()
                         .text(entry.name.clone())
                         .max_lines(1)
-                        .font_size(14.)
+                        .font_size(metrics::HEADING)
                         .font_weight(FontWeight::BOLD)
-                        .color(colours.text_primary),
+                        .color(tones::TEXT),
                 )
                 .child(
                     label()
                         .text(header_line(entry))
                         .max_lines(1)
-                        .font_size(12.)
-                        .color(colours.text_secondary),
+                        .font_size(metrics::BODY)
+                        .color(tones::DETAIL_LABEL),
                 )
                 // One sentence, never cut.
                 .maybe_child(entry.sentence.clone().map(|sentence| {
                     label()
                         .text(sentence)
                         .width(Size::fill())
-                        .font_size(12.)
-                        .color(colours.text_primary)
+                        .font_size(metrics::BODY)
+                        .color(tones::TEXT)
                 }))
                 // The prompt it confirmed, whole and wrapped: laid out above the lines, so their
                 // rows keep one fixed height.
@@ -490,15 +488,15 @@ impl Component for ActivityPopover {
                         .child(
                             label()
                                 .text(CONFIRMED_CAPTION)
-                                .font_size(11.)
-                                .color(colours.text_secondary),
+                                .font_size(metrics::CAPTION)
+                                .color(tones::DETAIL_LABEL),
                         )
                         .child(
                             label()
                                 .text(prompt)
                                 .width(Size::fill())
-                                .font_size(12.)
-                                .color(colours.text_primary),
+                                .font_size(metrics::BODY)
+                                .color(tones::TEXT),
                         )
                 }))
                 .maybe_child(replaced.map(|commit| {
@@ -511,7 +509,7 @@ impl Component for ActivityPopover {
                     rect()
                         .width(Size::fill())
                         .height(Size::flex(1.))
-                        .border(Border::new().fill(colours.border).width(1.))
+                        .border(Border::new().fill(tones::MENU_BORDER).width(1.))
                         .child(lines),
                 )
         });
@@ -544,8 +542,8 @@ impl Component for ActivityPopover {
                     .width(Size::px(ARROW))
                     .height(Size::px(ARROW))
                     .rotate(45.)
-                    .background(colours.background)
-                    .border(Border::new().fill(colours.border).width(1.)),
+                    .background(tones::MENU)
+                    .border(Border::new().fill(tones::MENU_BORDER).width(1.)),
             )
             .child(
                 rect()
@@ -557,9 +555,9 @@ impl Component for ActivityPopover {
                             .width(Size::px(width))
                             .height(Size::px(HEIGHT))
                             .corner_radius(8.)
-                            .background(colours.background)
-                            .border(Border::new().fill(colours.border).width(1.))
-                            .shadow(Shadow::new().y(4.).blur(5.).color((0, 0, 0, 30)))
+                            .background(tones::MENU)
+                            .border(Border::new().fill(tones::MENU_BORDER).width(1.))
+                            .shadow(Shadow::new().y(4.).blur(5.).color(tones::MENU_SHADOW))
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
                                 if e.key == Key::Named(NamedKey::Escape) {
                                     closing.call(());
@@ -571,9 +569,9 @@ impl Component for ActivityPopover {
                                 rect().padding(Gaps::new(8., 10., 4., 10.)).child(
                                     label()
                                         .text(ACTIVITY_TITLE)
-                                        .font_size(13.)
+                                        .font_size(metrics::BODY)
                                         .font_weight(FontWeight::BOLD)
-                                        .color(colours.text_primary),
+                                        .color(tones::TEXT),
                                 ),
                             )
                             .child(

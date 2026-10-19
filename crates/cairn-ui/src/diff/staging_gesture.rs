@@ -49,6 +49,7 @@ use crate::diff::view::{DIFF_ROW_HEIGHT, number_column_width, text_width};
 use crate::edge_scroll::EdgeScroll;
 use crate::end_room::SCROLLBAR_THICKNESS;
 use crate::local_changes::drag::DRAG_THRESHOLD;
+use crate::style::{metrics, tones};
 
 /// A hovered chunk's action over the unstaged diff (Fork's).
 pub const STAGE_CHUNK_CAPTION: &str = "Stage";
@@ -796,7 +797,6 @@ impl Component for GestureLayer {
 /// One floating action: a small filled button that takes no focus — the diff keeps it, and
 /// its chords with it — and whose press never begins a drag.
 fn floating_action(caption: String, pressed: impl Fn() + 'static) -> Rect {
-    let colours = get_theme_or_default().read().colors().clone();
     rect()
         .padding(Gaps::new(2., 8., 2., 8.))
         .corner_radius(4.)
@@ -807,9 +807,9 @@ fn floating_action(caption: String, pressed: impl Fn() + 'static) -> Rect {
         .child(
             label()
                 .text(caption)
-                .font_size(12.)
+                .font_size(metrics::BODY)
                 .max_lines(1)
-                .color(colours.text_inverse),
+                .color(tones::SELECTED_TEXT),
         )
 }
 

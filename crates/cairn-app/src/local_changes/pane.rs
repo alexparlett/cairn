@@ -45,6 +45,7 @@ use cairn_model::{
     WorkingTreeStatus,
 };
 use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     DiffHeader, DiffNotice, DiffNoticeView, DiffView, Gesture, GestureAct, GestureSide, LineDrag,
     ListIntent, LocalChangesList, ModeRow, SELECTION_CLEARED,
@@ -306,18 +307,19 @@ fn quieten(view: View) {
 
 /// One line over the lists: why the last status read failed, the lists before it still drawn.
 fn banner(message: String) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
+    // Its text keeps the theme's error tone, which Fork Dark's table does not name.
+    let error = get_theme_or_default().read().colors().error;
     rect()
         .width(Size::fill())
         .padding(Gaps::new(4., 8., 4., 8.))
-        .background(colours.surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
-                .font_size(12.)
-                .color(colours.error),
+                .font_size(metrics::BODY)
+                .color(error),
         )
         .into()
 }

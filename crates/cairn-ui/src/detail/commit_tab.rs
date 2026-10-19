@@ -42,6 +42,7 @@ use crate::diff::toggle_glyphs::Glyph;
 use crate::diff::view::{RowGeometry, draw_row};
 use crate::history::date_text;
 use crate::history::ref_chips::{Chip, chips_row};
+use crate::style::{metrics, tones};
 
 /// Every row of the tab is this tall — a file opened in place's rows too, its diff's among
 /// them: a fixed size is what keeps the list O(viewport), and the virtualising view lays
@@ -66,9 +67,6 @@ pub fn budget_notice(collapsed: usize) -> String {
     )
 }
 
-const FONT_SIZE: f32 = 13.0;
-const SUBJECT_FONT_SIZE: f32 = 15.0;
-const CAPTION_FONT_SIZE: f32 = 11.0;
 const CAPTION_WIDTH: f32 = 72.0;
 const BADGE_WIDTH: f32 = 18.0;
 const PADDING: f32 = 12.0;
@@ -417,6 +415,8 @@ struct TabData {
     view_width: f32,
     /// Read as a side-by-side row is built, for the sideways scroll its text slides by.
     scroll: ScrollController,
+    /// Whether the tab has focus, which the current file's tone says.
+    focused: bool,
 }
 
 /// One commit's list. Keyed by the commit, so another commit is a list of its own: it opens
@@ -452,11 +452,10 @@ impl Component for TabBody {
             cursor,
             view_width: *width.read(),
             scroll: controller,
+            focused: focus().is_focused(),
         };
         // The rows after the last are room for the horizontal scrollbar (`end_room`).
         let length = crate::end_room::with_end_room(data.content.length(), DETAIL_ROW_HEIGHT);
-        let border = colours().border_focus;
-
         rect()
             .expanded()
             .a11y_id(tab_id)
@@ -465,7 +464,7 @@ impl Component for TabBody {
             .on_key_down(keyboard(&data, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
             .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(border).width(1.))
+                el.border(Border::new().fill(tones::ACCENT).width(1.))
             })
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
@@ -594,7 +593,15 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
 fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     let content = &data.content;
     // Read, not peeked: the list redraws when the answer it shows is replaced.
-    let Some(drawn) = content.changes.read().files.get(index).map(file_row) else {
+    let current = data.current == Some(index);
+    let chosen = tones::selected(data.focused);
+    let Some(drawn) = content
+        .changes
+        .read()
+        .files
+        .get(index)
+        .map(|file| file_row(file, current.then_some(chosen.text)))
+    else {
         // The count and the files can disagree for one frame; an empty row of the right
         // height stands in.
         return row.into();
@@ -608,16 +615,20 @@ fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     row.horizontal()
         .main_align(Alignment::Start)
         .cross_align(Alignment::Center)
-        .maybe(data.current == Some(index), |el| {
-            el.background(colours().surface_secondary)
-        })
+        .maybe(current, |el| el.background(chosen.band))
         .on_press(move |_| {
             tab_id.request_focus();
             cursor.set(Some(index));
             on_file.call(index);
             on_file_pressed.call(index);
         })
-        .child(if open { Glyph::Open } else { Glyph::Closed }.draw(colours().text_secondary))
+        .child(
+            if open { Glyph::Open } else { Glyph::Closed }.draw(if current {
+                chosen.text
+            } else {
+                tones::DETAIL_LABEL
+            }),
+        )
         .child(drawn)
         .into()
 }
@@ -641,8 +652,8 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
         return plain(label());
     };
     match opened {
-        Opened::Reading => plain(text(READING_DIFF, FONT_SIZE, colours().text_placeholder)),
-        Opened::Failed(message) => plain(text(message.clone(), FONT_SIZE, colours().error)),
+        Opened::Reading => plain(text(READING_DIFF, metrics::BODY, tones::PLACEHOLDER)),
+        Opened::Failed(message) => plain(text(message.clone(), metrics::BODY, colours().error)),
         Opened::Shown(shown) => {
             if let Some(notice) = DiffNotice::of(shown) {
                 let rows = notice_rows(&notice);
@@ -668,7 +679,7 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
             }
             let hides = shown.hides_changes();
             if hides && under == 0 {
-                return plain(text(HIDDEN_CHANGES_NOTICE, FONT_SIZE, DIFF_MUTED));
+                return plain(text(HIDDEN_CHANGES_NOTICE, metrics::BODY, DIFF_MUTED));
             }
             let geometry = RowGeometry::of(
                 shown,
@@ -697,15 +708,15 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
         NoticeTone::Plain => DIFF_TEXT,
     };
     match row {
-        NoticeRow::Title(words) => text(words.clone(), FONT_SIZE, DIFF_TEXT),
-        NoticeRow::Muted(words) => text(words.clone(), CAPTION_FONT_SIZE + 1., DIFF_MUTED),
+        NoticeRow::Title(words) => text(words.clone(), metrics::BODY, DIFF_TEXT),
+        NoticeRow::Muted(words) => text(words.clone(), metrics::BODY, DIFF_MUTED),
         NoticeRow::Side {
             caption,
             tone: side,
             text: words,
         } => label()
             .max_lines(1)
-            .font_size(CAPTION_FONT_SIZE + 1.)
+            .font_size(metrics::BODY)
             .color(tone(side))
             .text(match words {
                 Some(words) => format!("{caption}  {words}"),
@@ -715,7 +726,11 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
             text: words,
             tone: line,
         } => text(words.clone(), DIFF_FONT_SIZE, tone(line)).font_family(DIFF_FONT_FAMILY),
-        NoticeRow::LoadDiff => text(crate::diff::notice::LOAD_DIFF_CAPTION, FONT_SIZE, DIFF_TEXT),
+        NoticeRow::LoadDiff => text(
+            crate::diff::notice::LOAD_DIFF_CAPTION,
+            metrics::BODY,
+            DIFF_TEXT,
+        ),
     }
 }
 
@@ -738,13 +753,9 @@ fn files_bar(content: &TabContent) -> Element {
         .width(Size::fill())
         .cross_align(Alignment::Center)
         .spacing(GAP)
-        .child(rect().width(Size::flex(1.)).maybe_child(stopped.then(|| {
-            text(
-                budget_notice(collapsed),
-                FONT_SIZE,
-                colours().text_secondary,
-            )
-        })))
+        .child(rect().width(Size::flex(1.)).maybe_child(
+            stopped.then(|| text(budget_notice(collapsed), metrics::BODY, tones::DETAIL_LABEL)),
+        ))
         .child(
             Button::new()
                 .compact()
@@ -758,6 +769,7 @@ fn files_bar(content: &TabContent) -> Element {
         .into()
 }
 
+/// The theme's status tones (error, warning and the badges Fork Dark's table does not name).
 fn colours() -> ColorsSheet {
     get_theme_or_default().read().colors().clone()
 }
@@ -771,7 +783,7 @@ fn text(content: impl Into<String>, size: f32, colour: Color) -> Label {
 }
 
 fn caption(content: &'static str) -> Label {
-    text(content, CAPTION_FONT_SIZE, colours().text_placeholder)
+    text(content, metrics::CAPTION, tones::DETAIL_LABEL)
 }
 
 fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
@@ -780,8 +792,8 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
         Line::Captions => columns(caption(AUTHOR_CAPTION), caption(COMMITTER_CAPTION)),
         Line::People { author, committer } => columns(person(author), person(committer)),
         Line::Dates { author, committer } => columns(
-            text(author.clone(), FONT_SIZE, colours.text_secondary),
-            text(committer.clone(), FONT_SIZE, colours.text_secondary),
+            text(author.clone(), metrics::BODY, tones::DETAIL_LABEL),
+            text(committer.clone(), metrics::BODY, tones::DETAIL_LABEL),
         ),
         // Cut at the pane's edge, never wrapped and never counted (Fork's Mac pane).
         Line::Refs(refs) => rect()
@@ -805,7 +817,7 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
             .into(),
         Line::Id(id) => labelled(
             ID_CAPTION,
-            text(id.clone(), FONT_SIZE, colours.text_primary)
+            text(id.clone(), metrics::BODY, tones::TEXT)
                 .font_family(DIFF_FONT_FAMILY)
                 .into(),
         ),
@@ -825,8 +837,8 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
                         .child(
                             text(
                                 parent.short().as_str().to_owned(),
-                                FONT_SIZE,
-                                colours.text_highlight,
+                                metrics::BODY,
+                                tones::LINK,
                             )
                             .font_family(DIFF_FONT_FAMILY)
                             .text_decoration(TextDecoration::Underline),
@@ -838,16 +850,16 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
         Line::Rule => rect()
             .width(Size::fill())
             .height(Size::px(1.))
-            .background(colours.border)
+            .background(tones::RULE)
             .into(),
-        Line::Subject(subject) => text(subject.clone(), SUBJECT_FONT_SIZE, colours.text_primary)
+        Line::Subject(subject) => text(subject.clone(), metrics::DETAIL_SUBJECT, tones::TEXT)
             .font_weight(FontWeight::BOLD)
             .into(),
-        Line::Body(body) => text(body.clone(), FONT_SIZE, colours.text_primary).into(),
+        Line::Body(body) => text(body.clone(), metrics::BODY, tones::TEXT).into(),
         Line::CutShort(needed) => {
-            text(cut_short_notice(*needed), FONT_SIZE, colours.warning).into()
+            text(cut_short_notice(*needed), metrics::BODY, colours.warning).into()
         }
-        Line::NoFiles => text(NO_FILES, FONT_SIZE, colours.text_placeholder).into(),
+        Line::NoFiles => text(NO_FILES, metrics::BODY, tones::PLACEHOLDER).into(),
         // Drawn by the list, which holds what it reads (`files_bar`).
         Line::FilesBar => rect().into(),
     }
@@ -878,11 +890,10 @@ fn columns(left: Label, right: Label) -> Element {
 
 /// A name and, in a lighter tone, the address beside it, as git prints `Name <email>`.
 fn person(signature: &Signature) -> Label {
-    let colours = colours();
     label()
         .max_lines(1)
-        .font_size(FONT_SIZE)
-        .color(colours.text_primary)
+        .font_size(metrics::BODY)
+        .color(tones::TEXT)
         .text(format!("{} <{}>", signature.name, signature.email))
 }
 
@@ -901,12 +912,15 @@ fn labelled(name: &'static str, value: Element) -> Element {
         .into()
 }
 
-pub(crate) fn file_row(file: &ChangedFile) -> Element {
+/// A changed file's badge and path, the path bold in `selected`'s tone when the row is the
+/// list's chosen one. Fork Dark's badges where it gives one (an added file's green, a modified
+/// one's yellow), the theme's status tones for the rest.
+pub(crate) fn file_row(file: &ChangedFile, selected: Option<Color>) -> Element {
     let colours = colours();
     let badge = match file.status {
-        ChangeStatus::Added => colours.success,
+        ChangeStatus::Added => tones::ADDED_BADGE,
         ChangeStatus::Deleted => colours.error,
-        ChangeStatus::Modified | ChangeStatus::TypeChanged => colours.warning,
+        ChangeStatus::Modified | ChangeStatus::TypeChanged => tones::MODIFIED_BADGE,
         ChangeStatus::Renamed(_) | ChangeStatus::Copied(_) => colours.info,
     };
     rect()
@@ -914,11 +928,19 @@ pub(crate) fn file_row(file: &ChangedFile) -> Element {
         .cross_align(Alignment::Center)
         .spacing(GAP)
         .child(
-            text(status_letter(file.status), FONT_SIZE, badge)
+            text(status_letter(file.status), metrics::BODY, badge)
                 .width(Size::px(BADGE_WIDTH))
                 .font_weight(FontWeight::BOLD),
         )
-        .child(text(file_text(file), FONT_SIZE, colours.text_primary).font_family(DIFF_FONT_FAMILY))
+        .child(
+            text(
+                file_text(file),
+                metrics::BODY,
+                selected.unwrap_or(tones::TEXT),
+            )
+            .maybe(selected.is_some(), |el| el.font_weight(FontWeight::BOLD))
+            .font_family(DIFF_FONT_FAMILY),
+        )
         .into()
 }
 

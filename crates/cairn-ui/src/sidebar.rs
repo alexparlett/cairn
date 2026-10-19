@@ -22,6 +22,7 @@ use freya::prelude::*;
 
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 use crate::title_bar::status_box::counts_text;
 
@@ -37,7 +38,6 @@ pub const LOCAL_CHANGES_CAPTION: &str = "Local Changes";
 pub const ALL_COMMITS_CAPTION: &str = "All Commits";
 /// What a detached `HEAD`'s row is called, as Fork names it in Branches.
 pub const DETACHED_HEAD_CAPTION: &str = "HEAD";
-const FONT_SIZE: f32 = 13.0;
 
 /// What the main region shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -236,6 +236,8 @@ struct ListData {
     counts: Option<BranchCounts>,
     chosen: Option<SidebarTarget>,
     on_row: EventHandler<SidebarRow>,
+    list_id: AccessibilityId,
+    focused: bool,
 }
 
 impl PartialEq for ListData {
@@ -243,28 +245,30 @@ impl PartialEq for ListData {
         self.shown == other.shown
             && same_counts(&self.counts, &other.counts)
             && self.chosen == other.chosen
+            && self.list_id == other.list_id
+            && self.focused == other.focused
     }
 }
 
 impl Component for Sidebar {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
+        // The list takes focus when one of its rows is pressed, and its chosen row says so.
+        let list_id = use_a11y();
+        let focus = use_focus(list_id);
         let entry = |text: String, view: MainView, on_main: EventHandler<MainView>| {
             rect()
                 .width(Size::fill())
                 .height(Size::px(SIDEBAR_ROW_HEIGHT))
                 .main_align(Alignment::Center)
                 .padding(Gaps::new(0., 8., 0., 8.))
-                .maybe(self.main == view, |el| {
-                    el.background(colours.surface_secondary)
-                })
+                .maybe(self.main == view, |el| el.background(tones::SIDEBAR_CHOSEN))
                 .on_press(move |_| on_main.call(view))
                 .child(
                     label()
                         .text(text)
                         .max_lines(1)
-                        .font_size(FONT_SIZE)
-                        .color(colours.text_primary),
+                        .font_size(metrics::BODY)
+                        .color(tones::TEXT),
                 )
         };
         let list: Element = match &self.shown {
@@ -276,6 +280,8 @@ impl Component for Sidebar {
                         counts: self.counts.clone(),
                         chosen: self.chosen.clone(),
                         on_row: self.on_row.clone(),
+                        list_id,
+                        focused: focus().is_focused(),
                     },
                     build_row,
                 )
@@ -286,8 +292,15 @@ impl Component for Sidebar {
             }
             None => rect().expanded().into(),
         };
+        let list = rect()
+            .expanded()
+            .a11y_id(list_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::List)
+            .child(list);
         rect()
             .expanded()
+            .background(tones::SIDEBAR)
             .padding(Gaps::new(6., 0., 0., 0.))
             .child(entry(
                 local_changes_text(self.local_changes),
@@ -314,8 +327,8 @@ impl Component for Sidebar {
                     .child(
                         label()
                             .text(notice)
-                            .font_size(12.)
-                            .color(colours.text_secondary),
+                            .font_size(metrics::BODY)
+                            .color(tones::DETAIL_LABEL),
                     )
             }))
             .child(list)
@@ -457,26 +470,38 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     ) else {
         return row.into();
     };
-    let colours = get_theme_or_default().read().colors().clone();
+    // The warning triangle keeps the theme's warning tone, which Fork Dark's table does not
+    // name.
+    let warning = get_theme_or_default().read().colors().warning;
     let on_row = data.on_row.clone();
+    let list_id = data.list_id;
     let indent = 8. + f32::from(drawn.depth) * SIDEBAR_INDENT;
     let section = matches!(sidebar_row, SidebarRow::Section { .. });
+    let chosen = tones::selected(data.focused);
+    let (text, muted) = if drawn.chosen {
+        (chosen.text, chosen.text)
+    } else {
+        (tones::TEXT, tones::DETAIL_LABEL)
+    };
     let glyph_colour = match drawn.glyph {
-        RefGlyph::Gone => colours.warning,
-        _ => colours.text_secondary,
+        RefGlyph::Gone => warning,
+        _ => muted,
     };
     row.horizontal()
         .content(Content::Flex)
         .cross_align(Alignment::Center)
         .padding(Gaps::new(0., 8., 0., indent))
         .spacing(5.)
-        .maybe(drawn.chosen, |el| el.background(colours.surface_secondary))
-        .on_press(move |_| on_row.call(sidebar_row))
+        .maybe(drawn.chosen, |el| el.background(chosen.band))
+        .on_press(move |_| {
+            list_id.request_focus();
+            on_row.call(sidebar_row);
+        })
         .maybe_child(
             drawn
                 .disclosure
                 .filter(|_| !section)
-                .map(|open| glyph(disclosure_glyph(open), colours.text_secondary)),
+                .map(|open| glyph(disclosure_glyph(open), muted)),
         )
         .child(glyph(drawn.glyph, glyph_colour))
         .child(
@@ -485,27 +510,21 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
                 .width(Size::flex(1.))
-                .font_size(if section { 12. } else { FONT_SIZE })
-                .maybe(drawn.bold || section, |el| el.font_weight(FontWeight::BOLD))
-                .color(if section {
-                    colours.text_secondary
-                } else {
-                    colours.text_primary
-                }),
+                .font_size(metrics::BODY)
+                .maybe(drawn.bold || section || drawn.chosen, |el| {
+                    el.font_weight(FontWeight::BOLD)
+                })
+                .color(text),
         )
-        .maybe_child(drawn.counts.map(|text| {
+        .maybe_child(drawn.counts.map(|counts| {
             label()
-                .text(text)
+                .text(counts)
                 .max_lines(1)
                 .font_family(DIFF_FONT_FAMILY)
-                .font_size(12.)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(muted)
         }))
-        .maybe_child(
-            drawn
-                .warning
-                .then(|| glyph(RefGlyph::Gone, colours.warning)),
-        )
+        .maybe_child(drawn.warning.then(|| glyph(RefGlyph::Gone, warning)))
         .into()
 }
 

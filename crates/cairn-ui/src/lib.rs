@@ -11,6 +11,7 @@ mod end_room;
 mod history;
 mod local_changes;
 mod sidebar;
+pub mod style;
 mod text_field;
 mod title_bar;
 

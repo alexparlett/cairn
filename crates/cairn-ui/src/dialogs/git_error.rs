@@ -27,6 +27,7 @@ use crate::dialogs::button_order::ordered;
 
 use crate::commit_box::SKIP_HOOKS_CAPTION;
 use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::style::{metrics, tones};
 
 /// Fork's words.
 pub const GIT_ERROR_TITLE: &str = "Git Error";
@@ -200,7 +201,6 @@ impl KeyExt for GitErrorDialog {
 
 impl Component for GitErrorDialog {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let close_id = use_a11y();
         // Opened at the end of the output, where a failing hook says why.
         let controller = use_scroll_controller(|| ScrollConfig {
@@ -238,22 +238,22 @@ impl Component for GitErrorDialog {
                 .child(
                     label()
                         .text(ERROR_DETAILS)
-                        .font_size(12.)
-                        .color(colours.text_secondary),
+                        .font_size(metrics::BODY)
+                        .color(tones::DETAIL_LABEL),
                 )
                 .child(
                     label()
                         .text(command.clone())
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .width(Size::fill()),
                 )
                 .child(
                     rect()
                         .width(Size::fill())
-                        .border(Border::new().fill(colours.border).width(1.))
+                        .border(Border::new().fill(tones::RULE).width(1.))
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .child(output),
                 )
         });
@@ -283,9 +283,9 @@ impl Component for GitErrorDialog {
                 .maybe_child(list.map(|list| {
                     rect()
                         .width(Size::fill())
-                        .border(Border::new().fill(colours.border).width(1.))
+                        .border(Border::new().fill(tones::RULE).width(1.))
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .child(list)
                 }))
         });
@@ -346,7 +346,7 @@ impl Component for GitErrorDialog {
                             .child(
                                 label()
                                     .text(self.sentence.clone())
-                                    .font_size(14.)
+                                    .font_size(metrics::BODY)
                                     .width(Size::fill()),
                             )
                             .maybe_child(files)

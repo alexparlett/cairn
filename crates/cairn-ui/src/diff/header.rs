@@ -20,6 +20,7 @@ use freya::prelude::*;
 use crate::diff::palette::{DIFF_FONT_FAMILY, DIFF_FONT_SIZE, HEADER_BAR};
 use crate::diff::settings::DiffSettings;
 use crate::diff::toggle_glyphs::Glyph;
+use crate::style::{metrics, tones};
 
 /// The bar's height: the detail pane strip's. Fork's own bar height is not established by
 /// the research; Cairn's is chosen to line up with the strip above it.
@@ -43,8 +44,6 @@ pub const ENTIRE_FILE_LABEL: &str = "Show entire file";
 pub const SIDE_BY_SIDE_LABEL: &str = "Side-by-side diff";
 /// Said in the bar while ignoring whitespace hides a change that is really there.
 pub const HIDDEN_CHANGES_NOTICE: &str = "Ignoring whitespace hides some changes";
-
-const NOTICE_FONT_SIZE: f32 = 12.0;
 
 /// What a press in the bar asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,18 +150,14 @@ fn split_path(path: &str) -> (&str, &str) {
 
 impl Component for DiffHeader {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let (primary, muted, warning, accent, disabled) = {
-            let sheet = colours.read();
-            let sheet = sheet.colors();
-            (
-                sheet.text_primary,
-                sheet.text_placeholder,
-                sheet.warning,
-                sheet.text_highlight,
-                sheet.disabled,
-            )
-        };
+        // The warning keeps the theme's tone, which Fork Dark's table does not name.
+        let warning = get_theme_or_default().read().colors().warning;
+        let (primary, muted, accent, disabled) = (
+            tones::TEXT,
+            tones::DETAIL_LABEL,
+            tones::ACCENT,
+            tones::DISABLED_TEXT,
+        );
         let settings = self.settings;
         // One button of the bar: its glyph in the accent while its toggle is on, its name for
         // assistive technology and in its tooltip. A disabled button reports nothing.
@@ -253,14 +248,14 @@ impl Component for DiffHeader {
                 label()
                     .text(HIDDEN_CHANGES_NOTICE)
                     .max_lines(1)
-                    .font_size(NOTICE_FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .color(warning)
             }))
             .maybe_child(self.said.map(|said| {
                 label()
                     .text(said)
                     .max_lines(1)
-                    .font_size(NOTICE_FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .color(warning)
             }))
             .child(button(

@@ -36,6 +36,7 @@ use crate::accelerators::Os;
 use crate::dialogs::answer_button::{AnswerColours, answer, greyed_answer};
 use crate::dialogs::button_order::ordered;
 use crate::dialogs::git_error::CLOSE_CAPTION;
+use crate::style::metrics;
 
 /// Width of the dialog: room for a prompt naming a long path.
 const DIALOG_WIDTH: f32 = 520.;
@@ -201,8 +202,8 @@ fn shown_file(item: VirtualItem, files: &ShownFiles) -> Element {
         .horizontal()
         .padding(Gaps::new(0., 6., 0., 6.))
         .spacing(12.)
-        .child(label().text(path).max_lines(1).font_size(13.))
-        .child(label().text(what).max_lines(1).font_size(13.))
+        .child(label().text(path).max_lines(1).font_size(metrics::BODY))
+        .child(label().text(what).max_lines(1).font_size(metrics::BODY))
         .into()
 }
 
@@ -329,8 +330,8 @@ impl Component for ConfirmDialog {
                         let open = *showing_files.peek();
                         showing_files.set(!open);
                     })
-                    .child(label().text(glyph).font_size(13.))
-                    .child(label().text(SHOW_FILES_CAPTION).font_size(13.)),
+                    .child(label().text(glyph).font_size(metrics::BODY))
+                    .child(label().text(SHOW_FILES_CAPTION).font_size(metrics::BODY)),
             );
             if open {
                 // Room for the horizontal scrollbar after the last row (`end_room`).
@@ -363,12 +364,18 @@ impl Component for ConfirmDialog {
                     .child(PopupTitle::new(title))
                     .child(
                         PopupContent::new()
-                            .child(label().text(body).width(Size::fill()).font_size(14.))
-                            .maybe_child(
-                                left.map(|left| {
-                                    label().text(left).width(Size::fill()).font_size(14.)
-                                }),
+                            .child(
+                                label()
+                                    .text(body)
+                                    .width(Size::fill())
+                                    .font_size(metrics::BODY),
                             )
+                            .maybe_child(left.map(|left| {
+                                label()
+                                    .text(left)
+                                    .width(Size::fill())
+                                    .font_size(metrics::BODY)
+                            }))
                             .maybe_child(disclosure),
                     )
                     .child(buttons),

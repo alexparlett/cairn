@@ -13,6 +13,7 @@
 use freya::prelude::*;
 
 use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::style::metrics;
 
 /// The box every glyph is drawn in.
 pub(crate) const GLYPH_WIDTH: f32 = 16.0;
@@ -57,7 +58,7 @@ impl Glyph {
             Self::Swap => label()
                 .text("↕")
                 .font_family(DIFF_FONT_FAMILY)
-                .font_size(14.)
+                .font_size(metrics::SWAP_GLYPH)
                 .line_height(1.)
                 .color(colour)
                 .into(),
@@ -76,7 +77,7 @@ impl Glyph {
                 label()
                     .text("↕")
                     .font_family(DIFF_FONT_FAMILY)
-                    .font_size(11.)
+                    .font_size(metrics::ENTIRE_FILE_GLYPH)
                     .line_height(1.)
                     .color(colour)
                     .into(),

@@ -87,6 +87,8 @@ Kept, and why:
 | Branch and commit context menus carry **forge links**: create pull request, open on the forge, copy permalink. After a push, the toast offers *Create pull request* directly. | `forge-links.md` |
 | **Conflict resolution is three-way and region-level**, with *edit in your editor* as the escape hatch, where Fork works a file at a time. | `conflicts.md` |
 | The toolbar has no Workspaces and no feedback face, and the menus no Git Flow, Git LFS, bisect, statistics, treemap, benchmark, accounts or SSH keys, and Cairn draws neither Fork's detached detail window nor its suggestion banners. **Fetch acts at once** on the default remote, where Fork's Fetch… opens a dialog; choosing the remote is issue #23. *Open in* and *Console* start programs other than git, so they are designed under the process guards before they are drawn. | `feature-inventory.md`, Tier 7 and "Explicitly out of scope"; `processes.md` |
+| **About Cairn** names the version, the licence and the `git` found as Cairn started, and closes by its Close button or Escape; Fork's About box carries its name, version and copyright with only a ✕, and Escape leaves it open. | `platform.md` — keyboard-first, every dialog leaves by Escape |
+| The menu bar has **no access keys**: Alt underlines nothing and opens no menu. Every item a person reaches often has its chord beside it, read from the one accelerator table, so the keys are learnt once; Fork underlines F, V, R, W and H while Alt is held. | `platform.md` — one accelerator table, keyboard-first |
 | **Avatars are initials**, coloured from the name; Cairn fetches no gravatar. | `diff.md`, "The detail pane" — no network call for a view |
 | Lanes keep **Cairn's colour-vision-safe set**, where Fork Dark's are orange and yellow. | "Palette and type", below |
 | **Every Tab stop shows focus** — a list by its selection's tone, any other control by a ring; Fork shows only the selection's tone, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
@@ -108,7 +110,8 @@ order and groups, with its chord beside it from the accelerator table: View hold
 Show Uncommitted Changes, Show All Commits, Hide Commit Details, Show HEAD and Show
 Lost Commits (Reflog); Repository holds Refresh, Fetch and the branch, tag, stash
 and worktree verbs; Window the zoom. Every context menu is the same component:
-groups split by rules, chords right-aligned, a greyed item's reason as its tooltip,
+groups split by rules, chords right-aligned, a greyed item's reason shown under it
+while the pointer rests on it, a ticked item's ✓ in a gutter before every label,
 and on every row Fork's verbs for it, Copy (Ctrl+C) and Copy Full (Ctrl+Shift+C)
 taking what that row names.
 

@@ -241,9 +241,10 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   Staged's (a deviation: Fork for Windows shows Unstage All only while Shift is held). The
   heading press is told apart from a row's: Shift on a row is still the range press, and a held
   Alt does nothing on Linux;
-- the context menu (`local_changes::menu`): Stage or Unstage, Discard Changes… (greyed on the
-  staged side, its reason beneath it), Stage All or Unstage All, Copy Path; a right-press on a
-  row outside the selection chooses it first; each item closes the menu as it is chosen.
+- the context menu (`local_changes::menu`, drawn by the one menu component, `cairn_ui::menu`):
+  Stage or Unstage, Discard Changes… (greyed on the staged side, its reason drawn under it
+  while the pointer is on it), Stage All or Unstage All, Copy Path; a right-press on a row
+  outside the selection chooses it first; each item closes the menu as it is chosen.
 
 Stage All and Unstage All ask `LocalWrite::StageAll` or `LocalWrite::UnstageAll` with the
 lists drawn, shared, and — with a filter on — the rows it shows (the user's decision,

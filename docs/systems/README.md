@@ -31,6 +31,9 @@ contract. Each is kept current in the same change that invalidates it.
 - `local-changes.md` — the Local Changes view: Unstaged and Staged laid out over a status on
   a worker, the filter, a path chosen and its working-tree diff asked and drawn for that path
   alone, and how the path chosen follows each refresh.
+- `window-frame.md` — the window's frame: Fork's caption row on Linux and the menus as a row
+  inside the desktop's frame on macOS, the one menu component every menu is drawn by, the menu
+  bar's items and what each does, the desktop's title for the window, the zoom, and About Cairn.
 - `style.md` — the window's look: Fork's sizes and Fork Dark's tones in one module, the
   theme the window launches with, the Lucide icons, and a selection drawn by its list's focus.
 - `staging.md` — staging, unstaging, discarding, committing and amending in the

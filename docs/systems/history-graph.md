@@ -1139,8 +1139,10 @@ the history lane opens the walk as the open asked, and a later reopen — a refr
 refs moved — asks as the toggle stands
 (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
 `the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). It is turned by its
-chord, heard in the history list's scope alone (`HistoryList::on_action`,
-`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and by a check box, "Show Lost
+chord, heard wherever focus is in the window as Fork's View menu hears it (`Scope::Window`;
+the history list leaves it alone, `a_chord_pressed_in_the_list_moves_nothing`), by the View
+menu's "Show Lost Commits (Reflog)", ticked while on (`docs/systems/window-frame.md`), and by a
+check box, "Show Lost
 Commits", at the right end of the "Graph and subject" heading's cell — laid over the cell, so
 every heading stays over its column and no row loses width — ticked while on, its tooltip the
 chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,

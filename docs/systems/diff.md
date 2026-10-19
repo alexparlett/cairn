@@ -2268,13 +2268,15 @@ keys until it is answered (`no_accelerator_acts_while_a_credential_prompt_is_up`
 `no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked`). The two tab
 chords show their tab, opening a collapsed pane; previous and next change move the diff;
 and the extending press selects a second commit to compare ("Comparing two commits" above).
-The staging, commit and Show Lost Commits chords are in the table, each heard in its own
-scope only — so with the commit box focused, only the commit chord resolves
+The staging and commit chords are in the table, each heard in its own scope only — so with
+the commit box focused, only the commit chord resolves
 (`in_the_commit_box_only_the_commit_chord_resolves`) — and are acted on by the views that
 hear those scopes: Local Changes' lists and diff (`LocalChanges`, `LocalChangesLists`;
-`local-changes.md`), the commit box's fields (`CommitBox`, through `text_field_in`, below)
-and the history list (`History`, `HistoryList::on_action`), whose Local Changes lists toggle
-a path on the extending press and select a range on the range press. The history
+`local-changes.md`) and the commit box's fields (`CommitBox`, through `text_field_in`, below),
+whose Local Changes lists toggle a path on the extending press and select a range on the
+range press. The menu bar's actions — Show Uncommitted Changes, Show All Commits, Hide Commit
+Details, Show HEAD, Show Lost Commits, Fetch, Zoom In and Out — are the window's
+(`docs/systems/window-frame.md`). The history
 list and the file lists leave the window's and the detail pane's chords alone, so Ctrl+↓ is
 "next change", never "next commit" (`an_accelerators_chord_does_not_move_the_selection`);
 another view's chord is theirs to read, so Shift+↓, the list selection's extension in Local

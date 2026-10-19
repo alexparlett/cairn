@@ -6,8 +6,8 @@ The cross-session cheat sheet. Every session updates this before ending.
 `process-manager`, `diff-engine`, `refs-and-status`, `staging-and-commit`,
 `history-topo-order`). `history-topo-order` (5c) passed its merge bar and was torn down on
 `feature/history-topo-order` (2026-10-18); it reaches `main` with its packet pull request,
-merged by the user, with the decisions it made in flight listed for the user's review in
-`docs/research/history-topo-order/packet-record.md`. The critical path is built; D7 still needs 6
+merged by the user, with the decisions it made in flight listed for the user's review in that
+pull request. The critical path is built; D7 still needs 6
 (`remote-sync`, its pull and push) and 7 (`branch-ops`, its branch operations), which are
 independent of each other, beside 5b (`stash-and-ignore`, which builds on 5) and 8; all
 four are briefs. Inserted 2026-10-16 ahead of them: 5c (`history-topo-order`, shipped)
@@ -58,7 +58,7 @@ alone, as in Fork — no backup, no auto-stash.
 | 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
 | 4 | `refs-and-status` | **shipped** — PRD frozen, as-built in `docs/systems/refs.md`, `status.md`, `sidebar.md`, `local-changes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/refs-and-status/measured.md`; O2 closed for `git status`; leftovers #62-#82 |
 | 5 | `staging-and-commit` | **shipped** — PRD frozen, as-built in `docs/systems/staging.md`, `local-changes.md`, `git-processes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/staging-and-commit/measured.md`; O3 closed (no backup before a discard); leftovers #90-#133 |
-| 5c | `history-topo-order` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md` (and the threads in `git-processes.md`); work dir torn down; numbers in `docs/research/history-topo-order/measured.md`, decisions pending the user's review in `packet-record.md` beside it; leftovers #139-#141 |
+| 5c | `history-topo-order` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md` (and the threads in `git-processes.md`); work dir torn down; numbers in `docs/research/history-topo-order/measured.md`; decisions pending the user's review in the packet pull request; leftovers #139-#141 |
 | 5b | `stash-and-ignore` | brief in `roadmap.md`; depends on 5 |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |

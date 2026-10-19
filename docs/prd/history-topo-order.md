@@ -16,10 +16,8 @@ this is not. Requirements R1-R7 and acceptance criteria C1-C10 were met at the m
 (2026-10-18), each against a test that decides it, checked to fail under a mutation; C8 was met
 by `#[ignore]`d reporters on the bench, by reading — the first 64 rows in 1,183 ms against git's
 1,257 ms without a commit-graph, the whole history equal to git's `--date-order` row for row,
-no frame over 16.7 ms. The decisions made in flight that await the user's review, each phase's
-QA adjudication and the merge bar's numbers are kept in
-`docs/research/history-topo-order/packet-record.md`, the numbers as first measured in
-`measured.md` beside it; the work directory this cites (`docs/work/history-topo-order/`) was torn
+no frame over 16.7 ms. The numbers as first measured are in
+`docs/research/history-topo-order/measured.md`; the work directory this cites (`docs/work/history-topo-order/`) was torn
 down and lives in git history. Leftovers: #139, #140, #141.
 
 The history graph drawn in `git log --date-order`'s order, which is Fork's default: no commit

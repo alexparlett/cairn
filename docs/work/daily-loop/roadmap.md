@@ -289,9 +289,7 @@ packet 5 discards an intent-to-add file by emptying it, as git does, keeping its
 ## 5c. history-topo-order — shipped
 
 `docs/prd/history-topo-order.md` (frozen), evidence `docs/research/history-topo-order/` —
-among it `measured.md` (the walk, the history thread and the window on the bench) and
-`packet-record.md` (the decisions made in flight that await the user's review, each phase's QA
-adjudication and the merge bar's numbers). Merge bar passed on 2026-10-18; the work directory
+among it `measured.md` (the walk, the history thread and the window on the bench). Merge bar passed on 2026-10-18; the work directory
 was torn down and the packet lands on `main` as one pull request. As built:
 `docs/systems/history-graph.md` (git's date order, stashes as tips of the walk, Show Lost
 Commits in date order, the history thread, the opening pass and a reopen in the window) and what

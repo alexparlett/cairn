@@ -11,9 +11,8 @@ the whole history equal to git's `--date-order` row for row; full gate green). A
 the integration branch — a worker test reading the opening pass's count where it expected a
 page on a slow runner — was fixed in its tests (`Pacing::UNTOLD`). Torn down on
 `feature/history-topo-order`: PRD `docs/prd/history-topo-order.md` stamped shipped; as built in
-`docs/systems/history-graph.md`; the decisions made in flight, PENDING the user's review, each
-phase's QA adjudication and the merge bar's numbers kept in
-`docs/research/history-topo-order/packet-record.md`; no new invariant (the packet changed the
+`docs/systems/history-graph.md`; the decisions made in flight, PENDING the user's review, listed
+in the packet pull request; no new invariant (the packet changed the
 routing account and the UI-thread guard's stated residuals in the root `CLAUDE.md`, under their
 existing twins); leftovers filed as #139-#141. Not filed, for the user: the gitoxide
 replace-refs issue, and whether #128 is closed. Next: 5d, `fork-alignment`.

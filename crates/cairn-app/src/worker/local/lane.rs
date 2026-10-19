@@ -1310,7 +1310,15 @@ pub(crate) struct Local<'a> {
 pub(crate) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     let mut configured = Configured::open(shared, serving.reopening);
     while let Ok(job) = serving.jobs.recv() {
-        let repo = configured.follow();
+        if matches!(job, LocalJob::Stop) {
+            break;
+        }
+        // Closing: nothing runs, so nothing is worth opening the handle again for.
+        let repo = if serving.lane.is_closing() {
+            configured.handle()
+        } else {
+            configured.follow()
+        };
         match job {
             LocalJob::Stop => break,
             LocalJob::Write { id, write } if serving.lane.is_closing() => {

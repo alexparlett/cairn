@@ -1434,6 +1434,77 @@ mod tests {
         })
     }
 
+    /// What git substitutes changed: the chosen commit's changes are asked again at once while
+    /// the history is shown; while Local Changes is, nothing is asked — its primary's diff holds
+    /// the file-diff lane — until the history is shown again, which asks once; and refs naming
+    /// the same substitutions ask nothing. Caught by: the answer kept across a substitution
+    /// shown while Local Changes was up, a changes query taking the lane from Local Changes, or
+    /// a re-ask on every refresh.
+    #[test]
+    fn a_substitution_change_asks_the_chosen_commits_changes_again_when_the_history_is_shown() {
+        use cairn_model::RowId;
+        use cairn_ui::MainView;
+
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        let changes_asked = || {
+            asked
+                .submitted
+                .borrow_mut()
+                .drain(..)
+                .filter(|request| {
+                    matches!(request, Request::Changes { of } if *of == crate::worker::Comparison::Commit(oid(1)))
+                })
+                .count()
+        };
+        let substituted = |n: u8| {
+            let mut snapshot = (*snapshot_naming(oid(2))).clone();
+            snapshot.substitutions =
+                cairn_model::Substitutions::new(vec![(oid(1), oid(n))], vec![]);
+            std::sync::Arc::new(snapshot)
+        };
+        let refs = |snapshot| Update::Refs {
+            snapshot,
+            reopen: false,
+        };
+        applying(&test, view, &asked, refs(snapshot_naming(oid(2))));
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::choose(RowId::Commit(oid(1)), view, Some(&submit));
+        });
+        assert_eq!(changes_asked(), 1, "choosing the commit asked its changes");
+
+        applying(&test, view, &asked, refs(substituted(3)));
+        assert_eq!(changes_asked(), 1, "a replace ref added, the history shown");
+        applying(&test, view, &asked, refs(substituted(3)));
+        assert_eq!(changes_asked(), 0, "the same substitutions asked again");
+
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+        });
+        applying(&test, view, &asked, refs(substituted(4)));
+        assert_eq!(
+            changes_asked(),
+            0,
+            "asked while Local Changes held the main region"
+        );
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::AllCommits, view, Some(&submit));
+        });
+        assert_eq!(
+            changes_asked(),
+            1,
+            "the history shown again did not ask again"
+        );
+        test.run_in(|| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            crate::history::selection::show_main(MainView::LocalChanges, view, Some(&submit));
+            crate::history::selection::show_main(MainView::AllCommits, view, Some(&submit));
+        });
+        assert_eq!(changes_asked(), 0, "asked again with nothing changed");
+    }
+
     /// A reopen keeps the old rows drawn and usable until the new walk's first page replaces
     /// them: refs that draw another history ask for the new walk alone, the rows, their status
     /// and the selection kept and no page of them asked; the walk's count, once told, is kept
@@ -1752,30 +1823,36 @@ mod tests {
     /// Through the real boundary, counting reopens: what git substitutes as it walks — a replace
     /// ref added and moved, `core.useReplaceRefs` turned off and on, the graft file written and
     /// removed, the shallow file written — each reopens the history though no ref moved, and a
-    /// refresh that finds nothing changed reopens nothing. Each reopened history draws the
-    /// replaced commit's row as git reads it under the configuration as it is then — its own
-    /// subject with replace refs off, its replacement's on — so the history thread read the
-    /// configuration again; and the chosen commit's changes are asked again each time. Caught by:
-    /// a comparison of the refs alone (no step reopens), a walk on a handle that keeps the
-    /// configuration of its first open (the row keeps its replacement's subject with replace
-    /// refs off), or the chosen commit's answer kept across a substitution.
+    /// refresh that finds nothing changed reopens nothing. After each, every thread reads the
+    /// configuration as it is then: the history draws the replaced commit's row as a handle
+    /// opened now reads it — its own subject with replace refs off, its replacement's on — the
+    /// refresh thread counts `main` against its upstream as one opened now counts it, and the
+    /// local lane's Recent Commit Messages are one opened now reads; and the chosen commit's
+    /// changes are asked again each time. Caught by: a comparison of the refs alone (no step
+    /// reopens), a thread whose handle keeps the configuration of its first open (the row, the
+    /// counts or the messages keep the replacement's with replace refs off), or the chosen
+    /// commit's answer kept across a substitution.
     #[test]
     fn a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now() {
-        use cairn_model::{RowContent, RowId};
+        use cairn_model::{RefName, RowContent, RowId};
 
-        use crate::worker::{Refreshable, next_update};
+        use crate::worker::{Refreshable, Updates, next_update};
 
         let fixture = Refreshable::new("cairn-session-substitutions");
         let [newest, replaced, replacement, other] = [0, 1, 2, 3].map(|n| fixture.commits[n]);
+        // `main` tracks `up`, two commits behind it: a replace ref under `main`'s first parent
+        // changes what the two have in common.
+        fixture.point("up", replacement);
+        fixture.track("main", "up");
         let (handle, mut updates) = fixture.open();
         let (test, view, asked) = launch(FetchStatus::Idle);
-        // Asks for a refresh and applies what arrives, handing on what applying asks, until
-        // the refresh's refs have been applied and — if they reopened the history — its first
-        // page has too. Returns how many reopens and how many changes queries the window asked.
-        let mut refresh = || -> (usize, usize) {
+        // Asks for a refresh and applies what arrives, handing on what applying asks, until the
+        // refresh's refs and its ahead/behind have been applied and — if the refs reopened the
+        // history — its first page has too. Returns how many reopens and how many changes
+        // queries the window asked.
+        let refresh = |updates: &mut Updates| -> (usize, usize) {
             handle.submit(Request::Refresh);
-            let mut refs_seen = false;
-            let mut reopening = false;
+            let (mut refs_seen, mut counted, mut reopening) = (false, false, false);
             let (mut opens, mut changes) = (0, 0);
             loop {
                 for request in asked.submitted.borrow_mut().drain(..) {
@@ -1789,16 +1866,30 @@ mod tests {
                     }
                     handle.submit(request);
                 }
-                if refs_seen && !reopening {
+                if refs_seen && counted && !reopening {
                     return (opens, changes);
                 }
-                let update = next_update(&mut updates);
+                let update = next_update(updates);
                 match &update {
                     Update::Refs { .. } => refs_seen = true,
+                    Update::AheadBehind { .. } => counted = true,
                     Update::Rows { .. } => reopening = false,
                     _ => {}
                 }
                 applying(&test, view, &asked, update);
+            }
+        };
+        // The local lane's Recent Commit Messages, asked of it directly.
+        let recent = |updates: &mut Updates| -> Vec<String> {
+            handle.submit(Request::CommitReads);
+            loop {
+                match next_update(updates) {
+                    Update::CommitReads(reads) => match reads.recent {
+                        Ok(recent) => return recent,
+                        Err(error) => panic!("the recent messages failed: {error}"),
+                    },
+                    other => applying(&test, view, &asked, other),
+                }
             }
         };
         let subject_drawn = |commit: Oid| -> Option<String> {
@@ -1809,10 +1900,37 @@ mod tests {
                 RowContent::Stash(stash) => panic!("a commit drawn as a stash: {stash:?}"),
             }
         };
+        let counted = || {
+            view.refreshed
+                .peek()
+                .ahead_behind_of(&RefName::new("refs/heads/main"))
+        };
+        // Every thread's answer is the one a handle opened now gives.
+        let every_thread_reads_it_now = |updates: &mut Updates, step: &str| {
+            assert_eq!(
+                subject_drawn(replaced),
+                Some(fixture.subject_now(replaced)),
+                "{step}: the history thread"
+            );
+            assert_eq!(
+                counted(),
+                fixture.ahead_behind_now("main"),
+                "{step}: the refresh thread"
+            );
+            assert_eq!(
+                recent(updates),
+                fixture.recent_messages_now(),
+                "{step}: the local lane"
+            );
+        };
 
-        assert_eq!(refresh().0, 1, "the first refresh did not open the history");
         assert_eq!(
-            refresh(),
+            refresh(&mut updates).0,
+            1,
+            "the first refresh did not open the history"
+        );
+        assert_eq!(
+            refresh(&mut updates),
             (0, 0),
             "a refresh that found nothing changed reopened"
         );
@@ -1821,10 +1939,11 @@ mod tests {
             selected.set(Some(RowId::Commit(replaced)));
         });
         let own = fixture.subject_now(replaced);
+        let stored_counts = fixture.ahead_behind_now("main");
 
         fixture.replace(replaced, replacement);
-        assert_eq!(refresh(), (1, 1), "a replace ref added");
-        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+        assert_eq!(refresh(&mut updates), (1, 1), "a replace ref added");
+        every_thread_reads_it_now(&mut updates, "a replace ref added");
         assert_ne!(
             subject_drawn(replaced),
             Some(own.clone()),
@@ -1832,32 +1951,48 @@ mod tests {
         );
 
         fixture.replace(replaced, other);
-        assert_eq!(refresh(), (1, 1), "a replace ref moved");
-        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+        assert_eq!(refresh(&mut updates), (1, 1), "a replace ref moved");
+        every_thread_reads_it_now(&mut updates, "a replace ref moved");
+        let replaced_counts = counted();
+        assert_ne!(
+            replaced_counts, stored_counts,
+            "the fixture's replace ref changes no count, so the counts decide nothing"
+        );
 
         fixture.use_replace_refs(false);
-        assert_eq!(refresh(), (1, 1), "core.useReplaceRefs turned off");
+        assert_eq!(
+            refresh(&mut updates),
+            (1, 1),
+            "core.useReplaceRefs turned off"
+        );
+        every_thread_reads_it_now(&mut updates, "core.useReplaceRefs turned off");
         assert_eq!(
             subject_drawn(replaced),
             Some(own.clone()),
             "the walk kept reading the replace refs the configuration turned off"
         );
+        assert_eq!(counted(), stored_counts, "the counts kept the replace refs");
         fixture.use_replace_refs(true);
-        assert_eq!(refresh(), (1, 1), "core.useReplaceRefs turned on");
-        assert_eq!(subject_drawn(replaced), Some(fixture.subject_now(replaced)));
+        assert_eq!(
+            refresh(&mut updates),
+            (1, 1),
+            "core.useReplaceRefs turned on"
+        );
+        every_thread_reads_it_now(&mut updates, "core.useReplaceRefs turned on");
+        assert_eq!(counted(), replaced_counts);
         fixture.unreplace(replaced);
-        assert_eq!(refresh(), (1, 1), "the replace ref deleted");
+        assert_eq!(refresh(&mut updates), (1, 1), "the replace ref deleted");
         assert_eq!(subject_drawn(replaced), Some(own));
 
         fixture.graft(Some((newest, &[replacement])));
-        assert_eq!(refresh(), (1, 1), "the graft file written");
+        assert_eq!(refresh(&mut updates), (1, 1), "the graft file written");
         fixture.graft(None);
-        assert_eq!(refresh(), (1, 1), "the graft file removed");
+        assert_eq!(refresh(&mut updates), (1, 1), "the graft file removed");
 
         fixture.shallow(Some(newest));
-        assert_eq!(refresh(), (1, 1), "the shallow file written");
+        assert_eq!(refresh(&mut updates), (1, 1), "the shallow file written");
         assert_eq!(
-            refresh(),
+            refresh(&mut updates),
             (0, 0),
             "nothing changed, yet the history reopened"
         );

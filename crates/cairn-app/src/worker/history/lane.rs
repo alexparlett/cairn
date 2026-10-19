@@ -136,6 +136,9 @@ fn serve_handle(
         outbox: serving.outbox,
     };
     loop {
+        // An open carried over from the handle before was opened again for: served on this
+        // one whatever its configuration's stamps say, so an open is never put off twice.
+        let followed = carried.is_some();
         let job = match (carried.take(), *finding) {
             (Some(job), _) => job,
             (None, Some((epoch, find))) => match serving.jobs.try_recv() {
@@ -165,7 +168,7 @@ fn serve_handle(
             // still the window's runs: its pass is superseded by the next open alone.
             Page::Open { rows, walk, lost } => {
                 if epochs.is_current(walk) {
-                    if configured.moved() {
+                    if !followed && configured.moved() {
                         *carried = Some(HistoryJob::Page { epoch, page });
                         return Ended::ConfigurationMoved;
                     }

@@ -177,6 +177,46 @@ impl Refreshable {
             .unwrap_or_else(|error| panic!("writing {}: {error}", config.display()));
     }
 
+    /// Makes `branch` track the local branch `upstream`, as `git branch -u` with `remote = .`
+    /// records it.
+    pub(crate) fn track(&self, branch: &str, upstream: &str) {
+        let config = self.git_dir().join("config");
+        let mut text = std::fs::read_to_string(&config)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", config.display()));
+        text.push_str(&format!(
+            "[branch \"{branch}\"]\n\tremote = .\n\tmerge = refs/heads/{upstream}\n"
+        ));
+        std::fs::write(&config, text)
+            .unwrap_or_else(|error| panic!("writing {}: {error}", config.display()));
+    }
+
+    /// `branch`'s ahead and behind as the engine counts them on a handle opened now (pinned to
+    /// `git rev-list --left-right --count` by `cairn-git`'s own tests).
+    pub(crate) fn ahead_behind_now(&self, branch: &str) -> Option<cairn_model::AheadBehind> {
+        let counted = Repository::discover(self.path()).and_then(|repo| {
+            let snapshot = repo.refs(&CancelSignal::new())?.snapshot;
+            repo.ahead_behind(&snapshot, &CancelSignal::new())
+        });
+        match counted {
+            Ok(read) => read
+                .counts
+                .into_iter()
+                .find(|(name, _)| name.as_str() == format!("refs/heads/{branch}"))
+                .map(|(_, counts)| counts),
+            Err(error) => panic!("counting {branch}: {error}"),
+        }
+    }
+
+    /// `HEAD`'s recent messages as the engine reads them on a handle opened now.
+    pub(crate) fn recent_messages_now(&self) -> Vec<String> {
+        match Repository::discover(self.path())
+            .and_then(|repo| repo.recent_messages(&CancelSignal::new()))
+        {
+            Ok(messages) => messages,
+            Err(error) => panic!("reading the recent messages: {error}"),
+        }
+    }
+
     /// `commit`'s subject as the engine reads it on a handle opened now — git's, through every
     /// substitution under the configuration as it is (`cairn-git`'s own tests hold that
     /// reading to `git show`).

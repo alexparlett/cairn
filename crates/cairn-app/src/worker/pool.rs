@@ -292,15 +292,15 @@ fn open_paced(
     ))
 }
 
-/// What the title bar calls `shared`: the last component of its working tree — of its git
-/// directory, when it is bare — which discovery has already made absolute and free of `.`
-/// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
-/// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
 /// The `git` found, as About Cairn names it: "git 2.47.1, at /usr/bin/git".
 fn described(git: &GitBinary) -> String {
     format!("git {}, at {}", git.version(), git.path().display())
 }
 
+/// What the title bar calls `shared`: the last component of its working tree — of its git
+/// directory, when it is bare — which discovery has already made absolute and free of `.`
+/// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
+/// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
 fn repository_name(shared: &SharedRepository) -> String {
     let root = shared.workdir().unwrap_or_else(|| shared.git_dir());
     root.file_name().map_or_else(

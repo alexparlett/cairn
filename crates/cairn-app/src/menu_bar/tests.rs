@@ -213,6 +213,19 @@ fn the_menu_bar_holds_only_what_works_in_forks_order() {
             "{label} with no repository open"
         );
     }
+    // Fetch, with a remote and none running, says no repository is open.
+    let mut fetch = view.fetch;
+    fetch.set(crate::operations::fetch::FetchStatus::Idle);
+    test.sync_and_update();
+    let fetch_reason = menus_now(&test, view, false)
+        .iter()
+        .flat_map(|menu| menu.groups.iter().flatten())
+        .find(|item| item.label == "Fetch 'origin'")
+        .and_then(|item| item.reason.clone());
+    assert_eq!(
+        fetch_reason.as_deref(),
+        Some(crate::operations::fetch::NO_REPOSITORY)
+    );
 }
 
 /// Each item does what it names, as its chord does: the two views shown, the detail pane
@@ -258,6 +271,14 @@ fn each_menu_item_does_its_action() {
 
     let head = Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}"));
     head_at(&mut test, view, head);
+    // Once the refs are read, Show HEAD and New Branch… can be chosen.
+    for label in ["Show HEAD", "New Branch…"] {
+        assert_eq!(
+            reason_now(&test, view, label),
+            None,
+            "{label} with HEAD read"
+        );
+    }
     chose(&mut test, view, &submitted, "Show HEAD");
     assert!(
         submitted
@@ -267,8 +288,58 @@ fn each_menu_item_does_its_action() {
         "Show HEAD did not look for HEAD's row"
     );
 
+    // Under the activity popover — the one modal state — About Cairn does not open.
+    test.run_in(|| view.activity.open());
+    test.sync_and_update();
+    chose(&mut test, view, &submitted, "About Cairn");
+    assert!(
+        !*view.frame.about.peek(),
+        "About Cairn opened under the popover"
+    );
+    test.run_in(|| {
+        let mut open = view.activity.open;
+        open.set(false);
+    });
+    test.sync_and_update();
     chose(&mut test, view, &submitted, "About Cairn");
     assert!(*view.frame.about.peek(), "About Cairn did not open");
+}
+
+/// The reason the item labelled `label` is greyed now, if it is.
+fn reason_now(test: &TestingRunner, view: View, label: &str) -> Option<String> {
+    menus_now(test, view, true)
+        .iter()
+        .flat_map(|menu| menu.groups.iter().flatten())
+        .find(|item| item.label == label)
+        .and_then(|item| item.reason.clone())
+}
+
+/// With `HEAD` unborn — or naming a branch with no ref — Show HEAD and New Branch… are greyed
+/// saying so, in git's word. Caught by: an unborn `HEAD` read as refs not yet read, or offered.
+#[test]
+fn an_unborn_head_greys_show_head_and_new_branch() {
+    for head in [
+        HeadState::Unborn(cairn_model::RefName::new("refs/heads/main")),
+        HeadState::Branch(cairn_model::RefName::new("refs/heads/main")),
+    ] {
+        let (mut test, view, _) = launch();
+        let mut refreshed = view.refreshed;
+        let _ = refreshed.write().refs_arrived(Arc::new(RefsSnapshot {
+            refs: Vec::new(),
+            head,
+            stashes: Vec::new(),
+            unreadable: 0,
+            substitutions: cairn_model::Substitutions::default(),
+        }));
+        test.sync_and_update();
+        for label in ["Show HEAD", "New Branch…"] {
+            assert_eq!(
+                reason_now(&test, view, label).as_deref(),
+                Some(crate::history::head::HEAD_UNBORN),
+                "{label}"
+            );
+        }
+    }
 }
 
 /// Zoom In and Out, by chord or menu, scale the window through the toolkit's scale factor a step

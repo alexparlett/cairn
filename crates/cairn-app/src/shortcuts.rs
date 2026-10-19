@@ -29,8 +29,8 @@ pub fn of_header(pressed: HeaderAction) -> Action {
 }
 
 /// Whether the window's chords and the views' keys do nothing now: while any dialog — a
-/// credential prompt, a confirmation, a Git Error or "Couldn't <name>", Create Branch — or the
-/// activity popover, which Escape alone closes, is open: the one modal state
+/// credential prompt, a confirmation, a Git Error or "Couldn't <name>", Create Branch, About
+/// Cairn — or the activity popover, which Escape alone closes, is open: the one modal state
 /// decides it (`crate::modal`).
 pub fn keys_inert(view: View) -> bool {
     crate::modal::modal(view).is_some()

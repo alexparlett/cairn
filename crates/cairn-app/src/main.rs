@@ -50,7 +50,7 @@ fn main() {
         move || app(git.clone(), closing.clone())
     })
     .with_title(cairn_ui::CAPTION_TITLE)
-    // The Wayland app id, as X11's class already is: what a compositor's window rule names.
+    // The Wayland app id, the same name as the X11 class winit already gives the window.
     .with_app_id("cairn")
     // Cairn draws Fork's caption row where the frame is its own (`cairn_ui::Frame`); macOS
     // keeps the desktop's frame.

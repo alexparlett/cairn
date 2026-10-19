@@ -30,9 +30,14 @@ const NO_REPOSITORY: &str = "No repository is open.";
 pub fn menus(view: View, open: bool) -> Vec<BarMenu<BarChoice>> {
     let act = |label: &str, action: Action| Item::new(label, BarChoice::Act(action)).chord(action);
     let needs_repository = || (!open).then(|| NO_REPOSITORY.to_owned());
-    let head = crate::history::head::head_commit(view)
-        .err()
-        .map(str::to_owned);
+    // Read, not peeked: the menus are built on the window's render, which must draw them again
+    // when the refs arrive.
+    let head = {
+        let _subscribed = view.refreshed.read();
+        crate::history::head::head_commit(view)
+            .err()
+            .map(str::to_owned)
+    };
     let fetch_label = match crate::operations::fetch::default_remote(view) {
         Some(remote) => format!("Fetch '{remote}'"),
         None => "Fetch".to_owned(),

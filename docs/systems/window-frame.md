@@ -12,9 +12,8 @@ items and what each does, the desktop's title for the window, the zoom, and Abou
 the frame (`WindowConfig::with_decorations`, `crates/cairn-app/src/main.rs`), and Freya's
 `BorderlessPlugin` (the `borderless` feature, crate `freya-borderless-plugin`, pinned in
 `deny.toml`) lays invisible bands along every edge and corner that ask the compositor for a
-resize (`drag_resize_window`), hidden while the window is maximized. The window names itself
-to the compositor as `cairn` — its Wayland app id, as its X11 class already is — so a window
-rule can name it.
+resize (`drag_resize_window`), hidden while the window is maximized. The window's Wayland app id is `cairn`, the
+same name as its X11 class.
 
 **The caption row** (`cairn_ui::CaptionRow`, `crates/cairn-ui/src/caption_row.rs`) is one row of
 `metrics::CAPTION_ROW` (26 px) in the chrome's tone: the menu bar at its left, "Cairn"
@@ -35,16 +34,33 @@ the close hook closes the repository first, `crate::closing`). Pinned by
 With `Frame::Native` the row holds the menu bar alone — no title, no controls, no drag — and is
 built from the same menus (the same test, its second half). No native menu bar is attached.
 
-**Compositors.** On Hyprland 0.56 (the development host) the window opens with no frame of
-the compositor's own and draws the caption row (captured from the window's own surface); the
-desktop's title for it reads `<repository> — Cairn`. A compositor plugin that decorates every
-window — `hyprbars` on that host — adds its bar to Cairn's too (`hyprctl decorations` lists it);
-a window rule on the class `cairn` turns it off. Under X11 (Xwayland) the window asks for no
-decorations (`_MOTIF_WM_HINTS`), its class is `cairn` and its title the same. A press and drag,
-a double press, the window menu and the resize bands were not driven by a pointer on either
-(no pointer reached the window from the tools the host has); what each asks of the window is
-pinned headlessly above, and what the compositor does with the ask is its own — a tiling
-compositor may decline a move, a resize or a maximize.
+**Compositors.** With the desktop's decorations off, winit asks for the frame through the
+standard protocols, before the window is first shown: on Wayland it binds
+`zxdg_decoration_manager_v1` and sends `zxdg_toplevel_decoration_v1.set_mode(client_side)`
+(winit's `WindowDecorations::RequestClient`, `platform_impl/linux/wayland/window/mod.rs`); on
+X11 it sets `_MOTIF_WM_HINTS` with no decorations. On Hyprland 0.56 (the development host)
+`WAYLAND_DEBUG=1` shows that request and the compositor's `configure(server_side)` in reply,
+yet nothing of the compositor's own is drawn on the window: its decoration plugin, `hyprbars`,
+draws no bar on a window whose most recent request was client-side, nor on an X11 window whose
+Motif hints ask for none (it still lists its decoration as present, hidden, in `hyprctl
+decorations`). Seen on screen on both, the caption row the top of the window; no window rule is
+needed. The desktop's title for the window reads `<repository> — Cairn` and its class `cairn`
+on both.
+
+A press and drag, a double press, the window menu and the resize bands were not driven by a
+pointer on either (no tool on the host moves the pointer into a Wayland window), nor were the
+menus opened by the pointer or the pointer's move along the bar. What no headless test sees
+either: `freya-testing` drops the requests the window makes of the platform, so what
+`frame::ask` hands winit (`drag_window`, `set_maximized`, `set_minimized`, `show_window_menu`,
+`request_close_window`), the scale factor the zoom sets, the title `frame::use_title` sets and
+the decorations and resize bands `main.rs` asks for are pinned only up to the request — the
+`FrameRequest`, the zoom's step, `frame::title` — and the rest was checked in the window as
+said here, or not at all. What a compositor does with an ask is its own: a tiling compositor
+may decline a move, a resize or a maximize.
+
+**macOS** is not compiled on the development host (no Apple target is installed), so the
+`Frame::Native` arm is checked only headlessly, with the frame forced, and the `cfg` paths and
+⌘ chords are unverified on a Mac.
 
 ## The menu component
 

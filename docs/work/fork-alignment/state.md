@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-19.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phase 01 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01 and 02 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -77,12 +77,51 @@ accelerator actions, guard names, `deny.toml` pins.
   that enables them (exact refuses an allowed feature not enabled); Lucide's ISC licence noted
   under `[licenses]`. Lockfile: `freya-icons` alone.
 
+**Phase 02:**
+- `cairn_ui::menu` (`crates/cairn-ui/src/menu.rs` beside `menu/`): `Item<T>` (`label`, `chord:
+  Option<Action>`, `reason: Option<String>` — greyed iff set — `ticked`, `kind: ItemKind<T>`:
+  `Choose(T)` | `Submenu(Groups<T>)`), `Groups<T>`, `context_menu(groups, on_choose) -> Menu`
+  (first item highlighted), `MenuBar<T>`/`BarMenu<T>` (Fork's bar: press opens with nothing
+  highlighted, hover switches, ←/→ wrap, press on the open name closes). `menu/panel.rs` draws
+  rows (`metrics::MENU_ITEM`), rules, chords from `chord_name`, a greyed item's reason under it
+  while hovered (Freya's tooltip hides under a context menu), the ✓ gutter
+  (`metrics::MENU_TICK_GUTTER`, 18 px) while any item is ticked; holds the keyboard while open.
+  The three context menus are built by it, items unchanged (a greyed reason now under the item
+  on hover rather than a second row). Not virtualized (C21 is 05/08's).
+- `cairn_ui::CaptionRow<T>` (`caption_row.rs`), `Frame` (`Drawn`/`Native`, `Frame::current`),
+  `FrameRequest` (`Drag`, `ToggleMaximize`, `Minimize`, `Close`, `WindowMenu { x, y }`),
+  `CAPTION_TITLE`. `cairn_ui::AboutDialog`, `ABOUT_TITLE`, `NO_GIT_FOUND`, `version_line`,
+  `licence_line` (`dialogs/about.rs`).
+- Accelerators: new actions `ShowLocalChanges` (Ctrl+1), `ShowAllCommits` (Ctrl+2), `ShowHead`
+  (Ctrl+0), `ToggleDetails` (no chord until phase 03), `Fetch` (Ctrl+Shift+F), `ZoomIn` (Ctrl+=),
+  `ZoomOut` (Ctrl+-), ⌘ on macOS; all `Scope::Window`. `ShowLostCommits` moved to
+  `Scope::Window`; `Scope::History` and `HistoryList::on_action` removed. `accelerators::MenuKey`
+  and `menu_key` (an open menu's keys, resolved in the table).
+- `metrics`: `MENU_MIN_WIDTH`, `MENU_INSET`, `MENU_TICK_GUTTER`, `MENU_CHORD_GAP`,
+  `MENU_REASON_WIDTH`, `MENU_BAR_PADDING`; `TITLE` removed (the title row's "Cairn" is the
+  caption row's now).
+- `cairn-app`: `src/frame.rs` (`FrameView { zoom, about, git }` on `View::frame`, `Zoom`,
+  `ZOOM_STEPS`, `ask(FrameRequest)`, `close()` through `request_close_window`, `title()`,
+  `use_title()`, `about()`), `src/menu_bar.rs` (`BarChoice { Act(Action), Exit, About }`,
+  `menus(view, open)`, `choose`), `src/history/head.rs` (`head_commit`, `show`),
+  `operations::fetch::{start, refusal, default_remote, NO_REPOSITORY, NO_REMOTE, FETCH_RUNNING}`;
+  `Modal::About` last in the one modal state; `Update::GitFound { described }` sent first on a
+  stream once git is found; the window's app id `cairn`; `with_decorations(false)` off macOS and
+  `BorderlessPlugin`.
+- `deny.toml`: freya `exact` now `["borderless", "default", "engine", "icons", "icons-lucide",
+  "titlebar", "winit"]`; lockfile gains `freya-borderless-plugin` alone. `titlebar` is enabled
+  on `cairn-ui` (where `TitlebarButton` is named), `borderless` on `cairn-app`.
+- `docs/systems/window-frame.md`; evidence `docs/research/ui-review/fork-menu-toggles-2026-10-19.md`.
+- `menu::Panel::on_dismiss`: Escape closes the whole menu in the panel and goes no further
+  (context menu and bar); `accelerators::MenuKey::Unclaimed` (a modifier key, AltGraph
+  included, left to the window).
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 | done (C1, C3, C4 met; C2 met but for `borderless`/`freya-borderless-plugin`, phase 02's) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 12 confirmed fixed, 3 deferred, 3 dismissed |
-| 02 | not started | — | — |
+| 02 | done (C5, C6, C20's About half met headlessly; C2's borderless arm met; pointer gestures and macOS UNVERIFIED, batched for the user) | full gate PASS | qa-checklist ×2, responsiveness ×2, test-coverage ×2, gate-integrity ×2; qa-confirm: 15 of 26 confirmed and fixed or recorded, 11 dismissed |
 | 03 | not started | — | — |
 | 04 | not started | — | — |
 | 05 | not started | — | — |

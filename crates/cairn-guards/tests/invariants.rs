@@ -5889,9 +5889,9 @@ fn chrome_sizes_and_tones_come_from_the_style_module() {
             if STYLE_EXCEPTIONS.iter().any(|(file, _)| *file == shown) {
                 // An exception excuses the file's tones alone: a size written there still
                 // fails, and only a tone keeps the row needed.
-                let (tones, sizes): (Vec<&(usize, &str)>, Vec<&(usize, &str)>) = hits
-                    .iter()
-                    .partition(|(_, kind)| kind.starts_with("colour"));
+                let is_tone = |hit: &&(usize, &str)| hit.1.starts_with("colour");
+                let tones: Vec<_> = hits.iter().filter(is_tone).collect();
+                let sizes: Vec<_> = hits.iter().filter(|hit| !is_tone(hit)).collect();
                 assert!(
                     sizes.is_empty(),
                     "{shown}:{} writes a {} outside the style module: STYLE_EXCEPTIONS excuses \

@@ -55,15 +55,44 @@ A refresh (`docs/systems/history-graph.md`, "Refresh") reads the snapshot again 
 focus, after a fetch, on the Refresh action — and compares it with the one the history
 was walked from: `RefsSnapshot::walks_as` says whether the two would draw the same
 history — the same refs naming the same objects, a symbolic ref's target among them, the
-same `HEAD` and the same stash list — leaving out an upstream's configuration and the
-unreadable count, which the graph does not draw (`a_walk_is_the_same_unless_what_it_draws_changed`).
+same `HEAD`, the same stash list and the same substitutions — leaving out an upstream's
+configuration and the unreadable count, which the graph does not draw
+(`a_walk_is_the_same_unless_what_it_draws_changed`).
 Comparing snapshots sees a symbolic ref retargeted and a tag object replaced on the same
-commit, which comparing peeled ids did not. It sees only what the snapshot holds, so a fetch
-that moves only a ref outside those namespaces (`refs/notes/`, `refs/pull/`,
-`refs/replace/`) reopens nothing — though the walk reads `refs/replace/` as git does, so a
-replace ref changed alone leaves the history drawing what it read until the next reopen
-(`docs/systems/history-graph.md`, "Known limits"). The network lane keeps no comparison of its own: a fetch
-that ends asks a refresh, and the refresh's snapshot is what is compared.
+commit, which comparing peeled ids did not. A fetch that moves only a ref outside the listed
+namespaces (`refs/notes/`, `refs/pull/`) reopens nothing. The network lane keeps no comparison
+of its own: a fetch that ends asks a refresh, and the refresh's snapshot is what is compared.
+
+**What git substitutes is kept beside the refs** (`RefsSnapshot::substitutions`,
+`cairn_model::Substitutions`): each object a replace ref git reads replaces and the object
+its ref names, and each grafted commit with the parents git shows for it — the graft file's
+and a shallow clone's boundary, the shallow file winning for one commit — read exactly as the
+walk reads them (`history::walk::Substitutions`, `crate::replacements`, `crate::grafts`), so
+none at all with `core.useReplaceRefs` false, and kept in id order, so two reads of the same
+files compare equal. A read that fails — a symbolic replace ref that names nothing, two for one
+object, a graft file that cannot be read — is kept as that failure, which the walk fails on
+too; the refs are listed regardless. A history walked under other substitutions is another
+history though no ref moved, so a replace ref added, moved or deleted, `core.useReplaceRefs`
+turned off or on, and the graft or shallow file written or removed each reopen it, where a
+read that finds nothing changed does not
+(`the_snapshot_keeps_what_git_substitutes_as_it_walks_and_a_change_to_it_walks_as_another_history`,
+in `crates/cairn-git/tests/refs.rs`, and through the window,
+`a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now`).
+A replace ref is not listed among the refs: `git for-each-ref` lists it, but no listing the
+sidebar follows (`git branch`, `git tag`, `git branch -r`) does. Whether git reads replace refs
+is `core.useReplaceRefs` as the configuration says now: the repository thread opens its handle
+again when a configuration file moved before it reads a refresh's refs, and the history thread
+before an open (`crates/cairn-app/src/worker/configured.rs`). The read costs about 4 µs on the
+bench repository (`docs/research/history-topo-order/measured.md`).
+
+A stash's base — its first parent — is read through the substitutions, as `git stash list`
+reads `stash@{n}^1`. A ref's target is told apart and a tag peeled from the objects as they are
+stored: git looks a replacement up there too (`peel_object_ext` in git's `object.c`), and dies
+where it is missing, but a ref hidden for a replacement the repository lacks would make a pushed
+`HEAD` read as unpublished (`an_amend_is_refused_where_a_remotes_history_names_a_missing_replacement`).
+So a tag object itself replaced peels to the commit the stored tag names where `git
+for-each-ref` names the replacement's — a residual; with `core.useReplaceRefs` false the two
+agree (`with_replace_refs_off_a_replaced_tag_object_peels_as_stored`).
 
 `RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its
 namespace, and the stashes whose message, hold the text, case ignored as the Changes tab's

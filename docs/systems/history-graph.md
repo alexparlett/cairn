@@ -360,7 +360,11 @@ replace ref replaces reads as its replacement, followed as git follows it
 (`crates/cairn-git/src/replacements.rs`), and a grafted commit — shallow, or from the
 graft file, the shallow file winning for one commit as in git — reads with its `parent`
 header lines replaced by the graft's, found by the commit's own id
-(`crates/cairn-git/src/grafts.rs`, which `Repository::commit_details` reads too). git
+(`crates/cairn-git/src/grafts.rs`). Each row's subject, author and date are read through the
+same substitutions, by a `Grafted` reader the walk's stream holds beside the walk, opened from
+the same read (`history::open_stream`), so a replaced commit's row is its replacement's as `git
+log` shows it; and `Repository::commit_details` reads through one too (`docs/systems/diff.md`,
+"What a commit's details carry"). git
 reads no commit-graph where any of these applies (`commit_graph_compatible`: a replace
 ref, a graft, a shallow repository), since the graph holds each commit's own parents and
 generations computed over them; nor does any graph read of Cairn's — the walk's, Show
@@ -381,16 +385,21 @@ reflog ids, and with `core.useReplaceRefs` off, and the shallow file beating a g
 commit; its oracle grafts the stashes through a copy's graft file, which that setting does
 not switch off); the
 commit-time and graph-order routes, Show Lost Commits' reflog dates, ahead and behind, and
-a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`;
-the details under a graft and a shallow boundary — they read through gitoxide's own handle,
-which applies no replace ref); a replace ref whose replacement is missing failing the walk
+a commit's details against git under each (`every_route_sees_the_substitutions_git_sees`);
+the rows' subjects, authors and dates against `git log`
+(`a_substituted_commit_is_described_and_compared_as_git_shows_it`); a replace ref whose
+replacement is missing failing the walk
 as git dies (`a_replacement_that_is_not_there_fails_the_walk`);
 the pushed check's graph stepping aside under each
 (`the_graph_does_not_answer_where_git_would_not_read_it`); the header rewrite by
 `only_the_headers_parent_lines_are_removed` and `a_grafts_parents_replace_the_commits_own`;
 the graft file's reading by `a_graft_file_is_read_as_git_reads_it`; and a replacement's
 depth by `a_replacement_is_followed_as_far_as_git_follows_it`. A replace ref added after the
-repository was opened is read, since each walk reads the refs afresh.
+repository was opened is read, since each walk reads the refs afresh; and `core.useReplaceRefs`
+is read as the configuration says when the walk opens, the history thread opening its handle
+again first when a configuration file moved (`crates/cairn-app/src/worker/configured.rs`).
+Whether a refresh reopens the history compares the substitutions too (`RefsSnapshot::walks_as`,
+"Refresh" below).
 
 Order is `HistoryOrder::DateOrder` by default: git's date order (below), the order
 `git log --date-order` and Fork's graph draw, in which no commit comes before any of its
@@ -772,8 +781,14 @@ snapshot the walk began from and the snapshot the last refresh read (`WalkedRefs
 assignment and a refresh across its comparison, so an open between the two cannot make a
 refresh answer for the wrong walk; the UI thread never takes it). A refresh compares
 the refs it reads with the first by `RefsSnapshot::walks_as` — the same refs naming the same
-objects, the same `HEAD`, the same stash list — and answers `Update::Refs { snapshot, reopen
-}`. The history thread names a snapshot the one the walk began from as it takes it to open,
+objects, the same `HEAD`, the same stash list, and the same substitutions git walks under
+(the replace refs it reads and the grafts, a shallow boundary among them;
+`docs/systems/refs.md`) — and answers `Update::Refs { snapshot, reopen }`. The repository
+thread reads the refs on a handle that follows the configuration, so `core.useReplaceRefs`
+turned off or on reopens the history too (`crates/cairn-app/src/worker/configured.rs`). When
+the substitutions differ from the snapshot the window kept, the window also asks the chosen
+commit's changes again, since its details and what it changed may be other now
+(`history::selection::ask_again`). The history thread names a snapshot the one the walk began from as it takes it to open,
 so a refresh while that walk is still opening compares with what it will draw and reopens
 nothing when nothing moved (`a_refresh_during_an_open_compares_with_the_refs_the_open_took`).
 The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the title bar,
@@ -791,7 +806,10 @@ answer it holds for it until another row is chosen. A stash pushed, a checkout t
 refresh that finds nothing changed does not, and neither does an upstream's
 configuration alone (`a_walk_is_the_same_unless_what_it_draws_changed`, in the model)
 (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`,
-counting the window's reopens through the real boundary;
+counting the window's reopens through the real boundary, and
+`a_refresh_reopens_for_what_git_substitutes_and_the_walk_reads_the_configuration_now`, for a
+replace ref added and moved, `core.useReplaceRefs` off and on, the graft and shallow files, each
+reopened history drawing the replaced commit's row as git reads it then;
 `focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`, headless
 with focus set; `a_reopen_keeps_the_old_rows_until_the_new_page`).
 The fetch's own before-and-after comparison of the refs, and `session::reload_if`
@@ -1373,12 +1391,6 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   linear (a hash set, `history::open_stream`). Show Lost Commits walks date order, so without
   a commit-graph its first page also pays the whole opening pass (about 1.2 s on
   rust-lang/rust), and so does each reopen while it is on.
-- **A replace ref or a graft file changed alone reopens nothing.** The walk reads
-  `refs/replace/`, `info/grafts` and the shallow file as git does, but whether a refresh
-  reopens the history is decided by the refs snapshot alone (`RefsSnapshot::walks_as`), which
-  holds none of them. Adding or moving a replace ref, or editing the graft file, while no ref
-  the graph draws moves leaves the history drawing what it read until the next reopen — a
-  refresh that moves a ref, or Show Lost Commits toggled.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

@@ -212,3 +212,34 @@ work per frame timed as the window check times it):
 
 R4.5 (no frame over 16.7 ms while an opening pass runs) holds in both. The keystroke's rows are
 drawn a frame after it whether a pass runs or not: the filter waits on no open.
+
+## What a refresh pays to compare what git substitutes
+
+Measured 2026-10-19, when a refresh's refs snapshot began keeping the replace refs git reads
+and the grafts (`RefsSnapshot::substitutions`), so a change to them alone reopens the history,
+and when every worker handle began following a moved configuration
+(`crates/cairn-app/src/worker/configured.rs`).
+
+- **The repository.** A full copy of `~/Development/bench/rust/.git` (1.1 GiB) in the session's
+  scratchpad, `core.bare true`, `gc.auto 0`, `maintenance.auto false`; the bench itself was only
+  copied, a marker touched before the copy and `find ~/Development/bench/rust/.git -newer
+  <marker>` empty after it. 175 refs, no replace ref, graft or shallow file — the common case,
+  where the read finds nothing to substitute.
+- **How.** `cargo test --release -p cairn-git --test refs -- --ignored --nocapture
+  measures_the_refs_snapshot_and_ahead_behind` with `CAIRN_BENCH_REPO` naming the copy: the refs
+  snapshot, median of seven warm runs, and `Repository::substitutions` alone, median of seven.
+
+| | refs snapshot (substitutions included) | substitutions alone |
+| --- | --- | --- |
+| the bench copy, 175 refs | 149 µs | 3.9 µs |
+| the generated fixture, 10,001 refs (6,000 packed) | 29.7 ms | 3.7 µs |
+
+The read lists `refs/replace/` by prefix (a binary search of the packed refs and one directory
+read), opens `info/grafts` and reads the shallow file gix already caches — under 3% of the
+smallest snapshot, and a constant in the number of refs. The configuration check each following
+thread makes before its work is one `stat` per configuration file the handle read (the diff
+thread's own, measured at about 6 µs with its index stamps; `docs/systems/diff.md`). The diff
+thread reads the same substitutions before each query to know whether its kept answers still
+hold, the same 4 µs. A walk now reads each row's commit through the substitutions' reader rather
+than gitoxide's handle: the same object database, one map lookup more per row, not measured
+apart from the first page above.

@@ -320,7 +320,10 @@ match nothing. `-q` leaves out the summary git prints once the commit is made.
 - **Made is read from `HEAD`** (R4.7). After git is reaped `HEAD` is
   read again: a commit was made when `HEAD` is a commit whose first parent is the `HEAD` it
   ran on (none, on an unborn branch); an amend, when `HEAD`'s parents are the replaced
-  commit's, as the object names them (a shallow boundary's included). So a commit or an amend
+  commit's as git reads them — through a replace ref and a graft — which are what `git commit
+  --amend` writes (`current_head->parents`): none at a shallow boundary, so an amend there
+  writes a root, and the graft's under a graft file or `git replace --graft`
+  (`an_amend_of_a_commit_git_reads_with_other_parents_is_made_as_git_makes_it`). So a commit or an amend
   cancelled after git made it — its `post-commit` hook running — is reported made, and one
   cancelled before is `Error::GitCancelled`
   (`a_cancelled_commit_or_amend_is_made_exactly_when_head_says_so`); git's exit 0 with
@@ -483,7 +486,9 @@ own `repo_is_descendant_of` cuts it, cancellable at every commit — 0.5 ms for 
 `HEAD` 20,000 commits behind on the bench clone with a graph written, against 1.2 s by the
 object walk and git's 10 ms
 (`the_pushed_check_answers_from_a_commit_graph_as_git_does`). Both routes see the
-history as git's `git branch -r --contains` sees it, replace refs and grafts applied: a local
+history as git's `git branch -r --contains` sees it, replace refs and grafts applied — the
+replace refs as `core.useReplaceRefs` says now, the local lane opening its handle again when a
+configuration file moved (`crates/cairn-app/src/worker/configured.rs`): a local
 replace ref or graft that cuts a remote's history short of `HEAD` answers `HEAD` unpublished
 though the remote holds it — and an amend git logs then runs without asking, its old commit
 kept in the reflog — and a replace ref whose replacement is missing fails the check, as git's

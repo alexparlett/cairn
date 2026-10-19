@@ -1412,7 +1412,7 @@ A kept answer is kept only while everything git and gix read to give it is as it
 was. Before each query the thread stamps those files
 (`crates/cairn-app/src/worker/diff/freshness.rs`, over `cairn_git::DiffInputs`) —
 each file's modification and change times to the nanosecond, its length, inode and
-device, or that it is missing — in three tiers
+device, or that it is missing — in three tiers, and reads what git substitutes beside them
 (`each_tier_lets_go_of_what_its_move_makes_stale`):
 
 - **The configuration**: every file git or gix reads it from — the system file, the
@@ -1426,7 +1426,8 @@ device, or that it is missing — in three tiers
   application opened it (`SharedRepository::reopen_for`, the same bare-repository
   check, the same registry and log;
   `opening_again_reads_the_configuration_afresh_and_refuses_another_repository`)
-  and lets everything kept go; the history thread keeps its own handle. A reopen
+  and lets everything kept go; the history, repository, refresh and local threads follow
+  the configuration the same way (`worker/configured.rs`). A reopen
   that fails — a configuration git would refuse, or the path now naming another
   repository (`Error::RepositoryReplaced`) — fails the query, and the next tries
   again (`a_configuration_edit_reaches_the_next_answer`: an include target created,
@@ -1440,6 +1441,13 @@ device, or that it is missing — in three tiers
   (`the_index_is_compared_by_what_it_holds_not_by_its_file`;
   `a_stat_only_index_refresh_keeps_what_is_kept`). When any moves, the session and
   every kept answer go.
+- **What git substitutes**: the replace refs git reads and the grafts, a shallow clone's
+  boundary among them (`Repository::substitutions`, the same value a refs snapshot keeps),
+  read on every query and compared by value — a replaced commit reads with another author,
+  message, tree and parents, a replaced blob with other lines. When they changed, the session
+  and every kept answer go (a graft written, in
+  `each_tier_lets_go_of_what_its_move_makes_stale`). The read is about 4 µs on the bench
+  repository.
 - **What one path reads**: the working tree's `.gitattributes` in each directory
   above it. A file's diff records the directories above both its paths; a change
   set records them for every path git's rename search could pair — added, deleted,
@@ -2366,10 +2374,36 @@ each with a name, an email and a `Timestamp` that keeps its own offset; the whol
 message, with `subject()` and `body()` reading it; and the parents in git's order,
 none for a shallow clone's boundary commit, whose parents the clone lacks, and a graft's
 for a commit the graft file grafts — read by `crates/cairn-git/src/grafts.rs`, as the
-history walk reads them. A replace ref is not applied here: the commit is read through
-gitoxide's own handle, and gitoxide 0.87.1 reads `core.useReplaceRefs` the wrong way round,
-so a replaced commit's details are the original's where `git show` gives the replacement's
-— a divergence from git the history walk does not share (`crates/cairn-git/src/replacements.rs`).
+history walk reads them. A commit a replace ref replaces is its replacement's — author,
+committer, message and parents — as `git show` and `git log` show it, unless
+`core.useReplaceRefs` is false: the commit is read through `history::walk::Grafted`, which
+applies the replace refs git reads (`crates/cairn-git/src/replacements.rs`) and the grafts,
+the graft looked up by the commit's own id as git's `parse_commit_buffer` looks it up over the
+replacement's bytes (`commit::details_of`). gitoxide 0.87.1 reads `core.useReplaceRefs` the
+wrong way round — replacing nothing when it is unset or true, and by its own rules when it is
+false — so every worker handle has gitoxide's replacement turned off
+(`Repository::to_worker`), and each read Cairn shows of a commit or a file git reads through
+a replace ref goes through `Grafted`: the details (and the changes query's, whose first parent
+is what a commit is compared with), each history row's subject, author and date, a stash's row
+and its base, Recent Commit Messages, amend's parent, a commit's blobs and trees in the content
+query, and the working tree's index and `HEAD` sides. Pinned against `git show -s`, `git log
+--raw`, `git diff`, `git log` and `git log -n 10 --format=%B` under `git replace`, `git replace
+--graft`, `git replace` with `core.useReplaceRefs` false, a graft file and a blob replaced
+(`a_substituted_commit_is_described_and_compared_as_git_shows_it`, with
+`a_replaced_blob_is_diffed_in_the_working_tree_as_git_diffs_it`, in
+`crates/cairn-git/tests/diff_engine/diff/substitutions.rs`). What reads as stored, and why: a
+ref's target and a tag's peeled commit in the refs snapshot (`docs/systems/refs.md`); the
+existence check before Create Branch (`ops/checkout.rs`), since git itself runs the checkout;
+and `StagedInputs`' `HEAD` `.gitmodules`, only a marker of change, read through `Grafted` too.
+A blob replaced where it is also the index's entry at the same path and the working-tree file
+is stat-clean is read by `git diff-tree -p` from the working tree instead
+(`reuse_worktree_file` in git's `diff.c`), so git's answer is the stored blob's there while
+`git show` gives the replacement's; the content query then answers the disagreement
+(`Error::ContentReadsDisagree`) rather than either. And the window asks the chosen commit's
+changes again when a refresh's snapshot names other substitutions
+(`history::selection::ask_again`) — not while Local Changes holds the main region, whose
+primary's diff holds the file-diff lane, nor for Local Changes' diff itself, which a blob
+replaced alone redraws only when it is next asked.
 It sits beside the history's rows rather than replacing them — a kept row holds a
 subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
 keeps"), and carrying every parent, both addresses, a committer, an offset and a whole
@@ -2442,8 +2476,11 @@ per way git reads a commit's text, by
   resolved, so not stamped. The process's own environment (`GIT_CONFIG_COUNT`,
   `GIT_CONFIG_PARAMETERS`) cannot change under it. A filesystem coarser than the
   two seconds `SETTLING` allows, or a file whose times are in the future, is never
-  trusted rather than trusted wrongly: answers under it are not kept. And the
-  history thread keeps the configuration of its first open: it reads no diff key.
+  trusted rather than trusted wrongly: answers under it are not kept. The other
+  worker threads follow the same stamps (`worker/configured.rs`), checked before the work
+  that reads the configuration: the repository thread before a refresh's refs, the history
+  thread before an open — a page of a walk already open goes on under the configuration it
+  opened with — and the refresh and local threads before each job.
 - **A commit's encoding is read as glibc's iconv reads it, and only as far as was
   measured.** Where `encoding_rs` and glibc still differ, Cairn's text is not git's:
   EUC-JP sequences glibc reads and `encoding_rs` refuses (lone C1 bytes, some JIS X 0212

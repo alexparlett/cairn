@@ -349,7 +349,15 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
     // Peeked: the proportion only matters when the pane is laid out anew, and reading it would
     // redraw the window on every step of a drag.
     let (list_share, pane_share) = pane_split.peek().weights();
-    ResizableContainer::new()
+    // The room the panels split, kept so a drag reporting one panel's height reads it against
+    // the room: written without a reader, so a resize redraws nothing for it.
+    let measuring = move |e: Event<SizedEventData>| {
+        let room = e.area.height() - ResizableContext::HANDLE_SIZE;
+        if (pane_split.peek().room() - room).abs() > 0.5 {
+            pane_split.write().measured(room);
+        }
+    };
+    let container = ResizableContainer::new()
         .direction(Direction::Vertical)
         .panel(
             ResizablePanel::new(PanelSize::percent(list_share))
@@ -364,7 +372,11 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
                 .on_resized(move |dragged: f32| pane_split.write().pane_dragged(dragged))
                 .on_collapse(move |()| pane_collapsed.set(true))
                 .child(pane),
-        )
+        );
+    rect()
+        .expanded()
+        .on_sized(measuring)
+        .child(container)
         .into()
 }
 
@@ -2409,23 +2421,46 @@ pub(crate) mod tests {
     /// The top of the main region: the caption row and the toolbar above it.
     const MAIN_TOP: f32 = cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR;
 
+    /// The detail pane's own height, its panel's: the one pane-role rect below the main region's
+    /// top whose bottom is the window's.
+    fn pane_height(test: &TestingRunner, height: f32) -> f32 {
+        test.find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|rect| {
+                    rect.accessibility.builder.role() == AccessibilityRole::Pane
+                        && area.min_y() > MAIN_TOP + 10.
+                        && (area.max_y() - height).abs() < 0.5
+                })
+                .map(|_| area.height())
+        })
+        .unwrap_or_else(|| panic!("no detail pane"))
+    }
+
+    /// Half the room the history and the pane split in a window `height` tall: the main region
+    /// under the toolbar, less the splitter's handle.
+    fn even_share(height: f32) -> f32 {
+        (height - MAIN_TOP - ResizableContext::HANDLE_SIZE) / 2.
+    }
+
     /// The history and the detail pane share the main region's height half each, both growing
-    /// with the window: the pane is half the room in a short window and in a tall one. Caught
-    /// by: a pane of a fixed height, which is the same in both.
+    /// with the window: the pane is exactly half the room at the window's minimum height and in
+    /// a tall window. Caught by: a pane of a fixed height, which is the same in both, or one
+    /// held at its floor above half the room.
     #[test]
     fn the_detail_pane_grows_with_the_window() {
         let mut heights = Vec::new();
-        for height in [HEIGHT, 1200.] {
+        for height in [crate::frame::MIN_SIZE.1 as f32, 1200.] {
             let (test, _, _) = launch_sized(
                 (0..10).map(row).collect(),
                 received(10, true),
                 (WINDOW_WIDTH, height),
             );
-            let pane = height - pane_top(&test);
-            let main = height - MAIN_TOP;
+            let pane = pane_height(&test, height);
             assert!(
-                (pane - main / 2.).abs() < 12.,
-                "the pane is {pane} of {main} in a window {height} tall"
+                (pane - even_share(height)).abs() < 2.,
+                "the pane is {pane}, half the room is {}, in a window {height} tall",
+                even_share(height)
             );
             heights.push(pane);
         }
@@ -2435,9 +2470,56 @@ pub(crate) mod tests {
         );
     }
 
+    /// At the window's minimum size a drag down against the pane's floor — where one panel's
+    /// size changes and the other's hardly — leaves the proportion the window draws, and hiding
+    /// and bringing back the details keeps it. Caught by: one panel's pixels weighed against the
+    /// other's default share, which collapses the pane when it is laid out again.
+    #[test]
+    fn a_drag_against_the_panes_floor_keeps_the_proportion() {
+        let (width, height) = (
+            crate::frame::MIN_SIZE.0 as f32,
+            crate::frame::MIN_SIZE.1 as f32,
+        );
+        let (mut test, view, _) = launch_sized(
+            (0..10).map(row).collect(),
+            received(10, true),
+            (width, height),
+        );
+        let handle = test
+            .find(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.height() == ResizableContext::HANDLE_SIZE && area.width() > 400.
+                    })
+                    .map(|_| f64::from(area.center().y))
+            })
+            .unwrap();
+        test.press_cursor((LEFT_X + 300., handle));
+        test.move_cursor((LEFT_X + 300., handle + 60.));
+        test.sync_and_update();
+        test.move_cursor((LEFT_X + 300., handle + 100.));
+        test.sync_and_update();
+        test.release_cursor((LEFT_X + 300., handle + 100.));
+        test.sync_and_update();
+        let dragged = pane_top(&test);
+        let (_, share) = view.pane_split.read().weights();
+        assert!(share > 40., "the drag left the pane {share}% of the room");
+        for _ in 0..2 {
+            test.run_in(|| shortcuts::act(Action::ToggleDetails, view, None));
+            test.sync_and_update();
+        }
+        assert!(
+            (pane_top(&test) - dragged).abs() < 2.,
+            "the pane came back at {} rather than {dragged}",
+            pane_top(&test)
+        );
+    }
+
     /// Expand All, over a commit's files, stands inside the pane and the window at the window's
-    /// minimum size and at 1024 × 1200. Caught by: a minimum too short for the Commit tab's
-    /// header, or a pane that does not grow.
+    /// minimum size and at 1024 × 1200, the pane at its even share at the minimum. Caught by: a
+    /// minimum too short for the pane's half to reach Expand All, where the pane's floor and
+    /// not its share would be what kept it in view.
     #[test]
     fn expand_all_is_visible_at_the_minimum_size_and_at_1024_by_1200() {
         let (min_width, min_height) = crate::frame::MIN_SIZE;
@@ -2456,6 +2538,14 @@ pub(crate) mod tests {
                 "Expand All at {expand:?} is cut off at {width}×{height}"
             );
             assert!(expand.max_x() <= width, "Expand All past the right edge");
+            // The minimum height is the one at which the pane's even share still reaches Expand
+            // All: the pane there is half the room, not held at its floor.
+            assert!(
+                (pane_height(&test, height) - even_share(height)).abs() < 2.,
+                "the pane is {} at {width}×{height}, not half the room, {}",
+                pane_height(&test, height),
+                even_share(height)
+            );
         }
     }
 
@@ -2513,7 +2603,8 @@ pub(crate) mod tests {
 
     /// The banners — the leftover lock and a close waiting on a write — stand directly under the
     /// toolbar across the whole window, above the sidebar and the main region. Caught by: a
-    /// banner drawn inside the main region, beside the sidebar, or over the toolbar.
+    /// banner drawn inside the main region, over the sidebar's column alone, or over the
+    /// toolbar.
     #[test]
     fn the_banners_stand_under_the_toolbar() {
         let banner_of = |test: &TestingRunner, starts: &str| {
@@ -2538,6 +2629,12 @@ pub(crate) mod tests {
             assert!(
                 sidebar.min_y() >= banner.max_y(),
                 "the sidebar is not under {starts:?}: {sidebar:?}"
+            );
+            // The main region is under it too, so it spans both columns rather than one.
+            let main = label_at(test, "Author").unwrap();
+            assert!(
+                main.min_y() >= banner.max_y() && main.min_x() > LEFT,
+                "the main region is not under {starts:?}: {main:?}"
             );
         };
 
@@ -3378,6 +3475,78 @@ pub(crate) mod tests {
         test.sync_and_update();
         let shown = title(&test);
         assert!(shown.contains(&"folder".to_owned()), "{shown:?}");
+    }
+
+    /// Rests the pointer on `at` long enough for a tooltip, and the labels drawn then.
+    fn hovered(test: &mut TestingRunner, at: Area) -> Vec<String> {
+        let centre = at.center();
+        test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.poll(
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(900),
+        );
+        let shown = texts(test);
+        test.move_cursor((f64::from(WINDOW_WIDTH - 2.), f64::from(HEIGHT - 2.)));
+        test.poll(
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(400),
+        );
+        shown
+    }
+
+    /// The toolbar's Branch opens Create Branch at `HEAD` once the refs say where `HEAD` is, and
+    /// until then is greyed saying why, opening nothing; Fetch greyed with no remote says so.
+    /// Caught by: a toolbar press the window does nothing with, or a greyed button whose reason
+    /// is not the window's.
+    #[test]
+    fn the_toolbars_branch_and_fetch_act_and_say_why_when_they_cannot() {
+        use cairn_model::{HeadState, RefName};
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let branch = toolbar_label(&test, cairn_ui::BRANCH_CAPTION).unwrap();
+        assert!(
+            hovered(&mut test, branch)
+                .iter()
+                .any(|text| text == crate::history::head::REFS_UNREAD),
+            "Branch does not say the refs are unread"
+        );
+        click_label(&mut test, cairn_ui::BRANCH_CAPTION);
+        assert!(
+            !texts(&test)
+                .iter()
+                .any(|t| t == cairn_ui::CREATE_BRANCH_TITLE)
+        );
+
+        refreshed_with(
+            &mut test,
+            view,
+            HeadState::Branch(RefName::new("refs/heads/main")),
+            None,
+            None,
+            0,
+        );
+        click_label(&mut test, cairn_ui::BRANCH_CAPTION);
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == cairn_ui::CREATE_BRANCH_TITLE),
+            "Branch did not open Create Branch: {:?}",
+            texts(&test)
+        );
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let mut remotes = view.remotes;
+        remotes.set(Vec::new());
+        test.sync_and_update();
+        let fetch = toolbar_label(&test, cairn_ui::FETCH_CAPTION).unwrap();
+        assert!(
+            hovered(&mut test, fetch)
+                .iter()
+                .any(|text| text == crate::operations::fetch::NO_REMOTE),
+            "Fetch does not say there is no remote"
+        );
     }
 
     /// Each refresh's ahead/behind redraws the badges: the commits ahead on Push, those behind on

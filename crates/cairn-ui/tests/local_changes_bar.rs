@@ -5,6 +5,9 @@
 //! bordered Stage or Unstage button greyed while nothing is selected in its list, the Staged
 //! heading's ⇈ Unstage All kept and Unstaged's chevron gone; rows 20 px apart.
 
+#[path = "support/named.rs"]
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -16,15 +19,16 @@ use cairn_model::{
 use cairn_ui::accelerators::{Action, HeldKeys};
 use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
-    FILTER_PLACEHOLDER, LIST_HEADER_HEIGHT, LISTS_BAR_HEIGHT, LOCAL_CHANGES_ROW_HEIGHT, ListIntent,
-    LocalChangesList, LocalSelection, SIDE_BY_SIDE_TOOLTIP, STAGE_ALL_CAPTION, STAGE_CAPTION,
-    STAGED_CAPTION, ShownFiles, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, UNSTAGED_CAPTION,
-    VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP,
+    COMES_WITH_QUICK_LOOK, FILTER_PLACEHOLDER, LIST_HEADER_HEIGHT, LISTS_BAR_HEIGHT,
+    LOCAL_CHANGES_ROW_HEIGHT, ListIntent, LocalChangesList, LocalSelection, SIDE_BY_SIDE_TOOLTIP,
+    STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles, UNSTAGE_ALL_CAPTION,
+    UNSTAGE_CAPTION, UNSTAGED_CAPTION, VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP,
 };
 use freya::elements::label::LabelElement;
 use freya::elements::rect::RectElement;
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use support::one_named;
 
 const WIDTH: f32 = 400.;
 const HEIGHT: f32 = 600.;
@@ -33,17 +37,10 @@ const HEIGHT: f32 = 600.;
 struct Fixture {
     changes: State<LocalChanges>,
     selection: State<Option<LocalSelection>>,
-    side_by_side: State<bool>,
 }
 
 /// What the lists reported.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Heard {
-    Intent(ListIntent),
-    Eye,
-}
-
-type Log = Rc<RefCell<Vec<Heard>>>;
+type Log = Rc<RefCell<Vec<ListIntent>>>;
 
 fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
     let log = Log::default();
@@ -51,7 +48,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
     let (mut test, fixture) = TestingRunner::new(
         move || {
             let fixture = use_consume::<Fixture>();
-            let (intending, eyeing) = (hearing.clone(), hearing.clone());
+            let intending = hearing.clone();
             let filter = use_state(String::new);
             let held = use_state(HeldKeys::default);
             let unstaged = use_state(|| ShownFiles::All);
@@ -62,11 +59,9 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
                     LocalChangesList::new(fixture.changes, unstaged, staged, filter)
                         .selection(fixture.selection)
                         .held(held)
-                        .side_by_side(*fixture.side_by_side.read())
                         .on_intent(move |intent: ListIntent| {
-                            intending.borrow_mut().push(Heard::Intent(intent));
-                        })
-                        .on_side_by_side(move |()| eyeing.borrow_mut().push(Heard::Eye)),
+                            intending.borrow_mut().push(intent);
+                        }),
                 )
                 .child(ContextMenuViewer::new())
                 .into_element()
@@ -76,7 +71,6 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Log) {
             runner.provide_root_context(move || Fixture {
                 changes: State::create(changes),
                 selection: State::create(None),
-                side_by_side: State::create(false),
             })
         },
         1.,
@@ -120,31 +114,6 @@ fn label_of(test: &TestingRunner, text: &str) -> (LabelElement, Area) {
             .map(|label| (label, node.layout().area))
     })
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
-}
-
-/// Every control assistive technology reads as `name` — a glyph button's value or a control's
-/// name — with where it is laid out.
-fn named(test: &TestingRunner, name: &str) -> Vec<(RectElement, Area)> {
-    test.find_many(|node, element| {
-        Rect::try_downcast(element)
-            .filter(|rect| {
-                let builder = &rect.accessibility.builder;
-                builder.value() == Some(name) || builder.label() == Some(name)
-            })
-            .map(|rect| (rect, node.layout().area))
-    })
-}
-
-/// The one control named `name`.
-fn one_named(test: &TestingRunner, name: &str) -> (RectElement, Area) {
-    let mut found = named(test, name);
-    assert_eq!(
-        found.len(),
-        1,
-        "{} controls are named {name:?}",
-        found.len()
-    );
-    found.remove(0)
 }
 
 fn press(test: &mut TestingRunner, at: Area) {
@@ -286,17 +255,18 @@ fn local_changes_bar_and_headings_are_forks() {
     assert_eq!(LOCAL_CHANGES_ROW_HEIGHT, 20.);
 }
 
-/// Stage All reports the lists' Stage All on Unstaged, the eye its press and View Mode opens a
-/// menu of "View as List" alone, ticked, whose choice reports nothing; each says Fork's words
-/// as its tooltip, and the eye says whether the diff is side by side. Caught by: Stage All
-/// reported on Staged, the eye unheard or its state not said, View Mode offering a mode Cairn
-/// does not draw, or a tooltip not Fork's.
+/// Stage All reports the lists' Stage All on Unstaged and View Mode opens a menu of "View as
+/// List" alone, ticked, whose choice reports nothing, each with Fork's words as its tooltip; the
+/// eye — Fork's Quick Look (`fork-local-changes-2026-10-20.md`, lc9) — is greyed, saying it comes
+/// with Quick Look, never a Tab stop, and its press reports nothing. Caught by: Stage All
+/// reported on Staged, View Mode offering a mode Cairn does not draw, a tooltip not Fork's, or
+/// the eye pressable or silent about why it is greyed.
 #[test]
 fn the_bars_controls_report_their_presses_and_say_what_they_are() {
-    let (mut test, fixture, log) = launch(lists());
+    let (mut test, _, log) = launch(lists());
     for (name, tooltip) in [
         (STAGE_ALL_CAPTION, STAGE_ALL_CAPTION),
-        (SIDE_BY_SIDE_TOOLTIP, SIDE_BY_SIDE_TOOLTIP),
+        (SIDE_BY_SIDE_TOOLTIP, COMES_WITH_QUICK_LOOK),
         (VIEW_MODE_TOOLTIP, VIEW_MODE_TOOLTIP),
     ] {
         let at = one_named(&test, name).1;
@@ -306,17 +276,15 @@ fn the_bars_controls_report_their_presses_and_say_what_they_are() {
             "{name}'s tooltip is not {tooltip:?}: {shown:?}"
         );
     }
-    let toggled = |test: &TestingRunner| one_named(test, SIDE_BY_SIDE_TOOLTIP).0;
-    assert_eq!(
-        toggled(&test).accessibility.builder.toggled(),
-        Some(Toggled::False)
+    let (eye, _) = one_named(&test, SIDE_BY_SIDE_TOOLTIP);
+    assert!(
+        eye.accessibility.builder.is_disabled(),
+        "the eye is not greyed"
     );
-    let mut side_by_side = fixture.side_by_side;
-    test.run_in(|| side_by_side.set(true));
-    test.sync_and_update();
-    assert_eq!(
-        toggled(&test).accessibility.builder.toggled(),
-        Some(Toggled::True)
+    assert_ne!(
+        eye.accessibility.a11y_focusable,
+        Focusable::Enabled,
+        "the eye is a Tab stop"
     );
 
     let at = one_named(&test, STAGE_ALL_CAPTION).1;
@@ -348,13 +316,10 @@ fn the_bars_controls_report_their_presses_and_say_what_they_are() {
     press(&mut test, item);
     assert_eq!(
         *log.borrow(),
-        [
-            Heard::Intent(ListIntent::Act(
-                ChangeList::Unstaged,
-                Action::StageOrUnstageAll
-            )),
-            Heard::Eye,
-        ]
+        [ListIntent::Act(
+            ChangeList::Unstaged,
+            Action::StageOrUnstageAll
+        ),]
     );
 }
 

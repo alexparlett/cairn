@@ -1,13 +1,14 @@
 //! The bar over Local Changes' two lists, as Fork for Windows draws it
 //! (`docs/research/ui-review/fork-window-survey-2026-10-16.md` §7, uv12a;
 //! `fork-window-survey-2-2026-10-16.md` §1c, uw6a): the filter — a magnifier and the field, no
-//! placeholder — and at its right Stage All's double chevron, the eye that shows the diff side by
-//! side, and View Mode, whose menu offers the list alone, the one mode Cairn draws.
+//! placeholder — and at its right Stage All's double chevron, the eye, and View Mode, whose menu
+//! offers the list alone, the one mode Cairn draws.
 //!
 //! **What it reports.** Stage All as the lists' own intent on Unstaged
-//! (`ListIntent::Act(Unstaged, StageOrUnstageAll)`), greyed while Unstaged shows no row; the
-//! eye's press, which the caller turns into the shared side-by-side setting, lit while it is on;
-//! and nothing for View Mode's one item, already the mode drawn.
+//! (`ListIntent::Act(Unstaged, StageOrUnstageAll)`), greyed while Unstaged shows no row; and
+//! nothing for View Mode's one item, already the mode drawn. The eye is greyed, saying what
+//! brings it: Fork's opens Quick Look, a window over Fork's own drawing the selected file's diff
+//! side by side (`fork-local-changes-2026-10-20.md`, lc9), which Cairn has not built (#35).
 
 use freya::prelude::*;
 
@@ -20,9 +21,10 @@ use crate::style::{icons, metrics, tones};
 use crate::text_field::text_field;
 use cairn_model::ChangeList;
 
-/// The eye's tooltip and name. Fork's adds "(space bar)", the key it binds to it there; Cairn
-/// binds none.
+/// The eye's name: Fork's tooltip without the key Fork binds to it, the space bar.
 pub const SIDE_BY_SIDE_TOOLTIP: &str = "Show diff side-by-side";
+/// Why the eye is greyed.
+pub const COMES_WITH_QUICK_LOOK: &str = "Comes with Quick Look.";
 /// View Mode's tooltip and name, Fork's.
 pub const VIEW_MODE_TOOLTIP: &str = "View Mode";
 /// View Mode's one item, ticked: Fork's words for the list.
@@ -33,10 +35,7 @@ pub(crate) struct ListsBar {
     pub filter: Writable<String>,
     /// Whether Unstaged shows a row, so Stage All has something to take.
     pub stage_all: bool,
-    /// Whether the diff is drawn side by side: the eye is lit while it is.
-    pub side_by_side: bool,
     pub on_intent: EventHandler<ListIntent>,
-    pub on_side_by_side: EventHandler<()>,
 }
 
 impl ListsBar {
@@ -55,13 +54,13 @@ impl ListsBar {
                 ));
             }),
         };
-        let side_by_side = BarButton {
+        let quick_look = BarButton {
             glyph: icons::eye,
             name: SIDE_BY_SIDE_TOOLTIP,
-            tooltip: SIDE_BY_SIDE_TOOLTIP.to_owned(),
-            toggle: Some(self.side_by_side),
-            enabled: true,
-            on_press: self.on_side_by_side,
+            tooltip: COMES_WITH_QUICK_LOOK.to_owned(),
+            toggle: None,
+            enabled: false,
+            on_press: EventHandler::new(|()| {}),
         };
         let view_mode = BarButton {
             glyph: icons::view_mode,
@@ -117,7 +116,7 @@ impl ListsBar {
                 ),
             )
             .child(stage_all)
-            .child(side_by_side)
+            .child(quick_look)
             .child(view_mode)
             .into()
     }

@@ -102,7 +102,9 @@ pub use history::ref_chips::{
 pub use history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 pub use history::reflog_strip::{REFLOG_STRIP_EXIT, REFLOG_STRIP_TEXT, ReflogStrip};
 pub use history::{graph_geometry, lane_palette};
-pub use local_changes::bar::{SIDE_BY_SIDE_TOOLTIP, VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP};
+pub use local_changes::bar::{
+    COMES_WITH_QUICK_LOOK, SIDE_BY_SIDE_TOOLTIP, VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP,
+};
 pub use local_changes::drag::DRAG_THRESHOLD;
 pub use local_changes::list::{
     ChangeBadge, LIST_HEADER_HEIGHT, LISTS_BAR_HEIGHT, LISTS_SPLIT, LOCAL_CHANGES_ROW_HEIGHT,

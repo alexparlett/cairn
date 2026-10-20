@@ -1,5 +1,5 @@
-//! Local Changes' left side: Fork's bar across both lists — the filter, Stage All, the
-//! side-by-side eye and View Mode (`local_changes::bar`) — then Unstaged above Staged behind a
+//! Local Changes' left side: Fork's bar across both lists — the filter, Stage All, the eye
+//! (greyed) and View Mode (`local_changes::bar`) — then Unstaged above Staged behind a
 //! draggable splitter, each under its bold heading and each one flat, virtualised list of paths
 //! with Fork's badges, 20 px apart. The diff of the selection's primary is the caller's, on the
 //! right.
@@ -27,9 +27,8 @@
 //! buttons read Stage All and Unstage All while it is, enabled whatever is selected), by Stage
 //! All's double chevron in the bar over both lists, as Fork's, and by the small ⇈ on the Staged
 //! heading, always drawn; and the discard chord and menu item, on the unstaged side only. The
-//! eye in the bar is reported to [`LocalChangesList::on_side_by_side`]. The selection it draws
-//! is the caller's ([`LocalSelection`]), read by a binary search per row built; ↑ and ↓ move
-//! from its primary.
+//! selection it draws is the caller's ([`LocalSelection`]), read by a binary search per row
+//! built; ↑ and ↓ move from its primary.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
@@ -147,10 +146,8 @@ pub struct LocalChangesList {
     split: Option<Writable<f32>>,
     selection: Option<Readable<Option<LocalSelection>>>,
     held: Option<Readable<HeldKeys>>,
-    side_by_side: bool,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
-    on_side_by_side: EventHandler<()>,
     key: DiffKey,
 }
 
@@ -173,10 +170,8 @@ impl LocalChangesList {
             split: None,
             selection: None,
             held: None,
-            side_by_side: false,
             on_choose: EventHandler::new(|_| {}),
             on_intent: EventHandler::new(|_| {}),
-            on_side_by_side: EventHandler::new(|()| {}),
             key: DiffKey::None,
         }
     }
@@ -225,18 +220,6 @@ impl LocalChangesList {
         self.on_intent = on_intent.into();
         self
     }
-
-    /// Whether the diff beside the lists is drawn side by side: the bar's eye is lit while it is.
-    pub fn side_by_side(mut self, side_by_side: bool) -> Self {
-        self.side_by_side = side_by_side;
-        self
-    }
-
-    /// The bar's eye was pressed: the caller turns the shared side-by-side setting.
-    pub fn on_side_by_side(mut self, on_side_by_side: impl Into<EventHandler<()>>) -> Self {
-        self.on_side_by_side = on_side_by_side.into();
-        self
-    }
 }
 
 impl PartialEq for LocalChangesList {
@@ -247,7 +230,6 @@ impl PartialEq for LocalChangesList {
             && self.shown_paths == other.shown_paths
             && self.selection == other.selection
             && self.held == other.held
-            && self.side_by_side == other.side_by_side
             && self.key == other.key
     }
 }
@@ -352,9 +334,7 @@ impl Component for LocalChangesList {
         let bar = ListsBar {
             filter: self.filter.clone(),
             stage_all: unstaged > 0,
-            side_by_side: self.side_by_side,
             on_intent: self.on_intent.clone(),
-            on_side_by_side: self.on_side_by_side.clone(),
         };
         drag.on(rect())
             .expanded()

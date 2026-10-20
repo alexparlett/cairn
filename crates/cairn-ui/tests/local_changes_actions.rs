@@ -3,6 +3,9 @@
 //! component's boundary: every press, chord, button, drag and menu item is a `ListIntent` or a
 //! choice, and the component decides nothing about what it stages.
 
+#[path = "support/named.rs"]
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -20,6 +23,7 @@ use cairn_ui::{
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
+use support::one_named;
 
 const WIDTH: f32 = 400.;
 const HEIGHT: f32 = 600.;
@@ -153,19 +157,9 @@ fn at(test: &TestingRunner, text: &str) -> (f64, f64) {
         .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", labels(test)))
 }
 
-/// The centre of the control assistive technology reads as `name`: a glyph button's value, or
-/// a heading control's name.
+/// The centre of the one control assistive technology reads as `name`.
 fn named(test: &TestingRunner, name: &str) -> (f64, f64) {
-    let centre = test
-        .find(|node, element| {
-            Rect::try_downcast(element)
-                .filter(|rect| {
-                    let builder = &rect.accessibility.builder;
-                    builder.value() == Some(name) || builder.label() == Some(name)
-                })
-                .map(|_| node.layout().area.center())
-        })
-        .unwrap_or_else(|| panic!("no control is named {name:?}"));
+    let centre = one_named(test, name).1.center();
     (f64::from(centre.x), f64::from(centre.y))
 }
 

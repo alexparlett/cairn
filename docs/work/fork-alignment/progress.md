@@ -3,6 +3,91 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-20 — phase 09, the merge bar (packet mode)
+
+Committed onto `feature/fork-alignment` over phase 08's ff97147. An independent review of the
+whole packet diff, `main...feature/fork-alignment`; teardown is a separate session's.
+
+- **Mode and scope.** Packet mode, declared by the coordinator. Phases 01-08 all at the tip.
+  Reviewed with the user's decisions of 2026-10-20 applied, not re-litigated: the Show Lost
+  Commits strip ("Reflog mode enabled", "Exit") over the history, the sidebar's Return doing
+  nothing (`the_sidebar_walks_by_key_as_forks_tree` deciding C14), the dialogs' primary as Fork's
+  bordered default (`every_dialogs_primary_button_is_forks_default_in_forks_frame` deciding C20),
+  the eye greyed "Comes with Quick Look.", the whole Commit tab at 17 px, COMMITTER only where it
+  differs, 4 px splitters, 880×620, status box option A, phase 01's and 03's tones and metrics.
+- **C1-C22.** Every criterion's named test exists and ran green from the committed tree
+  (`cargo test --workspace --release` over the 44 names, 46 tests across the binaries that
+  hold them, 0 failed); the coverage audit read each against its criterion and found one arm
+  undecided (T1, below, fixed and mutation-checked twice). C22 measured: section below.
+- **QA.** Fresh `qa-checklist`, `responsiveness-reviewer`, `test-coverage-auditor`,
+  `gate-integrity-reviewer` and `destructive-ops-reviewer` in the foreground over
+  `main...HEAD`; a fresh `qa-confirm` adjudicated 11 raw findings, a second fresh `qa-confirm`
+  verified the fix:
+  - Confirmed and fixed: T1 (major) — `the_toolbar_is_forks_with_the_unbuilt_buttons_greyed`
+    did not decide C7's "the greyed ones are disabled": its checks (the sentence tooltip,
+    nothing reported under a press, no menu) all followed from `on_press: never()` and
+    `Tip::Sentence`, so the greyed builder flipped to `enabled: true` passed. Now each greyed
+    caption must be `tones::DISABLED_TEXT` and Fetch's `tones::TOOLBAR_TEXT`, and no greyed
+    button — the Stash ⌄, which has no caption, among them — may light its hover box while Fetch
+    must (dc5c5b4). Mutations run and killed: the greyed builder enabled, the disabled label tone
+    made the toolbar's, the Stash ⌄ enabled.
+  - Dismissed, with reasons: Q1 (manifest comments citing brainstorm L5/L10 — phase 02's J and
+    phase 01's F: the PRD keeps the citations after teardown, the comment guard reads `.rs`);
+    Q2 (`STYLE_EXCEPTIONS`' palette row says "Fork Dark's table", the theme table
+    `style::tones` holds, not FS2's survey; `palette.rs` holds FS2 §1b's measured values and says
+    so; moving them is the batched "extra FS2 tones" item); Q3 (macOS chords unverified — already
+    batched in phases 02-08; the comment states present state); Q4 (the `lost_commits` floor 6
+    under seven tests, one under as the other rows); R1 (the sidebar key's once-per-press scan
+    is a stated residual of the root CLAUDE.md); T2 (`no_message_asks_to_reopen_the_repository`
+    pins the one notice where such advice would stand; no production literal says "reopen");
+    T3 (C17 pins the menu builders; each right-press site has its own test); G1 (the new
+    guards' residuals routed to `qa-checklist`'s item 1, which reads the whole Invariants block,
+    as other guards' are; a dispatch row would be a nicety); G2 (`Color4f` is the stated
+    "dependency's API" residual, unused).
+  - The destructive-ops review found nothing: `by_user` at one site in each surface, the
+    confirmation keyed per serial, `PushButton` never equal, the unspent token moved and never
+    copied, a greyed menu item unchoosable, a field's Delete never reaching a discard.
+- **Dismissal-log audit** (phases 01-08): every dismissal re-read; the two whose reason could
+  have moved were checked in the code and hold — phase 02's H (every dialog is still a Freya
+  `Popup` with its window-wide scrim, `dialogs/frame.rs`) and phase 07's Q-F2 (no bar or push
+  button requests focus on a press). Phase 01's Q and C, and phase 02's X, were closed by the
+  phases named. No dismissal hides a defect in a decision the user locked.
+- **C22, measured** (`docs/research/ui-review/measured.md`): rust-lang/rust, release, headless
+  1440×900, three runs of the whole check and six more of the opening pass, beside `main`'s
+  baseline built from its own tree into its own target directory. Every gesture under 16.7 ms in
+  every run but **one frame of 19.28 ms** in run 1's "scrolled until 3,000 rows were loaded"
+  (layout alone, no update applied; p99 12.97 ms in that run), which runs 2-6 did not repeat
+  (5.75-6.10 ms; `main` 3.99). Local Changes over 11,000 paths: 12.6-13.3 ms against `main`'s
+  8.2 in every run — under the bar, the packet's one consistent cost. The bar is absolute, so
+  the one frame is put to the user below rather than called noise here. The bench's `.git`
+  mtime was the same before and after. The check's last phase (a refresh while Local Changes
+  is shown) did not land within 60 s on this scratch clone on either tree: a leftover for
+  teardown to file.
+- **Real window on Isle** (qa-checklist items 5-7): the session was locked for the whole
+  review (`/run/user/1000/isle/locked-*` reading `locked`, idle over two hours), so nothing was
+  typed and nothing captured. Done without input: the release build launched over the fixture
+  (`fixture-recipe.md`, built on the host) opened as `cairn` "t — Cairn", floating at 1024×768;
+  `WAYLAND_DEBUG=1` shows winit binding `zxdg_decoration_manager_v1`, sending
+  `zxdg_toplevel_decoration_v1.set_mode(1)` (client side) and Isle answering `configure(1)`:
+  the client-side request is honoured with no compositor rule. OWED: the surface-by-surface
+  comparison with FS1/FS2 at 1024×768 and 880×620, the Tab stops and the selection tones by
+  eye, the menus' and tooltips' 12 px — for phases 05-09.
+- **Gate:** `scripts/gate.sh` (full) PASS on f4a3a60 — format, lint, typecheck, guards, deps,
+  test-full (79 binaries, 0 failed), test-doc and git-floor (2.30.9 and 2.32.7; the floors'
+  usual skips, `lost_commits` and `date_order` skipping nothing) — and run again on the final tip
+  after this entry's docs commit.
+
+**Batched for the user — PENDING, not approved:**
+1. **C22's one frame.** One 19.28 ms frame in one of nine runs, in a phase every other run kept
+   under 6.1 ms. Options: (a) accept the measurement as recorded, the bar read over the eight
+   runs that repeated it (recommended); (b) hold C22 open until the gesture is profiled.
+2. **The real-window check** for phases 05-09 is owed, or the headless release renders of
+   phases 05-08 accepted in their place; the decoration result above stands either way.
+
+**Deferred:** the window check's refresh phase on a scratch clone of 11,000 paths; Local
+Changes' first frame (icon rasterization on first draw, unprofiled); the Stash ⌄'s and every
+toolbar button's accessibility state (no node says it is disabled; tone and tooltip alone).
+
 ## 2026-10-20 — phase 08, context menus, keys, focus and dialogs (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 07's a88367f.

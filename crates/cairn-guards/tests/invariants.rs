@@ -2443,8 +2443,11 @@ const ACCELERATOR_PIN_BODY: &[&str] = &[
     "pin_violations(&moved)",
     "pin_violations(&letter)",
     "pin_violations(&press)",
+    "pin_violations(&heading_press)",
     "pin_violations(&twice)",
+    "pin_violations(&shift_d)",
     "pin_violations(&shared)",
+    "pin_violations(&copy_twice)",
 ];
 
 /// What keeps the bounded-output helpers a read's alone, in `process/runner.rs` and

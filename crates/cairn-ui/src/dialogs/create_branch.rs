@@ -479,10 +479,10 @@ impl Component for CreateBranchDialog {
                 .a11y_role(AccessibilityRole::Dialog)
                 .child(frame::title(CREATE_BRANCH_TITLE))
                 .child(
-                    label()
-                        .text(CREATE_BRANCH_SUBTITLE)
+                    rect()
                         .width(Size::fill())
-                        .padding(Gaps::new(0., 8., 4., 8.)),
+                        .padding(Gaps::new(0., 8., 4., 8.))
+                        .child(label().text(CREATE_BRANCH_SUBTITLE).width(Size::fill())),
                 )
                 .child(content)
                 .child(buttons),

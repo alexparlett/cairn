@@ -603,7 +603,11 @@ Pinned against `git rev-list HEAD` by `the_walk_marks_what_head_reaches_as_git_r
 (`crates/cairn-git/tests/lost_commits.rs`, run by `git-floor` too): a merge, a side branch
 with a tag, a remote-only commit, a reset-away commit, a stash, a parent dated after its child
 and every commit dated alike, `HEAD` on a branch and detached, Show Lost Commits off and on,
-every route, page size and window.
+every route, page size and window; and by `the_head_reach_counts_what_git_substitutes_and_a_head_no_ref_names`
+— a replace ref grafting the merge onto its first parent, a shallow clone and a detached `HEAD`
+at a commit no ref names. `cairn_ui::LocalZone` compares by which read it came from, never the
+zone file's contents, so the rows holding it compare cheaply on every render
+(`a_zone_compares_by_the_read_it_came_from`).
 
 ## The worker boundary (`cairn-app`)
 

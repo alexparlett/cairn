@@ -794,12 +794,12 @@ fn beyond_head_by_git(fixture: &Fixture, lost_commits: bool) -> BTreeSet<String>
 /// Every route, page size and window marks exactly `expected` among the commits beyond
 /// `HEAD`'s reach, and draws `stashes` stash rows, each beyond it.
 fn assert_every_route_marks(
-    fixture: &Fixture,
+    fixture: &std::path::Path,
     lost_commits: bool,
     expected: &BTreeSet<String>,
     stashes: usize,
 ) {
-    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let repo = ok(Repository::discover(fixture), "opening the fixture");
     let read = ok(repo.refs(&CancelSignal::new()), "reading the refs");
     for window in [1, 3, 1024] {
         for page in [1, 2, 5, 64] {
@@ -861,13 +861,114 @@ fn the_walk_marks_what_head_reaches_as_git_rev_list_does() {
                 lost_commits,
                 "only Show Lost Commits draws the reset-away commit"
             );
-            assert_every_route_marks(fixture, lost_commits, &expected, 1);
+            assert_every_route_marks(fixture.path(), lost_commits, &expected, 1);
         }
 
         // Detached on the side branch: what `HEAD` reaches is the side branch's history now.
         fixture.git(&["checkout", "--quiet", "--detach", &reached.side_tip]);
         let expected = beyond_head_by_git(fixture, false);
         assert!(!expected.contains(&reached.tagged_side) && expected.contains(&reached.skewed));
-        assert_every_route_marks(fixture, false, &expected, 1);
+        assert_every_route_marks(fixture.path(), false, &expected, 1);
     }
+}
+
+/// `git rev-list <every ref> --not HEAD` in the repository at `dir`.
+fn beyond_head_in(dir: &std::path::Path) -> BTreeSet<String> {
+    lines(&fixtures::run(
+        dir,
+        &[
+            "rev-list",
+            "--branches",
+            "--remotes",
+            "--tags",
+            "--not",
+            "HEAD",
+        ],
+        None,
+    ))
+}
+
+/// What git substitutes as it walks counts for `HEAD`'s reach as it counts for `git rev-list
+/// HEAD`: a replace ref grafting the merge onto its first parent alone leaves the merged side
+/// beyond `HEAD`; in a shallow clone the boundary's parents are no part of `HEAD`'s history;
+/// and a detached `HEAD` at a commit no ref names reaches its own history and no branch tip
+/// above it. Every route, page size and window. Caught by: the reach read through the
+/// commits' own parents rather than the ones the walk read (the grafted side marked as
+/// `HEAD`'s), or a `HEAD` that names no ref left unseeded so every row reads beyond it.
+#[test]
+fn the_head_reach_counts_what_git_substitutes_and_a_head_no_ref_names() {
+    let reached = head_reach_fixture(60);
+    let fixture = &reached.fixture;
+    let dir = fixture.path();
+
+    // The merge on `main`, grafted onto its first parent alone.
+    let merge = rev_parse(fixture, "main~3");
+    assert_eq!(
+        fixture
+            .git(&["rev-list", "--parents", "-1", &merge])
+            .split_whitespace()
+            .count(),
+        3,
+        "main~3 is the merge"
+    );
+    let first_parent = rev_parse(fixture, &format!("{merge}^1"));
+    fixture.git(&["replace", "--graft", &merge, &first_parent]);
+    let expected = beyond_head_in(dir);
+    assert!(
+        expected.contains(&reached.merged_side),
+        "git: the grafted-away side is beyond HEAD"
+    );
+    assert_every_route_marks(dir, false, &expected, 1);
+    fixture.git(&["replace", "--delete", &merge]);
+
+    // A detached `HEAD` on a commit no ref names, above `main`.
+    let tree = rev_parse(fixture, "HEAD^{tree}");
+    let main = rev_parse(fixture, "main");
+    let orphan = git_at(
+        fixture,
+        fixtures::EPOCH + 50_000,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &main,
+            "-m",
+            "named by HEAD alone",
+        ],
+    )
+    .trim()
+    .to_owned();
+    fixture.git(&["checkout", "--quiet", "--detach", &orphan]);
+    let expected = beyond_head_in(dir);
+    assert!(!expected.contains(&main) && !expected.contains(&orphan));
+    assert!(expected.contains(&reached.side_tip));
+    assert_every_route_marks(dir, false, &expected, 1);
+    fixture.git(&["checkout", "--quiet", "main"]);
+
+    // A shallow clone of three commits, inside the fixture's directory.
+    let url = format!("file://{}", dir.display());
+    fixtures::run(
+        dir,
+        &[
+            "clone",
+            "--quiet",
+            "--depth",
+            "3",
+            "--no-single-branch",
+            &url,
+            "shallow",
+        ],
+        None,
+    );
+    let shallow = dir.join("shallow");
+    assert!(
+        shallow.join(".git/shallow").exists(),
+        "the clone is shallow"
+    );
+    let expected = beyond_head_in(&shallow);
+    assert!(
+        !expected.is_empty(),
+        "the shallow clone has rows HEAD cannot reach"
+    );
+    assert_every_route_marks(&shallow, false, &expected, 0);
 }

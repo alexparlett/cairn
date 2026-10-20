@@ -6,12 +6,27 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-/// The zone dates are drawn in, and how it was had.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The zone dates are drawn in, and how it was had. Compared by which read it is, never by the
+/// zone's contents: every row, the Commit tab and the popover compare the one they hold on
+/// each render, and a zone read from the system is a whole zone file.
+#[derive(Debug, Clone)]
 pub struct LocalZone {
     zone: TimeZone,
     had: Had,
+    /// Which read of the system's zone this is; 0 for UTC had without one.
+    read: u64,
 }
+
+impl PartialEq for LocalZone {
+    fn eq(&self, other: &Self) -> bool {
+        self.had == other.had && self.read == other.read
+    }
+}
+
+impl Eq for LocalZone {}
+
+/// The number the next zone read is given.
+static NEXT_READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Had {
@@ -29,6 +44,7 @@ impl Default for LocalZone {
         Self {
             zone: TimeZone::UTC,
             had: Had::Waiting,
+            read: 0,
         }
     }
 }
@@ -39,6 +55,7 @@ impl LocalZone {
         Self {
             zone,
             had: Had::Read,
+            read: NEXT_READ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -47,6 +64,7 @@ impl LocalZone {
         Self {
             zone: TimeZone::UTC,
             had: Had::Unreadable,
+            read: 0,
         }
     }
 
@@ -97,5 +115,17 @@ mod tests {
         assert!(!LocalZone::read(TimeZone::UTC).fell_back_to_utc());
         assert_eq!(LocalZone::default().offset_at(1_782_907_200), 0);
         assert_ne!(LocalZone::default(), LocalZone::unreadable());
+    }
+
+    /// A zone and its clones compare equal, by the read they came from and not by the zone's
+    /// contents, and another read is another zone. Caught by: a clone comparing unequal, which
+    /// would draw every row again on each render.
+    #[test]
+    fn a_zone_compares_by_the_read_it_came_from() {
+        let zone = LocalZone::read(TimeZone::fixed(Offset::constant(1)));
+        assert_eq!(zone, zone.clone());
+        assert_ne!(zone, LocalZone::read(TimeZone::fixed(Offset::constant(1))));
+        assert_ne!(zone, LocalZone::default());
+        assert_eq!(LocalZone::unreadable(), LocalZone::unreadable());
     }
 }

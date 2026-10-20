@@ -293,3 +293,14 @@ fn ahead_and_behind_are_badges_on_push_and_pull() {
     let (test, _) = launch(move || Toolbar::new(status()));
     assert!(digits(&test).is_empty(), "{:?}", digits(&test));
 }
+
+/// The words the greyed buttons and the pane's icon say are the spec's and Fork's, spelled here
+/// apart from the constants the views draw. Caught by: a sentence reworded in the code alone.
+#[test]
+fn the_greyed_sentences_and_the_icons_name_are_the_specs_words() {
+    assert_eq!(COMES_WITH_QUICK_LAUNCH, "Comes with Quick Launch.");
+    assert_eq!(COMES_WITH_PULL_AND_PUSH, "Comes with pull and push.");
+    assert_eq!(COMES_WITH_STASHING, "Comes with stashing.");
+    assert_eq!(COMES_WITH_PREFERENCES, "Comes with Preferences.");
+    assert_eq!(cairn_ui::HIDE_DETAILS_TOOLTIP, "Hide commit details");
+}

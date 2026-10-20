@@ -1201,16 +1201,23 @@ mod tests {
         assert_eq!(view.lock.read().changed(), None);
     }
 
+    /// git's progress lines land whole — the latest in the fetch's state, for the status box to
+    /// keep to its percentage as it draws it, and every one in the fetch's activity entry, for
+    /// the popover — and the remotes in theirs. Caught by: a line trimmed before it is kept, so
+    /// the popover could never say it whole.
     #[test]
     fn progress_and_remotes_land_in_their_states() {
         let (test, view, asked) = launch(running());
+        let mut log = view.activity.log;
+        test.run_in(|| log.write().fetch_started("origin"));
+        let whole = "Receiving objects:  45% (12345/27000), 12.00 MiB | 3.00 MiB/s";
         applying(
             &test,
             view,
             &asked,
             Update::FetchProgress {
                 tap: crate::worker::OutputTap::holding(&cairn_model::ScrubbedLines::scrubbing(
-                    "Receiving objects: 20%\nReceiving objects: 40%\n",
+                    &format!("Receiving objects: 20%\n{whole}\n"),
                 )),
             },
         );
@@ -1218,9 +1225,15 @@ mod tests {
             *view.fetch.read(),
             FetchStatus::Running {
                 remote: "origin".to_owned(),
-                line: Some("Receiving objects: 40%".to_owned())
+                line: Some(whole.to_owned())
             }
         );
+        let (entries, _) = view.activity.log.peek().shown();
+        let kept = entries
+            .iter()
+            .flat_map(|entry| entry.lines.iter())
+            .any(|line| *line == cairn_ui::ActivityLine::Output(whole.to_owned()));
+        assert!(kept, "the activity entry does not keep the whole line");
         applying(
             &test,
             view,

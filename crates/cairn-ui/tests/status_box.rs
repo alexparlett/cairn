@@ -24,14 +24,19 @@ fn area(test: &TestingRunner, text: &str) -> Area {
 }
 
 fn boxed(status: StatusBox) -> TestingRunner {
+    boxed_at(status, 300.)
+}
+
+/// The box `width` wide and Fork's 36 px tall.
+fn boxed_at(status: StatusBox, width: f32) -> TestingRunner {
     let (mut test, _) = TestingRunner::new(
         move || {
             rect()
-                .width(Size::px(300.))
+                .width(Size::px(width))
                 .height(Size::px(36.))
                 .child(status.clone())
         },
-        (300., 36.).into(),
+        (width, 36.).into(),
         |_| {},
         1.,
     );
@@ -169,7 +174,18 @@ fn a_long_progress_line_is_kept_to_its_percentage_and_only_an_overlong_name_is_c
     let progress = area(&test, "Receiving objects: 45%");
     assert!(progress.max_x() <= 300., "{progress:?}");
     let name = area(&test, "Fetch 'origin'");
-    assert!(name.max_x() <= 300., "a short name is cut: {name:?}");
+    let roomy = boxed_at(
+        running(
+            "Fetch 'origin'",
+            Some("Receiving objects:  45% (12345/27000), 12.00 MiB | 3.00 MiB/s"),
+        ),
+        1200.,
+    );
+    let whole = area(&roomy, "Fetch 'origin'");
+    assert!(
+        (name.width() - whole.width()).abs() < 0.5 && name.max_x() <= 300.,
+        "a short name is cut: {name:?}, whole {whole:?}"
+    );
 
     let long = "Create branch 'feature/a-branch-name-far-too-long-for-the-status-box'";
     let test = boxed(running(long, None));
@@ -181,6 +197,10 @@ fn a_long_progress_line_is_kept_to_its_percentage_and_only_an_overlong_name_is_c
         })
         .unwrap_or_else(|| panic!("the whole name is not the label's: {:?}", labels(&test)));
     assert!(at.max_x() <= 300., "the name spills out of the box: {at:?}");
+    assert!(
+        (at.height() - name.height()).abs() < 0.5,
+        "the overlong name wraps rather than being cut: {at:?} against one line {name:?}"
+    );
     assert_eq!(
         overflow,
         Some(TextOverflow::Ellipsis),

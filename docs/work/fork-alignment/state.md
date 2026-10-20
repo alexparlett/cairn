@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03 and 04 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04 and 05 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -177,6 +177,28 @@ accelerator actions, guard names, `deny.toml` pins.
   (gix-date's default set). Lockfile: two dependency-edge lines, no new crate.
 - `scripts/git-floor.sh`: `--test lost_commits` floor 6.
 
+**Phase 05:**
+- `cairn-model`: `Ref::commit_time` (a tag's commit's committer date; `None` otherwise);
+  `Disclosure`'s default closes Tags (`SidebarSection::opens_closed`); tags laid out newest first
+  by it, ties by name last first.
+- `cairn-git`: the refs query reads each tag's commit date through `Grafted`
+  (`Reading::commit_time`), polled per tag, counted in `RefsCost::objects_read`.
+- `cairn-ui`: `Sidebar::name`, `on_gear(GearChoice)`, `on_ref_menu((SidebarRow, RefChoice))`;
+  `SidebarGlyph`, `DrawnRow::glyph: Option<SidebarGlyph>`, `row_indent`, `ref_menu`, `stash_text`,
+  `SidebarTarget::is`; `sidebar/keys.rs` (`Walk`, `SidebarStep`, `walked_to`,
+  `chosen_when_walked`); constants `COPY_REPOSITORY_PATH_CAPTION`, `REPOSITORY_GEAR_NAME`,
+  `COPY_BRANCH_NAME_CAPTION`, `COPY_TAG_NAME_CAPTION`, `NO_COMMIT_TO_BRANCH_FROM`;
+  `counts_text` now `1↑ 2↓`; `SIDEBAR_INDENT` = `metrics::SIDEBAR_INDENT` (12). `RefGlyph` lost
+  `Branch`, `LocalOnly`, `Folder`, `Opened`, `Closed`. Icons `chevron_right`, `tag`, `check`,
+  `local_branch`, `warning`, `local_changes`, `all_commits`. Metrics `SIDEBAR_ICON`,
+  `SIDEBAR_CHEVRON`, `SIDEBAR_GAP`, `SIDEBAR_INSET`, `SIDEBAR_BAND_INSET`, `SIDEBAR_BAND_RADIUS`,
+  `SIDEBAR_BADGE`; tones `SIDEBAR_ICON`, `SIDEBAR_DIM_ICON`, `FILTER_FIELD`, `UPSTREAM_GONE`,
+  `UNSEEN`. The menu panel: the rule a fill-minimum child of the panel; a chord's room held by an
+  unseen copy, the chord placed against the row's right edge.
+- `cairn-app`: `Update::Opened { name, path }`, `View::repository_path`, `sidebar/menu.rs`
+  (`gear`, `chosen`, `ref_name_text`, `repository_path_text`); `SIDEBAR_WIDTH` = 300.
+- Evidence: `docs/research/ui-review/fork-sidebar-2026-10-20.md`.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
@@ -185,7 +207,7 @@ accelerator actions, guard names, `deny.toml` pins.
 | 02 | done (C5, C6, C20's About half met headlessly; C2's borderless arm met; pointer gestures and macOS UNVERIFIED, batched for the user) | full gate PASS | qa-checklist ×2, responsiveness ×2, test-coverage ×2, gate-integrity ×2; qa-confirm: 15 of 26 confirmed and fixed or recorded, 11 dismissed |
 | 03 | done (C7, C8, C9, C18's Ctrl+Shift+D half met; option A by the user; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 10 of 14 confirmed and fixed (Q2 probed and fixed), 4 dismissed |
 | 04 | done (C10, C11, C12, C13 met; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 11 of 18 confirmed and fixed, G4 escalated (recorded, batched), 6 dismissed; fixes verified by a fresh qa-confirm |
-| 05 | not started | — | — |
+| 05 | done (C14 met but its "Return opens Local Changes or All Commits" clause, built as Fork's and batched; C21's sidebar half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 16 raw (two pairs merged), 12 confirmed (9 fixed, Q1/Q2/Q7 batched), Q5 and R3 dismissed, T1's mutation half dismissed on re-run; fixes verified by a fresh qa-confirm |
 | 06 | not started | — | — |
 | 07 | not started | — | — |
 | 08 | not started | — | — |

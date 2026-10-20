@@ -3,6 +3,134 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-20 — phase 05, the sidebar (packet mode)
+
+Committed onto `feature/fork-alignment` over phase 04's 4eea6ae.
+
+- **Fork observed first** (`/observe-fork`, fork-observer agent, Fork 2.23.2.0 Dark, shots `sb*`):
+  `docs/research/ui-review/fork-sidebar-2026-10-20.md`. VERIFIED: tags newest first by the
+  **tagged commit's date** (m-light, z-annot-old, b-light, a-annot-new — not name, not tagger
+  date, not creation order); counts ahead then behind, `1↑ 2↓`, body tone; a gone upstream draws
+  no count but a yellow (#FFC501) warning on its branch glyph's bottom right; a stash drops
+  `On <branch>: ` and keeps git's default `WIP on …` whole; ↑/↓ walk every heading, folder, ref
+  and stash, never reaching the filter, All Commits or Local Changes; the history follows each ref
+  walked to at once; Return does nothing anywhere observed; ←/→ are a tree's; the band is rounded
+  (~3 px), 22 px, inset ~5 px each side; "Create branch at:" names the ref with its glyph; Copy
+  Branch Name copies `origin/main` for a remote. NOT OBSERVED: Return on Local Changes / All
+  Commits (unreachable by arrows), a tie between tags of one date beyond one case, a local branch
+  in a folder. The tag order is by a date, so the phase's stopping rule did not trigger.
+- **The sidebar** (R6, C14): header with the repository's name and the gear's Copy Repository Path
+  (`Update::Opened { path }`, `View::repository_path`, `sidebar::menu`); Local Changes and All
+  Commits with Lucide icons (`file-diff`, `file-stack`) in Fork's rounded band; the filter's
+  magnifier and #292929 fill; Tags closed as it opens (`Disclosure`'s default,
+  `SidebarSection::opens_closed`); 12 px a level with a chevron slot so a leaf's icon lines up with
+  its folders'; Lucide glyphs (`SidebarGlyph`), a remote's folder its cloud; tags by their commits'
+  dates (`Ref::commit_time`, read by the refs query through git's substitutions); stash wording
+  (`stash_text`); counts `1↑ 2↓` (`counts_text`, was behind-first unspaced); the sidebar 300 px
+  (`metrics::SIDEBAR_WIDTH`, was 240). `RefGlyph` lost the five sidebar-only shapes.
+- **Keys** (R10.3, the deferred item): Fork's tree walk (`cairn_ui::sidebar::keys`), a ref or
+  stash walked to chosen at once as a press chooses it.
+- **Ref menus** (R9.2, R9.3): a right press on a ref selects its commit and opens New Branch…
+  (Ctrl+Shift+B shown) then Copy Branch Name / Copy Tag Name; greyed New Branch… on a tag naming
+  no commit; nothing on a stash, heading or folder.
+- **The menu component** (phase 02's) fixed: the release render showed a two-group menu stretched
+  across the window by its rule, and once fixed, its chord drawn past its edge — a row's
+  space-between alignment set the chord against the room the window offered before the menu was
+  measured. The rule is now the panel's own fill-minimum child, and an unseen copy of the chord
+  (`tones::UNSEEN`) holds its room while the chord is placed against the row's right edge.
+  Every two-group context menu phase 08 adds relies on it.
+- Acceptance criteria and their tests:
+  - C14: `the_sidebar_is_forks`, `each_entry_draws_its_kinds_glyph`,
+    `a_right_press_on_a_ref_selects_its_commit` (cairn-ui) and
+    `a_right_press_on_a_ref_selects_its_commit_in_the_history` (cairn-app),
+    `the_sidebar_walks_by_key_as_forks_tree`, `the_walk_stays_on_a_folder_opened_or_closed_by_key`,
+    `the_arrows_walk_the_sidebar_and_select_each_refs_commit` (cairn-app),
+    `tags_are_listed_newest_first_by_their_commits_date`,
+    `tags_and_every_folder_start_closed_and_the_other_sections_open` (cairn-model),
+    `a_tag_is_dated_by_its_commit_never_by_its_tagger`,
+    `a_tags_date_is_read_through_a_replacement_as_git_reads_it` (cairn-git, real git).
+    **Except** C14's last clause, "Return opens Local Changes or All Commits", which Fork's
+    evidence contradicts — see the batch below; the test is named for what it decides.
+  - C21 (sidebar half): `a_sidebar_of_50000_refs_builds_one_viewport` and
+    `a_folder_of_10000_branches_open_builds_one_viewport`, kept, each now requiring 22 px row pitch.
+  - Model changes with tests in the same commit: `Ref::commit_time` (edafd00, with the refs
+    oracle and the tagger-date test), `Disclosure`'s default and the tag order (86f9179).
+- Tests whose expectations changed: the sidebar suites (counts form, Tags closed, stash wording,
+  glyph kinds); the cairn-git poll count and cost (one poll and one object read per tag); the app's
+  tag-on-a-tree test opens Tags first.
+- Measured (`docs/research/refs-and-status/measured.md`, "A tag's commit date"): 10,000 tags on
+  commits of their own, 19.8 ms with the dates against 4.1 ms without — ~1.6 µs a tag on the
+  repository thread every refresh. Reusing the last snapshot's dates is a possible follow-up.
+
+**Real window — NOT RUN** (qa-checklist items 5, 6, 7 owed). After the host's reboot Hyprland's
+command socket (`.socket.sock`) is missing and the session is locked, so `hyprctl`,
+`send_shortcut` and `grim -T` had nothing to drive or capture, and `wtype` would type into the
+lock screen; the release build was not run in a real window. **Partial substitute:** the real
+`window()` with the real worker over the fixture (`fixture-recipe.md`, built on the host), Fork
+Dark's launch theme installed, rendered headlessly in a release build with freya-testing's
+`render_to_file` at 1024×768 and 880×620 (a scratch `#[ignore]` test, not committed), pressing,
+right-pressing and keying by the runner's events. It showed: the sidebar beside uw27/uv4z — rows,
+order, indents, Tags closed, `1↑`, the stash's wording, the band; ↓ from `main` landing on the
+Remotes heading in blue; the ref menu (which is how the menu component's two bugs were found and
+then seen fixed); at 880×620 every history column kept, the subject ~160 px (the 300 px sidebar
+takes 60 px more than phase 03's 240). It cannot show the compositor's fonts, a focus ring, hover,
+tooltips, or real keyboard and pointer input. Differences seen against FS1/FS2: Fork's own icon
+set against Lucide (L4); the local-only glyph's shape (a ui.md row); Fork's refs/search switch and
+divider not drawn (R6.3); Fork's filter field less rounded.
+
+**QA.** Fresh `qa-checklist`, `responsiveness-reviewer` and `test-coverage-auditor` in the
+foreground (no guard, script or CI change, so no gate-integrity reviewer); `qa-confirm`
+adjudicated 16 raw findings (two pairs merged), and a fresh `qa-confirm` verified the fixes:
+- Confirmed and fixed: Q3/R2 (the key's row search copied a name per row and was unstated —
+  `SidebarTarget::is`, a CLAUDE.md residual line), Q4/R1 (tag dates unmeasured — measured),
+  Q8's docs half (sidebar.md cited R11/R10.2 for things they do not ask), T1's test half (the
+  sidebar test could read the chord's unseen copy), T2 (a heading's first level unpinned), T3
+  (the walk kept across a toggle untested, and it trusted a stale index over later layouts —
+  `Walk` now keeps its row), T4 (greyed New Branch… untested), T5 (a remote ref's menu
+  untested), T6 (a tag's date through a replacement untested). T2, T3 and T4 mutation-checked.
+- Confirmed, batched for the user (PENDING): Q1, Q2, Q7, Q8's assignment (below).
+- Dismissed, with reasons: Q5 (`Clipboard::set` on the UI thread is no repository work, and the
+  same call already ships in Local Changes' Copy Path); R3 (a walk step is a press, whose cost is
+  a stated bounded residual, and superseding under key repeat is the design and Fork's); T1's
+  mutation half (the auditor reported that restoring space-between and a margin beside the new
+  rule passes the menu tests; re-run here twice from the committed tree, touched and rebuilt, it
+  fails `a_long_chord_stands_inside_the_menu` — "the chord ends at 395.8203, not at the menu's
+  236.91016 less its inset". The auditor's copies built into the shared `target/`, where an
+  artifact newer than its sources is reused: the same stale cache misled this phase once, when a
+  scratch worktree built into `target/` left a `cairn-model` that no source here held).
+
+**Batched for the user — PENDING, not approved:**
+1. **C14 / R10.3's Return.** The PRD says the sidebar's rows walk by ↑/↓ and Return opens Local
+   Changes or All Commits (test `the_sidebar_walks_by_key_and_opens_with_return`). Fork's arrows
+   never reach those rows and its Return does nothing on any row (sb55-sb68); Return on them is
+   NOT OBSERVED, being unreachable. Built: Fork's. Options: (a) ratify Fork's and amend C14,
+   R10.3.3 and the test name to `the_sidebar_walks_by_key_as_forks_tree` (recommended — Ctrl+1 and
+   Ctrl+2 already reach both from the keyboard); (b) a Cairn extension, ↑ past the Branches
+   heading to All Commits and Local Changes and Return there switching, as a ui.md deviation row.
+2. **The real-window check** (qa items 5-7) for this phase is owed — before phase 09 or by the
+   user — or the headless release render accepted in its place.
+3. **Tags of one date**: ordered by name, last first, from the one tie observed; a second
+   `/observe-fork` run with several ties would settle it.
+4. **Two deviations no requirement owns**: "Create branch at:" shows the commit where Fork names
+   the ref with its glyph (sb78-sb82; the chord's "main" too, FS2 §4), and pressing All Commits
+   does not move focus to the history (sb73). Assign each to a later phase (08 is the nearest),
+   or keep as ui.md rows.
+5. **New tones**: `SIDEBAR_ICON` #CFCFCF, `SIDEBAR_DIM_ICON` #777777, `FILTER_FIELD` #292929
+   (FS2's own), `UPSTREAM_GONE` #FFC501, and `UNSEEN` (transparent); **new metrics**:
+   `SIDEBAR_ICON` 14, `SIDEBAR_CHEVRON` 12, `SIDEBAR_GAP` 6, `SIDEBAR_INSET` 8,
+   `SIDEBAR_BAND_INSET` 5, `SIDEBAR_BAND_RADIUS` 3, `SIDEBAR_BADGE` 8.
+6. **The local-only glyph** keeps a shape of its own (Lucide `git-commit-vertical`, dim) where Fork
+   greys its branch glyph — kept from refs-and-status and now a ui.md row; Fork's own would be the
+   branch glyph in `SIDEBAR_DIM_ICON`.
+7. **The 300 px sidebar at the 880×620 minimum** leaves the history's subject ~160 px (it was
+   ~218 px with 240 px); the minimum size stays as approved.
+8. **Icons chosen from Lucide** for Local Changes (`file-diff`) and All Commits (`file-stack`, Fork's
+   is a tray of pages).
+
+**Deferred:** Copy Branch/Tag Name's Ctrl+C (R10.1's `Copy`, phase 08); C21's menu half
+(`a_long_menu_builds_one_viewport`, phase 08); a branch name's "Local branch / Tracked branch"
+tooltip and the hover icons (#2) not drawn; reusing the last snapshot's tag dates.
+
 ## 2026-10-20 — phase 04, the history (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 03's 1573b07.

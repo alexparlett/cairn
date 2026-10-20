@@ -220,7 +220,12 @@ impl Component for Toolbar {
             .content(Content::Flex)
             .width(Size::fill())
             .height(Size::px(metrics::TOOLBAR))
-            .padding(Gaps::new(0., 6., 0., 6.))
+            .padding(Gaps::new(
+                0.,
+                metrics::TOOLBAR_INSET,
+                0.,
+                metrics::TOOLBAR_INSET,
+            ))
             .cross_align(Alignment::center())
             .background(tones::CHROME)
             .font_size(metrics::BODY)
@@ -279,13 +284,13 @@ impl Component for Toolbar {
                             .max_width(Size::px(metrics::STATUS_BOX_WIDTH))
                             .height(Size::px(metrics::STATUS_BOX_HEIGHT))
                             .margin(Gaps::new(0., metrics::TOOLBAR_GROUP_GAP, 0., 0.))
-                            .corner_radius(4.)
+                            .corner_radius(metrics::CONTROL_RADIUS)
                             .background(tones::STATUS_BOX)
                             .padding(Gaps::new(
                                 0.,
-                                metrics::STATUS_BOX_GLYPH + 12.,
+                                metrics::STATUS_BOX_TEXT_INSET,
                                 0.,
-                                metrics::STATUS_BOX_GLYPH + 12.,
+                                metrics::STATUS_BOX_TEXT_INSET,
                             ))
                             .on_sized(move |e: Event<SizedEventData>| {
                                 on_sized.call((e.area.min_x(), e.area.max_y()));
@@ -294,10 +299,14 @@ impl Component for Toolbar {
                             // popover: a press on the box's centre opens nothing.
                             .child(
                                 rect()
-                                    .position(Position::new_absolute().left(4.).bottom(4.))
+                                    .position(
+                                        Position::new_absolute()
+                                            .left(metrics::STATUS_BOX_GLYPH_INSET)
+                                            .bottom(metrics::STATUS_BOX_GLYPH_INSET),
+                                    )
                                     .a11y_role(AccessibilityRole::Button)
                                     .a11y_builder(|node| node.set_value(ACTIVITY_GLYPH_NAME))
-                                    .padding(2.)
+                                    .padding(metrics::TOOLBAR_BUTTON_EDGE)
                                     .on_press(move |_| activity.call(ToolbarPress::Activity))
                                     .child(icons::activity(
                                         metrics::STATUS_BOX_GLYPH,

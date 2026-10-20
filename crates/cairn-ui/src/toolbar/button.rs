@@ -70,14 +70,14 @@ impl ToolButton {
                 .min_width(Size::px(metrics::TOOLBAR_BUTTON_MIN_WIDTH))
                 .height(Size::fill())
                 .padding(Gaps::new(
-                    3.,
+                    metrics::TOOLBAR_BUTTON_EDGE,
                     metrics::TOOLBAR_BUTTON_PADDING,
-                    2.,
+                    metrics::TOOLBAR_BUTTON_EDGE,
                     metrics::TOOLBAR_BUTTON_PADDING,
                 ))
                 .cross_align(Alignment::center())
                 .main_align(Alignment::center())
-                .spacing(2.)
+                .spacing(metrics::TOOLBAR_BUTTON_EDGE)
                 .on_press(move |_| {
                     if enabled {
                         on_press.call(());
@@ -115,7 +115,12 @@ pub(crate) fn chevron(
             .a11y_role(AccessibilityRole::Button)
             .a11y_builder(move |node| node.set_value(name))
             .height(Size::fill())
-            .padding(Gaps::new(0., 2., 4., 2.))
+            .padding(Gaps::new(
+                0.,
+                metrics::TOOLBAR_BUTTON_EDGE,
+                2. * metrics::TOOLBAR_BUTTON_EDGE,
+                metrics::TOOLBAR_BUTTON_EDGE,
+            ))
             .main_align(Alignment::End)
             .on_press(move |_| {
                 if enabled {
@@ -157,7 +162,12 @@ fn badge(count: usize) -> Rect {
         )
         .min_width(Size::px(metrics::TOOLBAR_BADGE))
         .height(Size::px(metrics::TOOLBAR_BADGE))
-        .padding(Gaps::new(0., 3., 0., 3.))
+        .padding(Gaps::new(
+            0.,
+            metrics::TOOLBAR_BADGE_PADDING,
+            0.,
+            metrics::TOOLBAR_BADGE_PADDING,
+        ))
         .corner_radius(metrics::TOOLBAR_BADGE / 2.)
         .background(tones::BADGE)
         .center()
@@ -183,7 +193,7 @@ impl Component for Hovered {
         let lit = self.enabled && *hovered.read();
         rect()
             .height(Size::fill())
-            .corner_radius(4.)
+            .corner_radius(metrics::CONTROL_RADIUS)
             .maybe(lit, |el| el.background(tones::MENU_HOVER))
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set_if_modified(false))

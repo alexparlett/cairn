@@ -16,6 +16,19 @@ pub const CAPTION_ROW: f32 = 26.0;
 pub const TOOLBAR: f32 = 41.0;
 /// A toolbar button's icon, over its label: ~20 px in Fork.
 pub const TOOLBAR_ICON: f32 = 20.0;
+/// The room at the toolbar's two ends.
+pub const TOOLBAR_INSET: f32 = 6.0;
+/// The corner radius of a toolbar button's hover box and of the status box, Fork's rounded
+/// rectangles.
+pub const CONTROL_RADIUS: f32 = 4.0;
+/// The room above and below a toolbar button's icon and label, and between the two.
+pub const TOOLBAR_BUTTON_EDGE: f32 = 2.0;
+/// The room either side of a count badge's figures.
+pub const TOOLBAR_BADGE_PADDING: f32 = 3.0;
+/// How far the status box's list glyph stands in from the box's left and bottom edges.
+pub const STATUS_BOX_GLYPH_INSET: f32 = 4.0;
+/// The room either side of the status box's lines: the glyph's, so the lines stay centred.
+pub const STATUS_BOX_TEXT_INSET: f32 = STATUS_BOX_GLYPH + 12.0;
 /// The least width of a toolbar button: Fork's narrowest, ~45 px.
 pub const TOOLBAR_BUTTON_MIN_WIDTH: f32 = 44.0;
 /// The room either side of a toolbar button's icon and label.

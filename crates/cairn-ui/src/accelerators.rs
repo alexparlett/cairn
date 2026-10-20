@@ -170,8 +170,9 @@ pub enum Scope {
     /// makes a new line — while the window's chords still do, as from any field.
     CommitBox,
     /// Only while a list with a context menu has focus — the history, the sidebar, the Changes
-    /// tab's files, Local Changes' lists: its copy chords are read by that list's menu, so the chord a menu item shows and the key are one source. Never a
-    /// text field's, so ⌘C or Ctrl+C in a field copies its text.
+    /// tab's files, Local Changes' lists: its copy chords are read by that list's menu, so the
+    /// chord a menu item shows and the key are one source. Never a text field's, so ⌘C or
+    /// Ctrl+C in a field copies its text.
     List,
 }
 

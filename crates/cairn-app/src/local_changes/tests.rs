@@ -1043,15 +1043,15 @@ fn hold_one_commit(view: View) -> cairn_model::Oid {
     id
 }
 
-#[path = "../../../cairn-ui/tests/support/focus_marks.rs"]
 mod focus_marks;
 
-/// Every Tab stop of the window shows where focus is as focus reaches it: in All
-/// Commits — the history, the sidebar, the filters, the detail pane — and in Local Changes —
-/// the bar's filter and its buttons, both lists, the diff, the commit box's fields, Amend and
-/// the Commit button — each by its selection turning to the focused tone or by the style's
-/// ring. Caught by: a focusable control drawing nothing as it takes focus, or a stop
-/// left out of the walk.
+/// Every Tab stop of the window shows where focus is as focus reaches it: in All Commits — the
+/// history, the sidebar, its filter — and in Local Changes — the bar's filter and its buttons,
+/// both lists, the diff's bar, the commit box's fields and the Commit button — each by its
+/// selection turning to the focused tone or by the style's ring; a stop focus reaches on
+/// something no rect draws counts as showing nothing. Caught by: a focusable control drawing
+/// nothing as it takes focus, or the Commit button no stop. A stop dropped from the walk while
+/// the count stays above its floor is not caught here.
 #[test]
 fn every_tab_stop_shows_focus() {
     let (mut test, view, submitted, _) = launch_with_theme(true);
@@ -1138,11 +1138,13 @@ fn press_label(test: &mut TestingRunner, text: &str) {
 /// The copy chords copy what the focused list's menu offers under them, as Fork's do
 /// (`docs/research/ui-review/fork-copy-and-dialogs-2026-10-20.md`): in the history, Ctrl+C the
 /// selected commit's full id and Ctrl+Shift+C its short id and subject; in Local Changes'
-/// Unstaged list, the selected path and that path joined to the repository's root. In the commit
-/// box's subject Ctrl+C is the field's own copy, and nothing of a list's is copied. Caught by: a
+/// Unstaged and Staged lists, the selected path and that path joined to the repository's root.
+/// With focus in the commit box's subject, nothing of a list's is copied; that the field takes
+/// Ctrl+C as its own copy is the table's to decide, and its test
+/// (`a_text_field_hands_on_the_windows_chords_and_keeps_its_own_keys`) pins it. Caught by: a
 /// chord heard by the window rather than the list it names, Copy and Copy Full swapped, the
-/// short id copied as the SHA, a path without its root as the full path, or a field's Ctrl+C
-/// taken by the list behind it.
+/// short id copied as the SHA, a path without its root as the full path, or a list's copy
+/// reading the other list.
 #[test]
 fn copy_and_copy_full_copy_what_the_focused_view_names() {
     use cairn_ui::accelerators::Action;
@@ -1174,6 +1176,12 @@ fn copy_and_copy_full_copy_what_the_focused_view_names() {
         take_copied().as_deref(),
         Some("/home/ada/engine/new/one.rs")
     );
+    // The Staged list's, a path pressed there.
+    press_row(&mut test, "added.rs", 0);
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(take_copied().as_deref(), Some("added.rs"));
+    press_chord(&mut test, Action::CopyFull);
+    assert_eq!(take_copied().as_deref(), Some("/home/ada/engine/added.rs"));
 
     // The commit box's subject, typed in: the field's own copy.
     let subject: Option<(f32, f32)> = test.find(|node, element| {

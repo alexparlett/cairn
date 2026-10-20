@@ -496,8 +496,8 @@ fn a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom() {
 }
 
 /// A right press on a file makes it current and opens Fork's Copy Path and Copy Full Path, each
-/// beside its chord; an item chosen is reported for that file; and with the list focused the copy
-/// chords choose the same items for the current file. Caught by: a right press that leaves the
+/// beside its chord; an item chosen is reported for that file; and with the list focused Copy's
+/// and Copy Full's chords choose Copy Path and Copy Full Path for the current file. Caught by: a right press that leaves the
 /// current file, a menu without its chords, an item reported for another file, or the chords
 /// heard nowhere.
 #[test]
@@ -591,4 +591,21 @@ fn a_files_menu_and_the_copy_chords_choose_its_copies() {
         *menu.borrow(),
         [(1, FileChoice::CopyFullPath), (1, FileChoice::CopyPath)]
     );
+    let (key, code, modifiers) = accelerators::chords(Action::CopyFull, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
+        .unwrap();
+    test.send_event(PlatformEvent::Keyboard {
+        name: KeyboardEventName::KeyDown,
+        key,
+        code,
+        modifiers,
+    });
+    test.sync_and_update();
+    assert_eq!(
+        menu.borrow().last(),
+        Some(&(1, FileChoice::CopyFullPath)),
+        "Copy Full's chord chose another item"
+    );
+    assert_eq!(menu.borrow().len(), 3);
 }

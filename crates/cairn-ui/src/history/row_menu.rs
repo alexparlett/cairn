@@ -130,6 +130,41 @@ mod tests {
         );
     }
 
+    /// The commits a menu reads come in the list's order, the upper row first, whatever order
+    /// the rows were named in — a right press on the lower row of a pair names it first — and
+    /// a row named twice counts once. Caught by: the copy text in press order.
+    #[test]
+    fn a_menus_commits_are_in_the_lists_order() {
+        use cairn_model::{GraphRow, Lane, PagedCommit, RowsPage};
+        let ids = [
+            "635ee8e2f83b6f15e4a464f8763894d67fa658a1",
+            "e3a0d1e9d5c29b4cc7b5fdafb06c3e104563fb25",
+            "2f83b6f15e4a464f8763894d67fa658a1904d4c1",
+        ];
+        let mut page = RowsPage::new();
+        for (n, id) in ids.iter().enumerate() {
+            let subject = format!("Add note {}", 5 - n);
+            page.push(
+                GraphRow::new(oid(id), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: &subject,
+                    author: "Ada",
+                    author_time: 0,
+                },
+            );
+        }
+        let mut rows = History::new();
+        rows.append(page).unwrap();
+        assert_eq!(
+            menu_commits(&rows, &[2, 0, 2]),
+            vec![
+                (oid(ids[0]), "Add note 5".to_owned()),
+                (oid(ids[2]), "Add note 3".to_owned()),
+            ]
+        );
+    }
+
     /// One commit's menu is New Branch… then the two copies, each beside its chord; two
     /// commits' is the copies alone, copying both; no commit, no menu. Caught by: New Branch…
     /// offered over a comparison, a copy without its chord, or a menu over a stash.

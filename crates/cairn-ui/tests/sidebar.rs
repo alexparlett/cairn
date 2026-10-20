@@ -1132,4 +1132,20 @@ fn the_copy_chord_copies_the_walked_refs_name() {
     );
     press_chord(&mut test, Action::Copy);
     assert_eq!(heard.borrow().menu, [(topic, RefChoice::CopyName)]);
+
+    // A tag: Copy Tag Name, by the same chord.
+    let mut disclosure = Disclosure::default();
+    disclosure.toggle_section(SidebarSection::Tags);
+    let (mut test, mut fixture, heard) = launch(shown(refs.clone(), "", &disclosure), None);
+    let tag = SidebarRow::Ref {
+        index: index_of("refs/tags/v1.0"),
+        depth: 0,
+    };
+    test.click_cursor(centre_of(&test, "v1.0"));
+    settle(&mut test);
+    test.run_in(|| fixture.chosen.set(SidebarTarget::of(tag, &refs)));
+    settle(&mut test);
+    heard.borrow_mut().menu.clear();
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(heard.borrow().menu, [(tag, RefChoice::CopyName)]);
 }

@@ -979,3 +979,103 @@ fn the_people_block_draws_each_persons_avatar_whole_across_its_rows() {
         );
     }
 }
+
+/// A right press on a file row makes it the current file without opening or closing it, and
+/// opens Fork's Commit-tab menu — Copy Path and Copy Full Path, showing no chord — whose item
+/// is reported for that file; the copy chords, which that menu shows none of, report nothing
+/// (fork-copy-and-dialogs §4, cp52-cp59). Caught by: a right press that toggles the file open,
+/// leaves another file current, reports another file, shows a chord, or copies on Ctrl+C.
+#[test]
+fn a_files_right_press_opens_its_menu_without_opening_the_file() {
+    use cairn_ui::FileChoice;
+    use freya_testing::prelude::{MouseEventName, PlatformEvent};
+    let files: Rc<RefCell<Vec<usize>>> = Rc::default();
+    let pressed: Rc<RefCell<Vec<usize>>> = Rc::default();
+    let menu: Rc<RefCell<Vec<(usize, FileChoice)>>> = Rc::default();
+    let app = {
+        let (files, pressed, menu) = (files.clone(), pressed.clone(), menu.clone());
+        move || {
+            let fixture = use_consume::<Fixture>();
+            let (files, pressed, menu) = (files.clone(), pressed.clone(), menu.clone());
+            rect()
+                .expanded()
+                .child(
+                    CommitTab::new(fixture.changes)
+                        .on_file(move |index: usize| files.borrow_mut().push(index))
+                        .on_file_pressed(move |index: usize| pressed.borrow_mut().push(index))
+                        .on_file_menu(move |chosen: (usize, FileChoice)| {
+                            menu.borrow_mut().push(chosen)
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        }
+    };
+    let (mut test, _) = TestingRunner::new(
+        app,
+        (WIDTH, HEIGHT).into(),
+        |runner| {
+            runner.provide_root_context(|| Fixture {
+                changes: State::create(change_set(3)),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let centre = |test: &TestingRunner, text: &str| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area.center())
+        })
+        .map(|c| (f64::from(c.x), f64::from(c.y)))
+        .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", texts(test)))
+    };
+    let row = centre(&test, "src/file-000002.rs");
+    test.move_cursor(row);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: row.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    test.sync_and_update();
+    assert_eq!(
+        files.borrow().as_slice(),
+        [2],
+        "the file was not made current"
+    );
+    assert!(
+        pressed.borrow().is_empty(),
+        "the right press opened or closed the file"
+    );
+    let drawn = texts(&test);
+    for chord in [Action::Copy, Action::CopyFull] {
+        let name = accelerators::chord_name(chord, Os::current()).unwrap();
+        assert!(!drawn.contains(&name), "the menu shows {name}: {drawn:?}");
+    }
+    test.click_cursor(centre(&test, "Copy Full Path"));
+    test.sync_and_update();
+    assert_eq!(menu.borrow().as_slice(), [(2, FileChoice::CopyFullPath)]);
+
+    press_action_physical(&mut test, Action::Copy);
+    assert_eq!(menu.borrow().len(), 1, "the Commit tab copied on its chord");
+}
+
+/// Presses `action`'s first chord as a keyboard sends it, the key at its place.
+fn press_action_physical(test: &mut TestingRunner, action: Action) {
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+    let (key, code, modifiers) = accelerators::chords(action, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
+        .unwrap_or_else(|| panic!("{action:?} has no key chord"));
+    test.send_event(PlatformEvent::Keyboard {
+        name: KeyboardEventName::KeyDown,
+        key,
+        code,
+        modifiers,
+    });
+    test.sync_and_update();
+}

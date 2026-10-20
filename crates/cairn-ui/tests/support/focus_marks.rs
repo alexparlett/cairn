@@ -34,14 +34,16 @@ fn marks(test: &TestingRunner) -> Vec<Place> {
     })
 }
 
-/// What holds focus now, by its accessibility id, and the area of the element that carries it.
-fn focused(test: &TestingRunner) -> Option<(AccessibilityId, Area)> {
+/// What holds focus now, by its accessibility id, and the area of the rect that carries it —
+/// `None` when no rect does.
+fn focused(test: &TestingRunner) -> (AccessibilityId, Option<Area>) {
     let id = test.run_in(|| *Platform::get().focused_accessibility_id.peek());
-    test.find(|node, element| {
+    let area = test.find(|node, element| {
         Rect::try_downcast(element)
             .filter(|rect| rect.accessibility.a11y_id == Some(id))
-            .map(|_| (id, node.layout().area))
-    })
+            .map(|_| node.layout().area)
+    });
+    (id, area)
 }
 
 fn inside(mark: Place, area: Area) -> bool {
@@ -78,17 +80,22 @@ pub fn walk_tab_stops(test: &mut TestingRunner, most: usize) -> Vec<Stop> {
             test.sync_and_update();
         }
         let now = marks(test);
-        let Some((id, area)) = focused(test) else {
-            before = now;
-            continue;
-        };
+        let (id, area) = focused(test);
         if stops.first().is_some_and(|(first, _)| *first == id) {
             break;
         }
-        let shows = now
-            .iter()
-            .any(|mark| !before.contains(mark) && inside(*mark, area));
-        stops.push((id, Stop { area, shows }));
+        // Focus on something drawn by no rect is a stop nobody can see: it shows nothing.
+        let shows = area.is_some_and(|area| {
+            now.iter()
+                .any(|mark| !before.contains(mark) && inside(*mark, area))
+        });
+        stops.push((
+            id,
+            Stop {
+                area: area.unwrap_or_default(),
+                shows,
+            },
+        ));
         before = now;
     }
     stops.into_iter().map(|(_, stop)| stop).collect()

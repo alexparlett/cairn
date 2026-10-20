@@ -1347,7 +1347,9 @@ Project invariants:
     parent with `selection::loaded_row` (`History::position`), a scan of every
     loaded row's id, once per
     press on the UI thread, and so does a second commit pressed with the
-    extending chord (`selection::extend`, to find which of the two rows is lower)
+    extending chord (`selection::extend`, to find which of the two rows is lower), and
+    a copy chord or a right press over a compared pair (`HistoryList`'s key handler, whose
+    hint names one of the two rows, and its rows' menu, `History::position` for the other)
     — and the Commit tab builds its header (proportional
     to the commit's message, never to its files) once per commit, cached on its id.
     Files opened in place in the Commit tab are placed by a binary search over a

@@ -1,8 +1,9 @@
 //! The one way the window puts text on the clipboard: every Copy item and copy chord — a
 //! commit's id or info, a ref's name, a path, the repository's path — ends here.
 //!
-//! A test reads what was copied on its own thread instead, so the suite never writes the desktop's
-//! clipboard and a host without one still decides what a copy put there.
+//! A test reads what was copied on its own thread instead, so the window's copies never write the
+//! desktop's clipboard under test and a host without one still decides what a copy put there.
+//! (A text field's own copy is the toolkit editor's, which writes it.)
 
 /// Puts `text` on the clipboard. A clipboard the platform does not offer copies nothing; there
 /// is nothing to lose.

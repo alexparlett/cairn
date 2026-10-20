@@ -597,3 +597,60 @@ fn a_long_menu_builds_one_viewport() {
     open_context(&mut test);
     assert_eq!(items_built(&test).len(), 20);
 }
+
+/// In a menu too long to draw whole, a greyed item says why while the pointer is on it and a
+/// submenu opens beside it, as in a short one — each drawn beside the scrolling rows at its
+/// row. Caught by: the reason or the submenu lost to the view that clips the rows.
+#[test]
+fn a_long_menus_reason_and_submenu_are_drawn_beside_its_rows() {
+    let (mut test, ()) = TestingRunner::new(
+        || {
+            rect()
+                .expanded()
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(40.))
+                        .on_press(|_| {
+                            let mut items: Vec<Item<Choice>> = vec![
+                                Item::new("Bravo", Choice::Bravo)
+                                    .greyed(Some(BRAVO_REASON.to_owned())),
+                                Item::submenu("Delta", vec![vec![Item::new("Echo", Choice::Echo)]]),
+                            ];
+                            items.extend(
+                                (0..40).map(|n| Item::new(format!("Item {n}"), Choice::Alpha)),
+                            );
+                            ContextMenu::open(context_menu(vec![items], |_: Choice| {}));
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    open_context(&mut test);
+    assert!(
+        texts(&test).len() < 40,
+        "the menu was drawn whole: {:?}",
+        texts(&test)
+    );
+    test.move_cursor(at(&test, "Bravo"));
+    test.sync_and_update();
+    test.sync_and_update();
+    assert!(
+        texts(&test).iter().any(|text| text == BRAVO_REASON),
+        "the greyed item's reason is not drawn: {:?}",
+        texts(&test)
+    );
+    test.move_cursor(at(&test, "Delta"));
+    test.sync_and_update();
+    test.sync_and_update();
+    assert!(
+        texts(&test).iter().any(|text| text == "Echo"),
+        "the submenu did not open: {:?}",
+        texts(&test)
+    );
+}

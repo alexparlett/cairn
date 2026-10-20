@@ -37,7 +37,7 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   and Fork's warning triangle for a conflicted path (`RefGlyph::Gone`). Colour only reinforces
   the shape. The Commit tab keeps its own letters.
 - **Nothing under the lists** (staging-and-commit R14.6): a write running or queued shows in
-  the title bar's status box, and its ending, when it is not a success or a cancel, in its Git
+  the toolbar's status box, and its ending, when it is not a success or a cancel, in its Git
   Error or "Couldn't <name>" dialog — a stale patch naming its path once
   (`docs/systems/git-processes.md`, "Where an ending goes";
   `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`).

@@ -1542,13 +1542,20 @@ commits from phase 08; the Changes tab's contents from phase 07). The layout is 
 (decision L9).
 
 **Where it sits** (`crates/cairn-app/src/window.rs`, `split`). Below the commit list,
-in a Freya `ResizableContainer`: the list a proportional panel that keeps at least
-80 px, the pane a pixel panel opening at `PANE_HEIGHT` and dragged no smaller than
-90 px; dragging it 24 px past that collapses it, Fork's gesture, as does the strip's
-Collapse control. A collapsed pane keeps its strip of tabs under a list that takes
-the rest, and opens again from the strip's Expand control, a tab pressed, or a tab's
-chord; it opens at the height it was last dragged to
-(`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
+in a Freya `ResizableContainer`: the list and the pane both proportional panels, half each
+until the splitter is dragged, so both grow with the window as Fork's do
+(`crate::detail::split::PaneSplit`, the shares a drag leaves;
+`the_detail_pane_grows_with_the_window`). The list keeps at least 80 px when the window is
+squeezed and the pane its strip and the ten rows of a one-line commit's Commit tab down to
+Expand All, so the history gives way first; a drag leaves the pane at least a tenth, and
+dragging it 24 px past that collapses it, Fork's gesture. The strip's right holds Fork's "Hide
+commit details" icon (`cairn_ui::HIDE_DETAILS_TOOLTIP`, its tooltip Fork's words, lit in the
+accent while the pane is hidden; Fork's pop-out icon is not drawn), which collapses the pane and
+brings it back, as Hide Commit Details in the View menu and its chord do (Ctrl+Shift+D on Linux;
+`hiding_the_details_leaves_the_tab_strip`, `the_strip_reports_its_tabs_and_its_collapse`). A
+collapsed pane keeps its strip of tabs at the window's bottom under a list that takes the rest,
+and opens again from the icon, a tab pressed, or a tab's chord, at the share it was last dragged
+to (`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
 involved: the exceptions roster stays empty.
 
 **The Changes tab** (`crates/cairn-app/src/detail/changes_tab.rs`, phase 07, R5.4), Fork's
@@ -1675,8 +1682,8 @@ reached from the keyboard; while it has focus, ↑ and ↓ move the current file
 highlighted, brought into view, reported through `CommitTab::on_file` by its index in
 the change set — and stop at either end
 (`the_focused_file_list_moves_the_current_file_with_the_arrows`). Tab and Shift-Tab
-move focus between the views that take it, Freya's own focus order: from the history,
-past the strip's Collapse control, into the files, and back
+move focus between the views that take it, Freya's own focus order: from the history
+into the files, and back — the strip's icon is no Tab stop
 (`tab_moves_the_arrows_between_the_history_and_the_commits_files`). A chord pressed
 there is not an arrow (`accelerators::is_chord`). Another commit is another list, with
 no file current.

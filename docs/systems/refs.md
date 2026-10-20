@@ -6,7 +6,7 @@ and the repositories refused at open because their refs are not files. Nothing h
 writes, and nothing here starts a process: every answer is gix's, read in process.
 What draws it: the history's chips and the Commit tab's REFS row
 (`docs/systems/history-graph.md`, "Chips on a row"; `docs/systems/diff.md`, "REFS"), the
-title bar's current branch and its counts (`history-graph.md`, "The title bar"), and the
+status box's current branch and Push's and Pull's badges (`history-graph.md`, "The status box"), and the
 sidebar's Branches, Remotes, Tags and Stashes (`docs/systems/sidebar.md`); a refresh reads
 it on the repository thread and ahead/behind on the refresh thread (`history-graph.md`,
 "Refresh").

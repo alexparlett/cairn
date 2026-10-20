@@ -28,8 +28,9 @@ focus, after a fetch, on the Refresh action — finds what the graph draws chang
 drawn and usable until the new walk's first page replaces them ("Refresh" and "The opening
 pass in the window", under the worker boundary below). Each row draws its refs as Fork's chips between the graph and the
 subject, a stash's row its `stash@{n}` chip, and `HEAD`'s subject bold ("Chips on a
-row", under the view below); the title bar names the repository, its branch and how
-far that branch is from its upstream ("The title bar", there too).
+row", under the view below); the toolbar's status box names the repository over its branch,
+and Push's and Pull's badges how far that branch is from its upstream ("The status box", there
+too).
 
 ## The path a commit takes
 
@@ -794,7 +795,7 @@ commit's changes again, since its details and what it changed may be other now
 (`history::selection::ask_again`). The history thread names a snapshot the one the walk began from as it takes it to open,
 so a refresh while that walk is still opening compares with what it will draw and reopens
 nothing when nothing moved (`a_refresh_during_an_open_compares_with_the_refs_the_open_took`).
-The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the title bar,
+The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the status box,
 the sidebar and the Commit tab's REFS row read) and, on `reopen`, asks the history thread for
 the new walk (`session::reopen_history`), whose number supersedes a walk still opening there,
 its pass ending at its next commit. The old rows stay drawn and usable — selected, scrolled,
@@ -1038,29 +1039,30 @@ refs), and, through the window, by
 (`crates/cairn-app/src/window.rs`). The Commit tab's REFS row draws the same chips
 (`docs/systems/diff.md`, "REFS").
 
-### The title bar
+### The status box
 
-The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/toolbar/status_box.rs`;
-R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
-component of its working tree (of its git directory when it is bare), which the worker
-sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a
-launch at `.`, `..`, a subdirectory or its `.git` names the repository and not the path
-given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`); nothing
-until it is open — `*` after it while the last status read listed a change — then a branch glyph
-and the current branch, and its distance from its upstream as Fork prints it, behind then
-ahead, `18↓1↑` (no space, as Fork prints it), a zero count left out and nothing for a branch level with its upstream;
-or `upstream gone` for a configured upstream no ref is (git's `[gone]`); a detached `HEAD`
-as `HEAD detached at <short id>` and an unborn branch as `<name> (no commits yet)`, in
-git's words. The arrows are IBM Plex Mono's, which the application embeds. The window
-builds it from what the last refresh answered (`window::status_box`): the snapshot's
-`HEAD` and the branch's upstream, the branch's counts found by name
-(`RefreshState::ahead_behind_of`, a binary search, the counts coming in the snapshot's
-order) and whether status listed anything — each as old as its answer, a status up to
-one refresh behind (R10.3 as amended). An unreadable index or no working tree draws no
-`*`. Pinned by `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream`
-(`crates/cairn-app/src/window.rs`: a dirty branch with counts, a gone upstream, a detached
-and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
-(`crates/cairn-app/src/refresh/state.rs`) and the status box's own tests.
+The toolbar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/toolbar/status_box.rs`;
+drawn in the toolbar, `docs/systems/window-frame.md`, "The toolbar") names the repository, bold —
+its folder, as Fork names it: the last component of its working tree (of its git directory when
+it is bare), which the worker sends once the repository is open (`Update::Opened`, kept in
+`View::repository`), so a launch at `.`, `..`, a subdirectory or its `.git` names the repository
+and not the path given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`);
+nothing until it is open — over a branch glyph and the current branch, and `upstream gone` after
+it for a configured upstream no ref is (git's `[gone]`); a detached `HEAD` as `HEAD detached at
+<short id>` and an unborn branch as `<name> (no commits yet)`, in git's words. No star and no
+counts, as in Fork: the sidebar's "Local Changes (N)" carries the change count, and the branch's
+distance from its upstream is two badges, the commits ahead on Push and those behind on Pull,
+each absent at zero. The window builds it from what the last refresh answered
+(`crate::toolbar::toolbar`): the snapshot's `HEAD` and the branch's upstream, the branch's counts
+found by name (`RefreshState::ahead_behind_of`, a binary search, the counts coming in the
+snapshot's order) — each as old as its answer. Pinned by
+`the_status_box_names_the_repository_over_the_branch` and
+`each_refresh_redraws_the_badges_on_push_and_pull` (`crates/cairn-app/src/window.rs`: a branch
+with counts, a gone upstream drawing no badge, a detached and an unborn `HEAD`, badges redrawn
+and gone at zero), `a_branchs_counts_are_found_by_its_name`
+(`crates/cairn-app/src/refresh/state.rs`), `ahead_and_behind_are_badges_on_push_and_pull`
+(`crates/cairn-ui/tests/toolbar.rs`) and the status box's own tests
+(`crates/cairn-ui/tests/status_box.rs`).
 
 ### Show Lost Commits
 

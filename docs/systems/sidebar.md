@@ -43,7 +43,7 @@ Fork's local-only icon, told by shape rather than Fork's grey); with its upstrea
 but gone, Fork's warning triangle in place of its glyph — the current branch's at its right,
 beside the check mark, as Fork marks an active branch with an invalid upstream. A branch
 with an upstream draws its behind and ahead counts at its right, unspaced as Fork prints
-them and as the title bar prints them (`counts_text`: `18↓1↑`, a zero left out).
+them and as Fork prints them (`counts_text`: `18↓1↑`, a zero left out).
 What one row draws is `cairn_ui::drawn_row`, read out of the snapshot for that row alone.
 The entry last pressed is drawn chosen, by identity (a ref by its name, a stash by its
 place and commit), and is let go of when a row is chosen in the history. A press on a row

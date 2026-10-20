@@ -1132,7 +1132,7 @@ of them.
 ## The activity popover
 
 Fork's Activity Manager (staging-and-commit R12, C29, `docs/design/ui.md`, "Activity"; observed
-in `fork-observed-2026-10-10.md`, `am1`, `am2`): the title bar's status box opens it over the
+in `fork-observed-2026-10-10.md`, `am1`, `am2`): the status box's list glyph opens it over the
 window, drawn by `cairn_ui::ActivityPopover` inside `crate::activity::ActivityLayer`, a child
 component of the window that alone reads the log. On the left the session's operations — every
 local write and every fetch — newest first, each row its one name, Fork's result line under it
@@ -1181,8 +1181,10 @@ opens no dialog (C35; `an_amend_pushed_while_it_ran_says_so_in_its_entry`,
 
 The user's decisions on it, as built:
 
-- **It hangs from the status box**. The window reads the box's laid-out place as Freya
-  lays it out — the `on_sized` event of the rect around it (`SizedEventData::area`, global
+- **It hangs from the status box**, opened by the list glyph at the box's left alone — a press
+  on the box's centre opens nothing, as Fork's (`fork-window-survey-2-2026-10-16.md`, section
+  2). The window reads the box's laid-out place as Freya
+  lays it out — the `on_sized` event of the box (`Toolbar::on_status_sized`) (`SizedEventData::area`, global
   coordinates, the mechanism Freya's own `Attached` uses), kept by `ActivityLog::set_anchor`
   only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
   arrow (a square turned 45°, half hidden under the panel) pointing up at the box, the whole
@@ -1303,11 +1305,18 @@ ending, which the lane sends after. Pinned by `the_lines_of_one_read_are_handed_
 
 Every operation's ending has one home (staging-and-commit R14, rule 4):
 
-- **Progress** is the title bar's status box's (`cairn_ui::StatusBox::running`, fed by
-  `window::running`): a spinner and the running write's one name with " · N waiting" while
-  writes queue behind it, and a fetch's name with git's latest progress line, each shown only
-  once it has run `cairn_ui::PROGRESS_AFTER` (250 ms) — a task on the toolkit's executor that
-  awaits `async_io::Timer` for what is left of it and ends with the line. A control a running
+- **Progress** is the toolbar's status box's (`cairn_ui::StatusBox::running`, fed by
+  `crate::toolbar::running`), drawn in the repository's place as Fork's is: a spinner and the
+  running write's one name with " · N waiting" while writes queue behind it, or a fetch's name,
+  over git's latest progress line up to and including its percentage
+  (`cairn_ui::progress_text`: "Receiving objects: 45%"; a line with no percentage up to its first
+  comma), so it fits Fork's 300 px box — the whole line is the activity popover's; a name wider
+  than the box (a long branch or remote name) is cut with "…", the whole name in the popover
+  (`docs/design/ui.md`, "What changes, and why"). Each is shown only once it has run
+  `cairn_ui::PROGRESS_AFTER` (250 ms) — a task of the box's scope for each operation, keyed by
+  the operations running, that awaits `async_io::Timer` for what is left of it and draws the box
+  again (`a_long_progress_line_is_kept_to_its_percentage_and_only_an_overlong_name_is_cut`,
+  `a_progress_line_is_kept_to_its_percentage`). A control a running
   write holds says "Waiting for <name>…".
 - **Success** says nothing: the refresh after it is the message. **A cancel** opens nothing.
 - **A git failure** opens Fork's Git Error dialog — its title, Fork's sentence, `Error
@@ -1349,7 +1358,7 @@ F6), never an operation's entry. Each status job on the refresh thread first sta
 `ops::index_lock_changed`, its time when it is a plain file, nothing otherwise; it writes nothing
 and runs no git — and sends `Update::IndexLock { changed }`, whether or not a write keeps the
 status back; a refresh runs on open, on focus, after every write and on Refresh. The window
-keeps it (`crate::leftover_lock::LeftoverLock`) and draws a banner under the title bar
+keeps it (`crate::leftover_lock::LeftoverLock`) and draws a banner under the toolbar
 (`cairn_ui::LockBanner`) while the stat found the file, no write of Cairn's runs or waits and no
 fetch is in flight, and the file is at least `cairn_ui::LOCK_STALE_AFTER` (ten seconds) old —
 the banner waits out a younger lock on the toolkit's executor — saying "index.lock is in this

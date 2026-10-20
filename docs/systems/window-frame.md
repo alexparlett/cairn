@@ -1,9 +1,10 @@
-# The window's frame, its menus and About Cairn
+# The window's frame, its toolbar, its menus and About Cairn
 
 How Cairn's window is framed today: Fork's caption row on Linux, the same menus as a row inside
 the desktop's frame on macOS, the one menu component every menu is drawn by, the menu bar's
-items and what each does, the desktop's title for the window, the zoom, and About Cairn. Intent:
-`docs/design/ui.md`, "The chrome". Spec: `docs/prd/fork-alignment.md` R2, R9.1, R11.2.
+items and what each does, Fork's toolbar and the status box in it, the window's regions and its
+minimum size, the desktop's title for the window, the zoom, and About Cairn. Intent:
+`docs/design/ui.md`, "The chrome". Spec: `docs/prd/fork-alignment.md` R2, R3, R4, R9.1, R11.2.
 
 ## The frame
 
@@ -134,6 +135,72 @@ The new actions' chords, Linux first (`accelerators::chords`): Show Uncommitted 
 Show All Commits Ctrl+2, Show HEAD Ctrl+0, Fetch Ctrl+Shift+F, Zoom In Ctrl+= and Zoom Out Ctrl+-,
 each digit and mark matched where it sits; ⌘ for Ctrl on macOS, not yet checked against Fork for
 macOS. Show Lost Commits' Ctrl+Shift+. is heard wherever focus is.
+
+## The toolbar
+
+Under the caption row, Fork's toolbar, 41 px in the chrome's tone (`cairn_ui::Toolbar`,
+`crates/cairn-ui/src/toolbar.rs`, its buttons `toolbar/button.rs`; built from the window's state
+by `crate::toolbar::toolbar`). Fork's buttons in Fork's order and groups
+(`fork-window-survey-2026-10-16.md`, sections 1 and 2), each a Lucide icon over its label in the
+toolbar's tone, Fork's light box behind one under the pointer:
+
+| Button | What it does |
+| --- | --- |
+| sidebar toggle (icon alone) | hides the sidebar, the main region taking the width, and shows it again at its width (`SidebarView::shown`) |
+| Quick Launch | greyed: "Comes with Quick Launch." |
+| Fetch | fetches the default remote, as the Repository menu's Fetch and its chord do (`shortcuts::act`), greyed with the same reason while it cannot (no repository, no remote, a fetch running); its tooltip "Fetch" over its chord, read from the accelerator table |
+| Pull, Push | greyed: "Comes with pull and push."; the commits behind the upstream a badge on Pull, those ahead on Push, each absent at zero |
+| Stash and its ⌄ | greyed: "Comes with stashing." |
+| the status box | below |
+| Branch and its ⌄ | Create Branch at `HEAD`, as New Branch… and its chord do; its ⌄ a menu of "New Branch…" alone, with its chord (New Worktree… comes with worktrees); both greyed while `HEAD` names no commit, with the menu bar's reason; no tooltip, as Fork's |
+| Appearance and its ⌄ | greyed: "Comes with Preferences." |
+
+Fork's Open in, Console and Work are not drawn: no packet plans them. A greyed button keeps its
+place, draws in the disabled tone and reports nothing to a press or a key — none takes focus.
+Every press is a `ToolbarPress` the window does (`crate::toolbar::pressed`). Pinned by
+`the_toolbar_is_forks_with_the_unbuilt_buttons_greyed`,
+`fetch_and_branch_are_greyed_with_their_reasons`, `ahead_and_behind_are_badges_on_push_and_pull`
+(`crates/cairn-ui/tests/toolbar.rs`), `fetch_is_greyed_while_a_fetch_is_in_flight`,
+`each_refresh_redraws_the_badges_on_push_and_pull` and
+`the_sidebar_toggle_hides_and_shows_the_sidebar` (`crates/cairn-app/src/window.rs`).
+
+The status box sits in the room between the groups with Branch beside it: Fork's 300 × 36 px box
+in its tone, the repository's name bold over the branch (`docs/systems/history-graph.md`, "The
+status box"), its list glyph at the left the one place that opens the activity popover — a press
+on its centre opens nothing, as Fork's (`docs/systems/git-processes.md`, "The activity popover").
+While an operation runs it shows it in the repository's place: a spinner and its name over git's
+progress line up to its percentage ("Where an ending goes", there). It may shrink to 200 px as the
+window narrows, but the window's minimum keeps it at 300.
+
+## The regions and the minimum size
+
+Under the toolbar stand the banners — the leftover lock's and a close waiting on a write — across
+the whole window, above the sidebar and the main region, as Fork's notification banner does
+(`the_banners_stand_under_the_toolbar`). The history and the detail pane share the main region's
+height half each, growing together (`docs/systems/diff.md`, "Where it sits";
+`the_detail_pane_grows_with_the_window`), and Hide Commit Details — the View item, Ctrl+Shift+D
+on Linux, the strip's icon — leaves the pane its strip (`hiding_the_details_leaves_the_tab_strip`).
+As the window narrows the history's subject column gives the room, the author, id and date
+keeping their widths (`the_subject_column_shrinks_first`).
+
+The window opens at 1024 × 768 and stops at **880 × 620** (`frame::OPENING_SIZE`,
+`frame::MIN_SIZE`, `WindowConfig::with_min_size`), at the zoom's own size. Measured in the
+headless window and checked in the real one (release build, the fixture, Hyprland, which holds
+the window at 880 × 620 when asked for less):
+
+- the toolbar's groups take about 550 px at the body's size and the status box its 300, so the
+  toolbar needs about 780 px; 880 leaves it whole with Fork's 300 px box;
+- at 880 px the history keeps about 218 px for a subject beside the sidebar's 240 — room left for
+  the sidebar's planned 300;
+- at 620 px the main region's half is 276 px, enough for the pane's strip and a one-line commit's
+  Commit tab down to Expand All, which the pane's floor then keeps when a banner takes room;
+- the diff bar's seven buttons stay inside the window.
+
+Pinned by `the_window_keeps_every_region_whole_at_its_minimum_size` and
+`expand_all_is_visible_at_the_minimum_size_and_at_1024_by_1200`. Fork clips below about 600 px
+instead (`fork-window-survey-2026-10-16.md`, section 11); Cairn stops the window first. Zoomed in,
+the window's own pixels hold less: a zoom above 1 at the minimum size can clip, which the window
+does not prevent.
 
 ## The title, the zoom and About Cairn
 

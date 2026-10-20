@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04, 05, 06 and 07 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04, 05, 06, 07 and 08 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -239,6 +239,33 @@ accelerator actions, guard names, `deny.toml` pins.
   (`named`, `one_named`, by `#[path]`).
 - Evidence: `docs/research/ui-review/fork-local-changes-2026-10-20.md`.
 
+**Phase 08:**
+- Accelerators: `Action::Copy` (Ctrl+C, ⌘C) and `Action::CopyFull` (Ctrl+Shift+C, ⇧⌘C) in a new
+  `Scope::List`, heard by a focused list with a context menu; Linux `Discard` is Delete then
+  Backspace; `chord_name` writes Linux chords Ctrl, Shift, Alt (Fork's menus). Pin example
+  `copy_twice`; `ACCELERATOR_PIN_BODY` gains `heading_press`, `shift_d`, `copy_twice`.
+- `cairn_ui::menu`: `chosen_by(groups, action)`, `context_menu_over(groups, owner, on_choose)`;
+  `menu/panel.rs` lays items out once (`Layout`) and virtualizes a menu past `LONG_MENU_LINES`
+  (`metrics::MENU_LONG_WIDTH`).
+- Menus: `history::row_menu` (`row_menu`, `RowChoice`, `commit_sha_text`, `commit_info_text`,
+  `COPY_COMMIT_SHA_CAPTION`, `COPY_COMMIT_INFO_CAPTION`; `HistoryList::on_copy`);
+  `detail::file_menu` (`file_menu(FileMenuIn)`, `FileChoice`; `ChangesList::on_file_menu`,
+  `CommitTab::on_file_menu`); `local_changes::menu_groups`, `MenuChoice::CopyFullPaths`,
+  `ListIntent::CopyFullPaths`, `COPY_FULL_PATH_CAPTION`; `sidebar::gear_menu`; a ref's Copy item
+  shows Copy's chord. `LocalChangesList::focus_unstaged(Option<u64>)`.
+- Focus and buttons: `style::focus` (`ring`, `ring_when`, `shown`, `ringed`, `RING_INSET`);
+  `push_button.rs` (`PushButton`, `ButtonFace`, `ButtonGlyph`, `ButtonSize`; never compares
+  equal); `dialogs/frame.rs` (`framed`, `title`, `content`, `buttons`); `answer_button::Answer`
+  (`answer` lost its serial argument; `AnswerColours` removed). Tones `DIALOG_TITLE`,
+  `DIALOG_TEXT`; the theme's popup a bare holder, `flat_input` focus in Fork's blue. Metrics
+  `DIALOG_BUTTON_PADDING_Y/X`, `COMPACT_BUTTON_PADDING_Y/X`, `MENU_LONG_WIDTH`.
+- `cairn-app`: `clipboard.rs` (`copy`, `full_path`, test-only `take_copied`); `detail/file_copy.rs`;
+  `history::selection::focus_local_changes`; `LocalChangesView::{focus_unstaged, focus_serial}`;
+  `worker::pool::WORKER_LOST` reworded.
+- Tests: `tests/context_menus.rs`, `tests/support/focus_marks.rs` (and the window's copy,
+  `local_changes/tests/focus_marks.rs`).
+- Evidence: `docs/research/ui-review/fork-copy-and-dialogs-2026-10-20.md`.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
@@ -250,5 +277,5 @@ accelerator actions, guard names, `deny.toml` pins.
 | 05 | done (C14 met but its "Return opens Local Changes or All Commits" clause, built as Fork's and batched; C21's sidebar half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 16 raw (two pairs merged), 12 confirmed (9 fixed, Q1/Q2/Q7 batched), Q5 and R3 dismissed, T1's mutation half dismissed on re-run; fixes verified by a fresh qa-confirm |
 | 06 | done (C15 met; Q1 Tab stops and the 17 px pitch batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 20 raw, 11 confirmed (4 merged) and fixed or recorded, Q1 escalated (decided, batched), 4 dismissed |
 | 07 | done (C16 met; the eye greyed until Quick Look on Fork's evidence, batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 12 raw (one pair merged), 4 confirmed and fixed (Q-F1/T1 dissolved by greying the eye), 7 dismissed; fixes verified by a fresh qa-confirm |
-| 08 | not started | — | — |
+| 08 | done (C17, C18, C19, C20 (as Fork's bordered default, batched), C21's menus half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 21 raw (Q2+T4 merged), 16 confirmed and fixed (D1 critical: stale press, fixed), G2 escalated and resolved without a policy change, 4 dismissed; fixes verified by a fresh qa-confirm |
 | 09 | not started | — | — |

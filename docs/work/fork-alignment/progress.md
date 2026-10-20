@@ -3,6 +3,132 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-20 — phase 08, context menus, keys, focus and dialogs (packet mode)
+
+Committed onto `feature/fork-alignment` over phase 07's a88367f.
+
+- **Fork observed first** (`/observe-fork`, fork-observer agent, shots `cp1`-`cp88`):
+  `docs/research/ui-review/fork-copy-and-dialogs-2026-10-20.md`. VERIFIED: Copy Commit Info is
+  `<7-char id> - <subject>` on one line, no trailing newline, the same from Ctrl+Shift+C; Copy
+  Commit SHA and Ctrl+C the full id; with two rows selected the menu keeps the copies (beside range
+  items Cairn lacks), each line a commit in list order, the upper first; Ctrl+C in the sidebar the
+  ref's name past its namespace (`origin/main`, `v0.2`), Ctrl+Shift+C nothing; Copy Path the
+  repository-relative path in the platform's separators, Copy Full Path joined to the root, the
+  keys the same; the Commit tab's file menu holds Copy Path and Copy Full Path with no chords;
+  a field's Ctrl+C copies its selection; dialogs #2B2B2B in a 1 px #3BACED border, square, title
+  white semibold, body #CAC6C6, the default button #373737 bordered 1 px #0078D7 (not filled),
+  Cancel bordered #525252, a disabled Create #343434 with #707070 text, focus a dashed inset
+  rectangle only after Tab. NOT OBSERVED: whether Copy Commit Info carries a body (no fixture
+  commit has one), CRLF or LF between lines, the Git Error dialog's look, which control a dialog
+  focuses on open.
+- **What shipped:**
+  - C17 — every context menu holds R9.2's working items in Fork's groups with Fork's chords,
+    through the one component: a commit row (`history::row_menu`: New Branch… — Copy Commit SHA,
+    Copy Commit Info; a comparison the copies alone), a ref (Copy Branch/Tag Name now showing
+    Ctrl+C), the gear, Unstaged (Stage, Discard Changes… — Stage All — Copy Path, Copy Full
+    Path), Staged (Unstage — Unstage All — the copies, no discard), a commit's file in the
+    Changes tab (with chords) and the Commit tab (without). Copy and Copy Full are two actions
+    in `Scope::List`, each list choosing its own menu's item showing the chord
+    (`menu::chosen_by`). Tests: **`every_context_menu_holds_its_rows_working_items`**,
+    **`copy_and_copy_full_copy_what_the_focused_view_names`** (history, Unstaged, Staged),
+    `the_copy_chord_copies_the_walked_refs_name` (branch, tag), `a_files_menu_and_the_copy_chords_choose_its_copies`,
+    `a_files_right_press_opens_its_menu_without_opening_the_file`, `the_copy_texts_are_forks`,
+    `a_menus_commits_are_in_the_lists_order`, `a_chord_chooses_the_item_that_shows_it_when_it_can_be_chosen`,
+    `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed` (expectation changed
+    to Fork's: no discard on the staged side, uv15).
+  - C18 — new chords: Copy Ctrl+C / ⌘C, Copy Full Ctrl+Shift+C / ⇧⌘C (macOS unverified against
+    Fork for macOS, as the other ⌘ columns of phases 02-08, marked in the table; ToggleDetails
+    still none on macOS). Linux Discard now Delete then Backspace, so menus show Fork's
+    "Delete"; Linux chord names in Fork's menus' order, Ctrl+Shift+Alt+S. The pin holds: no
+    bare chord in `Scope::List`, a new `copy_twice` example; a text field's Ctrl+C is the
+    field's (`a_text_field_hands_on_the_windows_chords_and_keeps_its_own_keys`). No chord
+    collides with a desktop's or a field's binding on Linux.
+  - C19 — one focus treatment, `style::focus`: a 1 px ring in Fork's blue on keyboard focus, drawn
+    inset in a bordered button; every focusable control applies it (lists, bar buttons, Expand
+    All, check boxes, radios, the commit button, Show files, the diff view, every push button).
+    Ctrl+1 leaves focus in Unstaged, whether Local Changes was shown or not, a press on the
+    sidebar's row leaving focus alone (uw38, uw6). Tests: **`every_tab_stop_shows_focus`** (All
+    Commits and Local Changes), `every_dialogs_tab_stop_shows_focus`,
+    **`ctrl_1_opens_local_changes_with_unstaged_focused`**.
+  - C20 — every dialog in Fork's frame (`dialogs::frame`), its title 14 px bold white, its primary
+    Fork's blue-bordered default button (`PushButton`), About's Close the default, Git Error with
+    none; the worker-lost notice reworded. Tests: **`every_dialogs_primary_button_is_forks_default_in_forks_frame`**,
+    **`no_message_asks_to_reopen_the_repository`**, `about_cairn_names_the_version_and_the_git` (kept).
+  - C21 menus half — **`a_long_menu_builds_one_viewport`** (1,000 and 100,000 items),
+    `a_long_menus_reason_and_submenu_are_drawn_beside_its_rows`.
+  - Deferred items closed: dialog titles off Freya's 18 px with Fork's border; `MENU_ITEM` read;
+    Ctrl+1 into Unstaged; menus virtualized; the macOS columns; the sidebar's Ctrl+C; Expand All
+    and the 1 px ring now inside `every_tab_stop_shows_focus`'s walk. A greyed bar button keeps
+    its ring if it held keyboard focus as it greyed (the ring follows focus, not the state);
+    probed in the code, not in a test.
+- **Evidence over the PRD's paraphrase** (qa-checklist item 1): R11.1/C20 say the primary is
+  "filled"; Fork's default button is bordered in blue over the button's fill (cp60-cp76) — built
+  as Fork's, the test named for what it checks, batched below. R9.2 lists chords on the Commit
+  tab's file menu; Fork's shows none (cp52-cp59) — built as Fork's. R9.2 lists no chord beside
+  Unstage All; Fork's shows Ctrl+Shift+Alt+S (uv15) — built as Fork's. R9.2 keeps "Discard" on the
+  staged menu implicitly ("as today"); Fork's staged menu has none (uv15) — removed. Fork's
+  two-row menu holds range items Cairn lacks; Cairn keeps the copies alone.
+- **Real window — NOT RUN in the compositor** (qa-checklist items 6-7): Hyprland's command socket
+  is still missing (`/run/user/1000/hypr/<instance>/` holds only `hyprland.log`). **Substitute:**
+  the real `window()` with the real worker over the fixture (built on the host by the recipe,
+  the upstreams set by fetching into the bare remote rather than pushing), Fork Dark's launch
+  theme, rendered headlessly in a release build at 1024×768 and 880×620 (a scratch `#[ignore]`
+  test, not committed): All Commits, a commit row's menu, Create Branch (and five Tab stops with
+  keyboard navigation set), Local Changes, a file's menu, the discard confirmation. Compared with
+  uv22, uv14, uw10 and cp61: the menus' items, groups, rules and chords, the dialogs' square frame
+  in its blue border, the bold white title and the blue-bordered default button match; the
+  focus rings show at each stop. Differences: Fork's logo and ✕ not drawn (a `ui.md` row);
+  Fork's buttons squarer; the subtitle stood left of the title (fixed, 95d9243); a field's
+  keyboard focus is the toolkit's 2 px border and ring, not Fork's 1 px (`docs/systems/style.md`).
+  It cannot show the compositor's fonts, hover, tooltips or real input.
+- **QA.** Fresh `qa-checklist`, `responsiveness-reviewer`, `test-coverage-auditor`,
+  `gate-integrity-reviewer` and `destructive-ops-reviewer` in the foreground; a fresh `qa-confirm`
+  adjudicated 21 raw findings (Q2 and T4 merged):
+  - Confirmed and fixed: D1 (critical by the letter: `PushButton` compared equal on what it drew,
+    so Create Branch's button kept the press of the choice it was first drawn with — a dead press
+    after switching Don't change and Discard; the window's re-checks refused every stale token —
+    482ac9c, `the_button_presses_for_the_choice_shown_now`); Q2/T4, Q3, Q4, R1 (CLAUDE.md's
+    residual list names the comparison's scans), G1 (the guard requires `copy_twice`,
+    `heading_press`, `shift_d`), T1, T2, T3 (Copy Full's chord; the no-current case not added),
+    T5, T6 (doc), T7, T8, T9 (29bd246, 4d012cc). G2 was escalated as a policy question (a test
+    helper compiled into cairn-app by `#[path]` from cairn-ui, outside cairn-app's scanned files);
+    resolved without a policy change by giving cairn-app its own copy. A fresh `qa-confirm`
+    verified all 16 and the mutations it ran each failed their test; its one new cosmetic note
+    (a doc line past 100 columns) fixed.
+  - Dismissed, with reasons: R2 (the panel compares groups by value and rebuilds an open
+    submenu's layout per highlight — proportional to a menu's items, and every production menu
+    is a short fixed list); R3 (Copy Full Path's joins and the clipboard write once per press,
+    inherited and within the per-press budget the root CLAUDE.md states); D2 (the confirmation's
+    button cannot go stale: one fixed consequence per serial, and greyed-to-ready re-renders it);
+    D3 (a double press's second token is dropped by `discard_confirmed`'s `writing` check).
+
+**Batched for the user — PENDING, not approved:**
+1. **C20's "filled" primary is built as Fork's bordered default** (cp60-cp76): `#373737` in a
+   1 px `#0078D7` border, other answers `#525252`, Git Error with no default as Fork's. The PRD's
+   C20 names `every_dialogs_primary_button_is_filled`; the test is
+   `every_dialogs_primary_button_is_forks_default_in_forks_frame`. Options: (a) keep Fork's look
+   and amend R11.1/C20 at teardown (recommended); (b) fill the primary as the PRD says.
+2. **The Commit tab's file menu shows no chord and hears none; Unstage All shows its chord; the
+   staged menu has no discard** — each Fork's evidence over R9.2's table.
+3. **New chords:** Copy Ctrl+C / ⌘C and Copy Full Ctrl+Shift+C / ⇧⌘C in a list-only scope; the ⌘
+   column of every action phases 02-08 added stays unverified against Fork for macOS.
+4. **Discard's Linux chords reordered** (Delete first) and **Linux chord names spelled
+   Ctrl+Shift+Alt** — what menus and tooltips show changes; no binding changes.
+5. **Focus:** a ring at every non-list stop and on lists (Fork draws none on lists; R10.2's ring),
+   inset in buttons; a field's ring is the toolkit's 2 px.
+6. **New metrics and tones:** `MENU_LONG_WIDTH` 360, `DIALOG_BUTTON_PADDING_Y/X` 6/14,
+   `COMPACT_BUTTON_PADDING_Y/X` 3/6, `focus::RING_INSET` 2; `DIALOG_TITLE` #FFFFFF,
+   `DIALOG_TEXT` #CAC6C6 (cp60).
+7. **Every Freya `Button` replaced by one `PushButton`** (dialogs, Load Diff, Remove index.lock…,
+   the popover's buttons, the comparison's swap) and every dialog by one frame.
+8. **The real-window check** for this phase is owed, as phases 05-07's, or the headless release
+   render accepted in its place.
+
+**Deferred:** whether Copy Commit Info carries a body (no fixture commit has one); the
+Changes tab's chord with no current file untested; Fork's dialog logo and ✕; a stop dropped
+from the window's focus walk while its count stays above the floor is not caught. macOS
+unverified.
+
 ## 2026-10-20 — phase 07, Local Changes and the commit box (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 06's 7bbbc5c.

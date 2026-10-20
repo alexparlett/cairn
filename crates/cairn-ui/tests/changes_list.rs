@@ -497,9 +497,9 @@ fn a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom() {
 
 /// A right press on a file makes it current and opens Fork's Copy Path and Copy Full Path, each
 /// beside its chord; an item chosen is reported for that file; and with the list focused Copy's
-/// and Copy Full's chords choose Copy Path and Copy Full Path for the current file. Caught by: a right press that leaves the
-/// current file, a menu without its chords, an item reported for another file, or the chords
-/// heard nowhere.
+/// and Copy Full's chords choose Copy Path and Copy Full Path for the current file. Caught by: a
+/// right press that leaves the current file, a menu without its chords, an item reported for
+/// another file, or the chords heard nowhere.
 #[test]
 fn a_files_menu_and_the_copy_chords_choose_its_copies() {
     use cairn_ui::FileChoice;

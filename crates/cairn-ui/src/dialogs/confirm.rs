@@ -239,7 +239,6 @@ impl Component for ConfirmDialog {
             DialogAnswer::Refused(why) => {
                 // The refusal, in this dialog, Close alone.
                 let buttons = frame::buttons(vec![answer(
-                    self.serial,
                     close_id,
                     CLOSE_CAPTION.to_owned(),
                     true,
@@ -257,17 +256,10 @@ impl Component for ConfirmDialog {
                 let buttons = frame::buttons(ordered(
                     self.platform,
                     vec![greyed_answer(self.title.clone())],
-                    answer(
-                        self.serial,
-                        cancel_id,
-                        CANCEL_CAPTION.to_owned(),
-                        true,
-                        Answer::Other,
-                        {
-                            let cancel = cancel.clone();
-                            move || cancel()
-                        },
-                    ),
+                    answer(cancel_id, CANCEL_CAPTION.to_owned(), true, Answer::Other, {
+                        let cancel = cancel.clone();
+                        move || cancel()
+                    }),
                 ));
                 (self.title.clone(), COUNTING_TEXT.to_owned(), buttons, None)
             }
@@ -291,25 +283,11 @@ impl Component for ConfirmDialog {
                 // as the count arrives.
                 let buttons = frame::buttons(ordered(
                     self.platform,
-                    vec![answer(
-                        self.serial,
-                        confirm_id,
-                        action,
-                        false,
-                        Answer::Primary,
-                        confirm,
-                    )],
-                    answer(
-                        self.serial,
-                        cancel_id,
-                        CANCEL_CAPTION.to_owned(),
-                        true,
-                        Answer::Other,
-                        {
-                            let cancel = cancel.clone();
-                            move || cancel()
-                        },
-                    ),
+                    vec![answer(confirm_id, action, false, Answer::Primary, confirm)],
+                    answer(cancel_id, CANCEL_CAPTION.to_owned(), true, Answer::Other, {
+                        let cancel = cancel.clone();
+                        move || cancel()
+                    }),
                 ));
                 let listed = consequence.listed();
                 let files = (listed > 0).then(|| (consequence.clone(), listed));

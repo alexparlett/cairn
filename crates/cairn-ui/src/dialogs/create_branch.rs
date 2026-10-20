@@ -448,7 +448,6 @@ impl Component for CreateBranchDialog {
                 self.platform,
                 vec![if ready {
                     answer(
-                        self.serial,
                         create_id,
                         primary.to_owned(),
                         false,
@@ -459,7 +458,6 @@ impl Component for CreateBranchDialog {
                     greyed_answer(primary.to_owned())
                 }],
                 answer(
-                    self.serial,
                     cancel_id,
                     CANCEL_BRANCH_CAPTION.to_owned(),
                     false,

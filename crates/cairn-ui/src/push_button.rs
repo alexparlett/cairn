@@ -53,9 +53,6 @@ pub(crate) struct PushButton {
     /// The accessibility id the caller owns, so it can hold focus as its dialog opens.
     id: Option<AccessibilityId>,
     focused_first: bool,
-    /// Whose handler `on_press` is — a dialog's serial — so a button of another dialog never
-    /// compares equal and keeps no stale handler.
-    serial: u64,
     on_press: EventHandler<()>,
     key: DiffKey,
 }
@@ -69,7 +66,6 @@ impl PushButton {
             enabled: true,
             id: None,
             focused_first: false,
-            serial: 0,
             on_press: EventHandler::new(|()| {}),
             key: DiffKey::None,
         }
@@ -99,27 +95,18 @@ impl PushButton {
         self
     }
 
-    pub(crate) fn serial(mut self, serial: u64) -> Self {
-        self.serial = serial;
-        self
-    }
-
     pub(crate) fn on_press(mut self, on_press: impl Fn() + 'static) -> Self {
         self.on_press = EventHandler::new(move |()| on_press());
         self
     }
 }
 
+// Never equal, as Freya's own `Button`: the press is a closure over what its caller drew it
+// for — Create Branch's choice of what to do with local changes, which nothing else the button
+// shows follows — so a button kept as equal would press for a choice no longer shown.
 impl PartialEq for PushButton {
-    fn eq(&self, other: &Self) -> bool {
-        self.face == other.face
-            && self.size == other.size
-            && self.default == other.default
-            && self.enabled == other.enabled
-            && self.id == other.id
-            && self.focused_first == other.focused_first
-            && self.serial == other.serial
-            && self.key == other.key
+    fn eq(&self, _: &Self) -> bool {
+        false
     }
 }
 

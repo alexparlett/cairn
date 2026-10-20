@@ -21,7 +21,6 @@ pub(crate) enum Answer {
 /// One answer of a dialog: focusable, pressed by the pointer, Return or Space while it has
 /// focus, and — `focused_first` — holding focus as the dialog opens.
 pub(crate) fn answer(
-    serial: u64,
     id: AccessibilityId,
     caption: String,
     focused_first: bool,
@@ -31,7 +30,6 @@ pub(crate) fn answer(
     PushButton::caption(caption, ButtonSize::Dialog)
         .default_answer(kind == Answer::Primary)
         .focus_id(id, focused_first)
-        .serial(serial)
         .on_press(pressed)
         .into()
 }

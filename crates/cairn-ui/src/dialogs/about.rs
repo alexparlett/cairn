@@ -88,7 +88,6 @@ impl Component for AboutDialog {
         let close_id = use_a11y();
         let closing = self.on_close.clone();
         let close = answer(
-            0,
             close_id,
             "Close".to_owned(),
             true,

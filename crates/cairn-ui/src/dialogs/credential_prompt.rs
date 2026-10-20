@@ -116,14 +116,7 @@ impl Component for CredentialPrompt {
 
         // ssh's host-key question opens on Cancel, the safe answer, so a Return or Space
         // pressed by habit declines; a field's prompt opens in its field.
-        let identity = {
-            use std::hash::{DefaultHasher, Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            (&self.remote, &self.text).hash(&mut hasher);
-            hasher.finish()
-        };
         let cancel_button = answer(
-            identity,
             cancel_id,
             "Cancel".to_owned(),
             kind == PromptKind::Confirmation,
@@ -159,7 +152,6 @@ impl Component for CredentialPrompt {
                     .color(secondary),
             );
             primary = answer(
-                identity,
                 primary_id,
                 "Yes, connect".to_owned(),
                 false,
@@ -192,7 +184,6 @@ impl Component for CredentialPrompt {
                     ),
                 );
             primary = answer(
-                identity,
                 primary_id,
                 "Continue".to_owned(),
                 false,

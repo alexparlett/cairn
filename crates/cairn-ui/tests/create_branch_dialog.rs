@@ -631,3 +631,65 @@ fn refusals_are_worded_by_the_view() {
         assert_eq!(discard_refusal(&operation), said);
     }
 }
+
+/// The dialog with its local-changes choice kept as the window keeps it — the radio pressed
+/// writes it — the name ready and Discard's consequence handed in throughout.
+fn launch_choosing(first: LocalChoice) -> (TestingRunner, Reports) {
+    let reports = Reports::default();
+    let (mut test, _) = TestingRunner::new(
+        {
+            let reports = reports.clone();
+            move || {
+                let name = use_state(|| "topic".to_owned());
+                let mut chosen = use_state(|| first);
+                let (created, confirmed) = (reports.created.clone(), reports.confirmed.clone());
+                CreateBranchDialog::new(1, at(), "Fix the parser", name)
+                    .ready(true)
+                    .checkout(true)
+                    .local_changes(Some(*chosen.read()))
+                    .discarding(Some(discarding()))
+                    .on_local(move |to: LocalChoice| chosen.set(to))
+                    .on_create(move |()| *created.borrow_mut() += 1)
+                    .on_confirmed(move |token: Confirmed| {
+                        confirmed.borrow_mut().push(token.consequence().clone())
+                    })
+                    .into_element()
+            }
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    settle(&mut test);
+    (test, reports)
+}
+
+/// The button does what the choice shown now asks, not the choice it was first drawn with:
+/// Don't change first, then Discard, the press builds the token from the consequence; Discard
+/// first, then Don't change, the press creates and builds no token; and the choice switched
+/// away and back, the press is the first choice's again. Caught by: a button that keeps the
+/// press of the choice it was first drawn with while its caption and state are unchanged.
+#[test]
+fn the_button_presses_for_the_choice_shown_now() {
+    let (mut test, reports) = launch_choosing(LocalChoice::Keep);
+    click(&mut test, DISCARD_LOCAL_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(reports.confirmed.borrow().as_slice(), &[discarding()]);
+    assert_eq!(
+        *reports.created.borrow(),
+        0,
+        "a create asked with Discard chosen"
+    );
+
+    let (mut test, reports) = launch_choosing(LocalChoice::Discard);
+    click(&mut test, DONT_CHANGE_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert!(
+        reports.confirmed.borrow().is_empty(),
+        "a token built with Don't change chosen"
+    );
+    assert_eq!(*reports.created.borrow(), 1, "the create was not asked");
+    click(&mut test, DISCARD_LOCAL_CAPTION);
+    click(&mut test, CREATE_AND_CHECKOUT_CAPTION);
+    assert_eq!(reports.confirmed.borrow().as_slice(), &[discarding()]);
+}

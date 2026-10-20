@@ -299,7 +299,6 @@ impl Component for GitErrorDialog {
         let mut actions: Vec<Element> = Vec::new();
         if self.remove_lock {
             actions.push(answer(
-                self.serial,
                 lock_id,
                 REMOVE_LOCK_CAPTION.to_owned(),
                 false,
@@ -309,7 +308,6 @@ impl Component for GitErrorDialog {
         }
         if self.skip {
             actions.push(answer(
-                self.serial,
                 skip_id,
                 SKIP_HOOKS_CAPTION.to_owned(),
                 false,
@@ -326,7 +324,6 @@ impl Component for GitErrorDialog {
             // Opened on Close, the safe answer, so a Return or Space pressed by habit never
             // skips the hooks nor removes a lock.
             answer(
-                self.serial,
                 close_id,
                 CLOSE_CAPTION.to_owned(),
                 true,

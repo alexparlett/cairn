@@ -5,6 +5,9 @@
 //! dialog draws its output through a virtualizing view, the skip in its footer beside Close,
 //! focus on Close.
 
+#[path = "support/named.rs"]
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -16,9 +19,9 @@ use cairn_ui::{
     GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT, RECENT_MESSAGES_CAPTION,
     SKIP_HOOKS_CAPTION,
 };
-use freya::elements::rect::RectElement;
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use support::one_named;
 
 const WIDTH: f32 = 900.;
 const HEIGHT: f32 = 600.;
@@ -332,30 +335,6 @@ fn an_edit_in_a_field_is_reported() {
     assert!(*reports.edits.borrow() >= 1, "typing was no edit");
 }
 
-/// Every control assistive technology reads as `name`, with where it is laid out.
-fn named(test: &TestingRunner, name: &str) -> Vec<(RectElement, Area)> {
-    test.find_many(|node, element| {
-        Rect::try_downcast(element)
-            .filter(|rect| {
-                let builder = &rect.accessibility.builder;
-                builder.value() == Some(name) || builder.label() == Some(name)
-            })
-            .map(|rect| (rect, node.layout().area))
-    })
-}
-
-/// The one control named `name`.
-fn one_named(test: &TestingRunner, name: &str) -> (RectElement, Area) {
-    let mut found = named(test, name);
-    assert_eq!(
-        found.len(),
-        1,
-        "{} controls are named {name:?}",
-        found.len()
-    );
-    found.remove(0)
-}
-
 /// Where the first text input of `role` is laid out.
 fn input_of(test: &TestingRunner, role: AccessibilityRole) -> Area {
     test.find(|node, element| {
@@ -460,6 +439,16 @@ fn the_commit_box_is_one_field_and_a_split_button() {
             options.accessibility.builder.is_disabled(),
             "the ⌄ is not greyed"
         );
+        assert_eq!(
+            options.style.background,
+            Fill::Color(tones::DISABLED_FILL),
+            "the ⌄ is not drawn greyed (ready: {ready})"
+        );
+        assert_ne!(
+            options.accessibility.a11y_focusable,
+            Focusable::Enabled,
+            "the ⌄ is a Tab stop"
+        );
         let shown = hovered(&mut test, chevron);
         assert!(
             shown.iter().any(|label| label == COMMIT_OPTIONS_TOOLTIP),
@@ -481,8 +470,9 @@ fn the_commit_box_is_one_field_and_a_split_button() {
 
 /// Fork's counter appears only once the subject has text, and the subject is bold then: with
 /// none, no figure is drawn and nothing is bold; with "x", "49" stands between the subject and
-/// Recent Commit Messages. Caught by: the counter's "50" over an empty subject, the counter
-/// after the glyph, or the typed subject at the body's weight.
+/// Recent Commit Messages; and the counter is Fork's still — grey at the hard limit of 70, red
+/// past it. Caught by: the counter's "50" over an empty subject, the counter after the glyph,
+/// the typed subject at the body's weight, or the counter drawn grey past 70 or red at it.
 #[test]
 fn the_counter_and_the_bold_subject_appear_once_the_subject_has_text() {
     let bold_round = |test: &TestingRunner, subject: Area| {
@@ -534,6 +524,34 @@ fn the_counter_and_the_bold_subject_appear_once_the_subject_has_text() {
         bold_round(&test, subject) >= 1,
         "the typed subject is not bold"
     );
+
+    for (typed, left, past) in [(70, "-20", false), (71, "-21", true)] {
+        let (test, _) = launch(
+            false,
+            CommitButton::Commit { files: 1 },
+            &"x".repeat(typed),
+            false,
+            None,
+            None,
+        );
+        let drawn = test
+            .find(|_, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == left)
+                    .map(|label| label.text_style_data.color)
+            })
+            .unwrap_or_else(|| panic!("no counter reads {left}"));
+        let colour = if past {
+            test.run_in(|| get_theme_or_default().read().colors().error)
+        } else {
+            tones::DETAIL_LABEL
+        };
+        assert_eq!(
+            drawn,
+            Some(Fill::Color(colour)),
+            "the counter at {typed} characters"
+        );
+    }
 }
 
 /// What the Git Error dialog reported.

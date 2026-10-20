@@ -89,9 +89,12 @@ pub const RULER_COLUMN: usize = 72;
 
 /// The description's size: monospace, so the ruler stands at a column.
 const DESCRIPTION_FONT_SIZE: f32 = metrics::BODY;
-const DESCRIPTION_MIN_HEIGHT: f32 = 64.;
+/// One line while empty, the subject's height, growing a line at a time as it is typed in, as
+/// Fork's does (`fork-local-changes-2026-10-20.md`, lc28-lc33), to Cairn's ceiling.
+const DESCRIPTION_MIN_HEIGHT: f32 = metrics::COMMIT_SUBJECT;
 const DESCRIPTION_MAX_HEIGHT: f32 = 200.;
-/// The field's inner margin: the toolkit's `input_layout` theme's, which the text starts after.
+/// The field's inner margin across: the toolkit's `input_layout` theme's, which the text starts
+/// after and the ruler is placed from.
 const FIELD_MARGIN: f32 = 8.;
 
 /// The commit button's words with `files` staged: Fork's `Commit 35 Files`, `Commit 1 File`,

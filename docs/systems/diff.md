@@ -1663,7 +1663,7 @@ no line re-wrapped (`a_message_reads_line_for_line_as_git_log_shows_it`, against
 row through the tab); a rule; git's own "exhaustive rename detection was skipped"
 warning with the `diff.renameLimit` git asks for, when the search was cut short, above
 the files, and nothing when a limit was set and not reached; Expand All, its caption alone
-as Fork draws it; and one row per changed file — its chevron, its status as a bare letter
+as Fork draws it and a Tab stop; and one row per changed file — its chevron, its status as a bare letter
 in a colour — `A`, `D`, `M`, `T`, `R`, `C`, as Fork
 draws it, by the user's decision: git's `--name-status` letter without the similarity
 score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — a document glyph,
@@ -2034,7 +2034,14 @@ previous change, Ctrl+↑" and "Go to next change, Ctrl+↓" on Linux and `⌘�
 A toggle that is on draws its glyph in Fork's `#419BF9`, nothing behind it, and says it is on
 to assistive technology; each button carries its name, Fork's words without the chord, so its
 meaning never rests on the glyph
-(`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue`). Both line
+(`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue`), drawn exactly as
+the style module's icon for it, the three mirrored ones about their own middle
+(`each_bar_button_draws_its_forks_glyph`). Every button that can be pressed is a Tab stop, Space
+or Enter pressing it and a 1 px ring showing focus that came by key — five of them have no
+chord — a deviation from Fork's three-stop cycle `docs/design/ui.md` records
+(`every_bar_button_that_can_be_pressed_is_a_tab_stop`); the square under the pointer stands
+behind an enabled button alone
+(`a_hovered_bar_button_stands_on_its_square_unless_it_is_disabled`). Both line
 buttons are greyed while the entire file is shown, as Fork greys them, and never otherwise:
 at one line of context Decrease stays pressable and does nothing, as Fork's does; a disabled
 button reports nothing

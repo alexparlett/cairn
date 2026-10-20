@@ -24,7 +24,10 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   few more the same survey sampled that the table does not name (a field's fill and
   placeholder, a check box's border, a banner, a link, the badges of an added and a modified
   file, a menu's shadow, a disabled button's border, the sidebar's chosen entry, a remote chip's
-  grey cloud), and Cairn's eight avatar colours, the first Fork's sampled lavender
+  grey cloud), the sidebar's sampled in uw27 and the sidebar survey
+  (`docs/research/ui-review/fork-sidebar-2026-10-20.md`: its icons, its quieter chevrons, its
+  filter's fill and a gone upstream's warning), `UNSEEN` for text laid out only to hold its room
+  (a menu's copy of a chord), and Cairn's eight avatar colours, the first Fork's sampled lavender
   (`AVATARS`). The lanes keep Cairn's eight
   (`history::lane_palette`); a branch's and a remote's chip is filled with a dark shade of its
   lane (`chip_fill`), and the cloud-only chip of a branch level with its upstream bordered in a

@@ -96,6 +96,7 @@ Kept, and why:
 | **Every Tab stop shows focus** — a list by its selection's tone, any other control by a ring; Fork shows only the selection's tone, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
 | The window has a **minimum size** at which nothing is cut; Fork clips its content below about 600 px. | `cairn.md`, what Cairn is — no text a person needs is cut |
 | While an operation runs, the status box shows **git's progress line up to its percentage** ("Receiving objects: 45%"; a line with no percentage up to its first comma), the whole line in the activity popover; an operation's name is drawn whole, and only a name wider than Fork's 300 px box — one carrying a long branch or remote name — is cut with "…", the whole name in the popover. The one place a running text is cut, by the user's decision: git's longer progress lines are wider than the box at every window size. Fork's own running box was observed only for a commit ("1 file…", ar22z). | `cairn.md`, what Cairn is — no text a person needs is cut; `fork-window-survey-2026-10-16.md`, the box's 300 px |
+| A branch with **no upstream has a glyph of its own shape** in the sidebar, in a quieter tone, where Fork greys its branch glyph. | "Palette and type", below — a kind is never told by colour alone |
 | No Accounts section in any sidebar. | `credentials.md` — Cairn holds no credential |
 | A visible **loading state** distinct from an empty repository. | `concurrency.md` — every query is assumed slow |
 

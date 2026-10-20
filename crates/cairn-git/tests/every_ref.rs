@@ -517,10 +517,12 @@ fn every_rows_labels_are_what_git_log_decorates_it_with() {
 }
 
 /// Each stash whose base is walked is one row — its index, base, message, author and date git's
-/// — with one line, leaving its node down its own lane and ending at its base; two stashes on
-/// one commit take a lane each; a stash dated older than its base is still above it; and every
-/// row is where git's date order, each stash a tip on its base, puts it. Caught by: a stash's
-/// row laid out as a commit's (lines joined, or to every parent), placed after its base, or
+/// — on its base's lane: one line leaves its node down that lane and ends at its base, and the
+/// only other line it touches is the one already descending that lane to the base, which runs
+/// through it; two stashes on one commit share its line; a stash dated older than its base is
+/// still above it; and every row is where git's date order, each stash a tip on its base, puts
+/// it. Caught by: a stash's row laid out as a commit's (lines joined into another lane, or to
+/// every parent), given a lane of its own beside its base's line, placed after its base, or
 /// placed otherwise than git's walk places it.
 #[test]
 fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
@@ -551,7 +553,8 @@ fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
         assert_eq!(stash.author_name, listed.author);
         assert_eq!(stash.author_time, listed.author_time);
 
-        // One line: out of its node, down its own lane, into its base's node.
+        // One line out of its node, down its lane, into its base's node — and, where a line
+        // already descended that lane to the base, that line running into its node.
         let lane = row.lane();
         let drawn = row
             .edges()
@@ -560,24 +563,40 @@ fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
             .edges
             .iter()
             .filter(|edge| edge.kind != EdgeKind::Passing)
+            .map(|edge| (edge.kind, edge.from, edge.to))
             .collect();
-        assert_eq!(own.len(), 1, "stash@{{{}}} draws {own:?}", listed.index);
-        assert_eq!(
-            (own[0].kind, own[0].from, own[0].to),
-            (EdgeKind::OutOfCommit, lane, lane)
+        let alone = vec![(EdgeKind::OutOfCommit, lane, lane)];
+        let on_a_line = vec![
+            (EdgeKind::IntoCommit, lane, lane),
+            (EdgeKind::OutOfCommit, lane, lane),
+        ];
+        assert!(
+            own == alone || own == on_a_line,
+            "stash@{{{}}} draws {own:?}",
+            listed.index
         );
         let base_at = commits[base];
         assert!(base_at > at, "stash@{{{}}} is below its base", listed.index);
         for between in at + 1..base_at {
-            let passing = rows
-                .row(between)
-                .and_then(|row| row.edges())
-                .is_some_and(|drawn| {
-                    drawn
-                        .edges
-                        .iter()
-                        .any(|edge| edge.kind == EdgeKind::Passing && edge.from == lane)
-                });
+            // Passing the row, or running through the node of another stash on the same base.
+            let passing =
+                rows.row(between)
+                    .and_then(|row| row.edges())
+                    .is_some_and(|drawn| {
+                        let runs = |kind: EdgeKind| {
+                            drawn.edges.iter().any(|edge| {
+                                edge.kind == kind && edge.from == lane && edge.to == lane
+                            })
+                        };
+                        let through_a_stash = rows
+                            .row(between)
+                            .and_then(stash_of)
+                            .is_some_and(|other| other.base.to_string() == *base)
+                            && drawn.lane == lane
+                            && runs(EdgeKind::IntoCommit)
+                            && runs(EdgeKind::OutOfCommit);
+                        runs(EdgeKind::Passing) || through_a_stash
+                    });
             assert!(
                 passing,
                 "stash@{{{}}}'s line breaks at row {between}",
@@ -601,10 +620,14 @@ fn each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it() {
     let path = it.fixture.path();
     assert_eq!(row_ids(&rows), git_date_order(path, &stash_tips(path), &[]));
 
-    // The two stashes on main's tip: a lane each, both ending there.
+    // The two stashes on main's tip: on one line, its base's.
     let (plain, untracked) = (stashes[&it.plain_stash], stashes[&it.untracked_stash]);
     let lane = |at: usize| rows.row(at).map(|row| row.lane());
-    assert_ne!(lane(plain), lane(untracked), "two stashes share a lane");
+    assert_eq!(
+        lane(plain),
+        lane(untracked),
+        "two stashes on one commit, two lanes"
+    );
     assert!(commits.contains_key(&it.side_tip));
 }
 

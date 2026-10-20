@@ -138,23 +138,30 @@ rows (14.4%, 64,698 segments); in `GraphOrder` it is most rows, by construction.
 bounds the blind spot from above without measuring it, since a parent must arrive late at
 all before it can arrive too late.
 
-**A stash's row is laid out with one line, in a lane of its own**
-(`LaneAssigner::push_stash`). The stash commit is pushed as the row's id with its
-base — the commit it was made on, its first parent — as its only parent: its index
-and untracked commits are never awaited. Its line leaves its node down a lane of its
-own to the base, even where another line already awaits that base, so several
-stashes on one commit each keep a lane down to it and every such line ends there
-(`Ends` for each); a commit's line instead joins a line already descending to its
-parent. The assigner is still keyed by `Oid` — the stash commit, which no commit the
-walk reaches names as a parent. A base already laid out above is joined by a late
-line, as any parent is, though the stream never places a stash below its base.
-Pinned by `a_stash_draws_one_line_down_to_the_commit_it_was_made_on`,
-`two_stashes_on_one_commit_each_keep_a_lane_down_to_it` (whose control lays the
-same walk out with `push` and gets one lane for both) and
+**A stash's row is drawn on its base's lane** (`LaneAssigner::push_stash`), as Fork for
+Windows draws it (`docs/research/ui-review/fork-window-survey-2026-10-16.md`, §4, uv7: the
+stash's dot on `main`'s lane with the line running down to `main`, no lane of its own). The
+stash commit is pushed as the row's id with its base — the commit it was made on, its first
+parent — as its only parent: its index and untracked commits are never awaited. Where a line
+already descends to the base, the stash's node is put on that line, in its lane — the lowest
+such lane — which ends at the node and starts again below it (`Ends` and `Starts` in one lane),
+still waiting for the base, so several stashes on one commit sit on one line and only that line
+ends at the base. Where no line awaits the base, the stash takes the lowest free lane, as a
+commit whose one parent is the base would, and its line descends in that lane to the base,
+which takes it. A commit's line instead joins a line already descending to its parent, from a
+lane of its own. The assigner is still keyed by `Oid` — the stash commit, which no commit the
+walk reaches names as a parent. A base already laid out above is joined by a late line, as any
+parent is, though the stream never places a stash below its base. Pinned by
+`a_stash_draws_one_line_down_to_the_commit_it_was_made_on`,
+`a_stash_is_drawn_on_its_base_commits_lane` (two stashes on one line, beside a commit that
+takes the next lane), `a_stash_whose_base_no_line_awaits_takes_a_new_lane` and
 `rows_with_stashes_derive_the_edges_the_assigner_kept`
-(`crates/cairn-model/src/lane_assignment.rs`), each deriving every row's edges and
-requiring them equal to the edges the assigner kept in its window. C15's oracle
-knows commits alone, so its comparisons run over walks with no stash.
+(`crates/cairn-model/src/lane_assignment.rs`), each deriving every row's edges and requiring
+them equal to the edges the assigner kept in its window, and by the drawn list's
+`a_stash_is_drawn_on_its_base_commits_lane` (`crates/cairn-ui/tests/drawn_lanes.rs`), which
+reads the stash's node back from the paint in its base's lane and nothing in the lane beside
+it. C15's oracle knows commits alone, so its comparisons run over walks with no stash, and the
+stash's lane leaves what it compares unchanged.
 
 **What a row keeps.** A `GraphRow` holds its commit's id, its lane and only the
 lane changes at it — never the lines passing through it. A `LaneChange` is a
@@ -534,9 +541,9 @@ and without `--include-untracked` whose internal commits are no rows unless a br
 reaches one; `every_rows_labels_are_what_git_log_decorates_it_with` — each row's
 labels against `git log --decorate=full`, `refs/stash` aside, `origin/HEAD` and a
 nested tag among them; `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
-— each stash's index, base, message, author and date against `git stash list`, one
-line out of its node down its own lane into its base, two stashes on one commit in
-two lanes, a stash dated older than its base still above it, and every row where git's date
+— each stash's index, base, message, author and date against `git stash list`, on its
+base's lane — one line out of its node down that lane into its base, the line already
+awaiting the base running through it — two stashes on one commit on one line, a stash dated older than its base still above it, and every row where git's date
 order puts it; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
 one, two and five); `a_stash_on_a_deep_base_is_where_git_puts_it` (held and cold);
 `a_detached_head_no_ref_reaches_is_walked_and_labelled`;

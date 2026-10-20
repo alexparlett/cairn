@@ -421,7 +421,7 @@ fn read_page(
 }
 
 /// `entry` laid out, returning the row it forced out of the window: a stash's with its one
-/// line to its base, in a lane of its own ([`LaneAssigner::push_stash`]).
+/// line to its base, on its base's lane ([`LaneAssigner::push_stash`]).
 fn lay_out(assigner: &mut LaneAssigner, decoration: &Decoration, entry: Entry) -> Option<GraphRow> {
     match entry {
         Entry::Commit { id, parents, .. } => assigner.push(id, parents),

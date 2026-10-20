@@ -137,8 +137,11 @@ fn assert_selected(test: &TestingRunner, list: &str, text: &str, focused: bool) 
     );
     assert!(bold, "{list}, {state}: the selected row's text is not bold");
     let other = tones::selected(!focused).band;
-    let elsewhere = test.find_many(|_, element| {
+    // A band is a row's height: a 1 px rule in the same grey (the sidebar's under All Commits,
+    // Fork's #525252) is no selection.
+    let elsewhere = test.find_many(|node, element| {
         Rect::try_downcast(element)
+            .filter(|_| node.layout().visible_area().height() > 1.)
             .and_then(|rect| rect.style.background.as_color())
             .filter(|band| *band == other)
     });

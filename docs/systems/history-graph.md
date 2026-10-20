@@ -605,9 +605,7 @@ with a tag, a remote-only commit, a reset-away commit, a stash, a parent dated a
 and every commit dated alike, `HEAD` on a branch and detached, Show Lost Commits off and on,
 every route, page size and window; and by `the_head_reach_counts_what_git_substitutes_and_a_head_no_ref_names`
 — a replace ref grafting the merge onto its first parent, a shallow clone and a detached `HEAD`
-at a commit no ref names. `cairn_ui::LocalZone` compares by which read it came from, never the
-zone file's contents, so the rows holding it compare cheaply on every render
-(`a_zone_compares_by_the_read_it_came_from`).
+at a commit no ref names.
 
 ## The worker boundary (`cairn-app`)
 
@@ -987,7 +985,9 @@ import — are rejected outside `cairn-model` by
   the Commit tab, the Changes summary and the activity popover; no render file reads it
   (`the_render_layer_is_handed_its_time_zone`). Until it arrives dates are drawn in UTC
   and nothing says so; a zone that cannot be read is UTC, which the Commit tab says once
-  ("(UTC)" after the author's date). A kept row holds the author time's seconds, which the
+  ("(UTC)" after the author's date). A `LocalZone` compares by which read it came from, never the zone
+  file's contents, so the rows holding it compare cheaply on every render
+  (`a_zone_compares_by_the_read_it_came_from`). A kept row holds the author time's seconds, which the
   zone places; `civil_from_days` is Hinnant's, total over every `i64`.
 
   The column is also **not monotonic**, and that is not a defect: the walk is

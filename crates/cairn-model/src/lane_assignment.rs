@@ -848,7 +848,10 @@ mod tests {
         );
         assert_eq!(
             rows[4].changes(),
-            &[LaneChange::Ends(Lane::new(0)), LaneChange::Ends(Lane::new(1))],
+            &[
+                LaneChange::Ends(Lane::new(0)),
+                LaneChange::Ends(Lane::new(1))
+            ],
             "both lines that awaited the base end there"
         );
         for (index, edges) in kept.iter().enumerate() {

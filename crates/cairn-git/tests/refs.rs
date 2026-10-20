@@ -126,7 +126,8 @@ fn peeled(dir: &Path, names: &[String]) -> Vec<Option<(Oid, String)>> {
 
 /// Every local branch, remote-tracking ref and tag as `git for-each-ref` lists them, in
 /// its order, each with what it names, what that peels to and — for a local branch — its
-/// `%(upstream)`, `[gone]` read from `%(upstream:track)`.
+/// `%(upstream)`, `[gone]` read from `%(upstream:track)`; for a tag, the committer date of the
+/// commit it identifies, as `git log --no-walk` prints it (`%ct`).
 fn git_refs(dir: &Path) -> Vec<Ref> {
     let listed = ask(
         dir,
@@ -166,6 +167,20 @@ fn git_refs(dir: &Path) -> Vec<Ref> {
         Some((id, kind)) if kind == "commit" => Some(*id),
         _ => None,
     };
+    // Each tag's commit, then each commit's date as git reads it.
+    let tag_commits: BTreeMap<String, Oid> = rows
+        .iter()
+        .filter(|row| row[0].starts_with("refs/tags/"))
+        .filter_map(|row| {
+            let commit = match row[2].as_str() {
+                "commit" => Some(oid(&row[1])),
+                "tag" => commit_of(&tag_ends[&row[0]]),
+                _ => None,
+            };
+            commit.map(|commit| (row[0].clone(), commit))
+        })
+        .collect();
+    let commit_times = commit_dates(dir, tag_commits.values());
     rows.iter()
         .map(|row| {
             let name = &row[0];
@@ -207,7 +222,31 @@ fn git_refs(dir: &Path) -> Vec<Ref> {
                 target,
                 symbolic: (!row[3].is_empty()).then(|| RefName::new(row[3].clone())),
                 upstream,
+                commit_time: tag_commits.get(name).map(|commit| commit_times[commit]),
             }
+        })
+        .collect()
+}
+
+/// Each of `commits`' committer dates, as `git log --no-walk` prints them (`%ct`).
+fn commit_dates<'a>(dir: &Path, commits: impl Iterator<Item = &'a Oid>) -> BTreeMap<Oid, i64> {
+    let ids: Vec<String> = commits.map(ToString::to_string).collect();
+    if ids.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut arguments = vec!["log", "--no-walk=unsorted", "--format=%H %ct"];
+    arguments.extend(ids.iter().map(String::as_str));
+    ask(dir, &arguments)
+        .lines()
+        .map(|line| {
+            let (id, time) = line
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("git log printed {line:?}"));
+            (
+                oid(id),
+                time.parse()
+                    .unwrap_or_else(|_| panic!("git log printed a date {time:?}")),
+            )
         })
         .collect()
 }
@@ -1328,8 +1367,37 @@ fn head_through_a_symbolic_branch_is_what_git_says() {
     );
 }
 
+/// A tag is dated by the commit it identifies — the commit's committer date, as Fork lists
+/// tags by — never by its tag object's tagger date, and a branch carries no date. Caught by:
+/// the tagger date read for an annotated tag, or a date read for a branch.
+#[test]
+fn a_tag_is_dated_by_its_commit_never_by_its_tagger() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    let committed = clock;
+    fixtures::run(
+        fixture.path(),
+        &["tag", "-a", "late", "-m", "tagged long after"],
+        Some(committed + 1_000_000),
+    );
+    fixture.git(&["tag", "light"]);
+    let read = assert_snapshot_is_gits(fixture.path());
+    let date = |name: &str| {
+        read.refs
+            .iter()
+            .find(|listed| listed.name.as_str() == name)
+            .unwrap_or_else(|| panic!("{name} is not listed"))
+            .commit_time
+    };
+    assert_eq!(date("refs/tags/late"), Some(committed));
+    assert_eq!(date("refs/tags/light"), Some(committed));
+    assert_eq!(date("refs/heads/main"), None);
+}
+
 /// A refs query stops at whichever poll is cancelled — listing the refs, resolving an
-/// upstream, reading the stash reflog or its entries — and polls nothing after it. Over a
+/// upstream, reading a tag's commit date, reading the stash reflog or its entries — and polls
+/// nothing after it. Over a
 /// fixture with every kind of poll: for each poll in turn, cancelling there is
 /// `Error::RefsCancelled` after exactly that many polls. Caught by: any poll point
 /// removed, or a loop that goes on after its cancel.
@@ -1348,10 +1416,15 @@ fn a_refs_query_stops_at_whichever_poll_is_cancelled() {
     let read = repo.refs(&all).unwrap();
     let total = all.polls.get();
     let branches = read.snapshot.of_kind(RefKind::LocalBranch).count();
+    let tags = read.snapshot.of_kind(RefKind::Tag).count();
+    assert!(
+        tags > 0,
+        "the fixture lists no tag, so its date's poll is not counted"
+    );
     // One poll per ref the store yields — listed, hidden as dangling (every_kind has three:
     // origin/dangling, deep1, deep2) or skipped as unreadable — one per local branch's
-    // upstream, one per stash reflog line and one per stash entry. Exact, so a poll point
-    // removed fails here even though every cancel below still lands.
+    // upstream, one per tag's commit date, one per stash reflog line and one per stash entry.
+    // Exact, so a poll point removed fails here even though every cancel below still lands.
     let dangling = 3;
     assert_eq!(
         total,
@@ -1359,6 +1432,7 @@ fn a_refs_query_stops_at_whichever_poll_is_cancelled() {
             + dangling
             + read.snapshot.unreadable
             + branches
+            + tags
             + 2 * read.snapshot.stashes.len(),
         "{total} polls"
     );
@@ -1384,8 +1458,9 @@ fn a_refs_query_stops_at_whichever_poll_is_cancelled() {
 /// What a refs query reports it paid, on a fixture small enough to count by hand:
 /// `HEAD` (one read, one hop to `main`); five refs listed, `origin/HEAD` one more for its
 /// hop; the stash ref; an object looked up for each of the five, the annotated tag read
-/// and peeled to its commit (two more), and the stash's commit; one reflog line. Caught
-/// by: a cost that counts something else, or nothing.
+/// and peeled to its commit (two more), each tag's commit read for its date (two more), and
+/// the stash's commit; one reflog line. Caught by: a cost that counts something else, or
+/// nothing.
 #[test]
 fn a_refs_query_reports_the_cost_it_paid() {
     let fixture = fixtures::unborn();
@@ -1409,7 +1484,7 @@ fn a_refs_query_reports_the_cost_it_paid() {
         .unwrap();
     assert_eq!(read.snapshot.refs.len(), 5);
     assert_eq!(read.cost.refs_read, 2 + 5 + 1 + 1, "{:?}", read.cost);
-    assert_eq!(read.cost.objects_read, 5 + 2 + 1, "{:?}", read.cost);
+    assert_eq!(read.cost.objects_read, 5 + 2 + 2 + 1, "{:?}", read.cost);
     assert_eq!(read.cost.reflog_lines_read, 1, "{:?}", read.cost);
 }
 
@@ -2109,6 +2184,7 @@ fn measures_the_refs_snapshot_and_ahead_behind() {
                     name: RefName::new("refs/remotes/origin/measured"),
                     commit: Some(base),
                 }),
+                commit_time: None,
             }],
             head: HeadState::Detached(tip),
             stashes: Vec::new(),

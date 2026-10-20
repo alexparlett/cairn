@@ -200,6 +200,7 @@ mod tests {
                     target: RefTarget::Commit(id),
                     symbolic: None,
                     upstream: None,
+                    commit_time: None,
                 })
                 .collect(),
             head: HeadState::Branch(RefName::new(head)),

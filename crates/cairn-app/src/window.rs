@@ -3415,6 +3415,7 @@ pub(crate) mod tests {
                     }
                 }
             }),
+            commit_time: None,
         }];
         if let Some((name, true)) = upstream {
             refs.push(Ref {
@@ -3423,6 +3424,7 @@ pub(crate) mod tests {
                 target: RefTarget::Commit(oid(1)),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             });
         }
         let mut refreshed = view.refreshed;
@@ -3765,6 +3767,7 @@ pub(crate) mod tests {
                 name: RefName::new(upstream),
                 commit: Some(oid(0)),
             }),
+            commit_time: None,
         };
         let mut refreshed = view.refreshed;
         let _ = refreshed

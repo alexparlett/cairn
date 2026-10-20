@@ -78,6 +78,7 @@ fn snapshot(refs: &[(&str, u8, Option<&str>)], head: HeadState) -> RefsSnapshot 
                     },
                 }
             }),
+            commit_time: None,
         })
         .collect();
     listed.sort_by(|one, other| one.name.as_str().cmp(other.name.as_str()));

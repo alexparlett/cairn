@@ -88,6 +88,7 @@ fn listed(name: &str, target: RefTarget) -> Ref {
         target,
         symbolic: None,
         upstream: None,
+        commit_time: None,
     }
 }
 

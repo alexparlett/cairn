@@ -191,6 +191,7 @@ fn sidebar_app() -> Element {
             target: RefTarget::Commit(oid(1)),
             symbolic: None,
             upstream: None,
+            commit_time: None,
         };
         let refs = RefsSnapshot {
             refs: vec![listed("refs/heads/main"), listed("refs/heads/topic")],

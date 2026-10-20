@@ -288,6 +288,7 @@ pub(super) fn many_refs(count: usize) -> Arc<RefsSnapshot> {
                 target: RefTarget::Commit(id),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             })
             .collect(),
         head: HeadState::Detached(id),

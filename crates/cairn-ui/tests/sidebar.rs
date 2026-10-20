@@ -38,6 +38,7 @@ fn listed(name: &str) -> Ref {
         target: RefTarget::Commit(oid(1)),
         symbolic: None,
         upstream: None,
+        commit_time: None,
     }
 }
 

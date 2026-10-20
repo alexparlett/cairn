@@ -1449,6 +1449,7 @@ mod tests {
                 target: cairn_model::RefTarget::Commit(commit),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             }],
             head: cairn_model::HeadState::Branch(cairn_model::RefName::new("refs/heads/main")),
             stashes: Vec::new(),

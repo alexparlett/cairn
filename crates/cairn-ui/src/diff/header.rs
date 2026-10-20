@@ -333,6 +333,8 @@ impl PartialEq for BarButton {
 impl Component for BarButton {
     fn render(&self) -> impl IntoElement {
         let mut hovered = use_state(|| false);
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
         let (which, toggle, enabled) = (self.which, self.toggle, self.enabled);
         let colour = if !enabled {
             tones::DISABLED_TEXT
@@ -345,6 +347,10 @@ impl Component for BarButton {
         let name = which.label();
         TooltipContainer::new(Tooltip::new_text(bar_tooltip(which, Os::current()))).child(
             rect()
+                .a11y_id(a11y_id)
+                // A Tab stop while it can be pressed, so the five buttons with no chord are
+                // reached from the keyboard; Space or Enter presses it.
+                .a11y_focusable(enabled)
                 .a11y_role(AccessibilityRole::Button)
                 .a11y_builder(move |node| {
                     node.set_value(name);
@@ -361,6 +367,14 @@ impl Component for BarButton {
                 .maybe(enabled && *hovered.read(), |el| {
                     el.background(tones::DIFF_BAR_HOVER)
                 })
+                .maybe(focus() == Focus::Keyboard, |el| {
+                    el.border(
+                        Border::new()
+                            .fill(tones::ACCENT)
+                            .width(1.)
+                            .alignment(BorderAlignment::Inner),
+                    )
+                })
                 .on_pointer_enter(move |_| hovered.set(true))
                 .on_pointer_leave(move |_| hovered.set_if_modified(false))
                 .on_press(move |_| {
@@ -376,6 +390,24 @@ impl Component for BarButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each button does the accelerator table's action for it, which its press is acted on as
+    /// and its tooltip's chord is read for. Caught by: two buttons' actions swapped.
+    #[test]
+    fn each_button_does_its_own_action() {
+        assert_eq!(
+            HeaderAction::ALL.map(HeaderAction::action),
+            [
+                Action::PreviousChange,
+                Action::NextChange,
+                Action::ToggleIgnoreWhitespace,
+                Action::FewerLines,
+                Action::MoreLines,
+                Action::EntireFile,
+                Action::ToggleSideBySide,
+            ]
+        );
+    }
 
     #[test]
     fn a_path_is_drawn_as_its_directory_and_its_name() {

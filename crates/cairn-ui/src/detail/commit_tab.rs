@@ -865,23 +865,56 @@ fn files_bar(content: &TabContent) -> Element {
         .child(rect().width(Size::flex(1.)).maybe_child(
             stopped.then(|| text(budget_notice(collapsed), metrics::BODY, tones::DETAIL_LABEL)),
         ))
-        // Fork's Expand All is its caption alone, no button drawn round it (uv9).
-        .child(
-            rect()
-                .a11y_role(AccessibilityRole::Button)
-                .cursor(CursorIcon::Pointer)
-                .on_press(move |_| on_expand_all.call(!any_open))
-                .child(text(
-                    if any_open {
-                        COLLAPSE_ALL_CAPTION
-                    } else {
-                        EXPAND_ALL_CAPTION
-                    },
-                    metrics::BODY,
-                    tones::TEXT,
-                )),
-        )
+        .child(ExpandAll {
+            any_open,
+            on_expand_all,
+        })
         .into()
+}
+
+/// Fork's Expand All — Collapse All while any file is open — its caption alone, no button drawn
+/// round it (uv9); a Tab stop, Space or Enter pressing it, with a ring while focus came by key.
+#[derive(Clone)]
+struct ExpandAll {
+    any_open: bool,
+    on_expand_all: EventHandler<bool>,
+}
+
+impl PartialEq for ExpandAll {
+    fn eq(&self, other: &Self) -> bool {
+        self.any_open == other.any_open
+    }
+}
+
+impl Component for ExpandAll {
+    fn render(&self) -> impl IntoElement {
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
+        let (any_open, on_expand_all) = (self.any_open, self.on_expand_all.clone());
+        rect()
+            .a11y_id(a11y_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::Button)
+            .cursor(CursorIcon::Pointer)
+            .maybe(focus() == Focus::Keyboard, |el| {
+                el.border(
+                    Border::new()
+                        .fill(tones::ACCENT)
+                        .width(1.)
+                        .alignment(BorderAlignment::Inner),
+                )
+            })
+            .on_press(move |_| on_expand_all.call(!any_open))
+            .child(text(
+                if any_open {
+                    COLLAPSE_ALL_CAPTION
+                } else {
+                    EXPAND_ALL_CAPTION
+                },
+                metrics::BODY,
+                tones::TEXT,
+            ))
+    }
 }
 
 /// The theme's status tones (error, warning and the badges Fork Dark's table does not name).

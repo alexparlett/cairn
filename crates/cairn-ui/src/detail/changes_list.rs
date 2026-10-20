@@ -8,20 +8,22 @@
 //! asks for anything: it reports a file by its index in the change set and the caller
 //! decides what that shows.
 //!
-//! The summary is Fork's: who wrote the commit, its short id, its date and its subject, on
-//! one line — no avatar.
+//! The summary is Fork's (`docs/research/ui-review/fork-window-survey-2026-10-16.md` §6,
+//! `fork-window-survey-2-2026-10-16.md` §1b): the author's avatar and name, the commit's id at
+//! nine characters and its date in the secondary tone, and its subject in bold, on one line.
 
 use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
 
 use crate::accelerators;
+use crate::avatar::{AvatarSize, avatar_of};
 use crate::detail::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
 use crate::detail::file_filter::ShownFiles;
+use crate::diff::header::DIFF_HEADER_HEIGHT;
 use crate::diff::palette::DIFF_FONT_FAMILY;
-use crate::diff::toggle_glyphs::Glyph;
 use crate::history::date_text;
 use crate::local_time::LocalZone;
-use crate::style::{metrics, tones};
+use crate::style::{icons, metrics, tones};
 use crate::text_field::text_field;
 
 /// The filter field's placeholder.
@@ -42,8 +44,11 @@ pub fn filter_count(shown: usize, total: usize) -> String {
         if total == 1 { "" } else { "s" }
     )
 }
-/// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up.
-pub const SUMMARY_HEIGHT: f32 = crate::diff::header::DIFF_HEADER_HEIGHT;
+/// The summary line's height: Fork's 23 px and the rule under it
+/// (`style::metrics::DETAIL_SUMMARY`).
+pub const SUMMARY_HEIGHT: f32 = metrics::DETAIL_SUMMARY;
+/// How many characters of the commit's id the summary draws: Fork's nine ("f93015d03", uw5).
+pub const SUMMARY_ID_LENGTH: usize = 9;
 
 /// The changed files of one change set, through a filter. `changes` and `shown` are handles,
 /// not copies: a row reads its file by index as it is built.
@@ -196,18 +201,49 @@ impl Component for ChangesList {
         rect()
             .expanded()
             .content(Content::Flex)
+            // Fork's bar over the files, level with the diff's: a magnifier and the field, on
+            // the detail pane's tone with the rule under it (uw5).
             .child(
                 rect()
                     .width(Size::fill())
-                    .padding(Gaps::new(4., 6., 4., 6.))
+                    .height(Size::px(DIFF_HEADER_HEIGHT))
+                    .background(tones::DETAIL)
+                    .border(
+                        Border::new()
+                            .fill(tones::RULE)
+                            .width(BorderWidth {
+                                top: 0.,
+                                right: 0.,
+                                bottom: 1.,
+                                left: 0.,
+                            })
+                            .alignment(BorderAlignment::Inner),
+                    )
                     .child(
                         text_field(self.filter.clone())
                             .placeholder(FILTER_PLACEHOLDER)
-                            .compact()
+                            .flat()
+                            .background(tones::DETAIL)
+                            .hover_background(tones::DETAIL)
+                            .focus_background(tones::DETAIL)
+                            .leading(icons::magnifier(
+                                metrics::DIFF_BAR_ICON,
+                                tones::DIFF_BAR_ICON,
+                            ))
+                            .height(Size::px(DIFF_HEADER_HEIGHT - 1.))
+                            .theme_layout(InputLayoutThemePartial {
+                                inner_margin: Some(Preference::Specific(Gaps::new(0., 6., 0., 6.))),
+                                ..Default::default()
+                            })
                             .width(Size::fill()),
-                    )
-                    .maybe_child(count),
+                    ),
             )
+            .maybe_child(count.map(|count| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new(2., 8., 2., 8.))
+                    .child(count)
+            }))
             .child(
                 rect()
                     .width(Size::fill())
@@ -366,12 +402,17 @@ impl ChangesSummary {
     }
 }
 
-/// The summary's four parts, in order: author, short id, date in `zone`, subject.
+/// The summary's four parts after its avatar, in order: author, the id's first nine
+/// characters, the author's date in `zone` as the history draws it, subject.
 pub fn summary_parts(details: &CommitDetails, zone: &LocalZone) -> [String; 4] {
+    let hex = details.id.hex();
     [
         details.author.name.clone(),
-        short(details.id),
-        date_text::long_date(details.author.time, zone),
+        hex.as_str()
+            .get(..SUMMARY_ID_LENGTH)
+            .unwrap_or(hex.as_str())
+            .to_owned(),
+        date_text::history_date(details.author.time.seconds, zone),
         details.subject().to_owned(),
     ]
 }
@@ -396,13 +437,26 @@ impl Component for ChangesSummary {
             .width(Size::fill())
             .height(Size::px(SUMMARY_HEIGHT))
             .cross_align(Alignment::Center)
-            .padding(Gaps::new(0., 12., 0., 12.))
-            .spacing(12.)
+            .padding(Gaps::new(0., 10., 0., 10.))
+            .spacing(8.)
+            .border(
+                Border::new()
+                    .fill(tones::RULE)
+                    .width(BorderWidth {
+                        top: 0.,
+                        right: 0.,
+                        bottom: 1.,
+                        left: 0.,
+                    })
+                    .alignment(BorderAlignment::Inner),
+            )
+            .child(avatar_of(&author, AvatarSize::Summary))
             .child(part(author, tones::TEXT))
-            .child(part(id, tones::DETAIL_LABEL).font_family(DIFF_FONT_FAMILY))
+            .child(part(id, tones::DETAIL_LABEL))
             .child(part(date, tones::DETAIL_LABEL))
             .child(
                 part(subject, tones::TEXT)
+                    .font_weight(FontWeight::BOLD)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
@@ -523,9 +577,9 @@ impl Component for ComparisonHeader {
                         .on_press(move |_: Event<PressEventData>| on_swap.call(()))
                         // The button takes its name from its first child's value.
                         .child(
-                            Glyph::Swap
-                                .draw(tones::TEXT)
-                                .a11y_builder(move |node| node.set_value(SWAP_LABEL)),
+                            rect()
+                                .a11y_builder(move |node| node.set_value(SWAP_LABEL))
+                                .child(icons::swap(metrics::DIFF_BAR_ICON, tones::TEXT)),
                         ),
                 ),
             )

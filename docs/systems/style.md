@@ -15,7 +15,11 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   history (23), the sidebar (22), Local Changes (20) and a menu (23), the history's graph —
   its 12 px lane pitch, 5 px dot, 13 px merge circle and 2 px line — its 17 px chips, its
   14 px avatars and the 22 px strip over it while Show Lost Commits is on, the sidebar's 300 px and
-  its 12 px indent, the diff's 17 px row — and the sizes Fork's survey does not give, each
+  its 12 px indent, the diff's 17 px row (the Commit tab's one pitch too), the detail pane's
+  strip (31 px between two rules, its tabs 96 px), the Changes tab's 23 px summary and the
+  diff's 17 px bar with their rules, the bar's 16 px buttons 20 px apart, the Commit tab's 42 px
+  avatar and its 20 px inset, 62 px captions' column and 16 px gap, and the summary's 18 px
+  avatar (`fork-window-survey-2-2026-10-16.md` §1b, `fork-committer-2026-10-20.md`) — and the sizes Fork's survey does not give, each
   saying where it comes from (the diff's text and line numbers, measured from Fork earlier;
   a heading's 14 px; the Commit tab's subject and captions, Cairn's).
 - **`style::tones`** — Fork Dark's tones, sampled from Fork's dark theme
@@ -26,7 +30,8 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   file, a menu's shadow, a disabled button's border, the sidebar's chosen entry, a remote chip's
   grey cloud), the sidebar's sampled in uw27 and the sidebar survey
   (`docs/research/ui-review/fork-sidebar-2026-10-20.md`: its icons, its quieter chevrons, its
-  filter's fill and a gone upstream's warning), `UNSEEN` for text laid out only to hold its room
+  filter's fill and a gone upstream's warning), the diff bar's glyph, its toggled-on blue and
+  the square under the pointer (`docs/research/ui-review/fork-committer-2026-10-20.md`), `UNSEEN` for text laid out only to hold its room
   (a menu's copy of a chord), and Cairn's eight avatar colours, the first Fork's sampled lavender
   (`AVATARS`). The lanes keep Cairn's eight
   (`history::lane_palette`); a branch's and a remote's chip is filled with a dark shade of its

@@ -19,7 +19,7 @@ pub mod style;
 mod text_field;
 mod toolbar;
 
-pub use avatar::{avatar, avatar_colour, initials};
+pub use avatar::{AvatarSize, avatar, avatar_colour, avatar_of, initials};
 pub use caption_row::{CAPTION_TITLE, CaptionRow, Frame, FrameRequest};
 pub use commit_box::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, AMEND_TITLE, Busy, CANCEL_COMMIT_CAPTION, CANCELLING,
@@ -33,9 +33,9 @@ pub use detail::changes_list::{
     summary_parts,
 };
 pub use detail::commit_tab::{
-    AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,
-    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
-    budget_notice, cut_short_notice, file_text, status_letter,
+    AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMIT_TAB_ROW_HEIGHT, COMMITTER_CAPTION, CommitTab,
+    DETAIL_ROW_HEIGHT, EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF,
+    REFS_CAPTION, Refs, budget_notice, cut_short_notice, file_text, status_letter,
 };
 pub use detail::expansion::{Expansion, Opened};
 pub use detail::file_filter::ShownFiles;
@@ -60,7 +60,7 @@ pub use dialogs::git_error::{
 pub use diff::header::{
     DIFF_HEADER_HEIGHT, DiffHeader, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL, HIDDEN_CHANGES_NOTICE,
     HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL, NEXT_CHANGE_LABEL,
-    PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL,
+    PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL, bar_tooltip,
 };
 pub use diff::line_text::{ShownLine, TAB_WIDTH, cut_marker, shown_line};
 pub use diff::notice::{

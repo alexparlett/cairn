@@ -8,10 +8,10 @@ use cairn_model::{
     Signature, Timestamp,
 };
 use cairn_ui::accelerators::{self, Action, Os};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
-    ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
-    FILTERING, LocalZone, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles,
-    summary_parts,
+    ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, FILTER_PLACEHOLDER, FILTERING, LocalZone,
+    NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles, avatar_colour, summary_parts,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -266,10 +266,11 @@ fn the_filter_field_takes_the_text_and_an_empty_answer_says_so() {
     assert!(labels.iter().any(|l| l == NO_FILE_MATCHES), "{labels:?}");
 }
 
-/// Fork's summary line: who wrote the commit, its short id, the date in the zone the window
-/// is handed, in Fork's format, and the subject. Caught by: the committer's name or date in the
-/// author's place, a full id, the offset the commit was recorded at drawn in the zone's place,
-/// or the message's body.
+/// Fork's summary line: who wrote the commit, its id at Fork's nine characters, the author's
+/// date in the zone the window is handed as the history draws it — no seconds, no offset, as
+/// Fork's summary draws it (uw5, cm14) — and the subject. Caught by: the committer's name or
+/// date in the author's place, a full or seven-character id, the offset the commit was recorded
+/// at drawn in the zone's place, or the message's body.
 #[test]
 fn the_summary_is_author_short_id_date_and_subject() {
     let signature = |name: &str, seconds| Signature {
@@ -292,28 +293,30 @@ fn the_summary_is_author_short_id_date_and_subject() {
         summary_parts(&details, &zone),
         [
             "Ada".to_owned(),
-            "abababa".to_owned(),
-            "14 Nov 2023 21:43:20 -00:30".to_owned(),
+            "ababababa".to_owned(),
+            "14 Nov 2023 21:43".to_owned(),
             "Subject line".to_owned(),
         ]
     );
 }
 
-/// The summary strip is 30 px, the diff bar's height, so the two strips of the Changes tab
-/// line up. Measured as drawn: what follows the summary starts 30 px down. Caught by: a
-/// 28 px strip, or one sized by its text.
+/// Fork's summary line opens with the author's avatar — its initials on its colour, 18 px
+/// across, left of the name — and is Fork's 23 px with the rule under it, measured as drawn:
+/// what follows starts `SUMMARY_HEIGHT` down; its subject is bold, its id and date in the
+/// secondary tone. Caught by: no avatar, the committer's avatar, an avatar after the name or
+/// at another size, the strip sized by its text, or a subject in the body's weight.
 #[test]
-fn the_summary_strip_is_as_tall_as_the_diff_bar() {
-    let signature = Signature {
-        name: "Ada".to_owned(),
-        email: "ada@example.com".to_owned(),
+fn the_changes_summary_opens_with_the_avatar() {
+    let signature = |name: &str| Signature {
+        name: name.to_owned(),
+        email: "someone@example.com".to_owned(),
         time: Timestamp::new(1_700_000_000, 0),
     };
     let details = CommitDetails {
         id: Oid::from_bytes(&[0xab; 20]).unwrap(),
         parents: Vec::new(),
-        author: signature.clone(),
-        committer: signature,
+        author: signature("Ada Lovelace"),
+        committer: signature("Grace Hopper"),
         message: "Subject line\n".to_owned(),
     };
     let (mut test, _) = TestingRunner::new(
@@ -334,8 +337,62 @@ fn the_summary_strip_is_as_tall_as_the_diff_bar() {
             .filter(|label| label.text == "below the summary")
             .map(|_| node.layout().area.min_y())
     });
-    assert_eq!(below, [30.], "the summary is not 30 px tall");
-    assert_eq!(SUMMARY_HEIGHT, DIFF_HEADER_HEIGHT);
+    assert_eq!(below, [SUMMARY_HEIGHT], "the summary is not its height");
+    assert_eq!(SUMMARY_HEIGHT, 24.);
+
+    // Every label of the line, left to right, with its weight and colour.
+    let mut drawn: Vec<(f32, String, Option<Color>, FontWeight)> =
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|_| node.layout().area.min_y() < SUMMARY_HEIGHT)
+                .map(|label| {
+                    (
+                        node.layout().area.min_x(),
+                        label.text.to_string(),
+                        label.text_style_data.color.and_then(|fill| fill.as_color()),
+                        label.text_style_data.font_weight.unwrap_or_default(),
+                    )
+                })
+        });
+    drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let texts: Vec<&str> = drawn.iter().map(|(_, text, _, _)| text.as_str()).collect();
+    assert_eq!(
+        texts.first().copied(),
+        Some("AL"),
+        "the line does not open with the author's initials: {texts:?}"
+    );
+    assert_eq!(texts.get(1).copied(), Some("Ada Lovelace"), "{texts:?}");
+    assert!(
+        !texts.contains(&"GH"),
+        "the committer's avatar is drawn: {texts:?}"
+    );
+    let subject = drawn
+        .iter()
+        .find(|(_, text, _, _)| text == "Subject line")
+        .unwrap_or_else(|| panic!("no subject: {texts:?}"));
+    assert_eq!(subject.3, FontWeight::BOLD, "the subject is not bold");
+    for secondary in ["ababababa", "14 Nov 2023 22:13"] {
+        let part = drawn
+            .iter()
+            .find(|(_, text, _, _)| text == secondary)
+            .unwrap_or_else(|| panic!("no {secondary:?}: {texts:?}"));
+        assert_eq!(part.2, Some(tones::DETAIL_LABEL), "{secondary:?}");
+    }
+
+    // The avatar's square: the author's colour, 18 px, at the line's left.
+    let squares: Vec<(f32, f32, f32)> = test.find_many(|node, element| {
+        Rect::try_downcast(element)
+            .filter(|rect| rect.style.background.as_color() == Some(avatar_colour("Ada Lovelace")))
+            .map(|_| {
+                let area = node.layout().area;
+                (area.min_x(), area.width(), area.height())
+            })
+    });
+    assert_eq!(
+        squares,
+        [(10., metrics::SUMMARY_AVATAR, metrics::SUMMARY_AVATAR)],
+        "the avatar is not an 18 px square at the line's left"
+    );
 }
 
 fn labels(test: &TestingRunner) -> Vec<String> {

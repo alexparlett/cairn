@@ -35,7 +35,6 @@ use crate::detail::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
 use crate::detail::commit_tab::DETAIL_ROW_HEIGHT;
 use crate::detail::file_filter::ShownFiles;
 use crate::diff::palette::DIFF_FONT_FAMILY;
-use crate::diff::toggle_glyphs::Glyph;
 use crate::history::ref_glyphs::RefGlyph;
 use crate::local_changes::drag::ListDrag;
 use crate::local_changes::menu::{
@@ -43,7 +42,7 @@ use crate::local_changes::menu::{
     no_discard,
 };
 use crate::local_changes::selection::LocalSelection;
-use crate::style::{metrics, tones};
+use crate::style::{icons, metrics, tones};
 use crate::text_field::text_field;
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
@@ -534,17 +533,24 @@ impl Component for ListSection {
         // shows Unstage All only while Shift is held).
         let staging_all = self.on_intent.clone();
         let (glyph, all_caption) = match list {
-            ChangeList::Unstaged => (Glyph::StageAll, STAGE_ALL_CAPTION),
-            ChangeList::Staged => (Glyph::UnstageAll, UNSTAGE_ALL_CAPTION),
+            ChangeList::Unstaged => (
+                icons::stage_all as fn(f32, Color) -> Element,
+                STAGE_ALL_CAPTION,
+            ),
+            ChangeList::Staged => (
+                icons::unstage_all as fn(f32, Color) -> Element,
+                UNSTAGE_ALL_CAPTION,
+            ),
         };
         let chevron = TooltipContainer::new(Tooltip::new_text(all_caption)).child(heading_control(
-            glyph
-                .draw(if listed {
+            glyph(
+                metrics::DIFF_BAR_ICON,
+                if listed {
                     tones::TEXT
                 } else {
                     tones::DISABLED_TEXT
-                })
-                .into(),
+                },
+            ),
             all_caption,
             listed,
             move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),

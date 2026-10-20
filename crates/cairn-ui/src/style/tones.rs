@@ -150,6 +150,13 @@ pub const BANNER: Color = hex(0x333333);
 pub const FIELD: Color = hex(0x333333);
 /// A check box's 1 px border.
 pub const CHECK_BOX_BORDER: Color = hex(0x6B6B6B);
+/// A glyph on the detail pane's bars: the diff bar's buttons and the file list's (FS2 §1b,
+/// `#CFCFCF`).
+pub const DIFF_BAR_ICON: Color = hex(0xCFCFCF);
+/// A diff bar's glyph while its toggle is on: Fork's blue, no box behind it (cm26, `#419BF9`).
+pub const DIFF_BAR_ON: Color = hex(0x419BF9);
+/// What stands behind a diff bar's glyph under the pointer: a 16 px square (cm15, `#242424`).
+pub const DIFF_BAR_HOVER: Color = hex(0x242424);
 /// A link to another commit: a parent's id in the Commit tab.
 pub const LINK: Color = hex(0x3E9FF8);
 /// An added file's badge.

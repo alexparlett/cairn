@@ -1,47 +1,47 @@
-//! The bar over a diff, laid out as Fork lays it out: previous and next change on the left,
-//! the path in the middle with its file name emphasised, the view's toggles on the right. No
-//! statistics and no file actions.
+//! The bar over a diff, laid out as Fork lays it out (`docs/research/ui-review/
+//! fork-window-survey-2026-10-16.md` §6, `fork-window-survey-2-2026-10-16.md` §1b): Go to
+//! previous change and Go to next change on the left, the file's document glyph and its path
+//! centred with its folder in the secondary tone, and the view's buttons on the right — Ignore
+//! whitespaces, Decrease and Increase number of visible lines, Show entire file and Side by side
+//! diff. Fork's Show hidden symbols and Word wrap are not drawn (#33, #34). No statistics and no
+//! file actions.
 //!
-//! **The buttons are Fork's**: a glyph each (`toggle_glyphs`), drawn in the accent colour —
-//! the theme's `text_highlight` — while its toggle is on, never filled; and each button's
-//! name, which assistive technology reads and its tooltip shows, is Fork's tooltip where one
-//! is recorded ([`IGNORE_WHITESPACE_LABEL`], [`FEWER_LINES_LABEL`], [`MORE_LINES_LABEL`],
-//! [`ENTIRE_FILE_LABEL`]) and Cairn's own otherwise ([`PREVIOUS_CHANGE_LABEL`],
-//! [`NEXT_CHANGE_LABEL`], [`SIDE_BY_SIDE_LABEL`]), so no meaning rests on the glyph alone.
+//! **The buttons are Fork's**: a Lucide glyph each (`style::icons`), drawn in the accent while
+//! its toggle is on and never filled, and Fork's tooltip, verbatim — its words, and the chord the
+//! accelerator table lists for the button's action after a comma, as Fork writes "Go to previous
+//! change, Ctrl+↑" ([`bar_tooltip`]). Each button's name, which assistive technology reads, is
+//! the tooltip's words, and a toggle says whether it is on, so no meaning rests on the glyph.
 //!
-//! Every toggle is a button and none has a chord — Fork binds none; previous and next change
-//! also answer the detail pane's chords. Side-by-side is lit while the shared setting is on.
-//! With whitespace ignored the bar says when that hides a change — only then, a deliberate
-//! deviation from Fork, which hides them silently.
+//! Side-by-side is lit while the shared setting is on. With whitespace ignored the bar says
+//! when that hides a change — only then, a deliberate deviation from Fork, which hides them
+//! silently.
 
 use cairn_model::{ChangeStatus, ChangedFile};
 use freya::prelude::*;
 
-use crate::diff::palette::{DIFF_FONT_FAMILY, DIFF_FONT_SIZE, HEADER_BAR};
+use crate::accelerators::{self, Action, Os};
+use crate::diff::palette::HEADER_BAR;
 use crate::diff::settings::DiffSettings;
-use crate::diff::toggle_glyphs::Glyph;
-use crate::style::{metrics, tones};
+use crate::style::{icons, metrics, tones};
 
-/// The bar's height: the detail pane strip's. Fork's own bar height is not established by
-/// the research; Cairn's is chosen to line up with the strip above it.
-pub const DIFF_HEADER_HEIGHT: f32 = 30.0;
+/// The bar's height: Fork's 17 px bar and the rule under it (`fork-window-survey-2-2026-10-16.md`
+/// §1b, uw5).
+pub const DIFF_HEADER_HEIGHT: f32 = metrics::DIFF_BAR;
 
-/// Previous change's name and tooltip. Fork's tooltip is not recorded; Cairn's own.
-pub const PREVIOUS_CHANGE_LABEL: &str = "Previous change";
-/// Next change's name and tooltip. Fork's tooltip is not recorded; Cairn's own.
-pub const NEXT_CHANGE_LABEL: &str = "Next change";
-/// Fork's tooltip (the vendor's GIF, Mac 1.0.69).
+/// Fork's tooltip for previous change, before its chord.
+pub const PREVIOUS_CHANGE_LABEL: &str = "Go to previous change";
+/// Fork's tooltip for next change, before its chord.
+pub const NEXT_CHANGE_LABEL: &str = "Go to next change";
+/// Fork's tooltip.
 pub const IGNORE_WHITESPACE_LABEL: &str = "Ignore whitespaces";
-/// Fork's tooltip (named in Fork Tracker #911 and TrackerWin #1046).
+/// Fork's tooltip.
 pub const FEWER_LINES_LABEL: &str = "Decrease number of visible lines";
-/// Fork's tooltip (the vendor's GIF, Mac 1.0.69).
+/// Fork's tooltip.
 pub const MORE_LINES_LABEL: &str = "Increase number of visible lines";
-/// Fork's tooltip (the vendor's screenshot, Fork TrackerWin #792).
+/// Fork's tooltip.
 pub const ENTIRE_FILE_LABEL: &str = "Show entire file";
-/// Side-by-side's name and tooltip. Fork's header toggle's tooltip is not recorded (its quick
-/// look's eye button reads "Show diff side-by-side (spacebar)", another control); Cairn's
-/// own, in the words Fork's release notes use for the view.
-pub const SIDE_BY_SIDE_LABEL: &str = "Side-by-side diff";
+/// Fork's tooltip.
+pub const SIDE_BY_SIDE_LABEL: &str = "Side by side diff";
 /// Said in the bar while ignoring whitespace hides a change that is really there.
 pub const HIDDEN_CHANGES_NOTICE: &str = "Ignoring whitespace hides some changes";
 
@@ -55,6 +55,66 @@ pub enum HeaderAction {
     MoreLines,
     EntireFile,
     SideBySide,
+}
+
+impl HeaderAction {
+    /// Every button of the bar, in Fork's order.
+    pub const ALL: [HeaderAction; 7] = [
+        HeaderAction::PreviousChange,
+        HeaderAction::NextChange,
+        HeaderAction::IgnoreWhitespace,
+        HeaderAction::FewerLines,
+        HeaderAction::MoreLines,
+        HeaderAction::EntireFile,
+        HeaderAction::SideBySide,
+    ];
+
+    /// The accelerator table's action the button does, which its press is acted on as.
+    pub fn action(self) -> Action {
+        match self {
+            Self::PreviousChange => Action::PreviousChange,
+            Self::NextChange => Action::NextChange,
+            Self::IgnoreWhitespace => Action::ToggleIgnoreWhitespace,
+            Self::FewerLines => Action::FewerLines,
+            Self::MoreLines => Action::MoreLines,
+            Self::EntireFile => Action::EntireFile,
+            Self::SideBySide => Action::ToggleSideBySide,
+        }
+    }
+
+    /// The button's name: Fork's tooltip without its chord.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PreviousChange => PREVIOUS_CHANGE_LABEL,
+            Self::NextChange => NEXT_CHANGE_LABEL,
+            Self::IgnoreWhitespace => IGNORE_WHITESPACE_LABEL,
+            Self::FewerLines => FEWER_LINES_LABEL,
+            Self::MoreLines => MORE_LINES_LABEL,
+            Self::EntireFile => ENTIRE_FILE_LABEL,
+            Self::SideBySide => SIDE_BY_SIDE_LABEL,
+        }
+    }
+
+    fn glyph(self) -> fn(f32, Color) -> Element {
+        match self {
+            Self::PreviousChange => icons::chevron_up,
+            Self::NextChange => icons::chevron_down,
+            Self::IgnoreWhitespace => icons::whitespace,
+            Self::FewerLines => icons::fewer_lines,
+            Self::MoreLines => icons::more_lines,
+            Self::EntireFile => icons::entire_file,
+            Self::SideBySide => icons::side_by_side,
+        }
+    }
+}
+
+/// The tooltip of `button` on `platform`, as Fork writes it: its words, then — where the
+/// accelerator table lists a chord for its action — a comma and the chord.
+pub fn bar_tooltip(button: HeaderAction, platform: Os) -> String {
+    match accelerators::chord_name(button.action(), platform) {
+        Some(chord) => format!("{}, {chord}", button.label()),
+        None => button.label().to_owned(),
+    }
 }
 
 /// The bar over one file's diff.
@@ -152,61 +212,46 @@ impl Component for DiffHeader {
     fn render(&self) -> impl IntoElement {
         // The warning keeps the theme's tone, which Fork Dark's table does not name.
         let warning = get_theme_or_default().read().colors().warning;
-        let (primary, muted, accent, disabled) = (
-            tones::TEXT,
-            tones::DETAIL_LABEL,
-            tones::ACCENT,
-            tones::DISABLED_TEXT,
-        );
         let settings = self.settings;
-        // One button of the bar: its glyph in the accent while its toggle is on, its name for
-        // assistive technology and in its tooltip. A disabled button reports nothing.
-        let button = |glyph: Glyph,
-                      name: &'static str,
-                      active: bool,
-                      enabled: bool,
-                      which: Option<HeaderAction>| {
-            let colour = if !enabled {
-                disabled
-            } else if active {
-                accent
-            } else {
-                primary
+        let exact = self.exact;
+        // Whether each button is a toggle and whether it is on, and whether it can be pressed.
+        let button = |which: HeaderAction| -> Element {
+            let (toggle, enabled) = match which {
+                HeaderAction::PreviousChange | HeaderAction::NextChange => (None, true),
+                HeaderAction::IgnoreWhitespace => {
+                    (Some(settings.ignore_whitespace() && !exact), !exact)
+                }
+                // Greyed only while the entire file is shown, as Fork's are (cm27): at one
+                // line of context Decrease stays pressable and does nothing (cm38).
+                HeaderAction::FewerLines | HeaderAction::MoreLines => {
+                    (None, !settings.entire_file())
+                }
+                HeaderAction::EntireFile => (Some(settings.entire_file()), true),
+                HeaderAction::SideBySide => (Some(settings.side_by_side()), true),
             };
-            let on_action = self.on_action.clone();
-            TooltipContainer::new(Tooltip::new_text(name)).child(
-                Button::new()
-                    .compact()
-                    .enabled(enabled)
-                    .on_press(move |_: Event<PressEventData>| {
-                        if let Some(which) = which {
-                            on_action.call(which);
-                        }
-                    })
-                    // The button takes its name from its first child's value.
-                    .child(
-                        glyph
-                            .draw(colour)
-                            .a11y_builder(move |node| node.set_value(name)),
-                    ),
-            )
+            BarButton {
+                which,
+                toggle,
+                enabled,
+                on_action: self.on_action.clone(),
+            }
+            .into()
         };
 
         let path = self.file.new_path.display().into_owned();
         let (directory, name) = split_path(&path);
         let shown_path = rect()
             .horizontal()
-            .width(Size::flex(1.))
             .cross_align(Alignment::Center)
-            .padding(Gaps::new(0., 8., 0., 8.))
+            .spacing(4.)
+            .child(icons::file(metrics::DIFF_BAR_ICON, tones::DIFF_BAR_ICON))
             .child(
                 paragraph()
                     .max_lines(1)
-                    .font_family(DIFF_FONT_FAMILY)
-                    .font_size(DIFF_FONT_SIZE)
+                    .font_size(metrics::BODY)
                     .text_overflow(TextOverflow::Ellipsis)
-                    .span(Span::new(directory.to_owned()).color(muted))
-                    .span(Span::new(name.to_owned()).color(primary)),
+                    .span(Span::new(directory.to_owned()).color(tones::DETAIL_LABEL))
+                    .span(Span::new(name.to_owned()).color(tones::TEXT)),
             );
         let shown_path: Element = match self.file.status {
             ChangeStatus::Renamed(_) | ChangeStatus::Copied(_) => TooltipContainer::new(
@@ -219,6 +264,13 @@ impl Component for DiffHeader {
             | ChangeStatus::Modified
             | ChangeStatus::TypeChanged => shown_path.into(),
         };
+        let said = |text: &'static str| {
+            label()
+                .text(text)
+                .max_lines(1)
+                .font_size(metrics::BODY)
+                .color(warning)
+        };
 
         rect()
             .horizontal()
@@ -226,77 +278,98 @@ impl Component for DiffHeader {
             .width(Size::fill())
             .height(Size::px(DIFF_HEADER_HEIGHT))
             .cross_align(Alignment::Center)
-            .padding(Gaps::new(0., 8., 0., 8.))
-            .spacing(4.)
+            .padding(Gaps::new(0., 4., 0., 4.))
             .background(HEADER_BAR)
-            .child(button(
-                Glyph::PreviousChange,
-                PREVIOUS_CHANGE_LABEL,
-                false,
-                true,
-                Some(HeaderAction::PreviousChange),
-            ))
-            .child(button(
-                Glyph::NextChange,
-                NEXT_CHANGE_LABEL,
-                false,
-                true,
-                Some(HeaderAction::NextChange),
-            ))
-            .child(shown_path)
-            .maybe_child((self.hiding && !self.exact).then(|| {
-                label()
-                    .text(HIDDEN_CHANGES_NOTICE)
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .color(warning)
-            }))
-            .maybe_child(self.said.map(|said| {
-                label()
-                    .text(said)
-                    .max_lines(1)
-                    .font_size(metrics::BODY)
-                    .color(warning)
-            }))
-            .child(button(
-                Glyph::IgnoreWhitespace,
-                IGNORE_WHITESPACE_LABEL,
-                settings.ignore_whitespace() && !self.exact,
-                !self.exact,
-                Some(HeaderAction::IgnoreWhitespace),
-            ))
-            .child(button(
-                Glyph::FewerLines,
-                FEWER_LINES_LABEL,
-                false,
-                settings.can_show_fewer_lines(),
-                Some(HeaderAction::FewerLines),
-            ))
-            .child(button(
-                Glyph::MoreLines,
-                MORE_LINES_LABEL,
-                false,
-                settings.can_show_more_lines(),
-                Some(HeaderAction::MoreLines),
-            ))
-            .child(button(
-                Glyph::EntireFile,
-                ENTIRE_FILE_LABEL,
-                settings.entire_file(),
-                true,
-                Some(HeaderAction::EntireFile),
-            ))
-            .child(button(
-                Glyph::SideBySide,
-                SIDE_BY_SIDE_LABEL,
-                settings.side_by_side(),
-                true,
-                Some(HeaderAction::SideBySide),
-            ))
+            .border(
+                Border::new()
+                    .fill(tones::RULE)
+                    .width(BorderWidth {
+                        top: 0.,
+                        right: 0.,
+                        bottom: 1.,
+                        left: 0.,
+                    })
+                    .alignment(BorderAlignment::Inner),
+            )
+            .spacing(metrics::DIFF_BAR_GAP)
+            .child(button(HeaderAction::PreviousChange))
+            .child(button(HeaderAction::NextChange))
+            .child(
+                rect()
+                    .horizontal()
+                    .width(Size::flex(1.))
+                    .main_align(Alignment::Center)
+                    .cross_align(Alignment::Center)
+                    .padding(Gaps::new(0., 8., 0., 8.))
+                    .child(shown_path),
+            )
+            .maybe_child((self.hiding && !exact).then(|| said(HIDDEN_CHANGES_NOTICE)))
+            .maybe_child(self.said.map(said))
+            .children(HeaderAction::ALL.into_iter().skip(2).map(button))
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
+    }
+}
+
+/// One button of the bar: its glyph in Fork's blue while its toggle is on and in the bar's
+/// tone otherwise, a square behind it under the pointer, its name for assistive technology and
+/// Fork's tooltip. A disabled button is greyed and reports nothing.
+#[derive(Clone)]
+struct BarButton {
+    which: HeaderAction,
+    toggle: Option<bool>,
+    enabled: bool,
+    on_action: EventHandler<HeaderAction>,
+}
+
+impl PartialEq for BarButton {
+    fn eq(&self, other: &Self) -> bool {
+        self.which == other.which && self.toggle == other.toggle && self.enabled == other.enabled
+    }
+}
+
+impl Component for BarButton {
+    fn render(&self) -> impl IntoElement {
+        let mut hovered = use_state(|| false);
+        let (which, toggle, enabled) = (self.which, self.toggle, self.enabled);
+        let colour = if !enabled {
+            tones::DISABLED_TEXT
+        } else if toggle == Some(true) {
+            tones::DIFF_BAR_ON
+        } else {
+            tones::DIFF_BAR_ICON
+        };
+        let on_action = self.on_action.clone();
+        let name = which.label();
+        TooltipContainer::new(Tooltip::new_text(bar_tooltip(which, Os::current()))).child(
+            rect()
+                .a11y_role(AccessibilityRole::Button)
+                .a11y_builder(move |node| {
+                    node.set_value(name);
+                    if let Some(on) = toggle {
+                        node.set_toggled(Toggled::from(on));
+                    }
+                    if !enabled {
+                        node.set_disabled();
+                    }
+                })
+                .width(Size::px(metrics::DIFF_BAR_BUTTON))
+                .height(Size::px(metrics::DIFF_BAR_BUTTON))
+                .center()
+                .maybe(enabled && *hovered.read(), |el| {
+                    el.background(tones::DIFF_BAR_HOVER)
+                })
+                .on_pointer_enter(move |_| hovered.set(true))
+                .on_pointer_leave(move |_| hovered.set_if_modified(false))
+                .on_press(move |_| {
+                    if enabled {
+                        on_action.call(which);
+                    }
+                })
+                .child(which.glyph()(metrics::DIFF_BAR_ICON, colour)),
+        )
     }
 }
 

@@ -973,7 +973,9 @@ import — are rejected outside `cairn-model` by
   out of a fixed set, `style::tones::AVATARS`, whose first is Fork's sampled lavender. No
   network is asked (`initials_are_the_first_and_last_words_letters`,
   `a_name_always_takes_the_same_colour_of_the_set`). The row builds one per row built, from
-  the name it already copied out.
+  the name it already copied out. The same avatar, larger and its initials regular, opens the
+  Changes tab's summary and stands beside the Commit tab's author and committer
+  (`cairn_ui::AvatarSize`; `docs/systems/diff.md`, "The detail pane").
 - **Dates are local** (`crates/cairn-ui/src/history/date_text.rs`, `crates/cairn-ui/src/local_time.rs`):
   Fork's `d Mon yyyy HH:mm`, `16 Oct 2026 12:12`, at the offset the window's zone gives
   that instant — its own daylight-saving time, not today's — in English, which needs no

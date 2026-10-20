@@ -8,18 +8,23 @@ use cairn_model::{
     DisplayOverlay, FileDiff, FileMode, FunctionContext, IntraLineHighlight, LineNumber, LineSpan,
     RepoPath, ShownDiff, Similarity, TextDiff, UnifiedRow, UnifiedRows, split_lines,
 };
+use cairn_ui::accelerators::Os;
 use cairn_ui::diff_palette::{
-    ADDED_EMPHASIS, ADDED_TINT, CURRENT_CHANGE, GUTTER_SEPARATOR, REMOVED_EMPHASIS, REMOVED_TINT,
+    ADDED_EMPHASIS, ADDED_TINT, GUTTER_SEPARATOR, REMOVED_EMPHASIS, REMOVED_TINT,
 };
+use cairn_ui::style::tones;
 use cairn_ui::{
     DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, DiffView, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
     HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL,
     NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, NUMBER_FONT_SIZE, NUMBER_PADDING, PREVIOUS_CHANGE_LABEL,
-    SIDE_BY_SIDE_LABEL, TEXT_PADDING, number_width,
+    SIDE_BY_SIDE_LABEL, TEXT_PADDING, bar_tooltip, number_width,
 };
 use cairn_ui::{SCROLLBAR_THICKNESS, with_end_room};
+use std::time::Duration;
+
+use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
-use freya_testing::{TestingNode, TestingRunner};
+use freya_testing::TestingRunner;
 
 const WIDTH: f32 = 900.;
 const HEIGHT: f32 = 400.;
@@ -599,38 +604,14 @@ fn click(test: &mut TestingRunner, name: &str) {
     test.sync_and_update();
 }
 
-/// Every colour the glyph of the button named `name` is drawn in: its shapes' fills and
-/// borders, and its characters.
-fn glyph_colours(test: &TestingRunner, name: &str) -> Vec<Color> {
-    fn walk(node: TestingNode, into: &mut Vec<Color>) {
-        let element = node.element();
-        if let Some(rect) = Rect::try_downcast(element.as_ref()) {
-            into.extend(rect.style.background.as_color());
-            into.extend(rect.style.borders.iter().map(|border| border.fill));
-        }
-        if let Some(label) = Label::try_downcast(element.as_ref()) {
-            into.extend(label.text_style_data.color.and_then(|fill| fill.as_color()));
-        }
-        for child in node.children() {
-            walk(child, into);
-        }
-    }
-    let glyph = test
-        .find(|node, element| named!(element).filter(|value| value == name).map(|_| node))
-        .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)));
-    let mut colours = Vec::new();
-    walk(glyph, &mut colours);
-    colours.retain(|colour| *colour != Color::TRANSPARENT);
-    colours
-}
-
 /// The bar holds previous and next change and every toggle, side-by-side among them, each
-/// found by the name assistive technology reads; each enabled button reports its action,
-/// fewer lines is disabled at one line and both line buttons while the entire file is shown.
-/// Caught by: a button wired to another action, fewer lines pressable at the floor,
-/// side-by-side still disabled.
+/// found by the name assistive technology reads; each enabled button reports its action —
+/// Decrease too at one line of context, pressable as Fork's is (where the press does nothing),
+/// and both line buttons greyed while the entire file is shown, as Fork greys them. Caught by: a
+/// button wired to another action, a line button greyed at the floor, or one pressable while
+/// the entire file is shown.
 #[test]
-fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
+fn the_bar_reports_each_button_and_greys_the_line_buttons_for_the_entire_file() {
     let mut at_one = DiffSettings::default();
     at_one.fewer_lines();
     at_one.fewer_lines();
@@ -645,15 +626,8 @@ fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
     }
     assert_eq!(
         pressed.borrow().as_slice(),
-        [
-            HeaderAction::PreviousChange,
-            HeaderAction::NextChange,
-            HeaderAction::IgnoreWhitespace,
-            HeaderAction::MoreLines,
-            HeaderAction::EntireFile,
-            HeaderAction::SideBySide,
-        ],
-        "fewer lines at one reported a press, or side-by-side did not"
+        HeaderAction::ALL,
+        "a button did not report its own press"
     );
 
     let mut entire = DiffSettings::default();
@@ -674,57 +648,226 @@ fn button_backgrounds(test: &TestingRunner) -> Vec<Option<Color>> {
     })
 }
 
-/// Fork's bar: every button is a glyph whose name — Fork's tooltip where one is recorded —
-/// is read by assistive technology rather than drawn as a caption; a toggle that is on has
-/// its glyph drawn wholly in the accent (the theme's `text_highlight`, which `CURRENT_CHANGE`
-/// copies) and is not filled, and a toggle that is off, or a plain button, draws none of it.
-/// Caught by: a caption drawn in place of a glyph, a button with no name, an active toggle
-/// filled, or its glyph not lit.
+/// Each button's toggled state, as assistive technology reads it, by its name: `None` for a
+/// button that is not a toggle.
+fn toggled(test: &TestingRunner) -> Vec<(String, Option<Toggled>)> {
+    test.find_many(|_, element| {
+        Rect::try_downcast(element).and_then(|rect| {
+            let builder = &rect.accessibility.builder;
+            builder
+                .value()
+                .map(|name| (name.to_owned(), builder.toggled()))
+        })
+    })
+}
+
+/// How many pixels of `colour`'s hue the frame shows inside the button named `name`: a glyph's
+/// strokes are smoothed into the bar's ground, so its pixels are its colour mixed with the
+/// ground's grey, and a pixel counts when its channels lean the way `colour`'s do, each by at
+/// least half as much.
+fn pixels_of(test: &mut TestingRunner, name: &str, colour: Color) -> usize {
+    let area = test
+        .find(|node, element| {
+            named!(element)
+                .filter(|value| value == name)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)));
+    let png = test.render();
+    let image = Image::from_encoded(png).unwrap_or_else(|| panic!("the frame did not decode"));
+    let (width, height) = (WIDTH as i32, HEIGHT as i32);
+    let mut surface =
+        raster_n32_premul((width, height)).unwrap_or_else(|| panic!("no raster surface"));
+    surface.canvas().draw_image(&image, (0, 0), None);
+    let info = ImageInfo::new_n32_premul((width, height), None);
+    let stride = info.min_row_bytes();
+    let mut pixels = vec![0u8; stride * height as usize];
+    assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+    let mut count = 0;
+    for y in area.min_y().floor() as usize..area.max_y().ceil() as usize {
+        for x in area.min_x().floor() as usize..area.max_x().ceil() as usize {
+            let at = y * stride + x * 4;
+            // The pixels are BGRA.
+            let Some(&[b, g, r]) = pixels.get(at..at + 3) else {
+                continue;
+            };
+            let lean = |one: u8, other: u8| i32::from(one) - i32::from(other);
+            let wanted = [
+                lean(colour.b(), colour.r()),
+                lean(colour.b(), colour.g()),
+                lean(colour.g(), colour.r()),
+            ];
+            let seen = [lean(b, r), lean(b, g), lean(g, r)];
+            if wanted
+                .iter()
+                .zip(seen)
+                .all(|(wanted, seen)| seen * 2 >= *wanted && (*wanted <= 0 || seen > 0))
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Fork's bar: every button is a glyph whose name — Fork's tooltip's words — is read by
+/// assistive technology rather than drawn as a caption; each toggle says whether it is on; a
+/// toggle that is on has its glyph drawn in Fork's blue and nothing behind it, and a toggle that
+/// is off, or a plain button, shows none of that blue. Caught by: a caption drawn in place of a
+/// glyph, a button with no name, a toggle that does not say it is on, an active toggle filled,
+/// or its glyph not lit.
 #[test]
-fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
+fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue() {
+    // Fork's toggled glyph, sampled (`fork-committer-2026-10-20.md` question 5).
+    assert_eq!(tones::DIFF_BAR_ON, Color::from_rgb(0x41, 0x9B, 0xF9));
     let mut on = DiffSettings::default();
     on.toggle_ignore_whitespace();
     on.toggle_entire_file();
     on.toggle_side_by_side();
-    let (test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), on));
+    let (mut test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), on));
+    test.sync_and_update();
     let drawn = labels(&test);
     for name in EVERY_BUTTON {
         assert!(
             !drawn.iter().any(|text| text == name),
             "{name:?} is drawn as a caption: {drawn:?}"
         );
-        let colours = glyph_colours(&test, name);
-        assert!(!colours.is_empty(), "{name:?} draws no glyph");
-        if name == IGNORE_WHITESPACE_LABEL
-            || name == ENTIRE_FILE_LABEL
-            || name == SIDE_BY_SIDE_LABEL
-        {
-            assert!(
-                colours.iter().all(|colour| *colour == CURRENT_CHANGE),
-                "{name:?} is on and its glyph is not the accent: {colours:?}"
-            );
+    }
+    let toggles: Vec<(String, Option<Toggled>)> = EVERY_BUTTON
+        .iter()
+        .map(|name| {
+            let state = toggled(&test)
+                .into_iter()
+                .find(|(named, _)| named == name)
+                .and_then(|(_, state)| state);
+            ((*name).to_owned(), state)
+        })
+        .collect();
+    let lit = [
+        IGNORE_WHITESPACE_LABEL,
+        ENTIRE_FILE_LABEL,
+        SIDE_BY_SIDE_LABEL,
+    ];
+    for (name, state) in &toggles {
+        let expected = lit.contains(&name.as_str()).then_some(Toggled::True);
+        assert_eq!(*state, expected, "{name:?} says it is {state:?}");
+    }
+    for name in EVERY_BUTTON {
+        let blue = pixels_of(&mut test, name, tones::DIFF_BAR_ON);
+        if lit.contains(&name) {
+            assert!(blue > 0, "{name:?} is on and its glyph is not Fork's blue");
         } else {
-            assert!(
-                !colours.contains(&CURRENT_CHANGE),
-                "{name:?} is not on and its glyph is lit: {colours:?}"
-            );
+            assert_eq!(blue, 0, "{name:?} is not on and shows Fork's blue");
         }
     }
     let backgrounds = button_backgrounds(&test);
     assert_eq!(backgrounds.len(), EVERY_BUTTON.len(), "{backgrounds:?}");
-    assert_eq!(
-        backgrounds.get(2),
-        backgrounds.get(4),
-        "an active toggle is filled: {backgrounds:?}"
+    assert!(
+        backgrounds
+            .iter()
+            .all(|fill| fill.is_none_or(|fill| fill == Color::TRANSPARENT)),
+        "a button is filled with the pointer away: {backgrounds:?}"
     );
 
-    let (test, _) =
+    let (mut test, _) =
         launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
+    test.sync_and_update();
     for name in EVERY_BUTTON {
-        assert!(
-            !glyph_colours(&test, name).contains(&CURRENT_CHANGE),
+        assert_eq!(
+            pixels_of(&mut test, name, tones::DIFF_BAR_ON),
+            0,
             "{name:?} is lit with nothing on"
         );
+    }
+    let states = toggled(&test);
+    for name in lit {
+        assert!(
+            states
+                .iter()
+                .any(|(named, state)| named == name && *state == Some(Toggled::False)),
+            "{name:?} does not say it is off: {states:?}"
+        );
+    }
+}
+
+/// Fork's bar, its order and its tooltips verbatim (FS1 §6; `fork-committer-2026-10-20.md`
+/// question 5): Go to previous change and Go to next change with the chord the accelerator
+/// table lists for each, on Linux in Fork's Windows form and on macOS in its own, and the view's
+/// buttons in Fork's words with no chord; and hovering a button shows the tooltip for the
+/// platform the build runs on. Caught by: a tooltip reworded, a chord typed rather than read
+/// from the table, a chord given to a button Fork gives none, a button out of order, or Show
+/// hidden symbols or Word wrap drawn.
+#[test]
+fn the_diff_bar_is_forks_with_its_tooltips() {
+    let expected = [
+        (
+            HeaderAction::PreviousChange,
+            "Go to previous change, Ctrl+↑",
+            "Go to previous change, ⌘↑",
+        ),
+        (
+            HeaderAction::NextChange,
+            "Go to next change, Ctrl+↓",
+            "Go to next change, ⌘↓",
+        ),
+        (
+            HeaderAction::IgnoreWhitespace,
+            "Ignore whitespaces",
+            "Ignore whitespaces",
+        ),
+        (
+            HeaderAction::FewerLines,
+            "Decrease number of visible lines",
+            "Decrease number of visible lines",
+        ),
+        (
+            HeaderAction::MoreLines,
+            "Increase number of visible lines",
+            "Increase number of visible lines",
+        ),
+        (
+            HeaderAction::EntireFile,
+            "Show entire file",
+            "Show entire file",
+        ),
+        (
+            HeaderAction::SideBySide,
+            "Side by side diff",
+            "Side by side diff",
+        ),
+    ];
+    assert_eq!(
+        expected.map(|(button, _, _)| button),
+        HeaderAction::ALL,
+        "the bar's buttons are not in Fork's order"
+    );
+    for (button, linux, mac) in expected {
+        assert_eq!(bar_tooltip(button, Os::Linux), linux, "{button:?} on Linux");
+        assert_eq!(bar_tooltip(button, Os::MacOs), mac, "{button:?} on macOS");
+    }
+
+    let (mut test, _) =
+        launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
+    assert_eq!(names(&test), EVERY_BUTTON, "the bar draws other buttons");
+    for (button, _, _) in expected {
+        let area = test
+            .find(|node, element| {
+                named!(element)
+                    .filter(|value| value == button.label())
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no button is named {:?}", button.label()));
+        let centre = area.center();
+        test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.poll(Duration::from_millis(50), Duration::from_millis(900));
+        let shown = labels(&test);
+        let wanted = bar_tooltip(button, Os::current());
+        assert!(
+            shown.contains(&wanted),
+            "hovering {button:?} shows {shown:?}, not {wanted:?}"
+        );
+        test.move_cursor((f64::from(WIDTH - 2.), f64::from(HEIGHT - 2.)));
+        test.poll(Duration::from_millis(50), Duration::from_millis(400));
     }
 }
 

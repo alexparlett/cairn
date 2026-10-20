@@ -141,6 +141,66 @@ pub fn all_commits(size: f32, colour: Color) -> Element {
     drawn(("file-stack", lucide::file_stack()), size, colour)
 }
 
+/// The ⌄'s upward twin: the diff bar's Go to previous change.
+pub fn chevron_up(size: f32, colour: Color) -> Element {
+    drawn(("chevron-up", lucide::chevron_up()), size, colour)
+}
+
+/// A space bar's ⎵: the diff bar's Ignore whitespaces.
+pub fn whitespace(size: f32, colour: Color) -> Element {
+    drawn(("space", lucide::space()), size, colour)
+}
+
+/// A minus beside lines of text: the diff bar's Decrease number of visible lines.
+pub fn fewer_lines(size: f32, colour: Color) -> Element {
+    mirrored(drawn(("list-minus", lucide::list_minus()), size, colour))
+}
+
+/// A plus beside lines of text: the diff bar's Increase number of visible lines.
+pub fn more_lines(size: f32, colour: Color) -> Element {
+    mirrored(drawn(("list-plus", lucide::list_plus()), size, colour))
+}
+
+/// Chevrons up and down beside lines of text: the diff bar's Show entire file.
+pub fn entire_file(size: f32, colour: Color) -> Element {
+    mirrored(drawn(
+        ("list-chevrons-up-down", lucide::list_chevrons_up_down()),
+        size,
+        colour,
+    ))
+}
+
+/// Two columns side by side: the diff bar's Side by side diff.
+pub fn side_by_side(size: f32, colour: Color) -> Element {
+    drawn(("columns-2", lucide::columns_2()), size, colour)
+}
+
+/// A document: the file the diff bar names.
+pub fn file(size: f32, colour: Color) -> Element {
+    drawn(("file", lucide::file()), size, colour)
+}
+
+/// Arrows up and down: a comparison's base and tip swapped.
+pub fn swap(size: f32, colour: Color) -> Element {
+    drawn(("arrow-up-down", lucide::arrow_up_down()), size, colour)
+}
+
+/// Two chevrons pointing down, into Staged: Stage All.
+pub fn stage_all(size: f32, colour: Color) -> Element {
+    drawn(("chevrons-down", lucide::chevrons_down()), size, colour)
+}
+
+/// Two chevrons pointing up, into Unstaged: Unstage All.
+pub fn unstage_all(size: f32, colour: Color) -> Element {
+    drawn(("chevrons-up", lucide::chevrons_up()), size, colour)
+}
+
+/// `icon` turned left for right: Lucide draws a list's sign at the lines' right, Fork at their
+/// left.
+fn mirrored(icon: Element) -> Element {
+    rect().scale((-1., 1.)).child(icon).into()
+}
+
 /// One icon, square, its strokes in `colour`: drawn at once, without a loader's flash, since
 /// the set is compiled in.
 fn drawn(source: impl Into<ImageSource>, size: f32, colour: Color) -> Element {
@@ -163,7 +223,7 @@ mod tests {
     /// turned off, or a name that resolves to something other than an SVG.
     #[test]
     fn every_icon_is_an_svg_of_the_set() {
-        let sources: [Source; 23] = [
+        let sources: [Source; 32] = [
             ("git-branch", || lucide::git_branch().to_vec()),
             ("cloud", || lucide::cloud().to_vec()),
             ("archive", || lucide::archive().to_vec()),
@@ -193,6 +253,17 @@ mod tests {
             ("triangle-alert", || lucide::triangle_alert().to_vec()),
             ("file-diff", || lucide::file_diff().to_vec()),
             ("file-stack", || lucide::file_stack().to_vec()),
+            ("chevron-up", || lucide::chevron_up().to_vec()),
+            ("space", || lucide::space().to_vec()),
+            ("list-minus", || lucide::list_minus().to_vec()),
+            ("list-plus", || lucide::list_plus().to_vec()),
+            ("list-chevrons-up-down", || {
+                lucide::list_chevrons_up_down().to_vec()
+            }),
+            ("file", || lucide::file().to_vec()),
+            ("arrow-up-down", || lucide::arrow_up_down().to_vec()),
+            ("chevrons-down", || lucide::chevrons_down().to_vec()),
+            ("chevrons-up", || lucide::chevrons_up().to_vec()),
         ];
         for (name, source) in sources {
             let svg = String::from_utf8(source()).unwrap_or_default();

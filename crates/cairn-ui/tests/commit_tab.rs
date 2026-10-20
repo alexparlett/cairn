@@ -9,7 +9,7 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, Os, Scope};
 use cairn_ui::{
-    AUTHOR_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab, DetailTabs,
+    AUTHOR_CAPTION, COMMIT_TAB_ROW_HEIGHT, COMMITTER_CAPTION, CommitTab, DetailTab, DetailTabs,
     EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, LocalZone, NO_FILES, PARENTS_CAPTION,
     cut_short_notice,
 };
@@ -158,8 +158,16 @@ fn launch_in(initial: ChangeSet, zone: LocalZone) -> (TestingRunner, Fixture, Pa
     (test, fixture, parents)
 }
 
+/// Every label's text, and every paragraph's spans joined.
 fn texts(test: &TestingRunner) -> Vec<String> {
-    test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+    test.find_many(|_, element| {
+        Label::try_downcast(element)
+            .map(|l| l.text.to_string())
+            .or_else(|| {
+                Paragraph::try_downcast(element)
+                    .map(|p| p.spans.iter().map(|span| span.text.as_ref()).collect())
+            })
+    })
 }
 
 fn shows(test: &TestingRunner, text: &str) -> bool {
@@ -189,8 +197,8 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     let expected = vec![
         AUTHOR_CAPTION.to_owned(),
         COMMITTER_CAPTION.to_owned(),
-        "Ada Lovelace <ada@example.com>".to_owned(),
-        "Grace Hopper <grace@example.com>".to_owned(),
+        "Ada Lovelace  ada@example.com".to_owned(),
+        "Grace Hopper  grace@example.com".to_owned(),
         // The author's moment in the zone, though it was recorded at another offset.
         "15 Nov 2023 03:43:20 +05:30".to_owned(),
         ID_CAPTION.to_owned(),
@@ -234,6 +242,107 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     );
 }
 
+/// A commit whose committer is `committer`, its author Ada at one instant in +05:30.
+fn committed_by(committer: Signature) -> ChangeSet {
+    let mut changes = change_set(0);
+    if let Some(details) = changes.details.as_mut() {
+        details.committer = committer;
+    }
+    changes
+}
+
+/// Fork draws the COMMITTER block — its caption, the committer's avatar, name, address and date,
+/// in a column of its own beside the author's — only where the committer differs from the
+/// author by name, by address or by the instant, to the second; the same instant written at
+/// another offset is the same committer (`docs/research/ui-review/fork-committer-2026-10-20.md`
+/// questions 1-3, cm7-cm13). Caught by: the block drawn for every commit, for none, for an
+/// offset alone, or missed for a one-second difference, a name or an address alone; or the
+/// committer's column drawn under the author's rather than beside it.
+#[test]
+fn the_committer_is_shown_only_where_it_differs() {
+    let ada = |email: &str, seconds: i64, offset: i32| Signature {
+        name: "Ada Lovelace".to_owned(),
+        email: email.to_owned(),
+        time: Timestamp::new(seconds, offset),
+    };
+    let author_offset = 5 * 3600 + 30 * 60;
+    let cases = [
+        (
+            "the same committer",
+            ada("ada@example.com", 1_700_000_000, author_offset),
+            false,
+        ),
+        (
+            "a name alone",
+            Signature {
+                name: "Ada L".to_owned(),
+                ..ada("ada@example.com", 1_700_000_000, author_offset)
+            },
+            true,
+        ),
+        (
+            "an address alone",
+            ada("ada@work.example", 1_700_000_000, author_offset),
+            true,
+        ),
+        (
+            "an hour later",
+            ada("ada@example.com", 1_700_003_600, author_offset),
+            true,
+        ),
+        (
+            "a second later",
+            ada("ada@example.com", 1_700_000_001, author_offset),
+            true,
+        ),
+        (
+            "another offset alone",
+            ada("ada@example.com", 1_700_000_000, -8 * 3600),
+            false,
+        ),
+    ];
+    for (case, committer, drawn) in cases {
+        let (test, _, _) = launch(committed_by(committer));
+        let shown = texts(&test);
+        assert_eq!(
+            shown.iter().any(|text| text == COMMITTER_CAPTION),
+            drawn,
+            "{case}: COMMITTER drawn is not {drawn}: {shown:?}"
+        );
+        // The committer's block draws its name and address a second time.
+        let people = shown
+            .iter()
+            .filter(|text| text.starts_with("Ada L"))
+            .count();
+        assert_eq!(people, 1 + usize::from(drawn), "{case}: {shown:?}");
+    }
+
+    // The block stands beside the author's, on the same rows, its avatar the committer's.
+    let (test, _, _) = launch(change_set(0));
+    let at = |text: &str| -> (f32, f32) {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.min_x(), area.min_y())
+                })
+        })
+        .unwrap_or_else(|| panic!("no {text:?}: {:?}", texts(&test)))
+    };
+    let (author_x, author_y) = at(AUTHOR_CAPTION);
+    let (committer_x, committer_y) = at(COMMITTER_CAPTION);
+    assert_eq!(author_y, committer_y, "COMMITTER is not on AUTHOR's row");
+    assert!(
+        committer_x > author_x + WIDTH / 3.,
+        "COMMITTER is not in a column of its own: {author_x} and {committer_x}"
+    );
+    assert!(
+        texts(&test).iter().any(|text| text == "GH"),
+        "no committer's avatar"
+    );
+}
+
 /// The message is the rows git shows for it, row for row and nothing between — the blank
 /// lines before and after it gone, each line without its trailing whitespace or `\r`, blank
 /// lines inside it kept, a tab expanded — between the last parent and Expand All above the
@@ -266,7 +375,7 @@ fn the_message_is_the_rows_git_log_shows_for_it() {
 /// deep. Caught by: a list that builds a row per file.
 #[test]
 fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
-    let viewport_rows = (HEIGHT / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let viewport_rows = (HEIGHT / COMMIT_TAB_ROW_HEIGHT).ceil() as usize;
     let mut built = Vec::new();
     for files in [1_000, 55_184] {
         let (mut test, _, _) = launch(change_set(files));
@@ -279,7 +388,7 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
         let deep = files - 200;
         test.scroll(
             (100., 100.),
-            (0., -(deep as f64 * f64::from(DETAIL_ROW_HEIGHT))),
+            (0., -(deep as f64 * f64::from(COMMIT_TAB_ROW_HEIGHT))),
         );
         let scrolled = built_files(&test);
         assert!(
@@ -299,7 +408,10 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
         // long as the files (forgetting the header's rows) would cut off.
         test.scroll(
             (100., 100.),
-            (0., -((files + 100) as f64 * f64::from(DETAIL_ROW_HEIGHT))),
+            (
+                0.,
+                -((files + 100) as f64 * f64::from(COMMIT_TAB_ROW_HEIGHT)),
+            ),
         );
         let last = format!("src/file-{:06}.rs", files + 2);
         let at_end = built_files(&test);
@@ -713,7 +825,7 @@ fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
             let area = node.layout().area;
             Rect::try_downcast(element)
                 .filter(|_| {
-                    area.height() == DETAIL_ROW_HEIGHT
+                    area.height() == COMMIT_TAB_ROW_HEIGHT
                         && area.width() > WIDTH / 2.
                         && area.min_y() <= label.min_y()
                         && area.max_y() >= label.max_y()

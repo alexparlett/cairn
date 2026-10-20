@@ -9,8 +9,9 @@ use freya::prelude::*;
 
 use crate::style::{icons, metrics, tones};
 
-/// Height of the strip, which is what a collapsed pane keeps.
-pub const DETAIL_STRIP_HEIGHT: f32 = 30.0;
+/// Height of the strip, which is what a collapsed pane keeps: Fork's 31 px between two rules
+/// (`style::metrics::DETAIL_STRIP`).
+pub const DETAIL_STRIP_HEIGHT: f32 = metrics::DETAIL_STRIP;
 
 /// The detail pane's tabs. Commit is the default; a File Tree tab is issue #31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -120,8 +121,7 @@ impl Component for DetailTabs {
             .width(Size::fill())
             .height(Size::px(DETAIL_STRIP_HEIGHT))
             .cross_align(Alignment::End)
-            .padding(Gaps::new(0., 12., 0., 12.))
-            .spacing(2.)
+            .padding(Gaps::new(0., 8., 0., 0.))
             .background(surface)
             .border(
                 Border::new()
@@ -141,7 +141,9 @@ impl Component for DetailTabs {
                 rect()
                     .key(tab.caption())
                     .height(Size::fill())
+                    .min_width(Size::px(metrics::DETAIL_TAB))
                     .main_align(Alignment::Center)
+                    .cross_align(Alignment::Center)
                     .padding(Gaps::new(0., 12., 0., 12.))
                     .a11y_role(AccessibilityRole::Tab)
                     .maybe(shown, |el| {

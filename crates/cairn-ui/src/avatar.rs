@@ -38,12 +38,51 @@ pub fn avatar_colour(name: &str) -> Color {
         .unwrap_or(tones::AVATAR_TEXT)
 }
 
-/// `name`'s avatar: its initials, white and bold, on its colour, in a square
-/// [`metrics::AVATAR`] across.
+/// Where an avatar is drawn, which sets its size: Fork draws one beside a history row's author,
+/// a larger one opening the Changes tab's summary, and the largest beside the Commit tab's
+/// author.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvatarSize {
+    /// [`metrics::AVATAR`] across.
+    Row,
+    /// [`metrics::SUMMARY_AVATAR`] across.
+    Summary,
+    /// [`metrics::DETAIL_AVATAR`] across.
+    Detail,
+}
+
+impl AvatarSize {
+    /// The square's side, its initials' size and their weight: a row's bold, the larger ones
+    /// regular, as Fork draws them (uv2f, cm7z).
+    pub fn measures(self) -> (f32, f32, FontWeight) {
+        match self {
+            Self::Row => (metrics::AVATAR, metrics::AVATAR_TEXT, FontWeight::BOLD),
+            Self::Summary => (
+                metrics::SUMMARY_AVATAR,
+                metrics::SUMMARY_AVATAR_TEXT,
+                FontWeight::NORMAL,
+            ),
+            Self::Detail => (
+                metrics::DETAIL_AVATAR,
+                metrics::DETAIL_AVATAR_TEXT,
+                FontWeight::NORMAL,
+            ),
+        }
+    }
+}
+
+/// `name`'s avatar beside a history row's author: its initials, white and bold, on its colour,
+/// in a square [`metrics::AVATAR`] across.
 pub fn avatar(name: &str) -> Rect {
+    avatar_of(name, AvatarSize::Row)
+}
+
+/// `name`'s avatar at `size`.
+pub fn avatar_of(name: &str, size: AvatarSize) -> Rect {
+    let (edge, text, weight) = size.measures();
     rect()
-        .width(Size::px(metrics::AVATAR))
-        .height(Size::px(metrics::AVATAR))
+        .width(Size::px(edge))
+        .height(Size::px(edge))
         .corner_radius(metrics::AVATAR_RADIUS)
         .background(avatar_colour(name))
         .center()
@@ -51,8 +90,8 @@ pub fn avatar(name: &str) -> Rect {
             label()
                 .text(initials(name))
                 .max_lines(1)
-                .font_size(metrics::AVATAR_TEXT)
-                .font_weight(FontWeight::BOLD)
+                .font_size(text)
+                .font_weight(weight)
                 .color(tones::AVATAR_TEXT),
         )
 }

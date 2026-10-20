@@ -15,17 +15,10 @@ use crate::window::View;
 use crate::worker::Request;
 
 /// The action a press in the diff's bar is: the bar's buttons and the chords are one set of
-/// actions, done in one place.
+/// actions, done in one place, and the bar names each button's action itself
+/// (`HeaderAction::action`), which its tooltip's chord is read for.
 pub fn of_header(pressed: HeaderAction) -> Action {
-    match pressed {
-        HeaderAction::PreviousChange => Action::PreviousChange,
-        HeaderAction::NextChange => Action::NextChange,
-        HeaderAction::IgnoreWhitespace => Action::ToggleIgnoreWhitespace,
-        HeaderAction::FewerLines => Action::FewerLines,
-        HeaderAction::MoreLines => Action::MoreLines,
-        HeaderAction::EntireFile => Action::EntireFile,
-        HeaderAction::SideBySide => Action::ToggleSideBySide,
-    }
+    pressed.action()
 }
 
 /// Whether the window's chords and the views' keys do nothing now: while any dialog — a

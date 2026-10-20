@@ -1559,13 +1559,18 @@ to (`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` i
 involved: the exceptions roster stays empty.
 
 **The Changes tab** (`crates/cairn-app/src/detail/changes_tab.rs`, phase 07, R5.4), Fork's
-(Findings 5 and 19): a one-line summary — the author's name, the short id, the author
-date in the window's zone and Fork's format and the subject (`cairn_ui::ChangesSummary`,
-`summary_parts`; no avatar yet), on a strip as tall as the diff bar's 30 px
-(`the_summary_strip_is_as_tall_as_the_diff_bar`) — then, behind a draggable splitter (the list opening at 35%
+(Findings 5 and 19; `docs/research/ui-review/fork-window-survey-2026-10-16.md` §6 and
+`fork-window-survey-2-2026-10-16.md` §1b, uw5): a one-line summary — the author's 18 px
+avatar, the author's name, the id's first nine characters and the author's date in the
+window's zone as the history draws it (`16 Oct 2026 12:12`), both in the secondary tone, and
+the subject in bold (`cairn_ui::ChangesSummary`, `summary_parts`), on Fork's 23 px strip with
+the rule under it (`the_changes_summary_opens_with_the_avatar`,
+`the_summary_is_author_short_id_date_and_subject`) — then, behind a draggable splitter (the list opening at 35%
 of the pane, never dragged or squeezed below 200 px, its share kept for the session:
 `the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width`), the changed
-files on the left under a filter field and one file's diff on the right. A component of its own, mounted only while the tab is
+files on the left under a filter field — a magnifier and the field in a bar level with the
+diff's, keeping Cairn's "Filter" placeholder where Fork's is blank — and one file's diff on
+the right. A component of its own, mounted only while the tab is
 shown. The list (`cairn_ui::ChangesList`) is one `VirtualScrollView` of fixed rows over a
 `Readable` of the change set and one of the filter's answer (`cairn_ui::ShownFiles`, every
 file or the matching indices), so 55,184 files build one viewport of rows, filtered or not
@@ -1623,8 +1628,16 @@ a change set with no details (a comparison of two commits) is not described by t
 which is unavailable while two are selected anyway.
 
 **The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/detail/commit_tab.rs`), in
-Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
-timestamp as Fork's Windows build shows it, in the window's zone at that instant whatever
+Fork's order (`docs/research/ui-review/fork-window-survey-2026-10-16.md` §5,
+`fork-committer-2026-10-20.md`): the AUTHOR caption over the author's block — the author's
+42 px avatar (`cairn_ui::avatar_of`, `AvatarSize::Detail`) in the captions' column, beside it
+the name in bold and the address in the secondary tone, and under them the date — and,
+beside it on the same rows in a column of its own, the COMMITTER block only where the
+committer differs from the author: by name, by address, or by the instant, to the second; the
+same instant written at another offset is the same committer, as Fork draws it
+(`cairn_ui::committer_differs`; `the_committer_is_shown_only_where_it_differs`, every case
+Fork was seen on, cm7-cm13). Each date is the full timestamp as Fork's Windows build shows it,
+in the window's zone at that instant whatever
 offset it was recorded at (`cairn_ui::LocalZone`, read once on the worker; `docs/systems/
 history-graph.md`, "The view") — `14 Nov 2023 21:43:20 -00:30`: a two-digit day, the English
 month's abbreviation, a 24-hour time to the second and the zone's offset as `±HH:MM`
@@ -1640,7 +1653,8 @@ pads). A commit recorded before 1970 shows its true instant, also the user's dec
 since git disagrees with itself there
 (`a_timestamp_before_the_epoch_reads_as_its_true_instant`);
 the full 40-digit id beside SHA; each parent's 7-digit short id beside PARENTS, as a
-link (no PARENTS row for a root commit); a rule; the message as `git log` shows it
+link in Fork's blue, and the PARENTS caption standing with nothing beside it for a root
+commit, as Fork's does; a rule; the message as `git log` shows it, in the values' column
 (`message_lines::shown_lines`) — the blank lines before and after it gone, each line
 without its trailing spaces, tabs or `\r`, blank lines inside kept, a tab expanded to
 the next multiple of eight columns, the first line the subject in a larger bold face,
@@ -1648,14 +1662,15 @@ no line re-wrapped (`a_message_reads_line_for_line_as_git_log_shows_it`, against
 `git log --format=fuller`; `the_message_is_the_rows_git_log_shows_for_it`, row for
 row through the tab); a rule; git's own "exhaustive rename detection was skipped"
 warning with the `diff.renameLimit` git asks for, when the search was cut short, above
-the files, and nothing when a limit was set and not reached; and one row per changed
-file, its status as a bare letter in a colour — `A`, `D`, `M`, `T`, `R`, `C`, as Fork
+the files, and nothing when a limit was set and not reached; Expand All, its caption alone
+as Fork draws it; and one row per changed file — its chevron, its status as a bare letter
+in a colour — `A`, `D`, `M`, `T`, `R`, `C`, as Fork
 draws it, by the user's decision: git's `--name-status` letter without the similarity
-score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — and its path,
-both paths, `old → new`, for a rename or a copy
+score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — a document glyph,
+and its path in the values' column, both paths, `old → new`, for a rename or a copy
 (`the_commit_tab_shows_every_field_r5_3_names`;
-`a_cut_short_rename_search_is_said_above_the_files`). No avatar and no
-network call.
+`a_cut_short_rename_search_is_said_above_the_files`). No network call: an avatar is its
+initials. Fork's ⌄ beside each address is not drawn — nothing Cairn builds fills its menu.
 
 **REFS** (refs-and-status R6.1, Fork's Finding 3): above SHA, under the dates, a REFS row
 holds the chips of the refs pointing at the commit — exactly the chips its row in the
@@ -1675,10 +1690,9 @@ window's width, never by the refs
 (`the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit`,
 `the_header_is_built_once_per_commit_however_often_the_state_is_written`,
 `a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot`,
-`a_row_is_looked_for_once_per_history_and_found_where_it_arrives`). The author and the committer are both drawn always, as git's `fuller`
-format draws them — the user's decision, where Fork appears to omit an identical
-committer. A person's `Name <email>` and a date are cut with an ellipsis where their
-half of the pane is narrower than they are; nothing else in the tab is cut.
+`a_row_is_looked_for_once_per_history_and_found_where_it_arrives`). A person's name and
+address are cut with an ellipsis where their column is narrower than they are; nothing else
+in the tab is cut.
 
 **The file list has focus of its own** (user decision 6, Fork's model). The tab takes
 focus when a file row is pressed or when Tab reaches it, and draws a focus border when
@@ -1693,7 +1707,12 @@ there is not an arrow (`accelerators::is_chord`). Another commit is another list
 no file current.
 
 **It is one virtualised list** (R5.5). Header, message lines and files are rows of one
-`VirtualScrollView` at a fixed `DETAIL_ROW_HEIGHT`, so a commit touching 55,184 paths
+`VirtualScrollView` at a fixed `COMMIT_TAB_ROW_HEIGHT` — the diff's 17 px row
+(`style::metrics::DIFF_ROW`), so a file opened in place draws its diff at the diff's row
+height, and every row above it takes that pitch too: Fork's header rows are ~20 px and its
+file rows 22 (uv7b), a deviation `docs/design/ui.md` records. The author's 42 px avatar spans
+the three rows under its caption, each row drawing its band of it, a pixel of each band
+reaching under the next row so no seam shows at a fractional offset; so a commit touching 55,184 paths
 builds one viewport of rows at the top, scrolled deep and at its very end, where the
 last file is built and visible
 (`only_a_viewport_of_files_is_built_however_many_the_commit_touched`). The tab is
@@ -1714,7 +1733,7 @@ Commit tab opens its diff under its own row, and closes it when pressed again; f
 collapsed (`a_pressed_file_is_reported_and_its_diff_opens_under_its_row`;
 `a_file_pressed_in_the_commit_tab_opens_its_diff_in_place`, through the window). A file's
 row carries a disclosure chevron, right when closed and down when open. What an opened
-file draws is more rows of the same list at the same `DETAIL_ROW_HEIGHT`: "Reading the
+file draws is more rows of the same list at the same `COMMIT_TAB_ROW_HEIGHT`: "Reading the
 diff…" while it is on its way; its failure, in the error colour, that file's alone; the
 notice that stands in place of rows, one line a row (`cairn_ui::notice_rows`, the same
 words in the same order as the Changes tab's notice,
@@ -1998,18 +2017,28 @@ text; Fork's own behaviour there was not established. A glyph the font lacks, dr
 wider fallback, can run a line past the extent.
 
 **The bar** (`cairn_ui::DiffHeader`, `crates/cairn-ui/src/diff/header.rs`), Fork's layout
-(Finding 10): ↑ and ↓ for previous and next change on the left; the path in IBM Plex
-Mono, the directory muted and the file name in the text colour, a rename's or a copy's
-old path in a tooltip; on the right, Ignore whitespace, Fewer lines, More lines, Entire
-file and Side-by-side. Each button is Fork's glyph
-(`cairn_ui`'s `toggle_glyphs`, built from plain shapes, no icon font): chevrons, `⎵`,
-`−`, `+` and `↕` over lines, a split rectangle. A toggle that is on draws its glyph in the
-accent colour, never filled, as Fork does; each button carries its name — read by assistive
-technology and shown as its tooltip — so its meaning never rests on the glyph
-(`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent`).
-Fewer lines is disabled at one line, and both line buttons while the entire file is
-shown; a disabled button reports nothing
-(`the_bar_reports_each_button_and_holds_fewer_lines_at_one`). With whitespace ignored
+(Finding 10; `docs/research/ui-review/fork-window-survey-2026-10-16.md` §6,
+`fork-committer-2026-10-20.md` question 5): Go to previous change and Go to next change on the
+left; centred, a document glyph and the path, the directory in the secondary tone and the file
+name in the text colour, a rename's or a copy's old path in a tooltip; on the right, Ignore
+whitespaces, Decrease and Increase number of visible lines, Show entire file and Side by side
+diff — Fork's Show hidden symbols and Word wrap are not drawn (#33, #34). The bar is Fork's
+17 px with the rule under it (`style::metrics::DIFF_BAR`), its buttons 16 px squares 20 px
+apart. Each button is a Lucide glyph (`style::icons`: `chevron-up`, `chevron-down`, `space`,
+`list-minus`, `list-plus` and `list-chevrons-up-down` turned left for right so the sign stands
+at the lines' left as Fork's does, `columns-2`), `#CFCFCF`, a `#242424` square behind it under
+the pointer. Its tooltip is Fork's, verbatim: its words, and where the accelerator table lists a
+chord for the button's action, a comma and the chord, so previous and next change read "Go to
+previous change, Ctrl+↑" and "Go to next change, Ctrl+↓" on Linux and `⌘↑`/`⌘↓` on macOS
+(`cairn_ui::bar_tooltip`, `HeaderAction::action`; `the_diff_bar_is_forks_with_its_tooltips`).
+A toggle that is on draws its glyph in Fork's `#419BF9`, nothing behind it, and says it is on
+to assistive technology; each button carries its name, Fork's words without the chord, so its
+meaning never rests on the glyph
+(`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue`). Both line
+buttons are greyed while the entire file is shown, as Fork greys them, and never otherwise:
+at one line of context Decrease stays pressable and does nothing, as Fork's does; a disabled
+button reports nothing
+(`the_bar_reports_each_button_and_greys_the_line_buttons_for_the_entire_file`). With whitespace ignored
 the bar says "Ignoring whitespace hides some changes" exactly when the answer hides one —
 never just because the toggle is on (`the_bar_says_changes_are_hidden_only_when_they_are`,
 `ignoring_whitespace_hides_whitespace_only_changes_and_says_so_only_then`, R6.7) — a
@@ -2075,12 +2104,12 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | --- | --- | --- |
 | Diff text size (`DIFF_FONT_SIZE`) | 11 px | Fork-measured: Mac's default diff font is Menlo 11 pt (Finding 17, two screenshots four years apart) with a 6.6 pt advance (Finding 24); a macOS point is a logical pixel, and Plex Mono's 0.6 em advance at 11 px is the same 6.6. Fork's Windows size and face are not established. |
 | Row pitch (`DIFF_ROW_HEIGHT`) | 17 px, a hunk header the same | Fork-measured: 17 pt on the Mac (Finding 24, a vendor screenshot at 2×, May 2026). Windows' 30–31 px is at an unknown display scale, so not used. |
-| Bar height (`DIFF_HEADER_HEIGHT`) | 30 px | Cairn-chosen: Fork's bar is not measured in the research; 30 lines up with the detail pane's strip above it. |
-| Changes tab summary strip (`SUMMARY_HEIGHT`) | 30 px, the bar's height | User's decision, 2026-10-03 (it was 28 px), so the tab's two strips line up (`the_summary_strip_is_as_tall_as_the_diff_bar`). |
-| The bar's buttons | chevrons; `⎵`; `−`, `+`, `↕` over lines; a split rectangle | Fork-measured: Finding 10 (vendor screenshots, Mac and Windows, 2025–2026), word wrap and invisibles left out (not in this packet). Drawn from plain shapes, not Fork's artwork. |
-| An active toggle | its glyph in the accent, not filled | Fork-measured: the vendor, Tracker #2623 (Finding 10). |
-| Tooltips and names | "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file" | Fork-measured: Finding 10. |
-| Tooltips and names | "Previous change", "Next change", "Side-by-side diff" | Cairn-chosen: Fork's are not recorded (the eye button's "Show diff side-by-side (spacebar)" belongs to the quick look, another control); the words Fork's release notes use. |
+| Bar height (`DIFF_HEADER_HEIGHT`) | 18 px: 17 and the rule under it | Fork-measured: Fork Dark's bar, uw5 and cm14 (`fork-committer-2026-10-20.md` question 6). The Changes tab's filter bar is the same height, level with it. |
+| Changes tab summary strip (`SUMMARY_HEIGHT`) | 24 px: 23 and the rule under it | Fork-measured: uw5. |
+| The bar's buttons | Lucide's chevrons, `space`, `list-minus`, `list-plus`, `list-chevrons-up-down` mirrored, `columns-2`; 16 px squares 20 px apart, a `#242424` square under the pointer | Fork-measured: FS1 §6 and `fork-committer-2026-10-20.md` questions 5 and 6, word wrap and invisibles left out (#33, #34). Lucide's glyphs, not Fork's artwork (L4). |
+| An active toggle | its glyph in `#419BF9`, nothing behind it | Fork-measured: cm26-cm28. |
+| Disabled line buttons | both, only while the entire file is shown | Fork-measured: cm27, cm38 (Decrease stays pressable at one line). |
+| Tooltips and names | "Go to previous change, Ctrl+↑", "Go to next change, Ctrl+↓" (⌘ on macOS), "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file", "Side by side diff" | Fork-measured: FS1 §6 (uv11), cm15-cm25; the chords read from the accelerator table. |
 | Previous and next change chords | Ctrl+↑/↓, ⌘↑/↓, heard in the detail pane | Fork-measured: `fork-shortcuts.md`. |
 | Keys in a focused diff | ↑/↓ a row, Page Up/Down a view, Home/End either end, ←/→ four columns | Cairn-chosen: Fork's diff is a text control (`NSTextView`, AvalonEdit) whose keys move a caret, and Fork documents none of its own beyond the chords above; Cairn's diff has no caret, so the keys scroll as a list's do. |
 | Tab stops | eight columns, counted in terminal widths | Cairn-chosen (the user's decision "terminal widths"): what `git diff` shows in a terminal. Fork's tab width is a setting whose default is not established (Finding 17). |
@@ -2105,7 +2134,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Rename or copy whose mode moved too | "Renamed, mode changed" ("Copied, mode changed") over git's mode lines, then its rename (copy) lines | User's decision, 2026-10-03; the copy's by analogy with the rename's. |
 | Conflicted | "Unmerged path — conflicts must be resolved before a diff can be shown" | User decision (2026-10-03): git's own "Unmerged path", and why no diff is drawn. |
 | Cut line marker | " … N more bytes", muted, N the bytes not drawn | User decision (2026-10-03). Fork refuses such lines rather than cutting them (Finding 21). |
-| Changes tab summary | author, short id, author date, subject | Fork-measured: Finding 2 (avatar, author, abbreviated SHA, date, subject); no avatar (L9); the date in the user's chosen format. |
+| Changes tab summary | the author's avatar and name, the id's first nine characters, the author's date as the history draws it, the subject in bold | Fork-measured: uw5, cm14 (the author's, never the committer's). |
 | Changes tab list | filter field at the top, status letter and path, first file chosen | Fork-measured: Finding 5 (filter, badge, name; first file selected by default). |
 | Filter matching | the text anywhere in a path, a rename or a copy by either name, no wildcards, case ignored as Unicode reads it | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Unicode case folding (`str::to_lowercase`, no dependency): user decision (2026-10-03). |
 | Filter's known limit | `İ` (U+0130) lowercases to `i` and a combining dot, so "istanbul" does not find `İstanbul.txt` | User's decision, 2026-10-03: accepted, `to_lowercase` kept rather than a case-folding table (`the_dotted_capital_i_is_a_known_limit`). |
@@ -2120,8 +2149,9 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `docs/research/diff-engine/c14-measured.md`, section 4. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |
 | Expand All over files already open | keeps them as they are drawn and reads only the rest: an open diff is never read again nor drawn anew, and its lines are not charged to the budget | User's decision, 2026-10-04 (as built it read them again with the rest, from the first file). |
-| A file row's disclosure | a chevron, right when closed, down when open | Fork-measured in part: Windows rows carry a disclosure triangle (Finding 4); a chevron of plain shapes rather than a filled triangle, and drawn on every platform (Mac rows carry none), the user's decision, 2026-10-04, kept as built. |
-| Row pitch of an in-place diff | the Commit tab's 24 px (`DETAIL_ROW_HEIGHT`), not the Changes tab's 17 | User's decision, 2026-10-04, kept as built; forced: the tab is one virtualised list of rows of one size, the invariant that keeps 55,184 files and every opened line one viewport of work; Fork's in-place pitch is not measured, and is presumably its diff's 17 pt. The alternative is the whole Commit tab at 17 px. |
+| A file row's disclosure | a chevron, right when closed, down when open | Fork-measured: Windows rows carry a chevron (uv7b, uv9z); Lucide's, drawn on every platform (Mac rows carry none). |
+| Row pitch of the Commit tab | 17 px (`COMMIT_TAB_ROW_HEIGHT`), every row: the in-place diff's at the diff's row height, the header's and the files' with it | The packet's commitment (fork-alignment R7.2): an opened file's diff at the diff's row height. Forced: the tab is one virtualised list of rows of one size, the invariant that keeps 55,184 files and every opened line one viewport of work, so the header and file rows take the diff's pitch where Fork's are ~20 and 22 px (uv7b). |
+| The committer's block | beside the author's, only where name, address or instant differ | Fork-measured: `fork-committer-2026-10-20.md` questions 1-3. |
 | Sideways scroll of in-place diffs | the whole Commit tab scrolls sideways as one, to the widest row built | User's decision, 2026-10-04, kept as built; forced as above: Fork scrolls each inline diff on its own (Finding 4); one list is one scroll. |
 | An in-place diff being read, failed, or hiding whitespace | "Reading the diff…"; the failure in the error colour, that file's alone; "Whitespace changes are hidden" as a row above it | User's decision, 2026-10-04, kept as built: the Changes tab's words, as rows (Fork's in-place states are not recorded). |
 | Load Diff in place | under a file past the limits, as in the Changes tab | User's decision, 2026-10-04, kept as built: R6.8's control, where the notice stands. |

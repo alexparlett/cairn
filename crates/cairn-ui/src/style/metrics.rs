@@ -101,8 +101,41 @@ pub const MENU_CHORD_GAP: f32 = 40.0;
 pub const MENU_REASON_WIDTH: f32 = 300.0;
 /// The room either side of a menu bar's name.
 pub const MENU_BAR_PADDING: f32 = 8.0;
-/// A diff row: Cairn's measured choice, kept (`diff::view`).
+/// A diff row: Cairn's measured choice, kept (`diff::view`); the Commit tab's one pitch too.
 pub const DIFF_ROW: f32 = 17.0;
+/// The detail pane's strip of tabs, its rules above and below included: Fork's 31 px strip
+/// between two 1 px rules (FS2 §1b, uw5).
+pub const DETAIL_STRIP: f32 = 33.0;
+/// A tab of the detail pane's strip, its caption centred: Fork's ~96 px from the pane's left
+/// edge, its underline as wide (uw5).
+pub const DETAIL_TAB: f32 = 96.0;
+/// The Changes tab's summary line and the rule under it: Fork's 23 px and 1 px (uw5).
+pub const DETAIL_SUMMARY: f32 = 24.0;
+/// The bar over a diff and over the Changes tab's files, and the rule under it: Fork's 17 px
+/// and 1 px (uw5).
+pub const DIFF_BAR: f32 = 18.0;
+/// A glyph of the diff bar: Fork's are ~12 px across inside their box (uw5a), as Lucide's are
+/// in a 14 px one.
+pub const DIFF_BAR_ICON: f32 = 14.0;
+/// A diff bar button's square, which its hover fills: Fork's 16 px (cm15).
+pub const DIFF_BAR_BUTTON: f32 = 16.0;
+/// The room between two of the bar's buttons: Fork's repeat every 20 px (cm22).
+pub const DIFF_BAR_GAP: f32 = 4.0;
+/// The Commit tab's author's avatar: 42 px (uv9, measured).
+pub const DETAIL_AVATAR: f32 = 42.0;
+/// Its initials: Fork's fill about half the square's width (cm7z).
+pub const DETAIL_AVATAR_TEXT: f32 = 20.0;
+/// The Changes tab's summary's avatar: 18 px (uw5, measured).
+pub const SUMMARY_AVATAR: f32 = 18.0;
+/// Its initials.
+pub const SUMMARY_AVATAR_TEXT: f32 = 9.0;
+/// How far the Commit tab's content stands in from the pane's sides: Fork's 20 px (uv9).
+pub const COMMIT_TAB_INSET: f32 = 20.0;
+/// The Commit tab's column of captions and the avatar, which its values stand right of: Fork's
+/// 62 px (uv9: the captions' and the avatar's right edges at 82 px).
+pub const COMMIT_TAB_CAPTIONS: f32 = 62.0;
+/// The room between the Commit tab's captions and their values: Fork's 16 px (uv9).
+pub const COMMIT_TAB_GAP: f32 = 16.0;
 
 /// The sidebar's width as the window opens.
 pub const SIDEBAR_WIDTH: f32 = 300.0;
@@ -136,15 +169,9 @@ pub const DIFF_TEXT: f32 = 11.0;
 /// 0.84 × 11 px ≈ 9.3 px. This toolkit build takes a font size in whole pixels (`FontSize`
 /// holds an `i32`), so 9.
 pub const DIFF_LINE_NUMBER: f32 = 9.0;
-/// The Commit tab's subject, over its body: Cairn's size, larger than the body text so the
-/// subject reads first; Fork's survey does not size it.
-pub const DETAIL_SUBJECT: f32 = 15.0;
+/// The Commit tab's subject, over its body: larger than the body text so the subject reads
+/// first, as Fork's ~14 px bold subject does (uv9), within the tab's one row height.
+pub const DETAIL_SUBJECT: f32 = 14.0;
 /// The Commit tab's captions (AUTHOR, PARENTS, …), the activity popover's times and a check
 /// box's tick: Cairn's size, a step under the body; Fork's survey does not size them.
 pub const CAPTION: f32 = 11.0;
-
-/// The diff bar's swap glyph, `↕` in IBM Plex Mono: Cairn's size, filling the bar's glyph box.
-pub const SWAP_GLYPH: f32 = 14.0;
-/// The `↕` drawn over lines in the diff bar's entire-file glyph: Cairn's size, small enough to
-/// sit between the lines.
-pub const ENTIRE_FILE_GLYPH: f32 = 11.0;

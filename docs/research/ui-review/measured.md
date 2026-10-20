@@ -14,8 +14,9 @@ Timing is not asserted in CI; these are reports.
 - **The bar held in every gesture of every run but one frame.** Over nine runs (three of
   the whole check, six more of the opening pass alone) the slowest frame of any gesture was
   13.3 ms, except one frame of 19.3 ms in the first run's history scroll, which no later run
-  repeated (5.8-6.1 ms in the other eight). The outlier is recorded below, not explained;
-  whether one frame in nine runs is a miss of an absolute bar is the user's reading.
+  repeated (5.8-6.1 ms in the other eight). The outlier is recorded below, not explained. The
+  user's decision (2026-10-20): C22 is accepted as measured — the frame stays recorded as it
+  is, and the criterion passes on the runs that repeated the gesture.
 - **Local Changes' first frame grew.** Showing Local Changes over 11,000 paths costs
   12.6-13.3 ms in its slowest frame against 8.2 ms on `main`, the same tree-state and the
   same bench, in every run: under the bar, and the one consistent regression the packet

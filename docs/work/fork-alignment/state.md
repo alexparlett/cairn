@@ -5,7 +5,9 @@ The cross-session cheat sheet. Every session updates it before ending.
 **Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
 integration branch `feature/fork-alignment` was cut from it. Phases 01-08 done (packet mode); phase 09,
 the merge bar, reviewed on 2026-10-20 — its result and what it put to the user are in
-`progress.md`'s phase 09 entry. Teardown (phase 09's STEP 5 onward) has not run.
+`progress.md`'s phase 09 entry: every criterion met, C22 accepted as measured by the user, the
+real-window pass on Isle for phases 05-09 OWED and scheduled for a separate unlocked session.
+Teardown (phase 09's STEP 5 onward) has not run.
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -284,4 +286,4 @@ accelerator actions, guard names, `deny.toml` pins.
 | 06 | done (C15 met; Q1 Tab stops and the 17 px pitch batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 20 raw, 11 confirmed (4 merged) and fixed or recorded, Q1 escalated (decided, batched), 4 dismissed |
 | 07 | done (C16 met; the eye greyed until Quick Look on Fork's evidence, batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 12 raw (one pair merged), 4 confirmed and fixed (Q-F1/T1 dissolved by greying the eye), 7 dismissed; fixes verified by a fresh qa-confirm |
 | 08 | done (C17, C18, C19, C20 (as Fork's bordered default, batched), C21's menus half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 21 raw (Q2+T4 merged), 16 confirmed and fixed (D1 critical: stale press, fixed), G2 escalated and resolved without a policy change, 4 dismissed; fixes verified by a fresh qa-confirm |
-| 09 | reviewed (C1-C21 met against their tests, two per the user's ratified Fork evidence; C22 measured, one 19.28 ms frame in one of nine runs put to the user; real window on Isle OWED — session locked; teardown not run) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 11 raw, 1 confirmed and fixed (T1, mutation-checked thrice), 1 escalated (C22's frame), 9 dismissed; fix verified by a fresh qa-confirm |
+| 09 | done (C1-C22 met — C13, C14, C20 per the user's ratified Fork evidence, C22 accepted as measured by the user with run 1's 19.28 ms frame recorded; the real-window pass on Isle for phases 05-09 OWED and scheduled for a separate unlocked session, not waived; teardown not run) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 11 raw, 1 confirmed and fixed (T1, mutation-checked thrice), 1 escalated (C22's frame), 9 dismissed; fix verified by a fresh qa-confirm |

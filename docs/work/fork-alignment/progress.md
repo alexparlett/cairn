@@ -59,7 +59,7 @@ whole packet diff, `main...feature/fork-alignment`; teardown is a separate sessi
   (layout alone, no update applied; p99 12.97 ms in that run), which runs 2-6 did not repeat
   (5.75-6.10 ms; `main` 3.99). Local Changes over 11,000 paths: 12.6-13.3 ms against `main`'s
   8.2 in every run — under the bar, the packet's one consistent cost. The bar is absolute, so
-  the one frame is put to the user below rather than called noise here. The bench's `.git`
+  the one frame was put to the user; accepted as measured (below). The bench's `.git`
   mtime was the same before and after. The check's last phase (a refresh while Local Changes
   is shown) did not land within 60 s on this scratch clone on either tree: a leftover for
   teardown to file.
@@ -77,12 +77,16 @@ whole packet diff, `main...feature/fork-alignment`; teardown is a separate sessi
   usual skips, `lost_commits` and `date_order` skipping nothing) — and run again on the final tip
   after this entry's docs commit.
 
-**Batched for the user — PENDING, not approved:**
-1. **C22's one frame.** One 19.28 ms frame in one of nine runs, in a phase every other run kept
-   under 6.1 ms. Options: (a) accept the measurement as recorded, the bar read over the eight
-   runs that repeated it (recommended); (b) hold C22 open until the gesture is profiled.
-2. **The real-window check** for phases 05-09 is owed, or the headless release renders of
-   phases 05-08 accepted in their place; the decoration result above stands either way.
+**User decisions, relayed by the coordinator on 2026-10-20:**
+1. **C22 accepted as measured.** Run 1's 19.28 ms frame stays recorded as it is in
+   `docs/research/ui-review/measured.md`; C22 passes on the runs that repeated the gesture
+   (5.75-6.10 ms). C22 is met.
+2. **The real-window pass on Isle for phases 05-09 is OWED and scheduled**, not waived: it runs
+   in a separate session once the user is at the desk and the session is unlocked. The
+   decoration result above stands.
+
+**Batched for the user — PENDING, not approved:** nothing new from this phase; the earlier
+phases' batches below stay as they are.
 
 **Deferred:** the window check's refresh phase on a scratch clone of 11,000 paths; Local
 Changes' first frame (icon rasterization on first draw, unprofiled); the Stash ⌄'s and every

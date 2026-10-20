@@ -100,6 +100,17 @@ upstream is `HEAD~n`), each count equal to `git rev-list --left-right --count`:
 gix's hidden frontier reads far more commits than the divergence, and no commit-graph is
 used so that every read can be cancelled (the bench has none either).
 
+### A tag's commit date (2026-10-20)
+
+The refs snapshot now reads each tag's commit for its committer date (fork-alignment's sidebar
+lists tags newest first by it). `measures_the_refs_snapshot_over_tags_on_commits_of_their_own`
+(`crates/cairn-git/tests/refs.rs`, release, warm, median of seven): 10,000 tags, a quarter
+annotated, each on a commit of its own along one line, packed — **19.8 ms** [19.7–20.4] with
+the dates (22,501 objects read), **4.1 ms** [4.1–4.7] with the date read stubbed out for the
+comparison (12,501 objects): about 1.6 µs a tag, on the repository thread, every refresh. The
+generated fixture above names one commit from all its 4,000 tags, so its dates cost one read the
+object cache answers; neither it nor the bench was measured again.
+
 ### Status
 
 Through `Repository::status`, beside the spike's own `git` (spawn and parse,

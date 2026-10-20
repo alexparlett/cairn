@@ -234,8 +234,11 @@ The window draws either reason as it draws every failed open.
   `git_namespace_in_cairns_environment_is_not_honoured`,
   `a_ref_naming_a_missing_object_is_skipped_and_counted`,
   `a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced`,
-  `a_tag_is_dated_by_its_commit_never_by_its_tagger` (and every oracle above compares each
-  tag's date with `git log --no-walk`'s),
+  `a_tag_is_dated_by_its_commit_never_by_its_tagger`,
+  `a_tags_date_is_read_through_a_replacement_as_git_reads_it` (and every oracle above compares
+  each tag's date with `git log --no-walk`'s; the dates' cost, about 1.6 µs a tag, is
+  `measures_the_refs_snapshot_over_tags_on_commits_of_their_own`,
+  `docs/research/refs-and-status/measured.md`),
   `a_refs_query_stops_at_whichever_poll_is_cancelled`,
   `a_refs_query_reports_the_cost_it_paid`,
   `the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical` (the whole git

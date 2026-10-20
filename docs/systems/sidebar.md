@@ -278,12 +278,15 @@ page asked.
   (pin, show only, hide: #2), a branch name's tooltip ("Local branch / Tracked branch"),
   double-click checkout and ⌘-click compare from the sidebar are not built.
 - New Branch… from a ref opens Create Branch at the ref's commit, its short id and subject in
-  "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82), and the dialog's
-  look is still to come (`docs/prd/fork-alignment.md` R11).
+  "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82). No requirement
+  asks for it yet.
 - Copy Branch Name and Copy Tag Name show no chord: Fork's Ctrl+C is the `Copy` action, still
   to come with the focused view's copy items (`docs/prd/fork-alignment.md` R10.1).
-- Pressing All Commits does not move focus to the history, where Fork's does (sb73); focus at
-  every stop is still to come (`docs/prd/fork-alignment.md` R10.2).
+- Pressing All Commits does not move focus to the history, where Fork's does (sb73). No
+  requirement asks for it yet.
+- `docs/prd/fork-alignment.md` C14 and R10.3 ask for Return to open Local Changes or All
+  Commits from the sidebar's rows; Fork's arrows never reach those two and its Return does
+  nothing on any row (`fork-sidebar-2026-10-20.md` §4), so the sidebar's keys are Fork's.
 - A find's page is `FIND_PAGE_ROWS` rows, so the page holding the row may carry up to that
   many rows past it — a few dozen kilobytes kept beyond what a scroll's page would.
 - A stash whose base no ref reaches is known to have no row only when the walk ends: its

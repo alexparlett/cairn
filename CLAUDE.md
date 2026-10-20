@@ -1407,7 +1407,11 @@ Project invariants:
     keyed), and compared on the UI thread as one number. A press in
     the sidebar looks for its row among the labelled, stash and `HEAD` rows alone
     (`History::labelled_position`), never every loaded row, and a find then looks
-    through each page as it arrives (`ref_find::pages_arrived`), never a page twice. A refresh asks the UI thread for
+    through each page as it arrives (`ref_find::pages_arrived`), never a page twice. A key in
+    the sidebar with no walk standing — the first after its rows were laid out again — looks for
+    the chosen entry's row among every row drawn (`sidebar::keys::handler`, each compared in place
+    by `SidebarTarget::is`, nothing copied), and ← looks upward for the row it stands in: once
+    per press, proportional to the rows, never per frame. A refresh asks the UI thread for
     a submit and nothing else — on focus gained (`refresh::focus::on_focus_gained`, a side
     effect on the toolkit's focus state), after a fetch ends, on the Refresh chord —
     and a refresh's answers are kept by moving them in (`RefreshState`), the one

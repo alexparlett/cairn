@@ -2,8 +2,8 @@
 
 The cross-session cheat sheet. Every session updates it before ending.
 
-**Status: in progress, 2026-10-19.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01, 02 and 03 done (packet mode).
+**Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03 and 04 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -148,6 +148,35 @@ accelerator actions, guard names, `deny.toml` pins.
 - Docs: `docs/systems/window-frame.md` "The toolbar", "The regions and the minimum size";
   `history-graph.md` "The status box"; `ui.md` row for the status box's one cut.
 
+**Phase 04:**
+- `cairn-model`: `RowsPage::mark_beyond_head`, `RowsPage::head_reaches`, `HistoryRow::head_reaches`
+  (a flag of the kept row, `BEYOND_HEAD`). `LaneAssigner::push_stash` puts a stash on the lowest
+  lane awaiting its base, else the lowest free lane.
+- `cairn-git`: `src/history/head_reach.rs` (`HeadReach`), marked in every date-order walk from
+  refs (`Decoration::walked_from_refs`, `Decoration::head`); `Entry::Commit { beyond_head }`,
+  `Entry::Stash { at, beyond_head }`.
+- `cairn-ui`: `LocalZone` (`src/local_time.rs`: `read`, `unreadable`, `Default` = UTC unsaid,
+  `fell_back_to_utc`, `offset_at`; compared by read serial); `history_date`, `long_date(time,
+  zone)`, `time_of_day`, `utc_fallback_note` (`history::date_text`, now public);
+  `avatar`, `avatar_colour`, `initials` (`src/avatar.rs`); `ReflogStrip`, `REFLOG_STRIP_TEXT`,
+  `REFLOG_STRIP_EXIT` (`history/reflog_strip.rs`); `CommitRow::head_reaches`, `CommitRow::zone`,
+  `HistoryList::zone`, `RowRender::{head_reaches, zone}`, `CommitTab::zone`,
+  `ChangesSummary::zone`, `summary_parts(details, zone)`; `HistoryHeader` and
+  `SHOW_LOST_COMMITS_CAPTION` removed; `ChipKind::is_tracked` (a tracked branch's upstream a
+  cloud-only chip of its own); `graph_geometry::RING_RADIUS`; `ROW_HEIGHT` = `metrics::HISTORY_ROW`.
+  Metrics: `HISTORY_LANE` 12, `HISTORY_DOT` 5, `HISTORY_RING` 13, `HISTORY_LINE` 2, `CHIP` 17,
+  `AVATAR` 14, `AVATAR_RADIUS` 3, `AVATAR_TEXT` 8, `REFLOG_STRIP` 22, `STRIP_INSET`, `STRIP_GAP`.
+  Tones: `REMOTE_GLYPH` #777676, `AVATAR_TEXT`, `AVATARS` (eight, the first Fork's lavender),
+  `upstream_chip_border(lane)`. Column widths: author 140, id 64, date 116.
+- `cairn-app`: `src/worker/zone.rs` (`read`, `TimeZone::try_system`); `Update::GitFound`
+  renamed `Update::Started { git, zone: Option<TimeZone> }`; `View::zone`;
+  `ActivityLog::shown_in(zone)`.
+- Guard: `the_render_layer_is_handed_its_time_zone` (matcher `reads_the_system_zone`, rosters
+  `SYSTEM_ZONE_IDENTS`, `SYSTEM_ZONE_PATHS`, `SYSTEM_ZONE_TYPES`, `ZONE_READER`), its CLAUDE.md
+  invariant. `jiff` in the allowlist rows of cairn-ui and cairn-app; `deny.toml` exact pin
+  (gix-date's default set). Lockfile: two dependency-edge lines, no new crate.
+- `scripts/git-floor.sh`: `--test lost_commits` floor 6.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
@@ -155,7 +184,7 @@ accelerator actions, guard names, `deny.toml` pins.
 | 01 | done (C1, C3, C4 met; C2 met but for `borderless`/`freya-borderless-plugin`, phase 02's) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 12 confirmed fixed, 3 deferred, 3 dismissed |
 | 02 | done (C5, C6, C20's About half met headlessly; C2's borderless arm met; pointer gestures and macOS UNVERIFIED, batched for the user) | full gate PASS | qa-checklist ×2, responsiveness ×2, test-coverage ×2, gate-integrity ×2; qa-confirm: 15 of 26 confirmed and fixed or recorded, 11 dismissed |
 | 03 | done (C7, C8, C9, C18's Ctrl+Shift+D half met; option A by the user; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 10 of 14 confirmed and fixed (Q2 probed and fixed), 4 dismissed |
-| 04 | not started | — | — |
+| 04 | done (C10, C11, C12, C13 met; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 11 of 18 confirmed and fixed, G4 escalated (recorded, batched), 6 dismissed; fixes verified by a fresh qa-confirm |
 | 05 | not started | — | — |
 | 06 | not started | — | — |
 | 07 | not started | — | — |

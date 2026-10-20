@@ -67,7 +67,7 @@ Kept, and why:
 | **No text a person needs is cut.** A sentence that could run long is made short instead — it names only the exception and never repeats what is on screen — and per-file detail goes behind Show files. | `cairn.md`, what Cairn is |
 | The **activity popover**, Fork's Activity Manager, also quotes the prompt an operation confirmed, whole, gives each entry its duration, and offers "Show in Lost Commits" for an amend's old commit. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | **Ignore Whitespace is disabled in Local Changes**, so every change drawn there is one a gesture can stage. Fork offers it there. | `diff.md`, "Selections and patches" |
-| A **visible Unstage All** — a double chevron on the Staged heading — beside Fork's Stage All in the bar over both lists; Fork for Windows offers Unstage All only in the menu and while Shift is held. | `platform.md` — keyboard-first, every action reachable |
+| A **visible Unstage All** — a double chevron on the Staged heading — beside Fork's Stage All in the bar over both lists; Fork for Windows offers Unstage All only in the menu, while Shift is held and in the bar's chevron once nothing is left to stage, where Cairn's Stage All greys instead, so one control never changes what it does. | `platform.md` — keyboard-first, every action reachable |
 | A finished **line selection survives a refresh** whose re-read draws the same text — switching to the editor and back — and is cleared, with one notice, when the text changed; Fork drops it silently. | `concurrency.md` — a refresh is frequent and must cost the person nothing |
 | The floating actions **stay at the list's top** while the chunk's top is scrolled above it, so a tall chunk's actions stay in reach; Fork's sit at the chunk's top right. | `cairn.md`, what Cairn is |
 | A press without a drag, or Escape, **lets a line selection go**, and the window losing focus cancels a drag; the selection's discard reads `Discard 2 Lines…`, its ellipsis saying it confirms. | `diff.md`, "Selections and patches" |
@@ -154,8 +154,8 @@ it, kept to its percentage so it fits the box, and Fetch is greyed while one run
 
 Pressing Local Changes puts the staging screen in the main region, as Fork lays it
 out: a bar across both lists — the filter, Stage All's double chevron, the
-side-by-side eye and View Mode — over Unstaged above Staged, each a list of paths
-with Fork's badges under a heading carrying its list's bordered `Stage` or
+eye that opens Quick Look, the file's diff side by side over the window, and View
+Mode — over Unstaged above Staged, each a list of paths with Fork's badges under a heading carrying its list's bordered `Stage` or
 `Unstage` button, the Staged heading also a small double chevron for Unstage All;
 and beside them, on the right, the diff of the selected file with the staging gesture on it and the commit
 box under it ("Staging", "The commit box", below). As built:

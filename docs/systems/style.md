@@ -19,7 +19,10 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   strip (31 px between two rules, its tabs 96 px), the Changes tab's 23 px summary and the
   diff's 17 px bar with their rules, the bar's 16 px buttons 20 px apart, the Commit tab's 42 px
   avatar and its 20 px inset, 62 px captions' column and 16 px gap, and the summary's 18 px
-  avatar (`fork-window-survey-2-2026-10-16.md` §1b, `fork-committer-2026-10-20.md`) — and the sizes Fork's survey does not give, each
+  avatar (`fork-window-survey-2-2026-10-16.md` §1b, `fork-committer-2026-10-20.md`), Local
+  Changes' 17 px bar over its lists and its 32 px headings, each with its rule, their 22 px
+  buttons, and the commit box's 15 px margin, 22 px subject, 22 px button and its 16 px ⌄
+  (`fork-window-survey-2-2026-10-16.md` §1c, uw6) — and the sizes Fork's survey does not give, each
   saying where it comes from (the diff's text and line numbers, measured from Fork earlier;
   a heading's 14 px; the Commit tab's subject and captions, Cairn's).
 - **`style::tones`** — Fork Dark's tones, sampled from Fork's dark theme

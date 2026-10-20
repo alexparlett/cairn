@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04, 05 and 06 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04, 05, 06 and 07 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -218,6 +218,27 @@ accelerator actions, guard names, `deny.toml` pins.
 - `cairn-app`: `shortcuts::of_header` delegates to `HeaderAction::action`.
 - Evidence: `docs/research/ui-review/fork-committer-2026-10-20.md`.
 
+**Phase 07:**
+- `cairn-ui`: `local_changes/bar.rs` (`ListsBar`: the filter with no placeholder, Stage All
+  reporting `ListIntent::Act(Unstaged, StageOrUnstageAll)`, the eye greyed, View Mode's one item);
+  constants `SIDE_BY_SIDE_TOOLTIP`, `COMES_WITH_QUICK_LOOK`, `VIEW_MODE_TOOLTIP`,
+  `VIEW_AS_LIST_CAPTION`; `LOCAL_CHANGES_ROW_HEIGHT` (= `metrics::LOCAL_CHANGES_ROW`, 20; Local
+  Changes no longer reads `DETAIL_ROW_HEIGHT`), `LISTS_BAR_HEIGHT`, `LIST_HEADER_HEIGHT` now
+  `metrics::LIST_HEADING` (33). The Unstaged heading's chevron removed; headings at
+  `metrics::HEADING` bold. `src/bar_button.rs` (`BarButton { glyph, name, tooltip, toggle,
+  enabled, on_press }`), extracted from the diff bar, which now builds its buttons with it.
+  `text_field::field_part(Input) -> Input`. Commit box: `COMMIT_FIELD_NAME`,
+  `COMMIT_OPTIONS_CAPTION`, `COMMIT_OPTIONS_TOOLTIP` (= `COMES_WITH_PULL_AND_PUSH`); the counter
+  only once the subject has text; the subject bold then; the description one line while empty.
+- Icons `eye`, `view_mode` (Lucide `list`), `recent_messages` (Lucide `text-align-justify`).
+  Metrics `LISTS_BAR` 18, `LIST_HEADING` 33, `LIST_HEADING_BUTTON` 22,
+  `LIST_HEADING_BUTTON_PADDING` 12, `COMMIT_BOX_INSET` 15, `COMMIT_SUBJECT` 22, `COMMIT_BUTTON` 22,
+  `COMMIT_CHEVRON` 16.
+- `cairn-app`: no new interface; `local_changes::tests::press_named`.
+- Tests: `crates/cairn-ui/tests/local_changes_bar.rs`; `crates/cairn-ui/tests/support/named.rs`
+  (`named`, `one_named`, by `#[path]`).
+- Evidence: `docs/research/ui-review/fork-local-changes-2026-10-20.md`.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
@@ -228,6 +249,6 @@ accelerator actions, guard names, `deny.toml` pins.
 | 04 | done (C10, C11, C12, C13 met; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 11 of 18 confirmed and fixed, G4 escalated (recorded, batched), 6 dismissed; fixes verified by a fresh qa-confirm |
 | 05 | done (C14 met but its "Return opens Local Changes or All Commits" clause, built as Fork's and batched; C21's sidebar half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 16 raw (two pairs merged), 12 confirmed (9 fixed, Q1/Q2/Q7 batched), Q5 and R3 dismissed, T1's mutation half dismissed on re-run; fixes verified by a fresh qa-confirm |
 | 06 | done (C15 met; Q1 Tab stops and the 17 px pitch batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 20 raw, 11 confirmed (4 merged) and fixed or recorded, Q1 escalated (decided, batched), 4 dismissed |
-| 07 | not started | — | — |
+| 07 | done (C16 met; the eye greyed until Quick Look on Fork's evidence, batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 12 raw (one pair merged), 4 confirmed and fixed (Q-F1/T1 dissolved by greying the eye), 7 dismissed; fixes verified by a fresh qa-confirm |
 | 08 | not started | — | — |
 | 09 | not started | — | — |

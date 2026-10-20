@@ -3,6 +3,121 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-20 — phase 07, Local Changes and the commit box (packet mode)
+
+Committed onto `feature/fork-alignment` over phase 06's 7bbbc5c.
+
+- **What shipped** (R8, C16):
+  - The bar over both lists (R8.1): Fork's 17 px bar and its rule (`metrics::LISTS_BAR`), the
+    filter a magnifier and a field with no placeholder, and at its right Stage All's ⇊, the eye
+    and View Mode, whose menu holds "View as List" alone, ticked, choosing it doing nothing
+    (`crates/cairn-ui/src/local_changes/bar.rs`). Stage All reports the same intent the
+    Unstaged heading's chevron did (`ListIntent::Act(Unstaged, StageOrUnstageAll)`), greyed
+    while Unstaged shows no row. Tests: **`local_changes_bar_and_headings_are_forks`** (C16),
+    `the_bars_controls_report_their_presses_and_say_what_they_are`,
+    `stage_all_is_greyed_while_unstaged_shows_no_row`.
+  - The headings (R8.2): bold at 14 px on Fork's 32 px band and rule, the bordered Stage or
+    Unstage button 22 px tall, greyed while nothing is selected in its list; Unstaged's chevron
+    gone, Staged's ⇈ Unstage All kept. Test: `local_changes_bar_and_headings_are_forks`.
+  - The commit box (R8.3): one bordered field of two parts (`text_field::field_part`), the
+    subject 22 px and bold once typed, the counter shown only then, the Recent Commit Messages
+    glyph at the subject's right end, a rule, the description one line while empty and growing
+    a line at a time; Amend at the left; the split button — the caption, then its ⌄, a segment
+    of its own, always greyed with "Comes with pull and push.", no Tab stop, opening nothing.
+    Tests: **`the_commit_box_is_one_field_and_a_split_button`** (C16, both states),
+    `the_counter_and_the_bold_subject_appear_once_the_subject_has_text` (and red past 70).
+  - Rows 20 px (R8.4, `LOCAL_CHANGES_ROW_HEIGHT`). The diff bar's button became
+    `src/bar_button.rs`, shared with the new bar; the diff bar's tests are unchanged and green.
+- **Staging routes**: every suite passes; expectations changed only where Stage All's chevron
+  moved into the bar (FS1 §7, uv12a): `the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything`
+  (Stage All pressed in the bar, Unstage All on Staged's heading, by accessible name),
+  `a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list` and
+  `stage_all_and_unstage_all_take_the_rows_the_filter_shows` (the bar's Stage All by name,
+  the writes asserted as before). Geometry only: the drag test's edge point moved clear of the
+  taller heading's splitter; the filter's click point and the 50,000-path twins' viewport read
+  the bar and row constants; the window's highlighted-row finder reads the 20 px row; Recent
+  Commit Messages is pressed by name (`recent_messages_fill_both_fields_from_the_menu_and_the_arrows`).
+  No discard route's wiring changed, so no destructive-ops reviewer.
+- **Fork observed** (`/observe-fork`, fork-observer agent, shots `lc6`-`lc33`):
+  `docs/research/ui-review/fork-local-changes-2026-10-20.md`. VERIFIED: the eye opens Quick Look
+  — a window over Fork's showing the file's diff side by side, "Space bar: close, Up/Down: move
+  file selection" — and leaves the main diff as it was; Space on a focused list does the same;
+  View Mode's glyph does not change with the mode and its tooltip stays "View Mode"; with
+  nothing left to stage the bar's chevron turns into ⌃⌃ "Unstage All"; the description is one
+  22 px line while empty and grows upward about 15 px a line; the selected band is inset 4 px
+  each side, rounded ~4 px, adjacent bands merge. NOT OBSERVED: whether Quick Look remembers its
+  own side-by-side toggle.
+- **Evidence over the PRD's paraphrase** (qa-checklist item 1): R8.1 lists "the eye 'Show diff
+  side-by-side'" without saying what it does; built first as a toggle of the shared side-by-side
+  setting, which the observation showed is not Fork's (b6fdcc5) — now greyed, "Comes with Quick
+  Look." (#35), batched below. R8.1's eye tooltip drops Fork's "(space bar)": Cairn binds no
+  key to it. Fork's typed subject is bold (uw36) and its description grows from one line (lc28):
+  both built, though R8.3 says "the rest of the box is unchanged". Fork's Stage All turning into
+  Unstage All is not built (R8.1 names only Stage All): greyed instead, a `ui.md` row, batched.
+- **Real window — NOT RUN in the compositor** (qa-checklist items 5-7): Hyprland's command
+  socket is still missing (`.socket.sock` absent; `.socket2.sock` and `.hyprsunset.sock` only),
+  so the window cannot be sized and `wtype` would type into the user's desktop. **Substitute:**
+  the real `window()` with the real worker over the fixture (`fx/t`, `fixture-recipe.md`'s
+  state), Fork Dark's launch theme, rendered headlessly in a release build at 1024×768 and
+  880×620 (a scratch `#[ignore]` test in `window_check.rs`, not committed), Local Changes empty
+  and with a subject and three description lines. Compared with uw6, uw6a, uw36a, uv12a-c and
+  the lc shots: the bar (17 px + rule, measured), the controls' order and place, the headings
+  (32 px + rule), the bordered buttons, the 20 px rows, the field (subject 22 px, rule, one-line
+  description), the counter "49" before the glyph, the bold subject, the split button and its ⌄
+  match. Differences seen: the splitters' 4 px handles (an existing `ui.md` row); the selection
+  band full width and square where Fork's is inset 4 px and rounded (R8.4 keeps the selection;
+  deferred); the badges coloured letters, no document glyph, paths in IBM Plex Mono (R1.6; the
+  badges deferred since phase 06); Lucide glyphs for Fork's artwork (L4; View Mode's notched
+  square drawn as Lucide's list); the description's lines 21 px apart to Fork's ~15 (its
+  monospace line). It cannot show the compositor's fonts, hover, tooltips, focus rings or input.
+- **QA.** Fresh `qa-checklist`, `responsiveness-reviewer` and `test-coverage-auditor` in the
+  foreground (no guard, script, CI or discard-route change); a fresh `qa-confirm` adjudicated 12
+  raw findings (Q-F1 and T1 merged) into 4 confirmed, 7 dismissed:
+  - Confirmed and fixed: Q-F1/T1 (the eye's window wiring untested — dissolved: the eye is greyed
+    and has no wiring, b6fdcc5); Q-F3 (a find-by-name helper in three test binaries — now
+    `crates/cairn-ui/tests/support/named.rs`); T2 (the ⌄'s greyed fill and no Tab stop
+    unchecked); T3 (the drawn counter's red past 70 unchecked; 04a2b7d). A fresh `qa-confirm`
+    verified all four; the mutations it named were run here and each failed its test (the eye
+    enabled, the ⌄ focusable, the ⌄ filled as a button, the counter grey past 70). It also
+    noted the empty description stood 31 px, not one line: fixed and pinned (0917c69).
+  - Dismissed, with reasons: Q-F2 (Stage All as a focusable glyph button taking focus from the
+    list on a press — in the vendored Freya a press focuses nothing that does not request it,
+    `accessibility/focus.rs`, so focus stays on the list); Q-F4 (survey shot ids in comments —
+    they cite the Fork behaviour matched, which the comment rule allows; precedent in the base
+    tree; the guard passes); Q-item4 (the Input builders — checked against the vendored source,
+    they behave as used); Q-item6 (a transient failure — caused by the auditor's concurrent
+    mutations; clean reruns pass); T4 (heights checked against the metric constants — R8 gives a
+    number only for the rows, pinned as a literal in `tests/style.rs`; the surveyed constants
+    are batched below); T5 (the heading size read from `metrics::HEADING` — R8.2 asks for bold,
+    which is pinned; the size is older and shared); T6 (the eye's lit tone through one toggle
+    field — by design, and the eye is now greyed). The responsiveness reviewer found nothing.
+
+**Batched for the user — PENDING, not approved:**
+1. **The eye is greyed, "Comes with Quick Look."** Fork's eye opens Quick Look (lc9), not a
+   side-by-side toggle; R8.1 names the eye but not what it does. Options: (a) greyed until #35
+   (built, recommended: L2's form, nothing claims to be Fork's that is not); (b) the eye toggles
+   the shared side-by-side setting (the first build, a `ui.md` row as a deviation); (c) the eye
+   absent until Quick Look.
+2. **Stage All greys when nothing is left to stage**, where Fork's turns into ⌃⌃ Unstage All
+   (lc21). Recorded in `ui.md`'s Unstage All row. Option (b): flip it as Fork does (a second
+   meaning on one control, and a staging route added).
+3. **The typed subject bold and the description growing from one line**, built on Fork's
+   evidence though R8.3 says the rest of the box is unchanged; the description's old 64 px floor
+   is gone.
+4. **New metrics:** `LISTS_BAR` 18, `LIST_HEADING` 33, `LIST_HEADING_BUTTON` 22,
+   `LIST_HEADING_BUTTON_PADDING` 12, `COMMIT_BOX_INSET` 15, `COMMIT_SUBJECT` 22,
+   `COMMIT_BUTTON` 22, `COMMIT_CHEVRON` 16. No new tones.
+5. **Lucide glyphs chosen:** the eye `eye`, View Mode `list` (Fork's is a notched square that
+   never changes with the mode), Recent Commit Messages `text-align-justify`.
+6. **The real-window check** for this phase is owed, as phases 05's and 06's, or the headless
+   release render accepted in its place.
+
+**Deferred:** the selection band inset 4 px and rounded, adjacent bands merged (lc8, lc23); the
+badges as Fork's filled squares and a document glyph on each row (with phase 06's); Quick Look
+(#35); the tree, combined list, Hide Untracked Files and Show Ignored Files (#36, #70, #62);
+Commit Options and Commit and Push in the ⌄ (remote-sync); the description's line pitch (Fork's
+~15 px, Cairn's monospace 21 px). macOS unverified.
+
 ## 2026-10-20 — phase 06, the detail pane and the diff bar (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 05's d9265cd.

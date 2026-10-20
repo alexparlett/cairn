@@ -67,6 +67,8 @@ pub(crate) struct PageRow {
     pub(crate) stash: Option<PageStash>,
     /// No ref reaches the row's commit: only a reflog does.
     pub(crate) lost: bool,
+    /// `HEAD` cannot reach the row's commit ([`RowsPage::mark_beyond_head`]).
+    pub(crate) beyond_head: bool,
 }
 
 /// Rows laid out and read for one page, in walk order.
@@ -140,6 +142,22 @@ impl RowsPage {
         self.rows.get(index).is_some_and(|row| row.lost)
     }
 
+    /// Marks the row pushed last as one `HEAD` cannot reach — a commit `git rev-list HEAD` does
+    /// not list, or a stash's — which the list draws greyed. The walk decides it as the row comes
+    /// off, finally: it yields no commit before its children. A row never marked is one `HEAD`
+    /// reaches, or one whose walk does not decide it. Nothing on an empty page.
+    pub fn mark_beyond_head(&mut self) {
+        if let Some(row) = self.rows.last_mut() {
+            row.beyond_head = true;
+        }
+    }
+
+    /// Whether `HEAD` reaches row `index` of this page: every row but those marked
+    /// ([`Self::mark_beyond_head`]).
+    pub fn head_reaches(&self, index: usize) -> bool {
+        self.rows.get(index).is_some_and(|row| !row.beyond_head)
+    }
+
     /// Appends the row `graph` lays out for a stash: its id is the stash commit,
     /// its subject the stash's message.
     pub fn push_stash(&mut self, graph: GraphRow, stash: PagedStash<'_>) {
@@ -188,6 +206,7 @@ impl RowsPage {
             head,
             stash,
             lost,
+            beyond_head: false,
         });
     }
 

@@ -647,3 +647,227 @@ fn measures_the_first_page_with_show_lost_commits() {
         );
     }
 }
+
+/// Every commit row `HEAD` cannot reach, and how many stash rows a history draws; each stash
+/// row is asserted beyond `HEAD`'s reach. No wildcard arm.
+fn beyond_head(rows: &History) -> (BTreeSet<String>, usize) {
+    let mut beyond = BTreeSet::new();
+    let mut stashes = 0;
+    for row in rows.rows() {
+        match row.content() {
+            RowContent::Commit(commit) => {
+                if !row.head_reaches() {
+                    beyond.insert(commit.id.to_string());
+                }
+            }
+            RowContent::Stash(stash) => {
+                assert!(!row.head_reaches(), "stash {} drawn as HEAD's", stash.id);
+                stashes += 1;
+            }
+        }
+    }
+    (beyond, stashes)
+}
+
+/// What `HEAD`'s reach fixture names: each a commit the test can say `HEAD` reaches or not.
+struct Reached {
+    fixture: Fixture,
+    merged_side: String,
+    skewed: String,
+    side_tip: String,
+    tagged_side: String,
+    remote_only: String,
+    reset_away: String,
+}
+
+/// `main` with a merge of a side branch, a parent dated after the child `main` reaches it
+/// through, an unmerged side branch with a tag on its parent, a remote-tracking ref on a commit
+/// only it names, a reset-away commit only `HEAD`'s reflog names, and a stash on `main` — every
+/// commit `step` seconds after the last, so a `step` of nothing dates every one alike.
+fn head_reach_fixture(step: i64) -> Reached {
+    let fixture = fixtures::unborn();
+    let mut clock = Clock(fixtures::EPOCH);
+    let mut at = || {
+        clock.0 += step;
+        clock.0
+    };
+    let commit_at = |fixture: &Fixture, at: i64, text: &str, message: &str| {
+        ok(
+            std::fs::write(fixture.path().join("f"), text),
+            "writing a file",
+        );
+        git_at(fixture, at, &["add", "--all"]);
+        git_at(fixture, at, &["commit", "--quiet", "-m", message]);
+        rev_parse(fixture, "HEAD")
+    };
+    commit_at(&fixture, at(), "1\n", "root");
+    let base = commit_at(&fixture, at(), "2\n", "base");
+    git_at(&fixture, at(), &["checkout", "--quiet", "-b", "feature"]);
+    let merged_side = commit_at(&fixture, at(), "f\n", "feature work");
+    git_at(&fixture, at(), &["checkout", "--quiet", "main"]);
+    commit_at(&fixture, at(), "3\n", "main work");
+    git_at(
+        &fixture,
+        at(),
+        &[
+            "merge", "--quiet", "--no-ff", "-X", "theirs", "-m", "merge", "feature",
+        ],
+    );
+    // A parent dated well after its child, which `main` reaches it through.
+    let tree = rev_parse(&fixture, "HEAD^{tree}");
+    let merge = rev_parse(&fixture, "HEAD");
+    let late = at() + 10_000;
+    let skewed = git_at(
+        &fixture,
+        late,
+        &["commit-tree", &tree, "-p", &merge, "-m", "skewed"],
+    )
+    .trim()
+    .to_owned();
+    let child = git_at(
+        &fixture,
+        at(),
+        &["commit-tree", &tree, "-p", &skewed, "-m", "child"],
+    )
+    .trim()
+    .to_owned();
+    git_at(&fixture, at(), &["reset", "--quiet", "--hard", &child]);
+    // An unmerged side branch from `base`, its parent tagged.
+    git_at(
+        &fixture,
+        at(),
+        &["checkout", "--quiet", "-b", "bugfix", &base],
+    );
+    let tagged_side = commit_at(&fixture, at(), "b\n", "side work");
+    git_at(&fixture, at(), &["tag", "-a", "-m", "tagged", "v0.1"]);
+    let side_tip = commit_at(&fixture, at(), "c\n", "side tip");
+    // A commit only a remote-tracking ref names.
+    let remote_only = git_at(
+        &fixture,
+        at(),
+        &["commit-tree", &tree, "-p", &base, "-m", "remote only"],
+    )
+    .trim()
+    .to_owned();
+    git_at(
+        &fixture,
+        at(),
+        &["update-ref", "refs/remotes/origin/old", &remote_only],
+    );
+    git_at(&fixture, at(), &["checkout", "--quiet", "main"]);
+    // Reset away: only `HEAD`'s and `main`'s logs name it.
+    let reset_away = commit_at(&fixture, at(), "r\n", "reset away");
+    git_at(&fixture, at(), &["reset", "--quiet", "--hard", "HEAD~1"]);
+    commit_at(&fixture, at(), "4\n", "main tip");
+    // A stash on `main`.
+    ok(
+        std::fs::write(fixture.path().join("f"), "wip\n"),
+        "writing a file",
+    );
+    git_at(&fixture, at(), &["stash", "push", "--quiet", "-m", "WIP"]);
+    Reached {
+        fixture,
+        merged_side,
+        skewed,
+        side_tip,
+        tagged_side,
+        remote_only,
+        reset_away,
+    }
+}
+
+/// `git rev-list <every tip> --not HEAD`: what the history draws that `HEAD` cannot reach —
+/// with Show Lost Commits, every id the logs of `HEAD` and the local branches hold among the
+/// tips, as the walk reads them (`refs/stash`'s log is the stash list, not a tip).
+fn beyond_head_by_git(fixture: &Fixture, lost_commits: bool) -> BTreeSet<String> {
+    let ids = if lost_commits {
+        ids_in_the_log_files(fixture)
+    } else {
+        BTreeSet::new()
+    };
+    let mut args = vec!["rev-list"];
+    args.extend(ids.iter().map(String::as_str));
+    args.extend(["--branches", "--remotes", "--tags", "--not", "HEAD"]);
+    lines(&fixture.git(&args))
+}
+
+/// Every route, page size and window marks exactly `expected` among the commits beyond
+/// `HEAD`'s reach, and draws `stashes` stash rows, each beyond it.
+fn assert_every_route_marks(
+    fixture: &Fixture,
+    lost_commits: bool,
+    expected: &BTreeSet<String>,
+    stashes: usize,
+) {
+    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let read = ok(repo.refs(&CancelSignal::new()), "reading the refs");
+    for window in [1, 3, 1024] {
+        for page in [1, 2, 5, 64] {
+            let mut request = HistoryRequest::from_refs(&read.snapshot, page).with_window(window);
+            if lost_commits {
+                request = request.with_lost_commits();
+            }
+            for (route, rows) in [
+                ("held", held(&repo, &request, page)),
+                ("cold", cold(&repo, request.clone(), page)),
+            ] {
+                assert_eq!(
+                    beyond_head(&rows),
+                    (expected.clone(), stashes),
+                    "{route} walk, page {page}, window {window}, lost commits {lost_commits}"
+                );
+            }
+        }
+    }
+}
+
+/// The walk marks what `HEAD` cannot reach as `git rev-list HEAD` says, on every route, page
+/// size and window, with Show Lost Commits off and on, with every commit dated alike and with
+/// a parent dated after its child, `HEAD` on a branch and detached; a stash's row is never
+/// reached. Caught by: a mark decided before every child came off (the skewed parent marked
+/// beyond `HEAD`), a merge's second parent left unmarked as reached, a parent taken for
+/// reached through an unreached child (the tagged commit under the side tip), a stash's row
+/// drawn as `HEAD`'s, the mark lost on a page boundary or on the cold route's replay, or a
+/// lost commit drawn as `HEAD`'s.
+#[test]
+fn the_walk_marks_what_head_reaches_as_git_rev_list_does() {
+    for step in [60, 0] {
+        let reached = head_reach_fixture(step);
+        let fixture = &reached.fixture;
+        let head: BTreeSet<String> = lines(&fixture.git(&["rev-list", "HEAD"]));
+        for (what, commit, reaches) in [
+            ("the merged side commit", &reached.merged_side, true),
+            ("the parent dated after its child", &reached.skewed, true),
+            ("the side branch's tip", &reached.side_tip, false),
+            ("the tagged side commit", &reached.tagged_side, false),
+            ("the remote-only commit", &reached.remote_only, false),
+            ("the reset-away commit", &reached.reset_away, false),
+        ] {
+            assert_eq!(head.contains(commit), reaches, "git, step {step}: {what}");
+        }
+        if step > 0 {
+            let date = |id: &str| fixture.git(&["log", "-1", "--format=%ct", id]);
+            let child = rev_parse(fixture, "main~1");
+            assert!(
+                date(&reached.skewed) > date(&child),
+                "the fixture is not skewed"
+            );
+        }
+
+        for lost_commits in [false, true] {
+            let expected = beyond_head_by_git(fixture, lost_commits);
+            assert_eq!(
+                expected.contains(&reached.reset_away),
+                lost_commits,
+                "only Show Lost Commits draws the reset-away commit"
+            );
+            assert_every_route_marks(fixture, lost_commits, &expected, 1);
+        }
+
+        // Detached on the side branch: what `HEAD` reaches is the side branch's history now.
+        fixture.git(&["checkout", "--quiet", "--detach", &reached.side_tip]);
+        let expected = beyond_head_by_git(fixture, false);
+        assert!(!expected.contains(&reached.tagged_side) && expected.contains(&reached.skewed));
+        assert_every_route_marks(fixture, false, &expected, 1);
+    }
+}

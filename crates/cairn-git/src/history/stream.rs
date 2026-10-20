@@ -11,13 +11,15 @@
 //! commit's row, never a stash's.
 //!
 //! With Show Lost Commits, which always walks in date order, each commit's row says whether
-//! no ref reaches it, decided as it comes off the walk (`reach`).
+//! no ref reaches it, decided as it comes off the walk (`reach`). A walk from refs in date
+//! order says too whether `HEAD` reaches each row (`head_reach`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use cairn_model::Oid;
 
+use super::head_reach::HeadReach;
 use super::reach::Reach;
 use super::seeds::Decoration;
 use super::walk::{CommitWalk, Grafted, Step};
@@ -31,9 +33,12 @@ pub(super) enum Entry {
         parents: Vec<Oid>,
         /// No ref reaches it: only a reflog does (Show Lost Commits).
         lost: bool,
+        /// `HEAD` cannot reach it, in a walk that decides it.
+        beyond_head: bool,
     },
-    /// The stash at this index of the decoration's stashes.
-    Stash(usize),
+    /// The stash at index `at` of the decoration's stashes; `beyond_head` in a walk that
+    /// decides `HEAD`'s reach, which never reaches a stash's row.
+    Stash { at: usize, beyond_head: bool },
 }
 
 /// What [`Stream::next`] found.
@@ -66,6 +71,8 @@ pub(super) struct Stream<'repo> {
     /// Which commits no ref reaches, when the walk has tips only reflogs name (Show Lost
     /// Commits); `None` when every commit it walks is reached.
     reach: Option<Reach>,
+    /// Which rows `HEAD` reaches, when the walk decides it; `None` when it does not.
+    head: Option<HeadReach>,
     decoration: Arc<Decoration>,
 }
 
@@ -81,13 +88,14 @@ impl std::fmt::Debug for Stream<'_> {
 
 impl<'repo> Stream<'repo> {
     /// `stashes_walked` when `walk` yields the stashes' rows itself; `reach` decides which
-    /// commits no ref reaches, for a walk with tips only reflogs name.
+    /// commits no ref reaches, for a walk with tips only reflogs name; `head` which rows `HEAD`
+    /// reaches, for a walk that yields no commit before its children.
     pub(super) fn new(
         walk: CommitWalk<'repo>,
         objects: Grafted<'repo>,
         decoration: Arc<Decoration>,
         stashes_walked: bool,
-        reach: Option<Reach>,
+        (reach, head): (Option<Reach>, Option<HeadReach>),
     ) -> Self {
         let stashes = decoration.stashes();
         let mut by_base: HashMap<Oid, Vec<usize>> = HashMap::new();
@@ -117,6 +125,7 @@ impl<'repo> Stream<'repo> {
             held: None,
             pulled: 0,
             reach,
+            head,
             decoration,
         }
     }
@@ -149,7 +158,10 @@ impl<'repo> Stream<'repo> {
                 {
                     reach.passed(&stash.id);
                 }
-                return Ok(Next::Entry(Entry::Stash(at)));
+                return Ok(Next::Entry(Entry::Stash {
+                    at,
+                    beyond_head: self.head.is_some(),
+                }));
             }
             Step::End => return Ok(Next::End),
             Step::Cancelled => return Ok(Next::Cancelled),
@@ -161,13 +173,22 @@ impl<'repo> Stream<'repo> {
             .reach
             .as_mut()
             .is_some_and(|reach| reach.pulled(id, &parents));
+        let beyond_head = self
+            .head
+            .as_mut()
+            .is_some_and(|head| !head.pulled(&id, &parents));
         if let Some(&stash) = self.by_commit.get(&id) {
             // The walk reaches the stash commit itself: that is a commit's row.
             if let Some(place) = self.placed.get_mut(stash) {
                 *place = true;
             }
         }
-        Ok(Next::Entry(self.above(Entry::Commit { id, parents, lost })))
+        Ok(Next::Entry(self.above(Entry::Commit {
+            id,
+            parents,
+            lost,
+            beyond_head,
+        })))
     }
 
     /// `commit`, or — in an order whose walk yields no stash — the newest stash on it not yet
@@ -188,7 +209,10 @@ impl<'repo> Stream<'repo> {
                     *place = true;
                 }
                 self.held = Some(commit);
-                Entry::Stash(stash)
+                Entry::Stash {
+                    at: stash,
+                    beyond_head: self.head.is_some(),
+                }
             }
             None => commit,
         }

@@ -78,6 +78,8 @@ const HEAD: u8 = 1 << 1;
 const LABELLED: u8 = 1 << 2;
 /// A row's flags: no ref reaches its commit, only a reflog's entry.
 const LOST: u8 = 1 << 3;
+/// A row's flags: `HEAD` cannot reach its commit.
+const BEYOND_HEAD: u8 = 1 << 4;
 /// No row: `HEAD`'s commit not held yet.
 const NO_ROW: u32 = u32::MAX;
 /// The end of a chain of authors whose names hash alike.
@@ -95,8 +97,8 @@ struct StoredRow {
     /// Saturating: only whether a commit has more than one parent is drawn.
     parents: u16,
     id: Oid,
-    /// [`STASH`], [`HEAD`], [`LABELLED`] and [`LOST`]: the byte the row's other fields leave
-    /// free.
+    /// [`STASH`], [`HEAD`], [`LABELLED`], [`LOST`] and [`BEYOND_HEAD`]: the byte the row's
+    /// other fields leave free.
     flags: u8,
 }
 
@@ -335,6 +337,9 @@ impl History {
             }
             if row.lost {
                 flags |= LOST;
+            }
+            if row.beyond_head {
+                flags |= BEYOND_HEAD;
             }
             let page_labels = page
                 .labels
@@ -635,6 +640,14 @@ impl<'h> HistoryRow<'h> {
         self.row.flags & LOST != 0
     }
 
+    /// Whether `HEAD` reaches the row's commit, as `git rev-list HEAD` lists it, so the list
+    /// draws its text in the body's tone rather than the unreachable grey. True for every row
+    /// the walk did not mark ([`crate::RowsPage::mark_beyond_head`]); a stash's row is marked by
+    /// every walk that decides it.
+    pub fn head_reaches(&self) -> bool {
+        self.row.flags & BEYOND_HEAD == 0
+    }
+
     /// The refs pointing at the row's commit, and whether it is `HEAD`'s, from
     /// the snapshot the walk began from. A stash's row carries none: `refs/stash` labels no
     /// row.
@@ -759,6 +772,78 @@ mod tests {
         history.append(next).unwrap();
         assert_eq!(lost(&history), [false, true, true, false, false, true]);
         assert_eq!(history.len(), 6);
+    }
+
+    /// `HEAD`'s reach: a row marked as beyond it reads back so — a commit's, a lost one's, a
+    /// stash's — every row not marked reads back reached, the mark sits on the row pushed last
+    /// alone, it is a flag of its own beside `HEAD`'s, the labels' and the lost one, and a later
+    /// page changes no row held. Caught by: the flag dropped on the way into the history, set on
+    /// another row, sharing a bit with another flag (a lost or labelled row reading back beyond
+    /// `HEAD`), or a mark on an empty page landing on the next page's row.
+    #[test]
+    fn a_row_beyond_heads_reach_reads_back_so_and_no_other_does() {
+        let mut first = RowsPage::new();
+        first.mark_beyond_head();
+        first.push_labelled(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("side tip", "Ada", 1),
+            false,
+            &[label("refs/heads/side", crate::RefKind::LocalBranch, false)],
+        );
+        first.mark_beyond_head();
+        first.push_labelled(
+            GraphRow::new(oid(2), Lane::new(1), Vec::new()),
+            commit("head", "Ada", 1),
+            true,
+            &[label("refs/heads/main", crate::RefKind::LocalBranch, true)],
+        );
+        first.push_lost(
+            GraphRow::new(oid(3), Lane::new(2), Vec::new()),
+            commit("amended away", "Ada", 1),
+        );
+        first.mark_beyond_head();
+        assert_eq!(
+            (0..3).map(|at| first.head_reaches(at)).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+        assert!(!first.head_reaches(3), "a row the page does not hold");
+        let mut history = History::new();
+        history.append(first).unwrap();
+        page_stash(&mut history, oid(9), 0, oid(2), "WIP on main");
+        let mut next = RowsPage::new();
+        next.push(
+            GraphRow::new(oid(4), Lane::new(0), Vec::new()),
+            commit("reached", "Ada", 1),
+        );
+        history.append(next).unwrap();
+
+        let reached: Vec<bool> = history.rows().map(|row| row.head_reaches()).collect();
+        assert_eq!(reached, [false, true, false, true, true]);
+        let side = history.row(0).unwrap();
+        assert!(!side.is_lost() && !side.labels().is_head() && side.labels().len() == 1);
+        let head = history.row(1).unwrap();
+        assert!(head.labels().is_head() && !head.is_lost());
+        assert!(history.row(2).unwrap().is_lost());
+
+        let mut stash = RowsPage::new();
+        stash.push_stash(
+            GraphRow::new(oid(8), Lane::new(0), Vec::new()),
+            crate::PagedStash {
+                index: 1,
+                base: oid(4),
+                message: "On main: WIP",
+                author: "Ada",
+                author_time: 1,
+            },
+        );
+        stash.mark_beyond_head();
+        history.append(stash).unwrap();
+        let held = history.row(5).unwrap();
+        assert!(!held.head_reaches() && matches!(held.content(), RowContent::Stash(_)));
+        assert!(
+            history.row(4).unwrap().head_reaches(),
+            "a later page moved no row"
+        );
     }
 
     /// Stashes on pages of their own and among commits: each reads back as its stash —

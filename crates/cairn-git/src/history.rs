@@ -6,6 +6,7 @@
 //! (`date_order`), as `git log --date-order` and Fork's graph do.
 
 mod date_order;
+mod head_reach;
 mod reach;
 mod reflogs;
 mod seeds;
@@ -22,6 +23,7 @@ use cairn_model::{
 pub use date_order::{DateOrderTips, DateOrderWalk, DateOrdered};
 pub use session::HistorySession;
 
+use head_reach::HeadReach;
 use reach::Reach;
 use seeds::{Decoration, RefSeeds};
 use stream::{Entry, Next, Stream};
@@ -130,6 +132,10 @@ fn open_stream<'repo>(
         *marking = Marking::Read { refs };
     }
     let reach = marking.reach(tips)?;
+    // `HEAD`'s reach is decided as each row comes off a walk that yields no commit before its
+    // children, which only date order is, and only a walk from refs knows `HEAD`.
+    let head = (order == HistoryOrder::DateOrder && decoration.walked_from_refs())
+        .then(|| HeadReach::new(decoration.head()));
     let (refs, reflogs) = match marking {
         Marking::Read { refs } => tips.split_at((*refs).min(tips.len())),
         Marking::Off | Marking::Unread(_) => (&tips[..], &[][..]),
@@ -162,7 +168,7 @@ fn open_stream<'repo>(
         objects,
         Arc::clone(decoration),
         stashes_walked,
-        reach,
+        (reach, head),
     )))
 }
 
@@ -419,7 +425,7 @@ fn read_page(
 fn lay_out(assigner: &mut LaneAssigner, decoration: &Decoration, entry: Entry) -> Option<GraphRow> {
     match entry {
         Entry::Commit { id, parents, .. } => assigner.push(id, parents),
-        Entry::Stash(at) => {
+        Entry::Stash { at, .. } => {
             let stash = decoration.stashes().get(at)?;
             assigner.push_stash(stash.id, stash.base)
         }
@@ -434,28 +440,47 @@ enum Laid {
         commit: Commit,
         /// No ref reaches it (Show Lost Commits).
         lost: bool,
+        /// `HEAD` cannot reach it.
+        beyond_head: bool,
     },
-    /// The stash at this index of the walk's decoration, read when the walk opened.
-    Stash(usize),
+    /// The stash at `at` of the walk's decoration, read when the walk opened.
+    Stash { at: usize, beyond_head: bool },
 }
 
 /// An entry laid out and not yet read: a commit by its id, how many parents the walk read
-/// for it and whether no ref reaches it, or a stash.
+/// for it, whether no ref reaches it and whether `HEAD` cannot, or a stash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pending {
-    Commit { id: Oid, parents: usize, lost: bool },
-    Stash(usize),
+    Commit {
+        id: Oid,
+        parents: usize,
+        lost: bool,
+        beyond_head: bool,
+    },
+    Stash {
+        at: usize,
+        beyond_head: bool,
+    },
 }
 
 impl Pending {
     fn of(entry: &Entry) -> Self {
         match entry {
-            Entry::Commit { id, parents, lost } => Self::Commit {
+            Entry::Commit {
+                id,
+                parents,
+                lost,
+                beyond_head,
+            } => Self::Commit {
                 id: *id,
                 parents: parents.len(),
                 lost: *lost,
+                beyond_head: *beyond_head,
             },
-            Entry::Stash(at) => Self::Stash(*at),
+            Entry::Stash { at, beyond_head } => Self::Stash {
+                at: *at,
+                beyond_head: *beyond_head,
+            },
         }
     }
 }
@@ -464,18 +489,28 @@ impl Laid {
     /// A commit's row reads its commit, as git reads it (`objects`); a stash's reads nothing.
     fn read(objects: &walk::Grafted<'_>, pending: Pending) -> Result<Self, Error> {
         Ok(match pending {
-            Pending::Commit { id, parents, lost } => Self::Commit {
+            Pending::Commit {
+                id,
+                parents,
+                lost,
+                beyond_head,
+            } => Self::Commit {
                 id,
                 commit: summary_of_commit(objects, &id, parents)?,
                 lost,
+                beyond_head,
             },
-            Pending::Stash(at) => Self::Stash(at),
+            Pending::Stash { at, beyond_head } => Self::Stash { at, beyond_head },
         })
     }
 
     /// Appends the row `graph` lays out for this to `rows`, with its labels — or, for a
-    /// commit no ref reaches, as lost.
+    /// commit no ref reaches, as lost — marked when `HEAD` cannot reach it.
     fn push_to(&self, rows: &mut RowsPage, graph: GraphRow, decoration: &Decoration) {
+        let before = rows.len();
+        let beyond_head = match self {
+            Self::Commit { beyond_head, .. } | Self::Stash { beyond_head, .. } => *beyond_head,
+        };
         match self {
             Self::Commit {
                 commit, lost: true, ..
@@ -486,13 +521,14 @@ impl Laid {
                 id,
                 commit,
                 lost: false,
+                ..
             } => rows.push_labelled(
                 graph,
                 commit.paged(),
                 decoration.is_head(id),
                 &decoration.labels_of(id),
             ),
-            Self::Stash(at) => {
+            Self::Stash { at, .. } => {
                 if let Some(stash) = decoration.stashes().get(*at) {
                     rows.push_stash(
                         graph,
@@ -506,6 +542,10 @@ impl Laid {
                     );
                 }
             }
+        }
+        // Only on the row this pushed: a stash the decoration no longer holds pushes none.
+        if beyond_head && rows.len() > before {
+            rows.mark_beyond_head();
         }
     }
 }

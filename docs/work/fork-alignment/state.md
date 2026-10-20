@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-20.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04 and 05 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02, 03, 04, 05 and 06 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -199,6 +199,25 @@ accelerator actions, guard names, `deny.toml` pins.
   (`gear`, `chosen`, `ref_name_text`, `repository_path_text`); `SIDEBAR_WIDTH` = 300.
 - Evidence: `docs/research/ui-review/fork-sidebar-2026-10-20.md`.
 
+**Phase 06:**
+- `cairn-ui`: `committer_differs(author, committer)` (name, address or instant to the second);
+  `COMMIT_TAB_ROW_HEIGHT` = `metrics::DIFF_ROW` (17), the Commit tab's one pitch —
+  `DETAIL_ROW_HEIGHT` (24) stays the Changes list's and Local Changes'; the Commit tab's people
+  block (`Line::People`, `BlockRow`, the avatar as three overlapping bands) and `ExpandAll` (a Tab
+  stop); `AvatarSize { Row, Summary, Detail }` and `avatar_of(name, size)` (`avatar(name)` is
+  `Row`); `SUMMARY_ID_LENGTH` (9); `bar_tooltip(HeaderAction, Os)`, `HeaderAction::{ALL, action,
+  label}`, the bar's `BarButton` (Tab stop, hover square, toggled state for assistive
+  technology); labels `PREVIOUS_CHANGE_LABEL` "Go to previous change", `NEXT_CHANGE_LABEL` "Go to
+  next change", `SIDE_BY_SIDE_LABEL` "Side by side diff"; `DIFF_HEADER_HEIGHT` =
+  `metrics::DIFF_BAR`, `SUMMARY_HEIGHT` = `metrics::DETAIL_SUMMARY`, `DETAIL_STRIP_HEIGHT` =
+  `metrics::DETAIL_STRIP`. `diff/toggle_glyphs.rs` removed; `DiffSettings::can_show_fewer_lines`
+  and `can_show_more_lines` removed.
+- Icons: `chevron_up`, `whitespace`, `fewer_lines`, `more_lines`, `entire_file` (the three
+  mirrored), `side_by_side`, `file`, `swap`, `stage_all`, `unstage_all`. Metrics and tones: the
+  progress entry's batch item 6.
+- `cairn-app`: `shortcuts::of_header` delegates to `HeaderAction::action`.
+- Evidence: `docs/research/ui-review/fork-committer-2026-10-20.md`.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
@@ -208,7 +227,7 @@ accelerator actions, guard names, `deny.toml` pins.
 | 03 | done (C7, C8, C9, C18's Ctrl+Shift+D half met; option A by the user; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 10 of 14 confirmed and fixed (Q2 probed and fixed), 4 dismissed |
 | 04 | done (C10, C11, C12, C13 met; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 11 of 18 confirmed and fixed, G4 escalated (recorded, batched), 6 dismissed; fixes verified by a fresh qa-confirm |
 | 05 | done (C14 met but its "Return opens Local Changes or All Commits" clause, built as Fork's and batched; C21's sidebar half met; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 16 raw (two pairs merged), 12 confirmed (9 fixed, Q1/Q2/Q7 batched), Q5 and R3 dismissed, T1's mutation half dismissed on re-run; fixes verified by a fresh qa-confirm |
-| 06 | not started | — | — |
+| 06 | done (C15 met; Q1 Tab stops and the 17 px pitch batched; real window NOT RUN — host compositor socket gone, headless release render instead; macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage; qa-confirm: 20 raw, 11 confirmed (4 merged) and fixed or recorded, Q1 escalated (decided, batched), 4 dismissed |
 | 07 | not started | — | — |
 | 08 | not started | — | — |
 | 09 | not started | — | — |

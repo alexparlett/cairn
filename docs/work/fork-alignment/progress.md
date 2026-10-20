@@ -3,6 +3,150 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-20 — phase 06, the detail pane and the diff bar (packet mode)
+
+Committed onto `feature/fork-alignment` over phase 05's d9265cd.
+
+- **Fork observed first** (`/observe-fork`, fork-observer agent, Fork 2.23.2.0 Dark, shots `cm*`):
+  `docs/research/ui-review/fork-committer-2026-10-20.md`. VERIFIED: a COMMITTER block is drawn for
+  a committer differing by name alone, address alone, an hour or one second later, and not for the
+  same instant written at another offset nor for the same committer — so Fork compares name,
+  address and the instant to the second; the block stands beside AUTHOR on the same rows, its
+  42 px avatar the committer's, its date in the machine's offset; the Changes summary and the
+  history row are the author's; the bar's seven tooltips verbatim; a toggled-on glyph is #419BF9
+  with nothing behind it; Show entire file greys both line buttons, Decrease never greys (at one
+  line a press does nothing); hover is a #242424 16 px square; buttons repeat every 20 px; the bar
+  is 17 px between rules. NOT OBSERVED: whether Fork compares the instant or the date as shown
+  (the fixture cannot tell them apart), the hover look of a toggled button, Fork's starting
+  context.
+- **What shipped** (R7, C15):
+  - The tab strip (R7.1): Fork's 31 px strip between rules (`metrics::DETAIL_STRIP`), 96 px tabs
+    from the pane's edge with the full-width underline, the hide-details icon at the right
+    (phase 03's). Test: `the_strip_reports_its_tabs_and_its_collapse` (kept).
+  - The Commit tab (R7.2): AUTHOR caps label over the author's block — 42 px avatar
+    (`cairn_ui::AvatarSize::Detail`, `avatar_of`), bold name and the address, the date with its
+    seconds and offset — the COMMITTER block beside it only where it differs
+    (`cairn_ui::committer_differs`), REFS absent without refs, SHA, PARENTS (standing empty for a
+    root commit, as Fork's, cm13), the message and the paths in the values' column, Expand All its
+    caption alone, a document glyph on each file row. Every row is the diff's 17 px
+    (`COMMIT_TAB_ROW_HEIGHT`), so a file opened in place draws its diff at the diff's row height;
+    the avatar spans three rows as overlapping bands. Tests: **`the_committer_is_shown_only_where_it_differs`**
+    (C15), `the_people_block_draws_each_persons_avatar_whole_across_its_rows`,
+    `the_message_and_the_paths_stand_in_the_values_column`, and the twins
+    `only_a_viewport_of_rows_is_built_however_many_files_are_open` and
+    `only_a_viewport_of_files_is_built_however_many_the_commit_touched`, held at the new pitch
+    (the expansion twin's `rows_built` now counts full-width one-pitch row rects, since the rows
+    under the avatar and the rules hold no text; its end-room expectation read from
+    `with_end_room`). The pitch change did not break `cairn_ui::Expansion`'s placement — the
+    phase's stopping rule — since every row moved to the one pitch together.
+  - The Changes summary (R7.3): the author's 18 px avatar, the name, the id's first nine
+    characters and the short date in the secondary tone, the subject bold, on Fork's 23 px strip
+    (`metrics::DETAIL_SUMMARY`). Test: **`the_changes_summary_opens_with_the_avatar`** (C15),
+    `the_summary_is_author_short_id_date_and_subject` (expectation changed to Fork's nine
+    characters and short date, uw5/cm14). The file list's filter now stands in a bar level with
+    the diff's (a magnifier, Fork's tone and rule), keeping Cairn's "Filter" placeholder.
+  - The diff bar (R7.4): Fork's order, the path centred with its document glyph, Lucide glyphs
+    (`chevron-up`, `chevron-down`, `space`, `list-minus`, `list-plus`,
+    `list-chevrons-up-down` — the three list glyphs mirrored so the sign stands left as Fork's —
+    `columns-2`), Fork's tooltips verbatim with the chord read from the table
+    (`cairn_ui::bar_tooltip`, `HeaderAction::action`, which `shortcuts::of_header` now
+    delegates to), the toggled glyph #419BF9, the hover square, the bar 17 px + rule
+    (`metrics::DIFF_BAR`). `toggle_glyphs.rs` retired: every glyph it drew is Lucide's (the
+    Commit tab's chevrons, the comparison's swap `arrow-up-down`, Stage All / Unstage All
+    `chevrons-down` / `chevrons-up`). Tests: **`the_diff_bar_is_forks_with_its_tooltips`** (C15),
+    `every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue`,
+    `each_bar_button_draws_its_forks_glyph`,
+    `the_bar_reports_each_button_and_greys_the_line_buttons_for_the_entire_file` (expectation
+    changed to Fork's: Decrease stays pressable at one line, cm38),
+    `a_hovered_bar_button_stands_on_its_square_unless_it_is_disabled`,
+    `every_bar_button_that_can_be_pressed_is_a_tab_stop`, `each_button_does_its_own_action`.
+  - The bands and hunk header (R7.5): already Fork Dark's since phase 01
+    (`each_tint_is_forks_measured_value_on_forks_ground`); nothing left.
+- **Evidence over the PRD's paraphrase** (qa-checklist item 1): R7.2 leaves to the observation
+  which fields count — built as observed (name, address, instant to the second, not offset); it
+  does not say where the block stands (beside AUTHOR, cm7z) nor that the committer's date is the
+  machine's offset (Cairn draws both dates in the zone the window is handed, which is the same
+  thing); R7.4 does not say Decrease never greys (cm38) — built as Fork's; FS1 §6 calls the
+  summary's id "ten characters" where its own quoted `f93015d03` and cm14's `1c63ef316` are nine —
+  built nine; R7.3 says nothing of the summary's date form, Fork's is the history's
+  `16 Oct 2026 12:12` — built so. Two earlier user decisions recorded in `docs/systems/diff.md`
+  are superseded by R7.2 as written: the Commit tab's in-place pitch kept at 24 px (2026-10-04,
+  which named "the whole Commit tab at 17 px" as the alternative) and the committer drawn always.
+  Both are in the batch below.
+- **Committer column x** (QA Q2): Cairn's committer avatar starts at the row's middle + 20 px,
+  Fork's at middle + 17 at the one pane width measured; left as is.
+- **Real window — NOT RUN in the compositor** (qa-checklist items 5-7). Hyprland's command socket
+  is still missing (`.socket.sock` absent under `/run/user/1000/hypr/<instance>/`; `hyprctl`
+  cannot connect). `grim` captures and the session is unlocked, but with no `hyprctl` the window
+  cannot be sized to 1024×768 or 880×620, and `wtype` would type into whatever the user has
+  focused on the desktop they were using, so the release build was not launched there.
+  **Substitute:** the real `window()` with the real worker over the fixture
+  (`fixture-recipe.md`, built on the host, its "Local only commit" given Grace Hopper as committer
+  so the COMMITTER block shows), Fork Dark's launch theme, rendered headlessly in a release build
+  at 1024×768 and 880×620 (a scratch `#[ignore]` test, not committed), the merge, the local-only
+  commit and the root commit each in the Commit and Changes tabs. Compared with uv2f, uv7b, uv9z,
+  uv10z, uw5a and cm7z: the strip, tabs and underline, the summary line, the bars (both 17 px,
+  level), the glyphs and their order, the author and committer blocks and their columns, REFS,
+  SHA, PARENTS, the message and file columns match. Differences seen: Lucide's glyphs and Fork's
+  own artwork (L4; Fork's −≡ has four lines to Lucide's three); the header's and file rows' 17 px
+  pitch against Fork's ~20 and 22 (batched); the file badges are coloured letters where Fork draws
+  filled squares and the paths IBM Plex Mono where Fork's are its UI face (R1.6 keeps the mono);
+  Fork's ⌄ beside an address and its pop-out icon not drawn; Fork's Changes list rows ~20 px to
+  Cairn's 24 (no requirement of this phase). It cannot show the compositor's fonts, real hover,
+  tooltips, focus rings or input.
+- **QA.** Fresh `qa-checklist`, `responsiveness-reviewer` and `test-coverage-auditor` in the
+  foreground (no guard, script or CI change, so no gate-integrity reviewer); a fresh `qa-confirm`
+  adjudicated 20 raw findings into 11 confirmed (4 merged), 1 escalated, 4 dismissed:
+  - Confirmed and fixed: T1 (the lit-glyph check accepted the accent's blue — now held to Fork's
+    by its red), Q5/T2/T10/T11 merged (the Commit tab's avatar unpinned — bands, offset, overlap,
+    size, weight, the author's own), T3 (the committer's own date), T4 (the greyed line buttons'
+    look and disabled flag), T5 (a test doc claiming to catch a typed chord, which is the
+    modifier guard's), T6/Q4 merged (the glyph per button and its mirroring — pixel-exact against
+    the style module's icon), T7 (the bar's action mapping), T8 (the values' column), T9 (the hover
+    square). Q2 and Q3: recorded above. Glyph mutations (Increase unmirrored, Decrease given
+    Increase's glyph) were run and fail `each_bar_button_draws_its_forks_glyph`.
+  - Escalated, decided and batched: Q1 — drawn as plain shapes the bar's five chordless toggles
+    and Expand All had lost keyboard reach (they were the toolkit's focusable buttons before this
+    phase); Fork's Tab cycle (FS2 §3) reaches neither. Decided: kept as Tab stops (0d637de), a
+    `docs/design/ui.md` row — batched for the user.
+  - A fresh `qa-confirm` verified the fixes by one mutation each (10 of 10 killed). Left open, for
+    phase 08's focus work: Expand All's Tab stop and the bar's 1 px focus ring have no test, and
+    a greyed bar button holding keyboard focus may keep its ring (unprobed).
+  - Dismissed, with reasons: Q6 (the exhaustive-read invariant over `DiffContent` and the diff's
+    row enums scopes production `src/` and leaves `tests/` out by design); R1, R2, R3 (the
+    responsiveness reviewer's own notes, no defect claimed: SVG rasters cached per icon, size and
+    tone; the avatar's bands bounded per built row; `bar_tooltip` constant per button render).
+
+**Batched for the user — PENDING, not approved:**
+1. **The Commit tab's one 17 px pitch.** R7.2/C15's "an opened file's diff at the diff's row
+   height" in a single fixed-pitch virtualized list moves every row to 17 px — header rows (Fork
+   ~20) and file rows (Fork 22) too. It reverses the 2026-10-04 decision that kept 24 px. Options:
+   (a) keep (recommended: C15 as written, the virtualization invariant intact, a ui.md row);
+   (b) back to 24 px everywhere, C15 amended.
+2. **COMMITTER only where it differs** reverses the earlier "both always, as git's `fuller`"
+   decision; R7.2 asks for it. Ratify or not.
+3. **Q1: the bar's buttons and Expand All stay Tab stops**, against Fork's three-stop Tab cycle
+   (a ui.md row). Option (b): Fork's, the five chordless toggles reached by pointer alone.
+4. **Decrease is never greyed at one line**, as Fork's (cm38); Cairn greyed it before.
+5. **Two small deviations as ui.md rows:** the Changes list's filter keeps its "Filter"
+   placeholder (Fork's is blank); Fork's ⌄ beside an address is not drawn.
+6. **New metrics:** `DETAIL_STRIP` 33, `DETAIL_TAB` 96, `DETAIL_SUMMARY` 24, `DIFF_BAR` 18,
+   `DIFF_BAR_ICON` 14, `DIFF_BAR_BUTTON` 16, `DIFF_BAR_GAP` 4, `DETAIL_AVATAR` 42,
+   `DETAIL_AVATAR_TEXT` 20, `SUMMARY_AVATAR` 18, `SUMMARY_AVATAR_TEXT` 9, `COMMIT_TAB_INSET` 20,
+   `COMMIT_TAB_CAPTIONS` 62, `COMMIT_TAB_GAP` 16; `DETAIL_SUBJECT` 15 → 14; `SWAP_GLYPH` and
+   `ENTIRE_FILE_GLYPH` removed. **New tones:** `DIFF_BAR_ICON` #CFCFCF, `DIFF_BAR_ON` #419BF9,
+   `DIFF_BAR_HOVER` #242424.
+7. **Lucide glyphs chosen** for the bar (above), the comparison's swap (`arrow-up-down`) and Stage
+   All / Unstage All (`chevrons-down` / `chevrons-up`); the stopping rule (no close Lucide
+   equivalent) did not trigger — each reads as Fork's, the list glyphs mirrored to put the sign
+   left. Fork's swap glyph was not observed.
+8. **The real-window check** (qa items 5-7) for this phase is owed, as phase 05's, or the
+   headless release render accepted in its place.
+
+**Deferred:** the file rows' badges as Fork's filled squares (Commit tab and Changes list) and the
+Changes list's ~20 px rows; Fork's ⌄ menu beside an address; the pop-out window; File Tree (#31),
+Quick Look (#35), hidden symbols (#33), word wrap (#34). macOS unverified.
+
 ## 2026-10-20 — phase 05, the sidebar (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 04's 4eea6ae.

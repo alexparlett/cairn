@@ -2235,7 +2235,8 @@ the document on macOS). The 3 beside the tab chords is kept for a File Tree tab 
 nothing yet. Fork binds no chord to the four diff toggles or the entire file, so they are
 actions without one, reached from the diff's header. The previous and next file are not
 chords at all: they are the focused file list's own ↑ and ↓, with Tab and Shift-Tab moving
-focus, as Fork does (the detail pane, above). No collapse chord: the user's decision. Refresh
+focus, as Fork does (the detail pane, above). Hide Commit Details is Ctrl+Shift+D on Linux, Fork
+for Windows' View menu chord; none on macOS, where ⇧⌘D stays discard. Refresh
 is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md` ⌘R and
 `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows row, as it
 does for every chord here, and F5 is bound by no Linux desktop nor by any other action. Fork

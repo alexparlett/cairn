@@ -1609,7 +1609,8 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   repository today — git's date order, the history thread, the opening pass in the
   window — with the twin that pins each rule, and Show Lost Commits and
   Create Branch. `window-frame.md`: the caption row and the frame, the one menu component, the
-  menu bar's items, the desktop's title, the zoom and About Cairn. `credentials.md`: the
+  menu bar's items, the toolbar and its status box, the window's regions and its minimum size,
+  the desktop's title, the zoom and About Cairn. `credentials.md`: the
   askpass helper and its channel, fetch end to end, and the decisions the
   packet locked. `git-processes.md`: where every `git` process is built, the
   read/write seal, the environment each kind of invocation runs with, the

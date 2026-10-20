@@ -110,7 +110,7 @@ fn head_at(test: &mut TestingRunner, view: View, at: Oid) {
 }
 
 /// The menus are Fork's File, View, Repository, Window and Help, in its order and groups, holding
-/// exactly the items Cairn does — Hide Commit Details showing no chord until it has one — each
+/// exactly the items Cairn does — Hide Commit Details showing the table's chord, none on macOS — each
 /// greyed with its reason when it cannot act: Show HEAD and New Branch… until the refs are read,
 /// Fetch with no remote and while one runs, everything a repository answers while none is open.
 /// Caught by: an item Cairn does not do, an item out of Fork's order or

@@ -364,11 +364,12 @@ fn contains(outer: Area, inner: Area) -> bool {
 }
 
 /// Fork's box (uv12c, uw36a): one bordered field holding the subject over a rule over the
-/// description, the Recent Commit Messages glyph at the subject's right end inside it; under it
-/// Amend at the left and the split button at the right — its caption, then its ⌄ beside it, a
-/// control of its own, greyed and saying it comes with pull and push whether the caption can be
-/// pressed or not, its press reporting nothing. Caught by: two separate fields, the glyph
-/// outside the field, the ⌄ missing, enabled, or silent, or a press on it committing.
+/// description, one line while empty (lc28), the Recent Commit Messages glyph at the subject's
+/// right end inside it; under it Amend at the left and the split button at the right — its
+/// caption, then its ⌄ beside it, a control of its own, greyed, no Tab stop and saying it comes
+/// with pull and push whether the caption can be pressed or not, its press reporting nothing.
+/// Caught by: two separate fields, a description taller than a line while empty, the glyph
+/// outside the field, the ⌄ missing, enabled, focusable or silent, or a press on it committing.
 #[test]
 fn the_commit_box_is_one_field_and_a_split_button() {
     for ready in [false, true] {
@@ -396,6 +397,11 @@ fn the_commit_box_is_one_field_and_a_split_button() {
         );
         assert!(subject_area.max_y() <= description.min_y());
         assert_eq!(subject_area.height(), metrics::COMMIT_SUBJECT);
+        assert_eq!(
+            description.height(),
+            metrics::COMMIT_SUBJECT,
+            "the empty description is not one line, as Fork's"
+        );
         let rules = test.find_many(|node, element| {
             let area = node.layout().area;
             Rect::try_downcast(element)

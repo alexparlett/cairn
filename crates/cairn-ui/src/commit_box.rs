@@ -450,10 +450,12 @@ impl Component for CommitBox {
                     .min_height(DESCRIPTION_MIN_HEIGHT)
                     .max_height(DESCRIPTION_MAX_HEIGHT)
                     .theme_layout(InputLayoutThemePartial {
+                        // No margin above and below: one line of the description's text is
+                        // already the subject's height.
                         inner_margin: Some(Preference::Specific(Gaps::new(
-                            4.,
+                            0.,
                             FIELD_MARGIN,
-                            4.,
+                            0.,
                             FIELD_MARGIN,
                         ))),
                         ..Default::default()

@@ -1395,6 +1395,39 @@ fn a_tag_is_dated_by_its_commit_never_by_its_tagger() {
     assert_eq!(date("refs/heads/main"), None);
 }
 
+/// A tag's date is read as git reads its commit — through a replace ref that swaps in a commit
+/// committed at another time, as `git log --no-walk` dates it. Caught by: the date read from the
+/// commit as stored, past the replacement git reads.
+#[test]
+fn a_tags_date_is_read_through_a_replacement_as_git_reads_it() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    let stored = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    fixture.git(&["tag", "light"]);
+    let tree = ask(fixture.path(), &["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_owned();
+    let replaced_at = clock + 1_000_000;
+    let replacement = fixtures::run(
+        fixture.path(),
+        &["commit-tree", &tree, "-m", "replacement"],
+        Some(replaced_at),
+    )
+    .trim()
+    .to_owned();
+    fixture.git(&["replace", &stored, &replacement]);
+    let read = assert_snapshot_is_gits(fixture.path());
+    let light = read
+        .refs
+        .iter()
+        .find(|listed| listed.name.as_str() == "refs/tags/light")
+        .unwrap_or_else(|| panic!("the tag is not listed"));
+    assert_eq!(light.commit_time, Some(replaced_at));
+}
+
 /// A refs query stops at whichever poll is cancelled — listing the refs, resolving an
 /// upstream, reading a tag's commit date, reading the stash reflog or its entries — and polls
 /// nothing after it. Over a
@@ -2268,4 +2301,70 @@ fn measures_the_refs_snapshot_and_ahead_behind() {
         .lines()
         .count();
     report(&format!("generated fixture ({total} refs)"), fixture.path());
+}
+
+/// Reporter for the tag dates' cost in `docs/research/refs-and-status/measured.md`: the refs
+/// snapshot over 10,000 tags, each on a commit of its own along one line (a quarter of them
+/// annotated), packed, warm, median of seven — every tag's commit a different object, so each
+/// date is a read of its own rather than one the object cache answers. Run with
+/// `--release --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement; run with --release"]
+fn measures_the_refs_snapshot_over_tags_on_commits_of_their_own() {
+    use std::time::{Duration, Instant};
+
+    let fixture = fixtures::unborn();
+    let mut stream = String::new();
+    for n in 0..10_000u32 {
+        stream.push_str(&format!(
+            "commit refs/heads/main\nmark :{}\ncommitter C <c@example.com> {} +0000\ndata 1\nc\n",
+            n + 1,
+            1_500_000_000 + u64::from(n)
+        ));
+        if n > 0 {
+            stream.push_str(&format!("from :{n}\n"));
+        }
+        stream.push('\n');
+        if n % 4 == 0 {
+            stream.push_str(&format!(
+                "tag tag-{n:05}\nfrom :{}\ntagger T <t@example.com> 1600000000 +0000\ndata 1\nt\n",
+                n + 1
+            ));
+        } else {
+            stream.push_str(&format!("reset refs/tags/tag-{n:05}\nfrom :{}\n\n", n + 1));
+        }
+    }
+    let imported = oracle(
+        fixture.path(),
+        &["fast-import", "--quiet"],
+        Some(stream.as_bytes()),
+    );
+    assert!(imported.status.success(), "{imported:?}");
+    fixture.git(&["pack-refs", "--all"]);
+    fixture.git(&["checkout", "-q", "main"]);
+    let repo = Repository::discover(fixture.path()).unwrap();
+    let read = repo.refs(&CancelSignal::new()).unwrap();
+    let dated = read
+        .snapshot
+        .refs
+        .iter()
+        .filter(|listed| listed.commit_time.is_some())
+        .count();
+    let mut runs: Vec<Duration> = (0..7)
+        .map(|_| {
+            let started = Instant::now();
+            std::hint::black_box(repo.refs(&CancelSignal::new()).unwrap());
+            started.elapsed()
+        })
+        .collect();
+    runs.sort();
+    eprintln!(
+        "10,000 tags on commits of their own: {} refs, {dated} dated; refs median {:?} \
+         [{:?}–{:?}]; cost {:?}",
+        read.snapshot.refs.len(),
+        runs[3],
+        runs[0],
+        runs[6],
+        read.cost
+    );
 }

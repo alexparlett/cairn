@@ -822,6 +822,46 @@ mod tests {
         }
     }
 
+    /// A stash commit a walked commit names as a parent — a merge of the stash — already has a
+    /// line descending to it: the stash sits on that line, which runs on to the base, and the
+    /// line that already awaited the base keeps waiting, so two lines end at the base. A second
+    /// stash on that base then sits on the lower of the two lines awaiting it. Caught by: the
+    /// stash re-targeting the base's line as well as taking its own (one line ends at the base,
+    /// and the stash moves to lane 0), or a stash taking the higher of two lines awaiting its
+    /// base.
+    #[test]
+    fn a_stash_already_awaited_keeps_its_line_and_a_second_takes_the_lower_waiting_lane() {
+        let (tip, merger, first, second, base) = (id(1), id(2), id(20), id(21), id(3));
+        let walk = [
+            (tip, Some(vec![base]), base),
+            (merger, Some(vec![first]), base),
+            (first, None, base),
+            (second, None, base),
+            (base, Some(vec![]), base),
+        ];
+        let (kept, rows) = lay_out_with_stashes(&walk);
+        let lanes: Vec<usize> = rows.iter().map(|row| row.lane.index()).collect();
+        assert_eq!(
+            lanes,
+            [0, 1, 1, 0, 0],
+            "the awaited stash on its own line, the second on the lower lane awaiting the base"
+        );
+        assert_eq!(
+            rows[4].changes(),
+            &[LaneChange::Ends(Lane::new(0)), LaneChange::Ends(Lane::new(1))],
+            "both lines that awaited the base end there"
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
+        }
+    }
+
     /// Stashes among late parents and their repaints, a snapshot every third row: every
     /// row derives exactly the edges the assigner kept, and a stash's base already laid out
     /// above it is joined by a late line. Caught by: a stash's change not recorded as the

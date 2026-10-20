@@ -8,7 +8,8 @@
 //! It is also where progress shows, as Fork's does while an operation runs
 //! (`docs/research/staging-and-commit/fork-activity-result-lines-2026-10-11.md`, ar22z): a
 //! spinner and the running operation's one name — a local write, " · N waiting" behind it while
-//! writes queue, or a fetch — over git's latest progress line, in place of the repository's
+//! writes queue, or a fetch — over git's latest progress line up to its percentage
+//! ([`progress_text`]; the whole line is the activity popover's), in place of the repository's
 //! lines, each operation only once it has run [`PROGRESS_AFTER`], so a write that is over at once
 //! draws nothing. The wait is a task on the toolkit's executor (`async_io::Timer`), never a
 //! sleep.
@@ -51,6 +52,23 @@ pub fn running_text(running: &Running) -> String {
         text.push_str(&format!(" · {} waiting", running.waiting));
     }
     text
+}
+
+/// What the status box's second line says of git's progress `line`: its words up to and
+/// including its percentage — "Receiving objects: 45%" of "Receiving objects:  45% (12345/27000),
+/// 12.00 MiB | 3.00 MiB/s" — so the line fits the box; git's own alignment padding is closed up.
+/// A line with no percentage keeps its words up to its first comma — "remote: Enumerating
+/// objects: 5" of "remote: Enumerating objects: 5, done." — or all of them when it has none. The
+/// whole line stays in the activity popover.
+pub fn progress_text(line: &str) -> String {
+    let words = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    match words.find('%') {
+        Some(at) => words[..=at].to_owned(),
+        None => match words.find(',') {
+            Some(at) => words[..at].to_owned(),
+            None => words,
+        },
+    }
 }
 
 /// Whether an operation that has run `elapsed` is shown yet.
@@ -197,7 +215,8 @@ impl Component for KeyedLines {
             [first, rest @ ..] => {
                 let second = first
                     .progress
-                    .clone()
+                    .as_deref()
+                    .map(progress_text)
                     .or_else(|| rest.first().map(|other| running_text(other)));
                 two_lines(
                     rect()
@@ -334,5 +353,31 @@ mod tests {
             running_text(&running(2, None)),
             "Fetch 'origin' · 2 waiting"
         );
+    }
+
+    /// A progress line is kept to its percentage, its alignment padding closed up; one with no
+    /// percentage to its first comma, or whole when it has none. Caught by: the counts and the
+    /// throughput left on (wider than the box), the percentage itself cut, git's double space
+    /// kept, or a count-only line emptied.
+    #[test]
+    fn a_progress_line_is_kept_to_its_percentage() {
+        assert_eq!(
+            progress_text("Receiving objects:  45% (12345/27000), 12.00 MiB | 3.00 MiB/s"),
+            "Receiving objects: 45%"
+        );
+        assert_eq!(
+            progress_text("remote: Counting objects: 100% (1234/1234), done."),
+            "remote: Counting objects: 100%"
+        );
+        assert_eq!(
+            progress_text("Unpacking objects: 100% (3/3), 268 bytes | 268.00 KiB/s, done."),
+            "Unpacking objects: 100%"
+        );
+        assert_eq!(
+            progress_text("remote: Enumerating objects: 5, done."),
+            "remote: Enumerating objects: 5"
+        );
+        assert_eq!(progress_text("From ../remote"), "From ../remote");
+        assert_eq!(progress_text("   "), "");
     }
 }

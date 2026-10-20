@@ -119,7 +119,7 @@ pub use toolbar::activity_popover::{
 pub use toolbar::lock_banner::{LOCK_BANNER_TEXT, LOCK_STALE_AFTER, LockBanner, lock_is_stale};
 pub use toolbar::status_box::{
     NO_COMMITS_YET, PROGRESS_AFTER, Running, StatusBox, Tracking, UPSTREAM_GONE, current_branch,
-    head_text, progress_shown, running_text,
+    head_text, progress_shown, progress_text, running_text,
 };
 pub use toolbar::{
     ACTIVITY_GLYPH_NAME, APPEARANCE_CAPTION, BRANCH_CAPTION, BRANCH_MENU_NAME,

@@ -12,7 +12,7 @@ use cairn_ui::accelerators::Os;
 use cairn_ui::diff_palette::{
     ADDED_EMPHASIS, ADDED_TINT, GUTTER_SEPARATOR, REMOVED_EMPHASIS, REMOVED_TINT,
 };
-use cairn_ui::style::tones;
+use cairn_ui::style::{icons, metrics, tones};
 use cairn_ui::{
     DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, DiffView, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
     HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL,
@@ -604,6 +604,16 @@ fn click(test: &mut TestingRunner, name: &str) {
     test.sync_and_update();
 }
 
+/// Whether the button named `name` says it is disabled, as assistive technology reads it.
+fn disabled(test: &TestingRunner, name: &str) -> Option<bool> {
+    test.find(|_, element| {
+        Rect::try_downcast(element).and_then(|rect| {
+            let builder = &rect.accessibility.builder;
+            (builder.value() == Some(name)).then(|| builder.is_disabled())
+        })
+    })
+}
+
 /// The bar holds previous and next change and every toggle, side-by-side among them, each
 /// found by the name assistive technology reads; each enabled button reports its action —
 /// Decrease too at one line of context, pressable as Fork's is (where the press does nothing),
@@ -630,9 +640,28 @@ fn the_bar_reports_each_button_and_greys_the_line_buttons_for_the_entire_file() 
         "a button did not report its own press"
     );
 
+    // At one line of context neither line button says it is disabled.
+    for name in [FEWER_LINES_LABEL, MORE_LINES_LABEL] {
+        assert_eq!(disabled(&test, name), Some(false), "{name:?} at one line");
+    }
+
     let mut entire = DiffSettings::default();
     entire.toggle_entire_file();
     let (mut test, pressed) = launch_header(move || DiffHeader::new(file("src/lib.rs"), entire));
+    for name in [FEWER_LINES_LABEL, MORE_LINES_LABEL] {
+        assert_eq!(
+            disabled(&test, name),
+            Some(true),
+            "{name:?} with the entire file"
+        );
+        let ink = pixels_of(&mut test, name, tones::DISABLED_TEXT);
+        assert!(
+            ink.iter()
+                .all(|(r, g, b)| r == g && g == b && *r <= tones::DISABLED_TEXT.r() + 2),
+            "{name:?} is not greyed: {ink:?}"
+        );
+    }
+    assert_eq!(disabled(&test, ENTIRE_FILE_LABEL), Some(false));
     click(&mut test, FEWER_LINES_LABEL);
     click(&mut test, MORE_LINES_LABEL);
     click(&mut test, ENTIRE_FILE_LABEL);
@@ -661,36 +690,58 @@ fn toggled(test: &TestingRunner) -> Vec<(String, Option<Toggled>)> {
     })
 }
 
-/// How many pixels of `colour`'s hue the frame shows inside the button named `name`: a glyph's
+/// The frame as drawn, its pixels as `(red, green, blue)` rows.
+struct Frame {
+    pixels: Vec<u8>,
+    stride: usize,
+}
+
+impl Frame {
+    fn of(test: &mut TestingRunner) -> Self {
+        let png = test.render();
+        let image = Image::from_encoded(png).unwrap_or_else(|| panic!("the frame did not decode"));
+        let (width, height) = (WIDTH as i32, HEIGHT as i32);
+        let mut surface =
+            raster_n32_premul((width, height)).unwrap_or_else(|| panic!("no raster surface"));
+        surface.canvas().draw_image(&image, (0, 0), None);
+        let info = ImageInfo::new_n32_premul((width, height), None);
+        let stride = info.min_row_bytes();
+        let mut pixels = vec![0u8; stride * height as usize];
+        assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+        Self { pixels, stride }
+    }
+
+    fn at(&self, x: usize, y: usize) -> (u8, u8, u8) {
+        let at = y * self.stride + x * 4;
+        // The pixels are BGRA.
+        match self.pixels.get(at..at + 3) {
+            Some(&[b, g, r]) => (r, g, b),
+            _ => (0, 0, 0),
+        }
+    }
+}
+
+/// The area of the button named `name`.
+fn button_area(test: &TestingRunner, name: &str) -> Area {
+    test.find(|node, element| {
+        named!(element)
+            .filter(|value| value == name)
+            .map(|_| node.layout().area)
+    })
+    .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)))
+}
+
+/// The pixels of `colour`'s hue the frame shows inside the button named `name`: a glyph's
 /// strokes are smoothed into the bar's ground, so its pixels are its colour mixed with the
 /// ground's grey, and a pixel counts when its channels lean the way `colour`'s do, each by at
 /// least half as much.
-fn pixels_of(test: &mut TestingRunner, name: &str, colour: Color) -> usize {
-    let area = test
-        .find(|node, element| {
-            named!(element)
-                .filter(|value| value == name)
-                .map(|_| node.layout().area)
-        })
-        .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)));
-    let png = test.render();
-    let image = Image::from_encoded(png).unwrap_or_else(|| panic!("the frame did not decode"));
-    let (width, height) = (WIDTH as i32, HEIGHT as i32);
-    let mut surface =
-        raster_n32_premul((width, height)).unwrap_or_else(|| panic!("no raster surface"));
-    surface.canvas().draw_image(&image, (0, 0), None);
-    let info = ImageInfo::new_n32_premul((width, height), None);
-    let stride = info.min_row_bytes();
-    let mut pixels = vec![0u8; stride * height as usize];
-    assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
-    let mut count = 0;
+fn pixels_of(test: &mut TestingRunner, name: &str, colour: Color) -> Vec<(u8, u8, u8)> {
+    let area = button_area(test, name);
+    let frame = Frame::of(test);
+    let mut counted = Vec::new();
     for y in area.min_y().floor() as usize..area.max_y().ceil() as usize {
         for x in area.min_x().floor() as usize..area.max_x().ceil() as usize {
-            let at = y * stride + x * 4;
-            // The pixels are BGRA.
-            let Some(&[b, g, r]) = pixels.get(at..at + 3) else {
-                continue;
-            };
+            let (r, g, b) = frame.at(x, y);
             let lean = |one: u8, other: u8| i32::from(one) - i32::from(other);
             let wanted = [
                 lean(colour.b(), colour.r()),
@@ -703,11 +754,11 @@ fn pixels_of(test: &mut TestingRunner, name: &str, colour: Color) -> usize {
                 .zip(seen)
                 .all(|(wanted, seen)| seen * 2 >= *wanted && (*wanted <= 0 || seen > 0))
             {
-                count += 1;
+                counted.push((r, g, b));
             }
         }
     }
-    count
+    counted
 }
 
 /// Fork's bar: every button is a glyph whose name — Fork's tooltip's words — is read by
@@ -752,12 +803,21 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue() {
         let expected = lit.contains(&name.as_str()).then_some(Toggled::True);
         assert_eq!(*state, expected, "{name:?} says it is {state:?}");
     }
+    let ground = cairn_ui::diff_palette::HEADER_BAR;
     for name in EVERY_BUTTON {
         let blue = pixels_of(&mut test, name, tones::DIFF_BAR_ON);
         if lit.contains(&name) {
-            assert!(blue > 0, "{name:?} is on and its glyph is not Fork's blue");
+            assert!(!blue.is_empty(), "{name:?} is on and its glyph is not blue");
+            // Fork's blue carries red the ground's grey lacks, so every stroke smoothed into
+            // the ground keeps at least the ground's red; the theme's accent, `#0078D7`, has
+            // none and pulls it below.
+            assert!(
+                blue.iter().all(|(r, _, _)| *r >= ground.r())
+                    && blue.iter().any(|(r, _, _)| *r > ground.r()),
+                "{name:?} is lit in another blue: {blue:?}"
+            );
         } else {
-            assert_eq!(blue, 0, "{name:?} is not on and shows Fork's blue");
+            assert!(blue.is_empty(), "{name:?} is not on and shows Fork's blue");
         }
     }
     let backgrounds = button_backgrounds(&test);
@@ -773,9 +833,8 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue() {
         launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
     test.sync_and_update();
     for name in EVERY_BUTTON {
-        assert_eq!(
-            pixels_of(&mut test, name, tones::DIFF_BAR_ON),
-            0,
+        assert!(
+            pixels_of(&mut test, name, tones::DIFF_BAR_ON).is_empty(),
             "{name:?} is lit with nothing on"
         );
     }
@@ -794,9 +853,10 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue() {
 /// question 5): Go to previous change and Go to next change with the chord the accelerator
 /// table lists for each, on Linux in Fork's Windows form and on macOS in its own, and the view's
 /// buttons in Fork's words with no chord; and hovering a button shows the tooltip for the
-/// platform the build runs on. Caught by: a tooltip reworded, a chord typed rather than read
-/// from the table, a chord given to a button Fork gives none, a button out of order, or Show
-/// hidden symbols or Word wrap drawn.
+/// platform the build runs on. Caught by: a tooltip reworded, a chord given to a button Fork
+/// gives none, a chord the table changed and the tooltip not, a button out of order, or Show
+/// hidden symbols or Word wrap drawn. A chord typed into a tooltip rather than read from the
+/// table is `no_component_names_a_literal_modifier`'s to refuse.
 #[test]
 fn the_diff_bar_is_forks_with_its_tooltips() {
     let expected = [
@@ -1518,5 +1578,167 @@ fn a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_s
                 }
             }
         }
+    }
+}
+
+/// Each button draws Fork's glyph, Lucide's nearest (`fork-committer-2026-10-20.md` question 5):
+/// its square in the bar is, pixel for pixel, the icon the style module names for it drawn on
+/// the bar's ground; and the three whose sign Fork puts left of the lines — Decrease, Increase
+/// and Show entire file — draw their top line of text right of the square's middle, Lucide's
+/// own drawing turned left for right inside the square. Caught by: a button given another's glyph, a glyph
+/// mirrored about anything but its own middle (drawn outside its square), or not mirrored.
+#[test]
+fn each_bar_button_draws_its_forks_glyph() {
+    let (mut test, _) =
+        launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
+    let bar = Frame::of(&mut test);
+    let squares: Vec<Area> = EVERY_BUTTON
+        .iter()
+        .map(|name| button_area(&test, name))
+        .collect();
+    let glyphs: [fn(f32, Color) -> Element; 7] = [
+        icons::chevron_up,
+        icons::chevron_down,
+        icons::whitespace,
+        icons::fewer_lines,
+        icons::more_lines,
+        icons::entire_file,
+        icons::side_by_side,
+    ];
+    let placed = squares.clone();
+    let (mut reference, _) = TestingRunner::new(
+        move || {
+            rect()
+                .expanded()
+                .background(cairn_ui::diff_palette::HEADER_BAR)
+                .children(placed.iter().zip(glyphs).map(|(square, glyph)| -> Element {
+                    rect()
+                        .position(
+                            Position::new_absolute()
+                                .left(square.min_x())
+                                .top(square.min_y()),
+                        )
+                        .width(Size::px(square.width()))
+                        .height(Size::px(square.height()))
+                        .center()
+                        .child(glyph(metrics::DIFF_BAR_ICON, tones::DIFF_BAR_ICON))
+                        .into()
+                }))
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    reference.sync_and_update();
+    reference.sync_and_update();
+    let drawn = Frame::of(&mut reference);
+    let ground = cairn_ui::diff_palette::HEADER_BAR;
+    for (name, square) in EVERY_BUTTON.iter().zip(&squares) {
+        let mut ink = Vec::new();
+        for y in square.min_y() as usize..square.max_y() as usize {
+            for x in square.min_x() as usize..square.max_x() as usize {
+                assert_eq!(
+                    bar.at(x, y),
+                    drawn.at(x, y),
+                    "{name:?} does not draw its glyph at ({x}, {y})"
+                );
+                if bar.at(x, y) != (ground.r(), ground.g(), ground.b()) {
+                    ink.push((y, x as f32));
+                }
+            }
+        }
+        assert!(!ink.is_empty(), "{name:?} draws nothing in its square");
+        if [FEWER_LINES_LABEL, MORE_LINES_LABEL, ENTIRE_FILE_LABEL].contains(name) {
+            // The glyph's top line of ink: Lucide's first line of text.
+            let top = ink.iter().map(|(y, _)| *y).min().unwrap_or_default();
+            let line: Vec<f32> = ink
+                .iter()
+                .filter(|(y, _)| *y == top)
+                .map(|(_, x)| *x)
+                .collect();
+            let middle = line.iter().sum::<f32>() / line.len() as f32;
+            assert!(
+                middle > square.center().x,
+                "{name:?}'s lines are not right of its sign: its top line centred at {middle}"
+            );
+        }
+    }
+}
+
+/// Under the pointer an enabled button stands on Fork's square, `#242424`, and a disabled one
+/// on nothing. Caught by: no square, or one lit behind a button that cannot be pressed.
+#[test]
+fn a_hovered_bar_button_stands_on_its_square_unless_it_is_disabled() {
+    let mut entire = DiffSettings::default();
+    entire.toggle_entire_file();
+    let (mut test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), entire));
+    let fill_of = |test: &TestingRunner, name: &str| {
+        test.find(|_, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|rect| rect.style.background.as_color())
+        })
+        .flatten()
+        .filter(|fill| *fill != Color::TRANSPARENT)
+    };
+    for (name, lit) in [(SIDE_BY_SIDE_LABEL, true), (FEWER_LINES_LABEL, false)] {
+        let centre = button_area(&test, name).center();
+        test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.sync_and_update();
+        assert_eq!(
+            fill_of(&test, name),
+            lit.then_some(tones::DIFF_BAR_HOVER),
+            "{name:?} under the pointer"
+        );
+        test.move_cursor((f64::from(WIDTH - 2.), f64::from(HEIGHT - 2.)));
+        test.sync_and_update();
+        assert_eq!(fill_of(&test, name), None, "{name:?} with the pointer gone");
+    }
+}
+
+/// Every bar button that can be pressed is a Tab stop, Space or Enter pressing it, so the five
+/// with no chord are reached from the keyboard; a greyed one is no stop. Caught by: the buttons
+/// drawn as shapes nothing can focus, a greyed button left a stop, or a key that does not press
+/// the focused button.
+#[test]
+fn every_bar_button_that_can_be_pressed_is_a_tab_stop() {
+    let focusable = |test: &TestingRunner, name: &str| {
+        test.find(|_, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|rect| rect.accessibility.a11y_focusable.clone())
+        })
+    };
+    let (mut test, pressed) =
+        launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
+    for name in EVERY_BUTTON {
+        assert_eq!(
+            focusable(&test, name),
+            Some(Focusable::Enabled),
+            "{name:?} is no Tab stop"
+        );
+    }
+    for _ in 0..3 {
+        test.press_key(Key::Named(NamedKey::Tab));
+        test.sync_and_update();
+    }
+    test.press_key(Key::Named(NamedKey::Enter));
+    test.sync_and_update();
+    assert_eq!(
+        pressed.borrow().as_slice(),
+        [HeaderAction::IgnoreWhitespace],
+        "Enter on the third stop did not press Ignore whitespaces"
+    );
+
+    let mut entire = DiffSettings::default();
+    entire.toggle_entire_file();
+    let (test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), entire));
+    for name in [FEWER_LINES_LABEL, MORE_LINES_LABEL] {
+        assert_eq!(
+            focusable(&test, name),
+            Some(Focusable::Disabled),
+            "greyed {name:?} is a Tab stop"
+        );
     }
 }

@@ -8,10 +8,11 @@ use cairn_model::{
     Signature, Similarity, Timestamp,
 };
 use cairn_ui::accelerators::{self, Action, Os, Scope};
+use cairn_ui::style::metrics;
 use cairn_ui::{
     AUTHOR_CAPTION, COMMIT_TAB_ROW_HEIGHT, COMMITTER_CAPTION, CommitTab, DetailTab, DetailTabs,
     EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, LocalZone, NO_FILES, PARENTS_CAPTION,
-    cut_short_notice,
+    avatar_colour, cut_short_notice,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -315,6 +316,12 @@ fn the_committer_is_shown_only_where_it_differs() {
             .filter(|text| text.starts_with("Ada L"))
             .count();
         assert_eq!(people, 1 + usize::from(drawn), "{case}: {shown:?}");
+        if case == "an hour later" {
+            // The committer's own instant beside the author's, both in the tab's zone.
+            for date in ["15 Nov 2023 03:43:20 +05:30", "15 Nov 2023 04:43:20 +05:30"] {
+                assert!(shown.iter().any(|text| text == date), "{case}: no {date:?}");
+            }
+        }
     }
 
     // The block stands beside the author's, on the same rows, its avatar the committer's.
@@ -867,4 +874,108 @@ fn the_commit_tab_says_once_that_the_zone_fell_back_to_utc() {
     );
     let (read, _, _) = launch(change_set(0));
     assert!(!texts(&read).iter().any(|text| text.contains("(UTC)")));
+}
+
+/// Where `text` is drawn — a label, or a paragraph whose spans join to it — as `(left, top)`.
+fn drawn_at(test: &TestingRunner, text: &str) -> (f32, f32) {
+    test.find(|node, element| {
+        let joined = Label::try_downcast(element)
+            .map(|label| label.text.to_string())
+            .or_else(|| {
+                Paragraph::try_downcast(element)
+                    .map(|p| p.spans.iter().map(|span| span.text.as_ref()).collect())
+            });
+        joined.filter(|joined| joined == text).map(|_| {
+            let area = node.layout().area;
+            (area.min_x(), area.min_y())
+        })
+    })
+    .unwrap_or_else(|| panic!("nothing draws {text:?}: {:?}", texts(test)))
+}
+
+/// Fork's one column of values (uv9, uv7b): the author's name, the id beside SHA, the subject,
+/// each line of the body and each file's path all start where the values do, the captions and
+/// the avatar left of it. Caught by: the message or a path starting at the pane's padding, or
+/// a file row's chevron, badge and glyph not ending where the values start.
+#[test]
+fn the_message_and_the_paths_stand_in_the_values_column() {
+    let (test, _, _) = launch(change_set(0));
+    let (values, _) = drawn_at(&test, oid(77).hex().as_str());
+    for text in [
+        "Ada Lovelace  ada@example.com",
+        "Teach the engine to count",
+        "The first paragraph of the body.",
+        "src/file-000001.rs",
+    ] {
+        let (left, _) = drawn_at(&test, text);
+        assert!(
+            (left - values).abs() < 1.,
+            "{text:?} starts at {left}, the values at {values}"
+        );
+    }
+    let (caption, _) = drawn_at(&test, ID_CAPTION);
+    assert!(caption < values, "SHA's caption is not left of its value");
+}
+
+/// The author's 42 px avatar, and the committer's beside it where it is drawn, as Fork draws
+/// them (cm7z): each the person's initials in the regular weight on the person's colour, the
+/// square whole in the three rows under the caption — each row drawing its band of the one
+/// square, every band reaching a pixel under the next row so no seam shows. Caught by: no
+/// author's avatar, another size, a band drawn without its offset (each row would draw the
+/// square's top), the tail row dropped (the square cut at two rows), the overlap dropped, or
+/// bold initials.
+#[test]
+fn the_people_block_draws_each_persons_avatar_whole_across_its_rows() {
+    let (test, _, _) = launch(change_set(0));
+    for (name, initials) in [("Ada Lovelace", "AL"), ("Grace Hopper", "GH")] {
+        let squares: Vec<(f32, f32, f32, f32)> = test.find_many(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.style.background.as_color() == Some(avatar_colour(name)))
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.min_x(), area.min_y(), area.width(), area.height())
+                })
+        });
+        assert_eq!(
+            squares.len(),
+            3,
+            "{name}'s avatar is not drawn in three bands"
+        );
+        assert!(
+            squares.windows(2).all(|pair| pair[0] == pair[1]),
+            "{name}'s bands do not draw one square: {squares:?}"
+        );
+        let (_, top, width, height) = squares[0];
+        assert_eq!(
+            (width, height),
+            (metrics::DETAIL_AVATAR, metrics::DETAIL_AVATAR)
+        );
+        // The bands: as wide as the square, a row and a pixel tall, a row apart from the
+        // square's top.
+        let mut bands: Vec<f32> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.width() == metrics::DETAIL_AVATAR
+                        && area.height() == COMMIT_TAB_ROW_HEIGHT + 1.
+                        && area.min_x() == squares[0].0
+                })
+                .map(|_| area.min_y() - top)
+        });
+        bands.sort_by(f32::total_cmp);
+        assert_eq!(
+            bands,
+            [0., COMMIT_TAB_ROW_HEIGHT, 2. * COMMIT_TAB_ROW_HEIGHT],
+            "{name}'s bands"
+        );
+        let weights: Vec<FontWeight> = test.find_many(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == initials)
+                .map(|label| label.text_style_data.font_weight.unwrap_or_default())
+        });
+        assert!(
+            !weights.is_empty() && weights.iter().all(|weight| *weight == FontWeight::NORMAL),
+            "{name}'s initials: {weights:?}"
+        );
+    }
 }

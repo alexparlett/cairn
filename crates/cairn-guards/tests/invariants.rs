@@ -6263,6 +6263,36 @@ fn the_system_zone_matcher_catches_the_shapes_it_claims() {
         ("the database", "let db = jiff::tz::db();", "tz::db"),
         ("the database imported", "use jiff::tz::db;", "tz::db"),
         (
+            "the database imported in a braced list",
+            "use jiff::tz::{self, db};\nlet zones = db();",
+            "tz::db",
+        ),
+        (
+            "the database imported beside the zone type",
+            "use jiff::tz::{TimeZone, db as zones};",
+            "tz::db",
+        ),
+        (
+            "a zone by name on an instant",
+            "let at = ts.in_tz(\"Europe/London\");",
+            "in_tz",
+        ),
+        (
+            "a zone by name on a civil date",
+            "date(2026, 10, 20).in_tz(\"Europe/London\")",
+            "in_tz",
+        ),
+        (
+            "the database's own type",
+            "let db = TimeZoneDatabase::from_env();",
+            "TimeZoneDatabase",
+        ),
+        (
+            "the database read from a directory",
+            "jiff::tz::TimeZoneDatabase::from_dir(path)",
+            "TimeZoneDatabase",
+        ),
+        (
             "now in the system's zone",
             "let now = Zoned::now();",
             "Zoned::now",
@@ -6298,10 +6328,11 @@ fn the_system_zone_matcher_catches_the_shapes_it_claims() {
             "`{ident}` is on the roster but the matcher does not read it"
         );
     }
-    for path in cairn_guards::SYSTEM_ZONE_PATHS {
+    for (path, named) in cairn_guards::SYSTEM_ZONE_PATHS {
+        let found = reads_the_system_zone(&format!("let x = {}();", path.join("::")));
         assert!(
-            !reads_the_system_zone(&format!("let x = {}();", path.join("::"))).is_empty(),
-            "`{path:?}` is on the roster but the matcher does not read it"
+            found.iter().any(|(_, found)| found == named),
+            "`{path:?}` is on the roster but the matcher reads it as {found:?}, not {named:?}"
         );
     }
     for (shape, source) in [
@@ -6314,6 +6345,12 @@ fn the_system_zone_matcher_catches_the_shapes_it_claims() {
         ("an offset", "zone.to_offset(at).seconds()"),
         ("a longer name", "let try_systems = 1; TimeZone::getter();"),
         ("another db", "store::db();"),
+        ("another braced db", "use store::{self, db};"),
+        (
+            "a braced tz list without db",
+            "use jiff::tz::{TimeZone, Offset};",
+        ),
+        ("a longer in_tz", "let in_tzs = 1;"),
         ("a comment", "// TimeZone::try_system reads TZ"),
         ("a string", "const WHAT: &str = \"TimeZone::system\";"),
         ("another variable", "std::env::var(\"TZDIR\")"),

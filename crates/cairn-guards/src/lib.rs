@@ -3051,19 +3051,22 @@ fn colour_tuples(code: &str) -> Vec<usize> {
     found
 }
 
-/// The identifiers that read the system's time zone, wherever they appear: jiff's
-/// `TimeZone::try_system`, which reads `TZ`, `/etc/localtime` and the zone database.
-pub const SYSTEM_ZONE_IDENTS: &[&str] = &["try_system"];
+/// The identifiers that read the system's time zone or the zone database, wherever they
+/// appear: jiff's `TimeZone::try_system`, which reads `TZ`, `/etc/localtime` and the database;
+/// `in_tz`, the method `Timestamp`, `civil::DateTime`, `civil::Date` and `Zoned` each take a
+/// zone's name by, looked up in the database; and `TimeZoneDatabase`, the database's own type,
+/// whose `from_env` and `from_dir` read it.
+pub const SYSTEM_ZONE_IDENTS: &[&str] = &["try_system", "in_tz", "TimeZoneDatabase"];
 
-/// The paths that read the system's time zone, or the zone database it is read from: jiff's
-/// `TimeZone::system` (the same read, falling back to UTC unsaid), `TimeZone::get` (a zone by
-/// name, from the database), `tz::db` (the database), and `Zoned::now` (now, in the system's
-/// zone).
-pub const SYSTEM_ZONE_PATHS: &[&[&str]] = &[
-    &["TimeZone", "system"],
-    &["TimeZone", "get"],
-    &["tz", "db"],
-    &["Zoned", "now"],
+/// The paths that read the system's time zone, or the zone database it is read from, each with
+/// the name it is reported by: jiff's `TimeZone::system` (the same read, falling back to UTC
+/// unsaid), `TimeZone::get` (a zone by name, from the database), `tz::db` (the database), and
+/// `Zoned::now` (now, in the system's zone).
+pub const SYSTEM_ZONE_PATHS: &[(&[&str], &str)] = &[
+    (&["TimeZone", "system"], "TimeZone::system"),
+    (&["TimeZone", "get"], "TimeZone::get"),
+    (&["tz", "db"], "tz::db"),
+    (&["Zoned", "now"], "Zoned::now"),
 ];
 
 /// The types whose renaming would hide a path of [`SYSTEM_ZONE_PATHS`] from the matcher.
@@ -3071,26 +3074,51 @@ pub const SYSTEM_ZONE_TYPES: &[&str] = &["TimeZone", "Zoned"];
 
 /// The 1-based lines where the production code of `source` (comments, strings and test
 /// modules blanked) reads the system's time zone, each with what it names: an identifier of
-/// [`SYSTEM_ZONE_IDENTS`], a path of [`SYSTEM_ZONE_PATHS`], a rename of one of
-/// [`SYSTEM_ZONE_TYPES`] (`use .. as`, a `type` alias), or the string `"TZ"`, the variable the
-/// zone is read from.
+/// [`SYSTEM_ZONE_IDENTS`], a path of [`SYSTEM_ZONE_PATHS`], `db` imported in a braced list
+/// after `tz::` (`use jiff::tz::{self, db}`), a rename of one of [`SYSTEM_ZONE_TYPES`]
+/// (`use .. as`, a `type` alias), or the string `"TZ"`, the variable the zone is read from.
 pub fn reads_the_system_zone(source: &str) -> Vec<(usize, &'static str)> {
     let code = code_without_test_modules(&code_without_strings(source));
+    let bytes = code.as_bytes();
     let mut found = BTreeSet::new();
     for ident in SYSTEM_ZONE_IDENTS {
         for offset in ident_offsets(&code, ident) {
             found.insert((line_at(&code, offset), *ident));
         }
     }
-    for path in SYSTEM_ZONE_PATHS {
-        let named = match *path {
-            ["TimeZone", "system"] => "TimeZone::system",
-            ["TimeZone", "get"] => "TimeZone::get",
-            ["tz", "db"] => "tz::db",
-            _ => "Zoned::now",
-        };
+    for (path, named) in SYSTEM_ZONE_PATHS {
         for (start, _) in path_offsets(&code, path) {
-            found.insert((line_at(&code, start), named));
+            found.insert((line_at(&code, start), *named));
+        }
+    }
+    // `use jiff::tz::{self, db};`: `db` at the top level of the braces after `tz::`.
+    for offset in ident_offsets(&code, "tz") {
+        let separator = skip_whitespace(bytes, offset + "tz".len());
+        if !code[separator..].starts_with("::") {
+            continue;
+        }
+        let brace = skip_whitespace(bytes, separator + 2);
+        if bytes.get(brace) != Some(&b'{') {
+            continue;
+        }
+        let end = balanced_end(bytes, brace);
+        let group = &code[brace + 1..end.saturating_sub(1).max(brace + 1)];
+        let mut depth = 0usize;
+        for (at, byte) in group.bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 0 && group[at..].starts_with("db") {
+                let after = group.as_bytes().get(at + "db".len());
+                let before = at.checked_sub(1).and_then(|b| group.as_bytes().get(b));
+                if !after.is_some_and(|b| is_ident_byte(*b))
+                    && !before.is_some_and(|b| is_ident_byte(*b) || *b == b':')
+                {
+                    found.insert((line_at(&code, brace + 1 + at), "tz::db"));
+                }
+            }
         }
     }
     for name in SYSTEM_ZONE_TYPES {

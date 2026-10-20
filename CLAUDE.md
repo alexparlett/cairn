@@ -1263,15 +1263,23 @@ Project invariants:
   `the_system_zone_matcher_catches_the_shapes_it_claims`, every roster entry spelled apart),
   over the production code of `crates/cairn-ui/src` and `crates/cairn-app/src` (test modules
   and files declared under `#[cfg(test)]` left out) with a nonzero-files assertion per
-  directory: no file but `ZONE_READER` names `try_system` (`SYSTEM_ZONE_IDENTS`), a path of
-  `SYSTEM_ZONE_PATHS` (`TimeZone::system`, `TimeZone::get`, `tz::db`, `Zoned::now`), renames
-  `TimeZone` or `Zoned`, or writes the string `"TZ"`; and `ZONE_READER` must name `try_system`,
-  so a blind matcher or a moved read fails. Residual review obligations, `qa-checklist`'s: the
-  matcher reads spellings, so the zone read through another crate's API, a macro, a `type`
-  alias declared outside the render crates, or a variable named by a string built at run time
-  is not seen; and whether a date drawn is in the zone handed down — rather than UTC by an
-  oversight, a `LocalZone::default()` left where the window's should be — is a judgement the
-  tests of each surface make.
+  directory: no file but `ZONE_READER` names an identifier of `SYSTEM_ZONE_IDENTS`
+  (`try_system`; `in_tz`, a zone by name on an instant, a civil date or time, or a `Zoned`;
+  `TimeZoneDatabase`), a path of `SYSTEM_ZONE_PATHS` (`TimeZone::system`, `TimeZone::get`,
+  `tz::db`, `Zoned::now`), `db` imported in a braced list after `tz::`, renames `TimeZone` or
+  `Zoned`, or writes the string `"TZ"`; and `ZONE_READER` must name `try_system`, so a blind
+  matcher or a moved read fails. A guard rather than clippy's `disallowed-methods`, which would
+  resolve calls by type: that list is workspace-wide, would need an exemption at the reader that
+  a guard must pin anyway, and cannot see the `"TZ"` string; and a Cargo feature cannot seal it,
+  since gix-date compiles jiff's `tz-system` for the whole build. Residual review obligations,
+  `qa-checklist`'s: the matcher reads spellings, so the zone read through another crate's API
+  (`std::fs` on `/etc/localtime` among them), a macro, a `type` alias declared outside the
+  render crates, or a variable named by a string built at run time is not seen, nor are jiff's
+  routes that name no rostered spelling — a `Zoned` parsed from text carrying an `[Area/City]`
+  annotation, `BrokenDownTime::to_zoned`, and a qualified-self call (`<TimeZone>::system()`);
+  and whether a date drawn is in the zone handed down — rather than UTC by an oversight, a
+  `LocalZone::default()` left where the window's should be — is a judgement the tests of each
+  surface make.
 - **No unbounded list renders without virtualization.** A history is however long
   somebody's repository is, so a view that builds one element per row of it is
   unbounded work per frame. Twin:

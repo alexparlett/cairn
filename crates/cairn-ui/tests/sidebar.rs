@@ -368,7 +368,17 @@ fn the_sidebar_is_forks() {
         "a branch stands where a folder of its level does"
     );
     assert_eq!(x("login") - folder, SIDEBAR_INDENT, "a folder's rows");
-    assert_eq!(x("origin") - heading, x("upstream") - heading);
+    // A heading draws its chevron and name; a row under it one level in, its icon between.
+    assert_eq!(
+        folder - heading,
+        SIDEBAR_INDENT + metrics::SIDEBAR_ICON + metrics::SIDEBAR_GAP,
+        "a heading's first level"
+    );
+    assert_eq!(
+        x("origin"),
+        folder,
+        "a remote's folder stands where a branch folder does"
+    );
     assert_eq!(SIDEBAR_INDENT, 12.);
     // The counts at the row's right, past the name.
     let counts = label_area(&test, "1↑ 2↓");
@@ -624,10 +634,20 @@ fn a_right_press_on_a_ref_selects_its_commit() {
         cairn_ui::accelerators::Os::current(),
     )
     .unwrap_or_else(|| panic!("New Branch has a chord"));
-    let row_of = |text: &str| centre_of_label(&test, text).1;
+    // The chord drawn in the chord's tone, not the copy that holds its room unseen.
+    let seen_chord = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| {
+                    label.text == chord
+                        && label.text_style_data.color == Some(Fill::Color(tones::MENU_CHORD))
+                })
+                .map(|_| node.layout().area.center().y)
+        })
+        .unwrap_or_else(|| panic!("New Branch…'s chord is not drawn"));
     assert_eq!(
-        row_of(&chord),
-        row_of(NEW_BRANCH_CAPTION),
+        f64::from(seen_chord),
+        centre_of_label(&test, NEW_BRANCH_CAPTION).1,
         "New Branch…'s chord"
     );
     test.click_cursor(centre_of_label(&test, COPY_BRANCH_NAME_CAPTION));
@@ -670,6 +690,76 @@ fn a_right_press_on_a_ref_selects_its_commit() {
         heard.borrow().rows.len(),
         pressed + 1,
         "a right press on a folder or heading was reported"
+    );
+}
+
+/// A remote-tracking ref's menu is a branch's — New Branch… then Copy Branch Name — and a tag
+/// that names no commit offers New Branch… greyed, its press reporting nothing. Caught by: a
+/// remote-tracking ref given a tag's items or none, or a branch offered at no commit.
+#[test]
+fn a_remote_refs_menu_is_a_branchs_and_a_tag_on_a_tree_greys_new_branch() {
+    let mut refs = every_kind();
+    refs.refs.push(Ref {
+        target: RefTarget::Other(oid(9)),
+        ..listed("refs/tags/on-tree")
+    });
+    refs.refs.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut open = Disclosure::default();
+    open.toggle_section(SidebarSection::Tags);
+    open.toggle_folder("refs/remotes/origin");
+    let (mut test, _, heard) = launch(shown(refs.clone(), "", &open), None);
+    let remote_main = drawn_labels(&test)
+        .into_iter()
+        .filter(|(text, _, _)| text == "main")
+        .map(|(_, _, area)| area.center())
+        .next_back()
+        .unwrap_or_else(|| panic!("origin's main is not drawn"));
+    right_click(
+        &mut test,
+        (f64::from(remote_main.x), f64::from(remote_main.y)),
+    );
+    let origin_main = refs
+        .refs
+        .iter()
+        .position(|listed| listed.name.as_str() == "refs/remotes/origin/main")
+        .unwrap() as u32;
+    assert_eq!(
+        heard.borrow().rows.last(),
+        Some(&SidebarRow::Ref {
+            index: origin_main,
+            depth: 1
+        })
+    );
+    assert_eq!(
+        menu_items(&test),
+        [NEW_BRANCH_CAPTION, COPY_BRANCH_NAME_CAPTION]
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+
+    let at = centre_of(&test, "on-tree");
+    right_click(&mut test, at);
+    assert_eq!(
+        menu_items(&test),
+        [NEW_BRANCH_CAPTION, COPY_TAG_NAME_CAPTION]
+    );
+    let new_branch_tone = test
+        .find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == NEW_BRANCH_CAPTION)
+                .and_then(|label| label.text_style_data.color.clone())
+        })
+        .unwrap_or_else(|| panic!("New Branch… has no tone"));
+    assert_eq!(
+        new_branch_tone,
+        Fill::Color(tones::DISABLED_TEXT),
+        "New Branch… on a tag of a tree is not greyed"
+    );
+    test.click_cursor(centre_of_label(&test, NEW_BRANCH_CAPTION));
+    settle(&mut test);
+    assert!(
+        heard.borrow().menu.is_empty(),
+        "a greyed New Branch… was chosen"
     );
 }
 
@@ -806,6 +896,83 @@ fn the_sidebar_walks_by_key_as_forks_tree() {
             open: true
         }),
         "← did not close the open heading"
+    );
+}
+
+/// → opens a closed folder the walk stands on and ← climbs back to it and closes it, the walk
+/// staying on the folder while its rows are laid out again, so the next key steps on from there
+/// (sb61-sb72). Caught by: a walk lost when the rows arrive, the next ↓ starting from the chosen
+/// branch instead, or → stepping into a closed folder.
+#[test]
+fn the_walk_stays_on_a_folder_opened_or_closed_by_key() {
+    let refs = every_kind();
+    let (mut test, mut fixture, heard) =
+        launch(shown(refs.clone(), "", &Disclosure::default()), None);
+    let index_of = |name: &str| {
+        refs.refs
+            .iter()
+            .position(|listed| listed.name.as_str() == name)
+            .unwrap() as u32
+    };
+    let main = SidebarRow::Ref {
+        index: index_of("refs/heads/main"),
+        depth: 0,
+    };
+    let feature = index_of("refs/heads/feature/login");
+    test.click_cursor(centre_of(&test, "main"));
+    settle(&mut test);
+    let chosen = SidebarTarget::of(main, &refs);
+    test.run_in(|| fixture.chosen.set(chosen));
+    settle(&mut test);
+    heard.borrow_mut().rows.clear();
+
+    // ↑ onto the closed folder, → opens it: reported as its press, the walk staying on it.
+    press_key(&mut test, NamedKey::ArrowUp);
+    press_key(&mut test, NamedKey::ArrowRight);
+    assert_eq!(
+        heard.borrow().rows,
+        [SidebarRow::Folder {
+            first: feature,
+            depth: 0,
+            open: false
+        }],
+        "→ did not open the closed folder"
+    );
+    // The window lays the rows out again with the folder open.
+    let mut opened = Disclosure::default();
+    opened.toggle_folder("refs/heads/feature");
+    let reopened = shown(refs.clone(), "", &opened);
+    test.run_in(|| fixture.shown.set(Some(reopened.clone())));
+    settle(&mut test);
+    assert_eq!(
+        bands_at(&test, centre_of(&test, "feature")),
+        [tones::SELECTION_FOCUSED],
+        "the walk left the folder it opened"
+    );
+    press_key(&mut test, NamedKey::ArrowDown);
+    let login = SidebarRow::Ref {
+        index: feature,
+        depth: 1,
+    };
+    assert_eq!(
+        heard.borrow().rows.last(),
+        Some(&login),
+        "↓ after the folder opened did not step into it"
+    );
+    let chosen = SidebarTarget::of(login, &refs);
+    test.run_in(|| fixture.chosen.set(chosen));
+    settle(&mut test);
+    // ← climbs to the folder, ← again closes it.
+    press_key(&mut test, NamedKey::ArrowLeft);
+    press_key(&mut test, NamedKey::ArrowLeft);
+    assert_eq!(
+        heard.borrow().rows.last(),
+        Some(&SidebarRow::Folder {
+            first: feature,
+            depth: 0,
+            open: true
+        }),
+        "← on the open folder did not close it"
     );
 }
 

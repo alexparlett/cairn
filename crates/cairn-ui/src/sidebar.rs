@@ -126,6 +126,30 @@ impl SidebarTarget {
             SidebarRow::Section { .. } | SidebarRow::Folder { .. } => None,
         }
     }
+
+    /// Whether `row` of `refs` is this entry: compared in place, building and copying nothing,
+    /// so a pass over every row allocates nothing.
+    pub fn is(&self, row: SidebarRow, refs: &RefsSnapshot) -> bool {
+        match (self, row) {
+            (Self::Ref(name), SidebarRow::Ref { index, .. }) => refs
+                .refs
+                .get(index as usize)
+                .is_some_and(|listed| listed.name == *name),
+            (Self::DetachedHead, SidebarRow::DetachedHead) => true,
+            (Self::Stash { index, commit }, SidebarRow::Stash { index: at }) => refs
+                .stashes
+                .get(at as usize)
+                .is_some_and(|stash| stash.index == *index && stash.commit == *commit),
+            (
+                Self::Ref(_) | Self::DetachedHead | Self::Stash { .. },
+                SidebarRow::Ref { .. }
+                | SidebarRow::DetachedHead
+                | SidebarRow::Stash { .. }
+                | SidebarRow::Section { .. }
+                | SidebarRow::Folder { .. },
+            ) => false,
+        }
+    }
 }
 
 /// The rows a worker laid out and the snapshot they index, kept together: a row names its ref
@@ -626,8 +650,7 @@ pub fn drawn_row(
     counts: Option<&[(RefName, AheadBehind)]>,
     chosen: Option<&SidebarTarget>,
 ) -> Option<DrawnRow> {
-    let target = SidebarTarget::of(row, refs);
-    let is_chosen = target.is_some() && target.as_ref() == chosen;
+    let is_chosen = chosen.is_some_and(|chosen| chosen.is(row, refs));
     let plain = |glyph, text: String, depth| DrawnRow {
         glyph: Some(glyph),
         disclosure: None,
@@ -782,10 +805,11 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         keys::Walk::at(
             &data.shown,
             item.index,
+            sidebar_row,
             SidebarTarget::of(sidebar_row, &data.shown.refs),
         )
     } else {
-        keys::Walk::keeping(item.index, data.chosen.clone())
+        keys::Walk::keeping(item.index, sidebar_row, data.chosen.clone())
     };
     let right_walk = pressed_walk.clone();
     let mut right_walk_state = data.walk;

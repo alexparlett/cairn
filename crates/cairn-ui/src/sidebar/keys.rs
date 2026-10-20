@@ -9,7 +9,8 @@
 //! Where the walk stands is the sidebar's own state, set by a press and by these keys. It holds
 //! while the entry chosen is the one it chose (a row chosen in the history lets it go) and while
 //! the rows are the ones it stood among — but for the rows laid out again for a heading or folder
-//! these keys or a press opened or closed, where the row it stands on keeps its place.
+//! these keys or a press opened or closed, where it holds while that heading or folder still
+//! stands at its place.
 
 use cairn_model::SidebarRow;
 use freya::prelude::*;
@@ -25,25 +26,35 @@ pub struct Walk {
     rows: Option<usize>,
     /// The row it stands on, by its place among them.
     index: usize,
+    /// That row, by which a walk kept across a new layout knows it is still there.
+    row: SidebarRow,
     /// The entry chosen when it was set: a different one lets the walk go.
     chosen: Option<SidebarTarget>,
 }
 
 impl Walk {
     /// The walk standing on `index` of `shown`'s rows, with `chosen` the entry chosen.
-    pub fn at(shown: &SidebarRefs, index: usize, chosen: Option<SidebarTarget>) -> Self {
+    pub fn at(
+        shown: &SidebarRefs,
+        index: usize,
+        row: SidebarRow,
+        chosen: Option<SidebarTarget>,
+    ) -> Self {
         Self {
             rows: Some(rows_address(shown)),
             index,
+            row,
             chosen,
         }
     }
 
-    /// The walk standing on `index` while the rows are laid out again around it.
-    pub fn keeping(index: usize, chosen: Option<SidebarTarget>) -> Self {
+    /// The walk standing on `row`, at `index`, while the rows are laid out again around it: it
+    /// holds over any rows while that heading or folder stands at its place, open or closed.
+    pub fn keeping(index: usize, row: SidebarRow, chosen: Option<SidebarTarget>) -> Self {
         Self {
             rows: None,
             index,
+            row,
             chosen,
         }
     }
@@ -61,9 +72,40 @@ pub fn place_now(
 ) -> Option<usize> {
     let shown = shown?;
     let walk = walk?;
-    let same_rows = walk.rows.is_none_or(|rows| rows == rows_address(shown));
+    let same_rows = match walk.rows {
+        Some(rows) => rows == rows_address(shown),
+        None => shown
+            .rows
+            .get(walk.index)
+            .is_some_and(|row| same_place(*row, walk.row)),
+    };
     (same_rows && walk.chosen.as_ref() == chosen && walk.index < shown.rows.len())
         .then_some(walk.index)
+}
+
+/// Whether two rows are the same heading, folder or entry, whether open or closed.
+fn same_place(one: SidebarRow, other: SidebarRow) -> bool {
+    match (one, other) {
+        (SidebarRow::Section { section, .. }, SidebarRow::Section { section: was, .. }) => {
+            section == was
+        }
+        (
+            SidebarRow::Folder { first, depth, .. },
+            SidebarRow::Folder {
+                first: was_first,
+                depth: was_depth,
+                ..
+            },
+        ) => first == was_first && depth == was_depth,
+        (
+            SidebarRow::Section { .. }
+            | SidebarRow::Folder { .. }
+            | SidebarRow::Ref { .. }
+            | SidebarRow::DetachedHead
+            | SidebarRow::Stash { .. },
+            _,
+        ) => one == other,
+    }
 }
 
 /// How many levels in `row` stands: a heading 0, what stands straight under it 1, and one more
@@ -166,13 +208,14 @@ pub fn handler(keys: Keys) -> impl FnMut(Event<KeyboardEventData>) + 'static {
             return;
         };
         let at = place_now(walk.peek().as_ref(), chosen.as_ref(), Some(shown))
-            // Nowhere yet: the chosen entry's row, looked for once per key press.
+            // Nowhere yet: the chosen entry's row, looked for once per key press, each row
+            // compared in place.
             .or_else(|| {
                 let chosen = chosen.as_ref()?;
                 shown
                     .rows
                     .iter()
-                    .position(|row| SidebarTarget::of(*row, &shown.refs).as_ref() == Some(chosen))
+                    .position(|row| chosen.is(*row, &shown.refs))
             });
         let Some(step) = walked_to(&e.key, at, &shown.rows) else {
             return;
@@ -180,8 +223,8 @@ pub fn handler(keys: Keys) -> impl FnMut(Event<KeyboardEventData>) + 'static {
         e.stop_propagation();
         match step {
             SidebarStep::Toggle(index) => {
-                walk.set(Some(Walk::keeping(index, chosen.clone())));
                 if let Some(row) = shown.rows.get(index).copied() {
+                    walk.set(Some(Walk::keeping(index, row, chosen.clone())));
                     on_row.call(row);
                 }
             }
@@ -195,7 +238,7 @@ pub fn handler(keys: Keys) -> impl FnMut(Event<KeyboardEventData>) + 'static {
                 } else {
                     chosen.clone()
                 };
-                walk.set(Some(Walk::at(shown, index, now_chosen)));
+                walk.set(Some(Walk::at(shown, index, row, now_chosen)));
                 controller.scroll_to_offset(
                     index as f32 * SIDEBAR_ROW_HEIGHT,
                     SIDEBAR_ROW_HEIGHT,

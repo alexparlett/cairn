@@ -15,9 +15,9 @@ use cairn_guards::{
     job_env_entries, mentions_crate, modifier_constants_blanked, mutates_the_filesystem,
     names_a_literal_modifier, names_a_modifier_in_code, names_an_element, names_an_icon_set,
     names_gitoxide_mutation, production_char_literals, production_string_literals,
-    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
-    required_skip_violations, rust_sources, spawns_git, spells_a_chord,
-    structs_with_a_field_naming, style_literals, types_containing, waits_on_work,
+    reads_enum_partially, reads_row_content_partially, reads_the_system_zone, renames_type,
+    renders_in_a_macro, repo_root, required_skip_violations, rust_sources, spawns_git,
+    spells_a_chord, structs_with_a_field_naming, style_literals, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -33,10 +33,13 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     // characters.
     // `async-io`: the timer a drag held still at a list's edge scrolls by, a future on the
     // toolkit's executor rather than a sleep.
+    // `jiff`: the time zone the window is handed, and each date's offset in it; the render
+    // layer never reads the zone (`the_render_layer_is_handed_its_time_zone`).
     (
         "cairn-ui",
-        &["async-io", "cairn-model", "freya", "unicode-width"],
+        &["async-io", "cairn-model", "freya", "jiff", "unicode-width"],
     ),
+    // `jiff`: the system's time zone, read once on a worker.
     (
         "cairn-app",
         &[
@@ -45,6 +48,7 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
             "cairn-model",
             "cairn-ui",
             "freya",
+            "jiff",
         ],
     ),
     ("cairn-guards", &["toml"]),
@@ -6175,6 +6179,155 @@ fn every_icon_is_named_through_the_icon_module() {
         module_seen,
         "{ICON_MODULE} does not exist, so the guard exempts a file nobody can see"
     );
+}
+
+/// The one file that reads the system's time zone: the worker's, as a repository opens.
+const ZONE_READER: &str = "crates/cairn-app/src/worker/zone.rs";
+
+/// The render layer is handed its time zone: no production file of `cairn-ui` or `cairn-app`
+/// but the worker's zone read reads the system's zone, the zone database or `TZ`, so every
+/// date a view draws is in the zone the worker read once and the window handed down — a view
+/// reading it would read files on the UI thread and could disagree with the dates beside it.
+#[test]
+fn the_render_layer_is_handed_its_time_zone() {
+    let mut reader_seen = false;
+    for dir in RENDER_SOURCE_DIRS {
+        let sources = rust_sources(dir);
+        let test_only = test_only_module_files(&sources);
+        let mut scanned = 0usize;
+        for (path, source) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            scanned += 1;
+            let shown = path.to_string_lossy().replace('\\', "/");
+            let hits = reads_the_system_zone(source);
+            if shown == ZONE_READER {
+                reader_seen = true;
+                assert!(
+                    hits.iter().any(|(_, named)| *named == "try_system"),
+                    "{ZONE_READER} does not read the zone with `try_system`: either the read \
+                     moved — move this guard with it — or the matcher has gone blind"
+                );
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{shown}:{} reads the system's time zone (`{}`). The worker reads it once \
+                 ({ZONE_READER}) and the window hands it down as a `cairn_ui::LocalZone` \
+                 (CLAUDE.md, Invariants).",
+                hits[0].0,
+                hits[0].1
+            );
+        }
+        assert!(
+            scanned > 0,
+            "the zone guard read no production file under {dir}; it is scanning less than it \
+             claims"
+        );
+    }
+    assert!(
+        reader_seen,
+        "{ZONE_READER} does not exist, so the guard exempts a file nobody can see"
+    );
+}
+
+#[test]
+fn the_system_zone_matcher_catches_the_shapes_it_claims() {
+    for (shape, source, named) in [
+        (
+            "the read",
+            "let zone = TimeZone::try_system();",
+            "try_system",
+        ),
+        (
+            "the read, qualified",
+            "jiff::tz::TimeZone::try_system().ok()",
+            "try_system",
+        ),
+        (
+            "the read falling back unsaid",
+            "let zone = TimeZone::system();",
+            "TimeZone::system",
+        ),
+        (
+            "the read, spaced",
+            "TimeZone ::\n    system()",
+            "TimeZone::system",
+        ),
+        (
+            "a zone by name",
+            "TimeZone::get(\"Europe/London\")",
+            "TimeZone::get",
+        ),
+        ("the database", "let db = jiff::tz::db();", "tz::db"),
+        ("the database imported", "use jiff::tz::db;", "tz::db"),
+        (
+            "now in the system's zone",
+            "let now = Zoned::now();",
+            "Zoned::now",
+        ),
+        (
+            "the zone type renamed",
+            "use jiff::tz::TimeZone as Z;",
+            "a renamed zone type",
+        ),
+        (
+            "the zone type aliased",
+            "type Here = jiff::tz::TimeZone;",
+            "a renamed zone type",
+        ),
+        (
+            "the zoned type renamed",
+            "use jiff::Zoned as Z;",
+            "a renamed zone type",
+        ),
+        ("the variable", "let tz = std::env::var(\"TZ\");", "\"TZ\""),
+    ] {
+        assert!(
+            reads_the_system_zone(source)
+                .iter()
+                .any(|(_, found)| *found == named),
+            "the zone matcher missed {shape}: {source:?} gave {:?}",
+            reads_the_system_zone(source)
+        );
+    }
+    for ident in cairn_guards::SYSTEM_ZONE_IDENTS {
+        assert!(
+            !reads_the_system_zone(&format!("let x = {ident};")).is_empty(),
+            "`{ident}` is on the roster but the matcher does not read it"
+        );
+    }
+    for path in cairn_guards::SYSTEM_ZONE_PATHS {
+        assert!(
+            !reads_the_system_zone(&format!("let x = {}();", path.join("::"))).is_empty(),
+            "`{path:?}` is on the roster but the matcher does not read it"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a zone handed in",
+            "pub fn zone(mut self, zone: LocalZone) -> Self { self.zone = zone; self }",
+        ),
+        ("a fixed zone", "TimeZone::fixed(Offset::constant(1))"),
+        ("UTC", "let zone = TimeZone::UTC;"),
+        ("an offset", "zone.to_offset(at).seconds()"),
+        ("a longer name", "let try_systems = 1; TimeZone::getter();"),
+        ("another db", "store::db();"),
+        ("a comment", "// TimeZone::try_system reads TZ"),
+        ("a string", "const WHAT: &str = \"TimeZone::system\";"),
+        ("another variable", "std::env::var(\"TZDIR\")"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { TimeZone::try_system(); std::env::var(\"TZ\"); }\n}",
+        ),
+    ] {
+        assert!(
+            reads_the_system_zone(source).is_empty(),
+            "the zone matcher flagged {shape}: {source:?} gave {:?}",
+            reads_the_system_zone(source)
+        );
+    }
 }
 
 #[test]

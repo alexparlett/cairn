@@ -3051,6 +3051,61 @@ fn colour_tuples(code: &str) -> Vec<usize> {
     found
 }
 
+/// The identifiers that read the system's time zone, wherever they appear: jiff's
+/// `TimeZone::try_system`, which reads `TZ`, `/etc/localtime` and the zone database.
+pub const SYSTEM_ZONE_IDENTS: &[&str] = &["try_system"];
+
+/// The paths that read the system's time zone, or the zone database it is read from: jiff's
+/// `TimeZone::system` (the same read, falling back to UTC unsaid), `TimeZone::get` (a zone by
+/// name, from the database), `tz::db` (the database), and `Zoned::now` (now, in the system's
+/// zone).
+pub const SYSTEM_ZONE_PATHS: &[&[&str]] = &[
+    &["TimeZone", "system"],
+    &["TimeZone", "get"],
+    &["tz", "db"],
+    &["Zoned", "now"],
+];
+
+/// The types whose renaming would hide a path of [`SYSTEM_ZONE_PATHS`] from the matcher.
+pub const SYSTEM_ZONE_TYPES: &[&str] = &["TimeZone", "Zoned"];
+
+/// The 1-based lines where the production code of `source` (comments, strings and test
+/// modules blanked) reads the system's time zone, each with what it names: an identifier of
+/// [`SYSTEM_ZONE_IDENTS`], a path of [`SYSTEM_ZONE_PATHS`], a rename of one of
+/// [`SYSTEM_ZONE_TYPES`] (`use .. as`, a `type` alias), or the string `"TZ"`, the variable the
+/// zone is read from.
+pub fn reads_the_system_zone(source: &str) -> Vec<(usize, &'static str)> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut found = BTreeSet::new();
+    for ident in SYSTEM_ZONE_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            found.insert((line_at(&code, offset), *ident));
+        }
+    }
+    for path in SYSTEM_ZONE_PATHS {
+        let named = match *path {
+            ["TimeZone", "system"] => "TimeZone::system",
+            ["TimeZone", "get"] => "TimeZone::get",
+            ["tz", "db"] => "tz::db",
+            _ => "Zoned::now",
+        };
+        for (start, _) in path_offsets(&code, path) {
+            found.insert((line_at(&code, start), named));
+        }
+    }
+    for name in SYSTEM_ZONE_TYPES {
+        for line in renames_type(&code, name) {
+            found.insert((line, "a renamed zone type"));
+        }
+    }
+    for (line, text) in production_string_literals(source) {
+        if text == "TZ" {
+            found.insert((line, "\"TZ\""));
+        }
+    }
+    found.into_iter().collect()
+}
+
 /// The ways a file names an icon set rather than the icon module: Freya's re-export of its
 /// icon crate (`freya::icons`, matched as a path and in a braced `use freya::{..}`), the crate
 /// itself, the Lucide set, the component that draws an SVG, and Freya's own drawn icons.

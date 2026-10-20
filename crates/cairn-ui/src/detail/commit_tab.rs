@@ -42,6 +42,7 @@ use crate::diff::toggle_glyphs::Glyph;
 use crate::diff::view::{RowGeometry, draw_row};
 use crate::history::date_text;
 use crate::history::ref_chips::{Chip, chips_row};
+use crate::local_time::LocalZone;
 use crate::style::{metrics, tones};
 
 /// Every row of the tab is this tall — a file opened in place's rows too, its diff's among
@@ -166,7 +167,7 @@ impl Default for Refs {
 
 /// The rows above the files, for `changes`. Proportional to the message and the refs drawn,
 /// never to the files: those are read by index as they scroll into view.
-fn header_lines(changes: &ChangeSet, refs: &Refs) -> Vec<Line> {
+fn header_lines(changes: &ChangeSet, refs: &Refs, zone: &LocalZone) -> Vec<Line> {
     #[cfg(test)]
     tests::HEADER_BUILDS.with(|builds| builds.set(builds.get() + 1));
     let mut lines = Vec::new();
@@ -177,8 +178,13 @@ fn header_lines(changes: &ChangeSet, refs: &Refs) -> Vec<Line> {
             committer: details.committer.clone(),
         });
         lines.push(Line::Dates {
-            author: date_text::long_date(details.author.time),
-            committer: date_text::long_date(details.committer.time),
+            // An unreadable zone is said once, after the author's date.
+            author: format!(
+                "{}{}",
+                date_text::long_date(details.author.time, zone),
+                date_text::utc_fallback_note(zone)
+            ),
+            committer: date_text::long_date(details.committer.time, zone),
         });
         if !refs.chips.is_empty() {
             lines.push(Line::Refs(refs.clone()));
@@ -222,15 +228,17 @@ struct HeaderKey {
     needed_limit: Option<usize>,
     no_files: bool,
     refs: Refs,
+    zone: LocalZone,
 }
 
 impl HeaderKey {
-    fn of(changes: &ChangeSet, refs: &Refs) -> Self {
+    fn of(changes: &ChangeSet, refs: &Refs, zone: &LocalZone) -> Self {
         Self {
             commit: changes.details.as_ref().map(|details| details.id),
             needed_limit: changes.renames.needed_limit,
             no_files: changes.files.is_empty(),
             refs: refs.clone(),
+            zone: zone.clone(),
         }
     }
 }
@@ -239,15 +247,20 @@ impl HeaderKey {
 type HeaderCache = Rc<RefCell<Option<(HeaderKey, Rc<Vec<Line>>)>>>;
 
 /// The header for `changes`: the one in `cache` while its key still holds.
-fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Vec<Line>> {
-    let key = HeaderKey::of(changes, refs);
+fn cached_header(
+    cache: &HeaderCache,
+    changes: &ChangeSet,
+    refs: &Refs,
+    zone: &LocalZone,
+) -> Rc<Vec<Line>> {
+    let key = HeaderKey::of(changes, refs, zone);
     let mut cached = cache.borrow_mut();
     if let Some((built_for, lines)) = cached.as_ref()
         && *built_for == key
     {
         return lines.clone();
     }
-    let lines = Rc::new(header_lines(changes, refs));
+    let lines = Rc::new(header_lines(changes, refs, zone));
     *cached = Some((key, lines.clone()));
     lines
 }
@@ -262,6 +275,7 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Ve
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
     refs: Refs,
+    zone: LocalZone,
     expansion: Readable<Expansion>,
     side_by_side: bool,
     on_parent: EventHandler<Oid>,
@@ -277,6 +291,7 @@ impl CommitTab {
         Self {
             changes: changes.into(),
             refs: Refs::default(),
+            zone: LocalZone::default(),
             expansion: Readable::from_value(Expansion::new()),
             side_by_side: false,
             on_parent: EventHandler::new(|_| {}),
@@ -292,6 +307,12 @@ impl CommitTab {
     /// them out, and that row's lane: the REFS row.
     pub fn refs(mut self, refs: Refs) -> Self {
         self.refs = refs;
+        self
+    }
+
+    /// The zone the author's and committer's dates are drawn in, handed down by the window.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
         self
     }
 
@@ -348,6 +369,7 @@ impl PartialEq for CommitTab {
     fn eq(&self, other: &Self) -> bool {
         self.changes == other.changes
             && self.refs == other.refs
+            && self.zone == other.zone
             && self.expansion == other.expansion
             && self.side_by_side == other.side_by_side
             && self.key == other.key
@@ -527,7 +549,7 @@ impl Component for CommitTab {
             let changes = self.changes.read();
             let identity = changes.details.as_ref().map(|details| details.id);
             (
-                cached_header(&cache, &changes, &self.refs),
+                cached_header(&cache, &changes, &self.refs, &self.zone),
                 changes.files.len(),
                 identity,
             )
@@ -1008,6 +1030,7 @@ mod tests {
                 None,
             ),
             &Refs::default(),
+            &LocalZone::default(),
         );
         let message: Vec<&Line> = lines
             .iter()
@@ -1029,12 +1052,20 @@ mod tests {
     /// changed nothing.
     #[test]
     fn the_header_says_what_is_missing_and_what_was_cut_short() {
-        let root = header_lines(&set(Some(details("x", 0)), 0, Some(2774)), &Refs::default());
+        let root = header_lines(
+            &set(Some(details("x", 0)), 0, Some(2774)),
+            &Refs::default(),
+            &LocalZone::default(),
+        );
         assert!(!root.iter().any(|line| matches!(line, Line::Parents(_))));
         assert!(root.contains(&Line::CutShort(2774)));
         assert!(root.contains(&Line::NoFiles));
 
-        let merge = header_lines(&set(Some(details("x", 2)), 1, None), &Refs::default());
+        let merge = header_lines(
+            &set(Some(details("x", 2)), 1, None),
+            &Refs::default(),
+            &LocalZone::default(),
+        );
         assert!(
             merge
                 .iter()
@@ -1062,11 +1093,11 @@ mod tests {
     #[test]
     fn the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit() {
         let changes = set(Some(details("x", 1)), 1, None);
-        let none = header_lines(&changes, &Refs::default());
+        let none = header_lines(&changes, &Refs::default(), &LocalZone::default());
         assert!(!none.iter().any(|line| matches!(line, Line::Refs(_))));
 
         let two = refs_of(&["v1.0", "v1.1"]);
-        let lines = header_lines(&changes, &two);
+        let lines = header_lines(&changes, &two, &LocalZone::default());
         let at = |wanted: fn(&Line) -> bool| lines.iter().position(wanted);
         let refs = at(|line| matches!(line, Line::Refs(_)));
         let id = at(|line| matches!(line, Line::Id(_)));

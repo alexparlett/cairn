@@ -732,6 +732,7 @@ dependencies = [
  "cairn-ui",
  "freya",
  "freya-testing",
+ "jiff",
 ]
 
 [[package]]
@@ -777,6 +778,7 @@ dependencies = [
  "cairn-model",
  "freya",
  "freya-testing",
+ "jiff",
  "unicode-width",
 ]
 

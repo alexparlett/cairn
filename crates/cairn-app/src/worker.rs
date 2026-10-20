@@ -22,6 +22,7 @@ mod wake;
 mod window_check_updates;
 #[cfg(test)]
 mod written_repository;
+mod zone;
 
 pub use askpass::{PromptId, Reply};
 #[cfg(test)]

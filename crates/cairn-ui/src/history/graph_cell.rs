@@ -5,14 +5,12 @@ use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor
 use freya::prelude::*;
 
 use crate::history::graph_geometry::{
-    self, NODE_RADIUS, Node, ROW_HEIGHT, RowGeometry, STROKE_WIDTH, Stroke,
+    self, NODE_RADIUS, Node, RING_RADIUS, ROW_HEIGHT, RowGeometry, STROKE_WIDTH, Stroke,
 };
 use crate::history::lane_palette::lane_colour;
 
 /// Painted length and gap of an out-of-order line.
 const DASH: [f32; 2] = [4.0, 3.0];
-
-const RING_WIDTH: f32 = 2.0;
 
 pub(crate) fn graph_cell(row: &RowEdges, parents: usize, lanes: usize) -> Canvas {
     let geometry = graph_geometry::row_geometry(row, parents);
@@ -42,9 +40,10 @@ fn paint_row(canvas: &freya::engine::prelude::Canvas, geometry: &RowGeometry) {
             canvas.draw_circle(geometry.node_at, NODE_RADIUS, &paint);
         }
         Node::Ring => {
+            // Fork's larger hollow circle, the ground showing inside it.
             paint.set_style(PaintStyle::Stroke);
-            paint.set_stroke_width(RING_WIDTH);
-            canvas.draw_circle(geometry.node_at, NODE_RADIUS, &paint);
+            paint.set_stroke_width(STROKE_WIDTH);
+            canvas.draw_circle(geometry.node_at, RING_RADIUS, &paint);
         }
     }
 }
@@ -165,5 +164,24 @@ mod tests {
             ring.iter().any(|painted| *painted),
             "a merge was not painted at all"
         );
+    }
+
+    /// A merge's node is Fork's larger hollow circle: painted at its radius above and below
+    /// the centre, past where a dot reaches, and hollow between; a dot paints nothing out
+    /// there. Caught by: the ring drawn at the dot's radius, or filled.
+    #[test]
+    fn a_merges_node_is_the_larger_hollow_circle() {
+        let node = row(0, Vec::new());
+        let column = graph_geometry::lane_x(Lane::new(0));
+        let middle = graph_geometry::row_middle();
+        let ring = painted_column(&node, 2, column);
+        let dot = painted_column(&node, 1, column);
+        let at = |offset: f32| (middle + offset).round() as usize;
+        for edge in [-RING_RADIUS, RING_RADIUS] {
+            assert_eq!(ring.get(at(edge)), Some(&true), "the ring at {edge}");
+            assert_eq!(dot.get(at(edge)), Some(&false), "a dot reaches {edge}");
+        }
+        let inside = NODE_RADIUS - 0.5;
+        assert_eq!(ring.get(at(inside)), Some(&false), "the ring is filled");
     }
 }

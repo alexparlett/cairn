@@ -7,7 +7,7 @@ use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     CaptionRow, ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT,
-    DetailTab, DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender,
+    DetailTab, DiffSettings, HistoryList, MainView, ROW_HEIGHT, ReflogStrip, RowRender,
 };
 use freya::prelude::*;
 
@@ -105,6 +105,9 @@ pub struct View {
     /// reflog entry too and draws what no ref reaches dimmed. Off as the window opens, kept
     /// for the session.
     pub show_lost: State<bool>,
+    /// The time zone every date is drawn in, read once on the worker (`Update::Started`) and
+    /// handed down to the history, the detail pane and the activity popover.
+    pub zone: State<cairn_ui::LocalZone>,
     /// Create Branch: its dialog, its name, its sticky check box and a create's failure.
     pub branch: crate::operations::create_branch::CreateBranchView,
     /// The activity popover: the session's operations, and whether it is open,
@@ -181,13 +184,14 @@ pub fn window(
     let list = rect()
         .width(Size::fill())
         .height(Size::fill())
-        .child({
-            // Show Lost Commits' check box flips the toggle exactly as its chord does.
+        // No heading over the rows, as in Fork; while Show Lost Commits is on, Fork's strip
+        // across the top of the history, its Exit turning the mode off as the chord does.
+        .maybe_child(view.show_lost.read().then(|| {
             let toggling = submit.clone();
-            HistoryHeader::new().show_lost_commits(*view.show_lost.read(), move |_: bool| {
+            ReflogStrip::new().on_exit(move |()| {
                 crate::history::lost_commits::toggle(view, toggling.as_deref());
             })
-        })
+        }))
         // A reopen's walk reading, over the rows it will replace: they stay drawn and usable.
         .maybe_child(reading.map(reading_strip))
         .child(match placeholder {
@@ -428,13 +432,18 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
                 .chips(render.chips)
                 .head(render.head)
                 .lost(render.lost)
+                .head_reaches(render.head_reaches)
+                .zone(render.zone)
                 .selected(render.selected)
                 .focused(render.focused)
                 .into(),
-            // A stash's row: its `stash@{n}` chip and its message as the subject.
+            // A stash's row: its `stash@{n}` chip and git's message as the subject, greyed as
+            // Fork greys it, since `HEAD` never reaches a stash.
             RowContent::Stash(stash) => {
                 CommitRow::new(stash.as_commit(), render.graph, render.lanes)
                     .chips(render.chips)
+                    .head_reaches(render.head_reaches)
+                    .zone(render.zone)
                     .selected(render.selected)
                     .focused(render.focused)
                     .into()
@@ -442,6 +451,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         }
     })
     .refs(refs)
+    .zone(view.zone.read().clone())
     .lanes(lanes)
     .selected(*view.selected.read())
     .also_selected(second)
@@ -768,6 +778,7 @@ pub(crate) mod tests {
             writes: State::create(crate::operations::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
+            zone: State::create(cairn_ui::LocalZone::default()),
             activity: crate::operations::activity::ActivityView::created(),
             branch: crate::operations::create_branch::CreateBranchView::created(),
             frame: crate::frame::FrameView::created(),
@@ -804,18 +815,13 @@ pub(crate) mod tests {
         test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
     }
 
-    /// The labels below the column headings: what fills the list's place.
+    /// The labels of the main region, under the toolbar and right of the sidebar: what fills
+    /// the list's place, the list having no heading.
     fn body(test: &TestingRunner) -> Vec<String> {
-        let headings_end = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Author")
-                    .map(|_| node.layout().area.max_y())
-            })
-            .unwrap();
         test.find_many(|node, element| {
+            let area = node.layout().area;
             Label::try_downcast(element)
-                .filter(|_| node.layout().area.min_y() >= headings_end)
+                .filter(|_| area.min_y() >= MAIN_TOP && area.min_x() >= LEFT)
                 .map(|label| label.text.to_string())
         })
     }
@@ -1152,6 +1158,19 @@ pub(crate) mod tests {
         }
     }
 
+    /// A frozen table's `YYYY-MM-DD HH:MM` as the list draws the same instant now: Fork's
+    /// `d Mon yyyy HH:mm`.
+    fn fork_date(before: &str) -> String {
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let (date, time) = before.split_once(' ').unwrap();
+        let parts: Vec<&str> = date.split('-').collect();
+        let month: usize = parts[1].parse().unwrap();
+        let day: u32 = parts[2].parse().unwrap();
+        format!("{day} {} {} {time}", MONTHS[month - 1], parts[0])
+    }
+
     #[test]
     fn the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed() {
         use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
@@ -1202,13 +1221,8 @@ pub(crate) mod tests {
         }
         test.sync_and_update();
 
-        let graph_left = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Graph and subject")
-                    .map(|_| node.layout().area.min_x())
-            })
-            .unwrap_or_else(|| panic!("no history header"));
+        // The list has no heading: its graph starts a row's padding in from its left edge.
+        let graph_left = LEFT + cairn_ui::ROW_PADDING;
         let mut drawn = Vec::new();
         for &(hex, ..) in MAIN_DRAWN_BEFORE {
             let id = Oid::parse(hex).unwrap();
@@ -1273,14 +1287,18 @@ pub(crate) mod tests {
             line.push((!filled).to_string());
             drawn.push(line);
         }
+        // The table's dates are in the form the list drew then, `YYYY-MM-DD HH:MM` in UTC; the
+        // list draws the same instant now in Fork's `d Mon yyyy HH:mm`, in UTC here, and the
+        // author's initials in an avatar before the name.
         let before: Vec<Vec<String>> = MAIN_DRAWN_BEFORE
             .iter()
             .map(|&(_, subject, author, short, date, ring)| {
                 vec![
                     subject.to_owned(),
+                    cairn_ui::initials(author),
                     author.to_owned(),
                     short.to_owned(),
-                    date.to_owned(),
+                    fork_date(date),
                     ring.to_string(),
                 ]
             })
@@ -1302,7 +1320,7 @@ pub(crate) mod tests {
         }
         assert_eq!(drawn.len(), 18, "main's rows were not all drawn");
         assert!(
-            before.iter().any(|line| line[4] == "true"),
+            before.iter().any(|line| line[5] == "true"),
             "no merge among main's rows, so no ring was decided"
         );
     }
@@ -1346,9 +1364,13 @@ pub(crate) mod tests {
         let backgrounds = |test: &TestingRunner, y: f32| {
             test.find_many(|node, element| {
                 let area = node.layout().area;
+                // The history's rows, not the sidebar's beside them.
                 Rect::try_downcast(element)
                     .filter(|_| {
-                        area.min_y() <= y && y < area.max_y() && area.height() == ROW_HEIGHT
+                        area.min_y() <= y
+                            && y < area.max_y()
+                            && area.height() == ROW_HEIGHT
+                            && area.min_x() >= LEFT
                     })
                     .map(|rect| rect.style.background)
             })
@@ -2005,30 +2027,108 @@ pub(crate) mod tests {
         );
     }
 
-    /// Show Lost Commits' check box flips the toggle as the chord does — a reopen walking from
-    /// the reflogs, then, once the reopened walk's first page draws the list, the chord heard
-    /// again with no click (the list takes the keyboard back from the box). Caught by: a box that
-    /// asks nothing, one that walks otherwise than the chord would, or a list left without the
-    /// keyboard after a press on the box.
+    /// Whether the menu bar's View menu ticks Show Lost Commits.
+    fn lost_commits_ticked(test: &TestingRunner, view: View) -> bool {
+        test.run_in(|| crate::menu_bar::menus(view, true))
+            .iter()
+            .flat_map(|menu| menu.groups.iter().flatten())
+            .find(|item| item.label == "Show Lost Commits (Reflog)")
+            .map(|item| (item.ticked, item.chord))
+            .map_or_else(
+                || panic!("no Show Lost Commits item"),
+                |(ticked, chord)| {
+                    assert_eq!(chord, Some(Action::ShowLostCommits), "the item's chord");
+                    ticked
+                },
+            )
+    }
+
+    /// Show Lost Commits is the View menu's item, chosen as a person chooses it — the menu
+    /// opened, the item pressed — and its chord: on, the menu ticks it and Fork's strip stands
+    /// across the top of the history, "Reflog mode enabled" over the rows with its Exit link,
+    /// which turns it off as the chord does; off, the strip is gone. No check box or heading
+    /// names it in the window, and the list keeps the keyboard through each reopen. Caught
+    /// by: the header's check box or headings back, the strip missing while on or left after,
+    /// Exit asking nothing, or the item unticked while on.
     #[test]
-    fn the_show_lost_commits_box_flips_the_toggle_as_its_chord_does() {
+    fn show_lost_commits_is_the_view_menus_and_names_itself_while_on() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
         click_row(&mut test, 2);
         submitted.borrow_mut().clear();
-        click_label(&mut test, cairn_ui::SHOW_LOST_COMMITS_CAPTION);
-        assert!(*view.show_lost.read(), "the box turned it on");
-        let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+        for gone in [
+            "Show Lost Commits",
+            "Graph and subject",
+            "Author",
+            "Date (UTC)",
+        ] {
+            assert!(
+                !texts(&test).iter().any(|text| text == gone),
+                "{gone:?} drawn"
+            );
+        }
+        assert!(!lost_commits_ticked(&test, view));
         assert!(
-            matches!(asked.as_slice(), [Request::OpenHistory { lost: true, .. }]),
-            "{asked:?}"
+            !texts(&test)
+                .iter()
+                .any(|text| text == cairn_ui::REFLOG_STRIP_TEXT)
+        );
+
+        // The View menu, opened and its item pressed.
+        click_label(&mut test, "View");
+        click_label(&mut test, "Show Lost Commits (Reflog)");
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(*view.show_lost.read(), "the item turned it on");
+        assert!(
+            matches!(
+                submitted
+                    .borrow_mut()
+                    .drain(..)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [Request::OpenHistory { lost: true, .. }]
+            ),
+            "the item reopened the history walking the reflogs"
         );
         first_page_arrives(&mut test, view, &submitted, 10);
         submitted.borrow_mut().clear();
-        press_chord(&mut test, Action::ShowLostCommits);
         assert!(
-            !*view.show_lost.read(),
-            "the chord, heard with no click, turned it off"
+            lost_commits_ticked(&test, view),
+            "the item is ticked while on"
         );
+        let drawn = texts(&test);
+        let strip = drawn
+            .iter()
+            .position(|text| text == cairn_ui::REFLOG_STRIP_TEXT);
+        let first_row = drawn.iter().position(|text| text == "commit 0");
+        assert!(
+            matches!((strip, first_row), (Some(strip), Some(row)) if strip < row),
+            "no strip over the rows: {drawn:?}"
+        );
+        assert!(drawn.iter().any(|text| text == cairn_ui::REFLOG_STRIP_EXIT));
+
+        // Its chord turns it off, heard with no click.
+        press_chord(&mut test, Action::ShowLostCommits);
+        assert!(!*view.show_lost.read(), "the chord turned it off");
+        first_page_arrives(&mut test, view, &submitted, 10);
+        submitted.borrow_mut().clear();
+        assert!(
+            !texts(&test)
+                .iter()
+                .any(|text| text == cairn_ui::REFLOG_STRIP_TEXT)
+        );
+        assert!(!lost_commits_ticked(&test, view));
+
+        // On again by the chord, and off by the strip's Exit.
+        press_chord(&mut test, Action::ShowLostCommits);
+        first_page_arrives(&mut test, view, &submitted, 10);
+        submitted.borrow_mut().clear();
+        click_label(&mut test, cairn_ui::REFLOG_STRIP_EXIT);
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(!*view.show_lost.read(), "Exit turned it off");
         assert!(
             matches!(
                 submitted.borrow().as_slice(),
@@ -2631,7 +2731,7 @@ pub(crate) mod tests {
                 "the sidebar is not under {starts:?}: {sidebar:?}"
             );
             // The main region is under it too, so it spans both columns rather than one.
-            let main = label_at(test, "Author").unwrap();
+            let main = label_at(test, "commit 0").unwrap();
             assert!(
                 main.min_y() >= banner.max_y() && main.min_x() > LEFT,
                 "the main region is not under {starts:?}: {main:?}"
@@ -3754,6 +3854,103 @@ pub(crate) mod tests {
         );
     }
 
+    /// The colour of the label reading `text`.
+    fn colour_of(test: &TestingRunner, text: &str) -> Option<Fill> {
+        test.find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|label| label.text_style_data.color.clone())
+        })
+        .unwrap_or_else(|| panic!("nothing reads {text:?}"))
+    }
+
+    /// Through the window: a commit the walk marked as beyond `HEAD`'s reach and a stash's row
+    /// are drawn in Fork's grey for a row `HEAD` cannot reach, a reached commit in the body's
+    /// tone; and the stash's row, pressed, is drawn in the focused selection's blue band and
+    /// white text, as a commit's row is. Caught by: the window's row callback dropping the mark
+    /// on either kind of row, or the stash's row not told the list has focus (drawn in the
+    /// unfocused grey band).
+    #[test]
+    fn rows_head_cannot_reach_are_grey_and_a_selected_stash_is_drawn_focused() {
+        let (mut test, view, _) = launch(Vec::new(), received(4, true));
+        let mut rows = view.rows;
+        let mut page = RowsPage::new();
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "side work",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        page.mark_beyond_head();
+        page.push_stash(
+            GraphRow::new(oid(90), Lane::new(1), Vec::new()),
+            cairn_model::PagedStash {
+                index: 0,
+                base: oid(2),
+                message: "On main: WIP on parser",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        page.mark_beyond_head();
+        page.push(
+            GraphRow::new(oid(2), Lane::new(1), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "main work",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        let grey = Some(Fill::from(tones::UNREACHABLE_TEXT));
+        assert_eq!(colour_of(&test, "side work"), grey);
+        assert_eq!(colour_of(&test, "On main: WIP on parser"), grey);
+        assert_eq!(colour_of(&test, "main work"), Some(Fill::from(tones::TEXT)));
+
+        // The stash's row pressed: the list has focus, so Fork's blue and white.
+        click_label(&mut test, "On main: WIP on parser");
+        test.sync_and_update();
+        assert_eq!(*view.selected.read(), Some(RowId::Stash(oid(90))));
+        let band_under = |test: &TestingRunner, text: &str| {
+            let y = test
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == text)
+                        .map(|_| node.layout().area.center().y)
+                })
+                .unwrap_or_else(|| panic!("nothing reads {text:?}"));
+            test.find_many(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.min_y() <= y
+                            && y < area.max_y()
+                            && area.height() == ROW_HEIGHT
+                            && area.min_x() >= LEFT
+                    })
+                    .and_then(|rect| rect.style.background.as_color())
+            })
+        };
+        let focused = tones::selected(true);
+        assert!(
+            band_under(&test, "On main: WIP on parser").contains(&focused.band),
+            "the focused stash row is not Fork's blue"
+        );
+        assert_eq!(
+            colour_of(&test, "On main: WIP on parser"),
+            Some(Fill::from(focused.text))
+        );
+    }
+
     /// A stash's row: its `stash@{n}` chip, then its message as its subject, on one row;
     /// pressed, it is selected by its own identity and asks what `git stash show` lists of it;
     /// pressed with the extending chord beside a commit, the pair holds the stash's row, the lower
@@ -4521,8 +4718,10 @@ pub(crate) mod tests {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
         changes_tab_over(&mut test, view, 3);
         let shown = pane(&test);
-        let [author, id, date, subject] =
-            cairn_ui::summary_parts(&answer_for(2, Vec::new()).details.unwrap());
+        let [author, id, date, subject] = cairn_ui::summary_parts(
+            &answer_for(2, Vec::new()).details.unwrap(),
+            &cairn_ui::LocalZone::default(),
+        );
         for part in [&author, &id, &date, &subject] {
             assert!(
                 shown.contains(part),

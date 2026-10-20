@@ -178,6 +178,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     writes: State::create(crate::operations::local_writes::LocalWrites::default()),
                     confirming: State::create(None),
                     show_lost: State::create(false),
+                    zone: State::create(cairn_ui::LocalZone::default()),
                     activity: crate::operations::activity::ActivityView::created(),
                     branch: crate::operations::create_branch::CreateBranchView::created(),
                     frame: crate::frame::FrameView::created(),
@@ -662,4 +663,54 @@ fn a_reopen_during_a_find_asks_it_again_of_the_new_walk() {
     // The new walk's first page holds the row.
     rows_arrive(&mut test, view, &submitted, 140..160, false);
     assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(150))));
+}
+
+/// `HEAD` detached at `oid(at)`, as the last refresh read it.
+fn head_detached_at(test: &mut TestingRunner, view: View, at: usize) {
+    let mut detached = (*snapshot()).clone();
+    detached.head = HeadState::Detached(oid(at));
+    let mut refreshed = view.refreshed;
+    test.run_in(|| {
+        let _ = refreshed.write().refs_arrived(Arc::new(detached));
+    });
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+}
+
+/// Show HEAD (Ctrl+0, ⌘0 on macOS) selects `HEAD`'s row and brings it into view, as a press of
+/// its ref finds it: a loaded row at once, its changes asked and the list told where it is; one
+/// past the loaded rows by paging the walk, "Finding HEAD…" said while it looks. Caught by: the
+/// chord unheard, a row selected but left out of view, or a row past the loaded ones never
+/// found.
+#[test]
+fn show_head_selects_heads_row() {
+    let (mut test, view, submitted) = launch(200, false);
+    head_detached_at(&mut test, view, 150);
+    assert!(!row_shown(&test, 150), "HEAD's row is in view already");
+    crate::window::tests::press_chord(&mut test, cairn_ui::accelerators::Action::ShowHead);
+    assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(150))));
+    assert_eq!(changes_asked(&submitted), [Comparison::Commit(oid(150))]);
+    assert!(finds(&submitted).is_empty(), "a loaded row was looked for");
+    assert!(
+        row_shown(&test, 150),
+        "HEAD's row was not brought into view"
+    );
+    assert_eq!(*view.history_cursor.read(), 150);
+
+    let (mut test, view, submitted) = launch(10, false);
+    head_detached_at(&mut test, view, 150);
+    crate::window::tests::press_chord(&mut test, cairn_ui::accelerators::Action::ShowHead);
+    assert_eq!(finds(&submitted), [oid(150)]);
+    assert!(
+        texts(&test).contains(&finding_text("HEAD")),
+        "{:?}",
+        texts(&test)
+    );
+    rows_arrive(&mut test, view, &submitted, 10..200, false);
+    assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(150))));
+    assert!(
+        row_shown(&test, 150),
+        "the found row was not brought into view"
+    );
 }

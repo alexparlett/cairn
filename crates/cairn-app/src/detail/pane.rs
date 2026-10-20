@@ -193,6 +193,7 @@ fn commit_body(
             let (toggling, expanding, loading) = (submit.clone(), submit.clone(), submit.clone());
             CommitTab::new(changes)
                 .refs(refs_of(view, id, finder))
+                .zone(view.zone.read().clone())
                 .expansion(expansion)
                 .side_by_side(side_by_side)
                 .on_parent(move |parent: Oid| follow_parent(parent, view, submit.as_deref()))

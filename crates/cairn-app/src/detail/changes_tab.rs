@@ -171,7 +171,11 @@ impl Component for ChangesTab {
         let list_share = *width.peek();
         let header: Option<Element> = match comparison {
             Some(comparison) => Some(comparison),
-            None => details.map(|details| ChangesSummary::new(details).into()),
+            None => details.map(|details| {
+                ChangesSummary::new(details)
+                    .zone(view.zone.read().clone())
+                    .into()
+            }),
         };
         rect()
             .expanded()

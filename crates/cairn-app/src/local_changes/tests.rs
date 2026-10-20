@@ -96,6 +96,7 @@ pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell:
                 writes: State::create(crate::operations::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
+                zone: State::create(cairn_ui::LocalZone::default()),
                 activity: crate::operations::activity::ActivityView::created(),
                 branch: crate::operations::create_branch::CreateBranchView::created(),
                 frame: crate::frame::FrameView::created(),

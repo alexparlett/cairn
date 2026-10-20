@@ -415,8 +415,9 @@ fn about_cairn_names_the_version_and_the_git() {
         &mut test,
         view,
         &submitted,
-        Update::GitFound {
-            described: described.clone(),
+        Update::Started {
+            git: described.clone(),
+            zone: None,
         },
     );
     chose(&mut test, view, &submitted, "About Cairn");

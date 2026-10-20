@@ -48,6 +48,13 @@ pub const STATUS_BOX_WIDTH: f32 = 300.0;
 pub const STATUS_BOX_HEIGHT: f32 = 36.0;
 /// The narrowest the status box shrinks to as the window narrows, before anything else gives.
 pub const STATUS_BOX_MIN_WIDTH: f32 = 200.0;
+/// The strip across the top of the history while Show Lost Commits is on: ~22 px in Fork
+/// (`fork-menu-toggles-2026-10-19.md`, §2: y≈118-139).
+pub const REFLOG_STRIP: f32 = 22.0;
+/// The room at a strip's two ends.
+pub const STRIP_INSET: f32 = 10.0;
+/// The room between a strip's sentence and its link.
+pub const STRIP_GAP: f32 = 6.0;
 /// The detail pane's Hide commit details icon, at its tab strip's right.
 pub const STRIP_ICON: f32 = 14.0;
 /// The status box's list glyph, at its left.
@@ -55,6 +62,24 @@ pub const STATUS_BOX_GLYPH: f32 = 14.0;
 
 /// A history row: Fork's row pitch.
 pub const HISTORY_ROW: f32 = 23.0;
+/// The distance between the centres of two neighbouring lanes of the history's graph: 12 px in
+/// Fork (uv2, the graph of uv7 at 4×: lane centres at x 315.5 and 327.5).
+pub const HISTORY_LANE: f32 = 12.0;
+/// A commit's dot on its lane: ~5 px across in Fork (uv2: 4 px wide, 5 px tall).
+pub const HISTORY_DOT: f32 = 5.0;
+/// A merge's hollow circle, across its outer edge: ~13 px in Fork (uv2: x 310-321, y 196-208).
+pub const HISTORY_RING: f32 = 13.0;
+/// A line of the graph, and a merge's circle's stroke: 2 px in Fork.
+pub const HISTORY_LINE: f32 = 2.0;
+/// A ref chip on a history row: a rounded rectangle ~17 px tall in Fork.
+pub const CHIP: f32 = 17.0;
+/// An author's avatar before the name: a rounded square ~14 px across in Fork.
+pub const AVATAR: f32 = 14.0;
+/// An avatar's corner radius.
+pub const AVATAR_RADIUS: f32 = 3.0;
+/// An avatar's initials: Cairn's size, two letters fitting the square; Fork's survey does not
+/// size them.
+pub const AVATAR_TEXT: f32 = 8.0;
 /// A sidebar row.
 pub const SIDEBAR_ROW: f32 = 22.0;
 /// A row of Local Changes' lists.

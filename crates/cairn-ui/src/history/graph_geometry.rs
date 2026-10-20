@@ -1,16 +1,23 @@
-//! Row geometry, in row-local logical pixels with `y` growing downwards.
+//! Row geometry, in row-local logical pixels with `y` growing downwards: Fork's row pitch,
+//! lane pitch, dot, merge circle and line, measured from Fork for Windows (`style::metrics`).
 
 use cairn_model::{EdgeKind, EdgeSegment, Lane, RowEdges};
 
-pub const ROW_HEIGHT: f32 = 26.0;
+use crate::style::metrics;
+
+pub const ROW_HEIGHT: f32 = metrics::HISTORY_ROW;
 
 /// Distance between the centres of neighbouring lanes, in logical pixels.
-pub const LANE_WIDTH: f32 = 14.0;
+pub const LANE_WIDTH: f32 = metrics::HISTORY_LANE;
 
-/// Radius of the dot or ring at a row's own commit.
-pub const NODE_RADIUS: f32 = 4.0;
+/// Radius of the dot at a row's own commit.
+pub const NODE_RADIUS: f32 = metrics::HISTORY_DOT / 2.0;
 
-pub const STROKE_WIDTH: f32 = 1.8;
+pub const STROKE_WIDTH: f32 = metrics::HISTORY_LINE;
+
+/// Radius of a merge's hollow circle, to the middle of its stroke: Fork's larger circle,
+/// [`metrics::HISTORY_RING`] across its outer edge.
+pub const RING_RADIUS: f32 = (metrics::HISTORY_RING - STROKE_WIDTH) / 2.0;
 
 /// Lanes past this share the last column.
 pub const MAX_DRAWN_LANES: usize = 24;
@@ -24,6 +31,14 @@ const _: () = assert!(
 const _: () = assert!(
     LANE_WIDTH > STROKE_WIDTH,
     "a lane is narrower than the line that runs down it"
+);
+const _: () = assert!(
+    LANE_WIDTH >= 2.0 * RING_RADIUS,
+    "a merge's circle reaches past the middle of the next lane's line"
+);
+const _: () = assert!(
+    RING_RADIUS > NODE_RADIUS + STROKE_WIDTH,
+    "a merge's circle is no larger than a commit's dot"
 );
 
 pub type Point = (f32, f32);
@@ -326,6 +341,19 @@ mod tests {
             assert_eq!(late.to, ordinary.to);
             assert_eq!(late.colour_lane, ordinary.colour_lane);
         }
+    }
+
+    /// Fork's geometry: a 23 px row, lanes 12 px apart, a 5 px dot and a 13 px merge circle
+    /// drawn with a 2 px line, measured from Fork for Windows. Caught by: any of them drifting
+    /// from what was measured.
+    #[test]
+    fn the_graph_is_drawn_at_forks_measured_sizes() {
+        assert_eq!(ROW_HEIGHT, 23.0);
+        assert_eq!(lane_x(Lane::new(1)) - lane_x(Lane::new(0)), 12.0);
+        assert_eq!(2.0 * NODE_RADIUS, 5.0);
+        assert_eq!(2.0 * RING_RADIUS + STROKE_WIDTH, 13.0);
+        assert_eq!(STROKE_WIDTH, 2.0);
+        assert_eq!(row_middle(), 11.5);
     }
 
     #[test]

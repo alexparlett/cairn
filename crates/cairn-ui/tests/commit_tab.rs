@@ -10,7 +10,7 @@ use cairn_model::{
 use cairn_ui::accelerators::{self, Action, Os, Scope};
 use cairn_ui::{
     AUTHOR_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab, DetailTabs,
-    EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, NO_FILES, PARENTS_CAPTION,
+    EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, LocalZone, NO_FILES, PARENTS_CAPTION,
     cut_short_notice,
 };
 use freya::prelude::*;
@@ -115,6 +115,18 @@ struct Fixture {
 type Parents = Rc<RefCell<Vec<Oid>>>;
 
 fn launch(initial: ChangeSet) -> (TestingRunner, Fixture, Parents) {
+    launch_in(initial, east_of_india())
+}
+
+/// A zone five and a half hours east of UTC, handed to the tab as the window hands it the
+/// system's.
+fn east_of_india() -> LocalZone {
+    LocalZone::read(jiff::tz::TimeZone::fixed(
+        jiff::tz::Offset::from_seconds(5 * 3_600 + 30 * 60).unwrap_or_else(|e| panic!("{e}")),
+    ))
+}
+
+fn launch_in(initial: ChangeSet, zone: LocalZone) -> (TestingRunner, Fixture, Parents) {
     let parents = Parents::default();
     let app = {
         let parents = parents.clone();
@@ -125,6 +137,7 @@ fn launch(initial: ChangeSet) -> (TestingRunner, Fixture, Parents) {
                 .expanded()
                 .child(
                     CommitTab::new(fixture.changes)
+                        .zone(zone.clone())
                         .on_parent(move |parent: Oid| parents.borrow_mut().push(parent)),
                 )
                 .into_element()
@@ -162,11 +175,12 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// The author and the committer, each with name, email and the full timestamp at its own
-/// offset; the full id; each parent as its short id; and the files, a rename showing both
-/// names (the message, row for row: `the_message_is_the_rows_git_log_shows_for_it`). Caught
-/// by: dropping the committer, rendering a date in UTC or without its offset, abbreviating
-/// the id, dropping a parent or the body, or a rename showing only its new name.
+/// The author and the committer, each with name, email and the full timestamp in the zone the
+/// tab is handed, whatever offset each was recorded at; the full id; each parent as its short
+/// id; and the files, a rename showing both names (the message, row for row:
+/// `the_message_is_the_rows_git_log_shows_for_it`). Caught by: dropping the committer,
+/// rendering a date in UTC, at its recorded offset or without its offset, abbreviating the id,
+/// dropping a parent or the body, or a rename showing only its new name.
 #[test]
 fn the_commit_tab_shows_every_field_r5_3_names() {
     let (test, _, _) = launch(change_set(0));
@@ -177,10 +191,8 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
         COMMITTER_CAPTION.to_owned(),
         "Ada Lovelace <ada@example.com>".to_owned(),
         "Grace Hopper <grace@example.com>".to_owned(),
-        // The author's and the committer's moments, each at its own offset, as Fork shows a
-        // date: one instant, two offsets, two different days.
+        // The author's moment in the zone, though it was recorded at another offset.
         "15 Nov 2023 03:43:20 +05:30".to_owned(),
-        "14 Nov 2023 14:13:20 -08:00".to_owned(),
         ID_CAPTION.to_owned(),
         oid(77).hex().as_str().to_owned(),
         PARENTS_CAPTION.to_owned(),
@@ -196,6 +208,20 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
             "the Commit tab does not show {text:?}; it shows {shown:?}"
         );
     }
+    // The committer recorded at -08:00 and the author at +05:30, one instant: both drawn in
+    // the zone.
+    assert_eq!(
+        shown
+            .iter()
+            .filter(|text| *text == "15 Nov 2023 03:43:20 +05:30")
+            .count(),
+        2,
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|text| text.contains("-08:00")),
+        "{shown:?}"
+    );
     for status in ["R", "A", "D"] {
         assert!(
             shown.iter().any(|t| t == status),
@@ -709,4 +735,24 @@ fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
         label.center().y,
         row.center().y
     );
+}
+
+/// A zone the worker could not read: the dates are drawn in UTC and the tab says so once,
+/// after the author's date; a zone read says nothing. Caught by: the fallback said nowhere, or
+/// after every date.
+#[test]
+fn the_commit_tab_says_once_that_the_zone_fell_back_to_utc() {
+    let (test, _, _) = launch_in(change_set(0), LocalZone::unreadable());
+    let shown = texts(&test);
+    assert!(
+        shown.contains(&"14 Nov 2023 22:13:20 +00:00 (UTC)".to_owned()),
+        "{shown:?}"
+    );
+    assert_eq!(
+        shown.iter().filter(|text| text.contains("(UTC)")).count(),
+        1,
+        "{shown:?}"
+    );
+    let (read, _, _) = launch(change_set(0));
+    assert!(!texts(&read).iter().any(|text| text.contains("(UTC)")));
 }

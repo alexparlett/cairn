@@ -5,11 +5,14 @@
 //! full parents and their author's address. The slim rows, read through a history built page
 //! by page, are held to it. Each row is drawn by the window's own row, `CommitRow`, and read
 //! back from the drawn tree: its labels' text, and the pixel at the centre of its node, which
-//! a dot fills and a merge's ring leaves empty.
+//! a dot fills and a merge's ring leaves empty. The oracle's dates are in the form the list
+//! drew then, `YYYY-MM-DD HH:MM` in UTC; the list now draws Fork's `d Mon yyyy HH:mm` in the
+//! zone it is handed, UTC here, so each is read in that form (`fork_date`) — the same instant
+//! — and the author's avatar, drawn before the name, is its initials (`initials`).
 
 use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowContent, RowsPage};
 use cairn_ui::graph_geometry::{lane_x, row_middle};
-use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender};
+use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender, initials};
 use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -183,6 +186,24 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
         .collect()
 }
 
+/// An oracle's `YYYY-MM-DD HH:MM` as the list draws the same instant now: Fork's
+/// `d Mon yyyy HH:mm`.
+fn fork_date(before: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (date, time) = before
+        .split_once(' ')
+        .unwrap_or_else(|| panic!("{before:?} is no date"));
+    let parts: Vec<&str> = date.split('-').collect();
+    let [year, month, day] = parts[..] else {
+        panic!("{before:?} is no date");
+    };
+    let month: usize = month.parse().unwrap_or_else(|_| panic!("{before:?}"));
+    let day: u32 = day.parse().unwrap_or_else(|_| panic!("{before:?}"));
+    format!("{day} {} {year} {time}", MONTHS[month - 1])
+}
+
 #[test]
 fn every_row_draws_what_it_drew_before_rows_were_slimmed() {
     let (mut test, ()) = TestingRunner::new(
@@ -202,9 +223,10 @@ fn every_row_draws_what_it_drew_before_rows_were_slimmed() {
             (
                 vec![
                     subject(subject_text),
+                    initials(author),
                     author.to_owned(),
                     short.to_owned(),
-                    date.to_owned(),
+                    fork_date(date),
                 ],
                 ring,
             )

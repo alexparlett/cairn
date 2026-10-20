@@ -9,6 +9,7 @@ use crate::accelerators::{self, Action, HeldKeys};
 use crate::history::commit_row::label_room;
 use crate::history::graph_geometry::ROW_HEIGHT;
 use crate::history::ref_chips::{Chip, chips_of_row};
+use crate::local_time::LocalZone;
 use crate::menu::{Item, context_menu};
 use crate::style::tones;
 
@@ -39,6 +40,11 @@ pub struct RowRender {
     pub head: bool,
     /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed.
     pub lost: bool,
+    /// Whether `HEAD` reaches the row's commit, as the walk marked it: a row it does not is
+    /// drawn greyed, a stash's among them.
+    pub head_reaches: bool,
+    /// The zone the row's date is drawn in.
+    pub zone: LocalZone,
     pub selected: bool,
     /// Whether the list has focus, which a selected row's tone says.
     pub focused: bool,
@@ -49,6 +55,7 @@ pub struct RowRender {
 pub struct HistoryList {
     rows: State<History>,
     refs: Option<Arc<RefsSnapshot>>,
+    zone: LocalZone,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -68,6 +75,7 @@ impl HistoryList {
         Self {
             rows,
             refs: None,
+            zone: LocalZone::default(),
             lanes: 1,
             selected: None,
             also_selected: None,
@@ -109,6 +117,13 @@ impl HistoryList {
 
     pub fn lanes(mut self, lanes: usize) -> Self {
         self.lanes = lanes;
+        self
+    }
+
+    /// The zone the rows' dates are drawn in, handed down by the window, which had it read on a
+    /// worker.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
         self
     }
 
@@ -165,6 +180,7 @@ impl PartialEq for HistoryList {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
             && same_refs(&self.refs, &other.refs)
+            && self.zone == other.zone
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
@@ -194,6 +210,7 @@ impl KeyExt for HistoryList {
 struct ListData {
     rows: State<History>,
     refs: Option<Arc<RefsSnapshot>>,
+    zone: LocalZone,
     /// The room a row's chips and subject share, from the list's measured width.
     room: f32,
     lanes: usize,
@@ -215,6 +232,7 @@ impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
             && same_refs(&self.refs, &other.refs)
+            && self.zone == other.zone
             && self.room == other.room
             && self.lanes == other.lanes
             && self.selected == other.selected
@@ -246,6 +264,7 @@ impl Component for HistoryList {
         let data = ListData {
             rows: self.rows,
             refs: self.refs.clone(),
+            zone: self.zone.clone(),
             room: label_room(*width.read(), self.lanes),
             lanes: self.lanes,
             selected: self.selected,
@@ -454,6 +473,8 @@ fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
         chips,
         head: row.labels().is_head(),
         lost: row.is_lost(),
+        head_reaches: row.head_reaches(),
+        zone: data.zone.clone(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
         focused: data.focused,
         lanes: data.lanes,

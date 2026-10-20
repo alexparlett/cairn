@@ -1136,7 +1136,7 @@ in `fork-observed-2026-10-10.md`, `am1`, `am2`): the status box's list glyph ope
 window, drawn by `cairn_ui::ActivityPopover` inside `crate::activity::ActivityLayer`, a child
 component of the window that alone reads the log. On the left the session's operations — every
 local write and every fetch — newest first, each row its one name, Fork's result line under it
-(`LocalWrite::result_lines`, kept on `local_writes::Asked`), its start time as `HH:MM:SS UTC`,
+(`LocalWrite::result_lines`, kept on `local_writes::Asked`), its start time as `HH:MM:SS` in the window's zone (`cairn_ui::time_of_day`),
 `⚠` on a failure (`cairn_ui::FAILED_GLYPH`) and `⊘` on a cancel (`CANCELLED_GLYPH`), and no
 status word, with Fork's × beside a running one that can be cancelled (a commit, an amend, a
 fetch). On the right the one selected: its name; one of four words — `running`, `succeeded`,

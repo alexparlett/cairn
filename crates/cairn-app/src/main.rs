@@ -113,6 +113,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let confirming = use_state(|| None::<operations::confirming::Confirming>);
     // Show Lost Commits, off as the window opens.
     let show_lost = use_state(|| false);
+    // The zone dates are drawn in: UTC, said nowhere, until the worker reads the system's.
+    let zone = use_state(cairn_ui::LocalZone::default);
     // Create Branch, for the session.
     let branch = operations::create_branch::CreateBranchView::used();
     // The activity popover's operations, for the session.
@@ -148,6 +150,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         writes,
         confirming,
         show_lost,
+        zone,
         branch,
         activity,
         frame,

@@ -22,6 +22,9 @@ freya = { workspace = true, features = ["engine", "icons-lucide", "titlebar"] }
 unicode-width.workspace = true
 # The edge auto-scroll's timer (`src/edge_scroll.rs`; user-approved 2026-10-07, L5).
 async-io.workspace = true
+# The time zone the window is handed, and each instant's offset in it (`src/local_time.rs`;
+# fork-alignment L5). The zone itself is read by the application's worker, never here.
+jiff.workspace = true
 
 [dev-dependencies]
 freya-testing.workspace = true

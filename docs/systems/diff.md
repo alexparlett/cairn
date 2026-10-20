@@ -1560,8 +1560,8 @@ involved: the exceptions roster stays empty.
 
 **The Changes tab** (`crates/cairn-app/src/detail/changes_tab.rs`, phase 07, R5.4), Fork's
 (Findings 5 and 19): a one-line summary — the author's name, the short id, the author
-date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
-`summary_parts`; no avatar), on a strip as tall as the diff bar's 30 px
+date in the window's zone and Fork's format and the subject (`cairn_ui::ChangesSummary`,
+`summary_parts`; no avatar yet), on a strip as tall as the diff bar's 30 px
 (`the_summary_strip_is_as_tall_as_the_diff_bar`) — then, behind a draggable splitter (the list opening at 35%
 of the pane, never dragged or squeezed below 200 px, its share kept for the session:
 `the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width`), the changed
@@ -1624,11 +1624,15 @@ which is unavailable while two are selected anyway.
 
 **The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/detail/commit_tab.rs`), in
 Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
-timestamp at its own offset as Fork's Windows build shows it — `14 Nov 2023 21:43:20
--00:30`: a two-digit day, the English month's abbreviation, a 24-hour time to the
-second and the offset as `±HH:MM` (`date_text::long_date`, pinned against GNU `date`
-by `a_timestamp_reads_as_fork_shows_it_at_its_own_offset`, Fork's own
-`25 Nov 2020 01:11:30 +01:00` among its rows). The user's decision of 2026-10-03:
+timestamp as Fork's Windows build shows it, in the window's zone at that instant whatever
+offset it was recorded at (`cairn_ui::LocalZone`, read once on the worker; `docs/systems/
+history-graph.md`, "The view") — `14 Nov 2023 21:43:20 -00:30`: a two-digit day, the English
+month's abbreviation, a 24-hour time to the second and the zone's offset as `±HH:MM`
+(`date_text::long_date`, pinned against GNU `date` by
+`a_commit_tab_date_reads_as_fork_shows_it_in_the_zone`, Fork's own
+`25 Nov 2020 01:11:30 +01:00` among its rows, and through the tab by
+`the_commit_tab_shows_every_field_r5_3_names`). A zone the worker could not read is UTC,
+said once, " (UTC)" after the author's date (`the_commit_tab_says_once_that_the_zone_fell_back_to_utc`). The user's decision of 2026-10-03:
 Fork's presentation rather than git's default format, fixed and in English, since a
 localized one needs locale data no dependency of Cairn's carries; the day's padding is
 inferred (Fork's one example has a two-digit day; its Windows build is .NET, whose `dd`

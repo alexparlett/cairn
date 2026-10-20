@@ -79,7 +79,8 @@ Kept, and why:
 | A nested repository among the untracked rows is never touched — left as it is, a line in the dialog saying so, as a submodule is — since deleting it deletes history no prompt can count; Fork deletes it as an untracked folder. | `engine.md`, the write verbs |
 | A submodule row's discard is greyed and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
 | During a rebase, `git am` or a sequence of cherry-picks or reverts the commit box is disabled and names git's own command to continue or abort, where Fork offers its commit box as usual. Continuing those operations is their own design. A single cherry-pick or revert is concluded by Commit, as in Fork. | `cairn.md`, the milestone — rewrites are the second lap |
-| While **Show Lost Commits** is on, a strip under the toolbar names the mode and turns it off; Fork shows no sign of the mode in the window itself. | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
+| The **history's graph column is as wide as its widest row's lanes**, so every subject starts at one place; Fork starts each row's chips just after that row's own lanes, so a row's subject moves with the lanes crossing it. | `history-graph.md` — one column width per list, laid out once, not per row |
+| **`HEAD`'s row carries no blue dot** before its chips, and **a merge's circle draws no chevron and is not filled while selected**: Fork's dot repeats the bold and the check mark, and its chevron is the handle of Collapse Merges, which is #1's. | `history-graph.md`; issue #1 |
 | Create Branch's **"Stash and reapply" is drawn greyed**, saying it comes with stashing, where Fork's acts. | `feature-inventory.md` — stash is its own feature |
 | Show Lost Commits reaches the commits `HEAD`'s and the local branches' reflogs hold; Fork's mode reaches every reflog, as `git log --all --reflog` does (TrackerWin #1307). | `history-graph.md`, "What it walks" |
 | **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree is marked, as Fork marks it in its sidebar — and, unlike Fork, its checkout is disabled. | `worktrees.md` |
@@ -163,10 +164,11 @@ system. Fork's standing complaint — that each refresh holds `index.lock` for
 seconds on a large tree — does not carry over, because Cairn's reads take no
 lock (`engine.md`).
 
-Three banners can stand under the toolbar, each about the repository or the window
-rather than an operation: a leftover `index.lock` ("The leftover lock", below), a
+Two banners can stand under the toolbar, each about the repository or the window
+rather than an operation: a leftover `index.lock` ("The leftover lock", below) and a
 close waiting on a write — "Closing after Commit finishes. Close again to quit
-now." — and Show Lost Commits while it is on ("Show Lost Commits", below).
+now." Show Lost Commits, while it is on, is Fork's strip across the top of the history
+instead, since it is about what the history draws ("Show Lost Commits", below).
 
 ## Messages
 
@@ -375,9 +377,9 @@ with push, and is designed with it. Spec: `docs/prd/staging-and-commit.md` R10. 
 ### Show Lost Commits
 
 Fork's reflog view is a mode of the graph, not a list. Its toggle — View › "Show Lost
-Commits (Reflog)", ticked while on, and ⌘⇧. or Ctrl+Shift+., as in Fork, with a strip
-under the toolbar naming the mode and turning it off while it is on, which Fork does
-not have — adds the old
+Commits (Reflog)", ticked while on, and ⌘⇧. or Ctrl+Shift+., as in Fork, with Fork's strip
+across the top of the history while it is on, "Reflog mode enabled" and an "Exit" link that
+turns it off (`docs/research/ui-review/fork-menu-toggles-2026-10-19.md`, §2) — adds the old
 and the new id of every entry of `HEAD`'s reflog and of each local branch's to the walk's tips
 and draws the commits no ref reaches dimmed, as Fork dims them: their subject, author, id and
 date in a lighter grey, their lanes, edges and chips in their own colours

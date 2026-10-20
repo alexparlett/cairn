@@ -1,14 +1,11 @@
-//! Headless component tests for `CommitRow` and `HistoryHeader`.
+//! Headless component tests for `CommitRow`: Fork's history row.
 
 use cairn_model::{CommitSummary, EdgeSegment, Lane, Oid, RowEdges};
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::Duration;
 
-use cairn_ui::accelerators::{self, Action, Os};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
-    AUTHOR_WIDTH, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE, ROW_HEIGHT,
-    SHOW_LOST_COMMITS_CAPTION, graph_width,
+    AUTHOR_WIDTH, CommitRow, DATE_WIDTH, ID_WIDTH, LocalZone, ROW_FONT_SIZE, ROW_HEIGHT,
+    avatar_colour, graph_width,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -37,24 +34,38 @@ fn commit() -> (CommitSummary, RowEdges) {
 }
 
 const WIDTH: f32 = 900.;
-const DATE: &str = "2024-03-09 16:05";
+/// `WHEN` an hour east of UTC, as Fork draws a date: `d Mon yyyy HH:mm`.
+const DATE: &str = "9 Mar 2024 17:05";
+
+/// A zone an hour east of UTC, handed to the rows as the window hands them the system's.
+fn zone() -> LocalZone {
+    LocalZone::read(jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(1)))
+}
 
 #[derive(Clone, Copy)]
 struct Setup {
     lanes: usize,
 }
 
-/// The header, an unselected row, then a selected one.
+/// An unselected row, a selected one, then `HEAD`'s.
 fn app() -> impl IntoElement {
     let Setup { lanes } = use_consume::<Setup>();
     let (commit, graph) = commit();
     let mut second = commit.clone();
     second.summary = format!("selected {SUBJECT}");
+    let mut head = commit.clone();
+    head.summary = format!("head {SUBJECT}");
+    head.author_name = "Grace Hopper".to_owned();
+    head.author_time = WHEN + 60;
     rect()
         .width(Size::fill())
-        .child(HistoryHeader::new().show_lost_commits(false, |_| {}))
-        .child(CommitRow::new(commit, graph.clone(), lanes))
-        .child(CommitRow::new(second, graph, lanes).selected(true))
+        .child(CommitRow::new(commit, graph.clone(), lanes).zone(zone()))
+        .child(
+            CommitRow::new(second, graph.clone(), lanes)
+                .selected(true)
+                .zone(zone()),
+        )
+        .child(CommitRow::new(head, graph, lanes).head(true).zone(zone()))
 }
 
 /// How wide `text` is at the rows' font size, laid out on its own.
@@ -99,49 +110,104 @@ fn launch() -> TestingRunner {
     launch_with(3)
 }
 
+/// The label reading exactly `text`: its weight and colour.
+fn style_of(test: &TestingRunner, text: &str) -> (Option<FontWeight>, Option<Fill>) {
+    test.find(|_, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|label| {
+                (
+                    label.text_style_data.font_weight,
+                    label.text_style_data.color.clone(),
+                )
+            })
+    })
+    .unwrap_or_else(|| panic!("no label reads {text:?}"))
+}
+
+/// Fork's history row: 23 px tall; the graph, then the subject, then the author after an
+/// avatar of their initials in a rounded square of the name's colour, the 7-character id and
+/// the date, local, in Fork's `d Mon yyyy HH:mm`; the author column, the id's and the date's
+/// at their widths whatever the subject; and `HEAD`'s row bold throughout. Caught by: the old
+/// 26 px row, the date drawn in UTC or as `YYYY-MM-DD`, no avatar or another's initials or
+/// colour, the columns out of Fork's order, or `HEAD`'s author, id or date left regular.
 #[test]
-fn each_value_is_drawn_in_its_own_column_at_its_own_width() {
+fn a_history_row_is_forks() {
     let test = launch();
 
+    // Each row's band, the full width and 23 px tall, one under the other.
+    let mut tops: Vec<f32> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| area.width() == WIDTH && area.height() == 23.)
+            .map(|_| area.min_y())
+    });
+    tops.sort_by(f32::total_cmp);
+    tops.dedup();
+    assert_eq!(tops, [0., 23., 46.], "three rows of 23 px");
+    assert_eq!(ROW_HEIGHT, metrics::HISTORY_ROW);
+
     let subject = column(&test, SUBJECT);
+    let initials = column(&test, "AL");
     let author = column(&test, AUTHOR);
     let id = column(&test, &HEX[..7]);
     let date = column(&test, DATE);
-
-    assert_eq!(author.1, AUTHOR_WIDTH, "the author column");
+    assert!(
+        subject.0 < initials.0 && initials.0 < author.0 && author.0 < id.0 && id.0 < date.0,
+        "columns out of Fork's order: subject {subject:?}, avatar {initials:?}, author \
+         {author:?}, id {id:?}, date {date:?}"
+    );
     assert_eq!(id.1, ID_WIDTH, "the commit column");
     assert_eq!(date.1, DATE_WIDTH, "the date column");
     assert!(subject.1 > 0., "the subject column has no width");
 
-    assert!(
-        subject.0 < author.0 && author.0 < id.0 && id.0 < date.0,
-        "columns out of order: subject {subject:?}, author {author:?}, id {id:?}, date {date:?}"
-    );
-}
-
-#[test]
-fn every_heading_sits_over_its_column() {
-    let test = launch();
-
-    for (heading, value) in [
-        ("Author", AUTHOR),
-        ("Commit", &HEX[..7]),
-        ("Date (UTC)", DATE),
-    ] {
-        assert_eq!(
-            column(&test, heading),
-            column(&test, value),
-            "the {heading:?} heading does not line up with its column"
-        );
-    }
-
-    let heading = column(&test, "Graph and subject");
-    let subject = column(&test, SUBJECT);
+    // The avatar: a square of the name's colour, its initials white and bold, the author's
+    // column ending where it always does.
+    let squares: Vec<(f32, f32, f32, Fill)> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| area.width() == metrics::AVATAR && area.height() == metrics::AVATAR)
+            .map(|rect| {
+                (
+                    area.min_x(),
+                    area.max_x(),
+                    area.min_y(),
+                    rect.style.background.clone(),
+                )
+            })
+    });
+    let first = squares
+        .iter()
+        .find(|(_, _, top, _)| *top < ROW_HEIGHT)
+        .unwrap_or_else(|| panic!("no avatar on the first row: {squares:?}"));
     assert_eq!(
-        heading.0 + heading.1,
-        subject.0 + subject.1,
-        "the subject column and its heading end in different places"
+        first.3,
+        Fill::from(avatar_colour(AUTHOR)),
+        "the avatar's colour"
     );
+    assert!(first.0 <= initials.0 && initials.0 + initials.1 <= first.1);
+    assert_eq!(
+        style_of(&test, "AL"),
+        (Some(FontWeight::BOLD), Some(Fill::from(tones::AVATAR_TEXT)))
+    );
+    assert_eq!(
+        author.0 + author.1,
+        first.0 + AUTHOR_WIDTH,
+        "the author column is {AUTHOR_WIDTH} px from its avatar"
+    );
+    assert!(column(&test, "GH").0 > subject.0, "HEAD's row's avatar");
+
+    // `HEAD`'s row bold throughout, the others regular.
+    for text in [
+        format!("head {SUBJECT}"),
+        "Grace Hopper".to_owned(),
+        "9 Mar 2024 17:06".to_owned(),
+    ] {
+        assert_eq!(style_of(&test, &text).0, Some(FontWeight::BOLD), "{text:?}");
+    }
+    for text in [SUBJECT, AUTHOR, DATE] {
+        assert_ne!(style_of(&test, text).0, Some(FontWeight::BOLD), "{text:?}");
+    }
 }
 
 #[test]
@@ -179,9 +245,17 @@ fn a_selected_row_is_drawn_differently_from_an_unselected_one() {
     );
 }
 
+/// The widest date Fork's format draws, and the widest short id. Caught by: a column sized
+/// for a narrower date than the format can draw.
 #[test]
 fn the_date_and_the_short_id_fit_their_columns() {
-    for (text, width, name) in [(DATE, DATE_WIDTH, "date"), (&HEX[..7], ID_WIDTH, "commit")] {
+    for (text, width, name) in [
+        ("28 May 2026 23:59", DATE_WIDTH, "date"),
+        ("30 Sep 2026 00:00", DATE_WIDTH, "date"),
+        ("ddddddd", ID_WIDTH, "commit"),
+        ("0000000", ID_WIDTH, "commit"),
+        (&HEX[..7], ID_WIDTH, "commit"),
+    ] {
         let needed = measured(text);
         assert!(
             needed > 0.,
@@ -206,8 +280,8 @@ fn lost_app() -> impl IntoElement {
     lost.id = Oid::parse(LOST_HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
     rect()
         .width(Size::fill())
-        .child(CommitRow::new(commit, graph.clone(), 3))
-        .child(CommitRow::new(lost, graph, 3).lost(true))
+        .child(CommitRow::new(commit, graph.clone(), 3).zone(zone()))
+        .child(CommitRow::new(lost, graph, 3).lost(true).zone(zone()))
 }
 
 /// As Fork draws a commit `HEAD` cannot reach: its subject, author, short id and date in Fork
@@ -232,7 +306,7 @@ fn a_lost_rows_text_alone_is_dimmed() {
         &format!("lost {SUBJECT}"),
         "Lost Author",
         &LOST_HEX[..7],
-        "2024-03-10 16:05",
+        "10 Mar 2024 17:05",
     ] {
         assert_eq!(colour(text), placeholder, "{text:?} is not dimmed");
     }
@@ -248,81 +322,55 @@ fn a_lost_rows_text_alone_is_dimmed() {
     assert!(translucent.is_empty(), "drawn translucent: {translucent:?}");
 }
 
-/// The check box's toggled state as assistive technology reads it, its area, and what a press
-/// reported.
-type Pressed = Rc<RefCell<Vec<bool>>>;
-
-fn header_with(on: bool, pressed: Pressed) -> impl Fn() -> Element {
-    move || {
-        let pressed = pressed.clone();
-        rect()
-            .width(Size::fill())
-            .child(
-                HistoryHeader::new().show_lost_commits(on, move |to| pressed.borrow_mut().push(to)),
-            )
-            .child(CommitRow::new(commit().0, commit().1, 3))
-            .into()
-    }
-}
-
-/// Show Lost Commits is a check box at the right end of the "Graph and subject" heading's cell,
-/// just left of "Author" — the headings still over their columns — ticked while on, a press
-/// reporting the state it turns to, and its tooltip the chord the accelerator table lists,
-/// spelled for this platform. Caught by: the box placed elsewhere in the strip, a heading
-/// pushed off its column, the state not drawn or not reported, or a tooltip typed rather than
-/// read from the table.
+/// A row `HEAD` cannot reach — a commit or a stash's — beside one it reaches: its subject,
+/// author, id and date in Fork Dark's grey for such a row, its avatar, graph and chips in
+/// their own colours; selected, it takes the selection's tone. Caught by: the mark ignored,
+/// the reached row greyed, or the grey kept over the selection's white.
 #[test]
-fn show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell() {
-    for on in [false, true] {
-        let pressed = Pressed::default();
-        let (mut test, ()) = TestingRunner::new(
-            header_with(on, pressed.clone()),
-            (WIDTH, 200.).into(),
-            |_| {},
-            1.,
-        );
-        test.sync_and_update();
-        let (box_left, box_width) = column(&test, SHOW_LOST_COMMITS_CAPTION);
-        let author = column(&test, "Author");
-        let subject = column(&test, SUBJECT);
-        assert!(
-            box_left + box_width <= author.0 && box_left + box_width >= author.0 - 40.,
-            "the box ends at {} and Author starts at {}",
-            box_left + box_width,
-            author.0
-        );
-        assert!(
-            box_left > subject.0,
-            "the box is not at the cell's right end"
-        );
-        assert_eq!(author, column(&test, AUTHOR), "Author left its column");
-        let toggled = test.find(|_, element| {
-            Rect::try_downcast(element)
-                .filter(|rect| rect.accessibility.builder.role() == AccessibilityRole::CheckBox)
-                .map(|rect| rect.accessibility.builder.toggled())
-        });
-        assert_eq!(toggled, Some(Some(Toggled::from(on))), "its state as drawn");
-
-        let at = (
-            f64::from(box_left + box_width - 4.),
-            f64::from(ROW_HEIGHT / 2.),
-        );
-        test.click_cursor(at);
-        test.sync_and_update();
-        assert_eq!(
-            pressed.borrow().as_slice(),
-            &[!on],
-            "a press reports the state it turns to"
-        );
-
-        test.move_cursor((at.0 - 20., at.1));
-        test.poll(Duration::from_millis(50), Duration::from_millis(900));
-        let chord = accelerators::chord_name(Action::ShowLostCommits, Os::current())
-            .unwrap_or_else(|| panic!("Show Lost Commits has a chord"));
-        assert!(
-            test.find(|_, element| Label::try_downcast(element).filter(|l| l.text == chord))
-                .is_some(),
-            "no tooltip reads {chord:?}"
-        );
+fn a_row_head_cannot_reach_is_greyed_and_one_it_reaches_is_not() {
+    let (mut test, ()) = TestingRunner::new(
+        || -> Element {
+            let (commit, graph) = commit();
+            let mut beyond = commit.clone();
+            beyond.summary = format!("beyond {SUBJECT}");
+            beyond.author_name = "Side Author".to_owned();
+            let mut chosen = commit.clone();
+            chosen.summary = format!("chosen {SUBJECT}");
+            rect()
+                .width(Size::fill())
+                .child(CommitRow::new(commit, graph.clone(), 3).zone(zone()))
+                .child(
+                    CommitRow::new(beyond, graph.clone(), 3)
+                        .head_reaches(false)
+                        .zone(zone()),
+                )
+                .child(
+                    CommitRow::new(chosen, graph, 3)
+                        .head_reaches(false)
+                        .selected(true)
+                        .focused(true)
+                        .zone(zone()),
+                )
+                .into()
+        },
+        (WIDTH, 200.).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    let grey = Some(Fill::from(tones::UNREACHABLE_TEXT));
+    for text in [&format!("beyond {SUBJECT}"), "Side Author"] {
+        assert_eq!(style_of(&test, text).1, grey, "{text:?}");
     }
+    assert_eq!(style_of(&test, SUBJECT).1, Some(Fill::from(tones::TEXT)));
+    assert_eq!(style_of(&test, AUTHOR).1, Some(Fill::from(tones::TEXT)));
+    assert_eq!(
+        style_of(&test, &format!("chosen {SUBJECT}")).1,
+        Some(Fill::from(tones::SELECTED_TEXT))
+    );
+    assert_eq!(
+        style_of(&test, "SA").1,
+        Some(Fill::from(tones::AVATAR_TEXT)),
+        "the avatar keeps its colours"
+    );
 }

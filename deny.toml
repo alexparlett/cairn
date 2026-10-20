@@ -70,6 +70,27 @@ crate = "freya"
 exact = true
 allow = ["borderless", "default", "engine", "icons", "icons-lucide", "titlebar", "winit"]
 
+# jiff is a direct dependency of cairn-ui and cairn-app (fork-alignment L5): the system's time
+# zone, read once on cairn-app's worker, and the offset it gives each date the window draws. It
+# adds no crate: the lockfile already held it at this version through gix-date, which takes its
+# default features, and Cairn names none beyond them, so the set below is exactly what gix-date
+# already compiled. Another feature — `serde`, `static`, `js`, `logging` — changes what is built
+# and is a decision to surface, not a default move.
+[[bans.features]]
+crate = "jiff"
+exact = true
+allow = [
+  "alloc",
+  "default",
+  "perf-inline",
+  "std",
+  "tz-fat",
+  "tz-system",
+  "tzdb-bundle-platform",
+  "tzdb-concatenated",
+  "tzdb-zoneinfo",
+]
+
 [licenses]
 # Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's
 # release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary

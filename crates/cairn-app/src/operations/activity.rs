@@ -36,7 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use cairn_model::{CommandExit, CommandRecord, Oid, ScrubbedLines};
-use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover, ActivityStatus};
+use cairn_ui::{ActivityEntry, ActivityLine, ActivityPopover, ActivityStatus, LocalZone};
 use freya::prelude::*;
 
 use crate::operations::local_writes::Asked;
@@ -227,7 +227,12 @@ impl Activity {
     }
 
     /// As the popover draws it: its lines only when it is the one selected.
-    fn entry(&self, with_lines: bool, none: &Arc<VecDeque<ActivityLine>>) -> ActivityEntry {
+    fn entry(
+        &self,
+        with_lines: bool,
+        none: &Arc<VecDeque<ActivityLine>>,
+        zone: &LocalZone,
+    ) -> ActivityEntry {
         ActivityEntry {
             id: match self.key {
                 ActivityKey::Write(id) => id.number(),
@@ -236,7 +241,7 @@ impl Activity {
             name: self.name.clone(),
             result: self.result(),
             status: self.outcome.status(),
-            started: started_text(self.started),
+            started: started_text(self.started, zone),
             took: self.took.map(took_text),
             sentence: self.sentence(),
             prompt: self.prompt.clone().filter(|_| self.ran),
@@ -547,9 +552,10 @@ impl ActivityLog {
         }
     }
 
-    /// What the window's popover draws: every entry, newest first, and the place of the one
-    /// selected — the newest when none is — whose lines alone are handed over, as a snapshot.
-    pub fn shown(&self) -> (Rc<Vec<ActivityEntry>>, usize) {
+    /// What the window's popover draws, its times in the zone the window holds: every entry,
+    /// newest first, and the place of the one selected — the newest when none is — whose lines
+    /// alone are handed over, as a snapshot.
+    pub fn shown_in(&self, zone: &LocalZone) -> (Rc<Vec<ActivityEntry>>, usize) {
         let selected = self
             .selected
             .and_then(|key| self.newest_first().position(|entry| entry.key == key))
@@ -558,9 +564,15 @@ impl ActivityLog {
         let entries: Vec<ActivityEntry> = self
             .newest_first()
             .enumerate()
-            .map(|(place, activity)| activity.entry(place == selected, &none))
+            .map(|(place, activity)| activity.entry(place == selected, &none, zone))
             .collect();
         (Rc::new(entries), selected)
+    }
+
+    /// [`Self::shown_in`] with its times in UTC, as a test reads them.
+    #[cfg(test)]
+    pub fn shown(&self) -> (Rc<Vec<ActivityEntry>>, usize) {
+        self.shown_in(&LocalZone::default())
     }
 
     /// The key of the entry at `place`, newest first.
@@ -648,19 +660,15 @@ pub fn shell_quoted(argument: &str) -> String {
     }
 }
 
-/// When an operation started, as the popover says it: the time of day, UTC, as the history's
-/// dates are drawn.
-fn started_text(started: SystemTime) -> String {
+/// When an operation started, as the popover says it: the time of day in `zone`, as the
+/// history's dates are drawn.
+fn started_text(started: SystemTime, zone: &LocalZone) -> String {
     let seconds = started
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let of_day = seconds % 86_400;
-    format!(
-        "{:02}:{:02}:{:02} UTC",
-        of_day / 3600,
-        (of_day % 3600) / 60,
-        of_day % 60
-    )
+        .map_or(0, |since| {
+            i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+        });
+    cairn_ui::time_of_day(seconds, zone)
 }
 
 /// How long an operation took, as the popover says it.
@@ -695,6 +703,7 @@ impl PartialEq for ActivityLayer {
     fn eq(&self, other: &Self) -> bool {
         self.view.activity == other.view.activity
             && self.view.fetch == other.view.fetch
+            && self.view.zone == other.view.zone
             && self.submit.is_some() == other.submit.is_some()
     }
 }
@@ -704,7 +713,7 @@ impl Component for ActivityLayer {
         let view = self.view;
         let (entries, selected, anchor) = {
             let log = view.activity.log.read();
-            let (entries, selected) = log.shown();
+            let (entries, selected) = log.shown_in(&view.zone.read());
             (entries, selected, log.anchor())
         };
         let mut log = view.activity.log;
@@ -1361,8 +1370,17 @@ mod tests {
         assert_eq!(took_text(Duration::from_millis(1_500)), "1.5 s");
         assert_eq!(took_text(Duration::from_secs(125)), "2 min 5 s");
         assert_eq!(
-            started_text(SystemTime::UNIX_EPOCH + Duration::from_secs(3_723)),
-            "01:02:03 UTC"
+            started_text(
+                SystemTime::UNIX_EPOCH + Duration::from_secs(3_723),
+                &LocalZone::default()
+            ),
+            "01:02:03"
+        );
+        let west = LocalZone::read(jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(-2)));
+        assert_eq!(
+            started_text(SystemTime::UNIX_EPOCH + Duration::from_secs(3_723), &west),
+            "23:02:03",
+            "the time of day in the zone the window holds"
         );
     }
 

@@ -858,7 +858,7 @@ fn output(
 }
 
 /// Fork's Activity Manager as the window draws it: each row its name, Fork's result line under it
-/// ("staged", "stage failed"), its start time as `HH:MM:SS UTC`, ⚠ on a failure and a shape of its
+/// ("staged", "stage failed"), its start time as `HH:MM:SS` in the window's zone, ⚠ on a failure and a shape of its
 /// own on a cancel, and no status word; the selected one's header its name, one of four words with
 /// its time, and how long it took; a failure's one sentence; and an operation whose output passed
 /// its bound headed "Earlier output not kept." over its latest lines. Caught by: a status word in a
@@ -952,13 +952,14 @@ fn the_activity_manager_draws_forks_rows_and_header() {
         !drawn(&test, EARLIER_NOT_KEPT),
         "a running entry opened at its top"
     );
-    let times = shown
-        .iter()
-        .filter(|label| {
-            let bytes = label.as_bytes();
-            label.len() == 12 && label.ends_with(" UTC") && bytes[2] == b':' && bytes[5] == b':'
-        })
-        .count();
+    let is_time = |text: &str| {
+        let bytes = text.as_bytes();
+        text.len() == 8
+            && bytes[2] == b':'
+            && bytes[5] == b':'
+            && text.chars().filter(char::is_ascii_digit).count() == 6
+    };
+    let times = shown.iter().filter(|label| is_time(label)).count();
     assert_eq!(times, 4, "every row its start time: {shown:?}");
     // No status word in a row: the four words are the header's; a cancel's row reads Fork's
     // result line, "cancelled", once.
@@ -977,16 +978,17 @@ fn the_activity_manager_draws_forks_rows_and_header() {
     assert!(
         shown
             .iter()
-            .any(|label| label.starts_with("running ") && label.ends_with(" UTC")),
+            .any(|label| label.strip_prefix("running ").is_some_and(is_time)),
         "the header's word and time: {shown:?}"
     );
     // The failed stage, selected: its word, time and duration, and its one sentence.
     click_lowest(&mut test, "stage failed");
     let shown = labels(&test);
     assert!(
-        shown
-            .iter()
-            .any(|label| label.starts_with("failed ") && label.contains(" UTC · took ")),
+        shown.iter().any(|label| label
+            .strip_prefix("failed ")
+            .and_then(|rest| rest.split_once(" · took "))
+            .is_some_and(|(time, _)| is_time(time))),
         "{shown:?}"
     );
     assert!(drawn(&test, cairn_ui::GIT_ERROR_TEXT), "{shown:?}");

@@ -12,7 +12,9 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
 - **`style::metrics`** — sizes in logical pixels: Fork's, measured on Fork for Windows at
   1024×768 (`docs/research/ui-review/fork-window-survey-2026-10-16.md`) — the body's 12 px,
   the toolbar labels' 11 px, the caption row's 26 px and the toolbar's 41 px, the rows of the
-  history (23), the sidebar (22), Local Changes (20) and a menu (23), the sidebar's 300 px and
+  history (23), the sidebar (22), Local Changes (20) and a menu (23), the history's graph —
+  its 12 px lane pitch, 5 px dot, 13 px merge circle and 2 px line — its 17 px chips, its
+  14 px avatars and the 22 px strip over it while Show Lost Commits is on, the sidebar's 300 px and
   its 12 px indent, the diff's 17 px row — and the sizes Fork's survey does not give, each
   saying where it comes from (the diff's text and line numbers, measured from Fork earlier;
   a heading's 14 px; the Commit tab's subject and captions, Cairn's).
@@ -21,9 +23,12 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   text, selection, menu, dialog, button, diff band and chip tone of the PRD's table, then the
   few more the same survey sampled that the table does not name (a field's fill and
   placeholder, a check box's border, a banner, a link, the badges of an added and a modified
-  file, a menu's shadow, a disabled button's border, the sidebar's chosen entry). The lanes keep Cairn's eight
+  file, a menu's shadow, a disabled button's border, the sidebar's chosen entry, a remote chip's
+  grey cloud), and Cairn's eight avatar colours, the first Fork's sampled lavender
+  (`AVATARS`). The lanes keep Cairn's eight
   (`history::lane_palette`); a branch's and a remote's chip is filled with a dark shade of its
-  lane (`chip_fill`).
+  lane (`chip_fill`), and the cloud-only chip of a branch level with its upstream bordered in a
+  darker one (`upstream_chip_border`).
 - **`style::icons`** — the Lucide icons, compiled in by Freya's `icons-lucide` feature
   (the crate `freya-icons`, from the pinned Freya source; the feature pinned and Lucide's ISC
   licence recorded in `deny.toml`), one function per icon by what it means, drawn at a size

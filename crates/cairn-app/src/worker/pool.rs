@@ -205,8 +205,9 @@ fn open_paced(
             };
             outbox.send(
                 None,
-                Update::GitFound {
-                    described: described(&git),
+                Update::Started {
+                    git: described(&git),
+                    zone: super::zone::read(),
                 },
             );
             // As the git found above would find it: a bare repository planted in a
@@ -1400,7 +1401,7 @@ mod tests {
     /// open says of the repository.
     fn past_the_git_found(updates: &mut Updates) -> Option<Update> {
         match block_on(updates.next()) {
-            Some(Update::GitFound { .. }) => block_on(updates.next()),
+            Some(Update::Started { .. }) => block_on(updates.next()),
             other => panic!("the open did not first say which git it found: {other:?}"),
         }
     }

@@ -20,6 +20,7 @@ use crate::detail::file_filter::ShownFiles;
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::diff::toggle_glyphs::Glyph;
 use crate::history::date_text;
+use crate::local_time::LocalZone;
 use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
@@ -347,20 +348,30 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChangesSummary {
     details: CommitDetails,
+    zone: LocalZone,
 }
 
 impl ChangesSummary {
     pub fn new(details: CommitDetails) -> Self {
-        Self { details }
+        Self {
+            details,
+            zone: LocalZone::default(),
+        }
+    }
+
+    /// The zone the date is drawn in, handed down by the window.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
+        self
     }
 }
 
-/// The summary's four parts, in order: author, short id, date, subject.
-pub fn summary_parts(details: &CommitDetails) -> [String; 4] {
+/// The summary's four parts, in order: author, short id, date in `zone`, subject.
+pub fn summary_parts(details: &CommitDetails, zone: &LocalZone) -> [String; 4] {
     [
         details.author.name.clone(),
         short(details.id),
-        date_text::long_date(details.author.time),
+        date_text::long_date(details.author.time, zone),
         details.subject().to_owned(),
     ]
 }
@@ -371,7 +382,7 @@ fn short(id: Oid) -> String {
 
 impl Component for ChangesSummary {
     fn render(&self) -> impl IntoElement {
-        let [author, id, date, subject] = summary_parts(&self.details);
+        let [author, id, date, subject] = summary_parts(&self.details, &self.zone);
         let part = |text: String, colour: Color| {
             label()
                 .text(text)

@@ -105,6 +105,25 @@ pub const STASH_CHIP: Color = hex(0x545454);
 pub const STASH_CHIP_BORDER: Color = hex(0x929292);
 /// A chip's text.
 pub const CHIP_TEXT: Color = hex(0xF0F0F0);
+/// The cloud in a remote's chip's icon segment, and in the cloud-only chip of a branch level
+/// with its upstream: grey (`~#777676`).
+pub const REMOTE_GLYPH: Color = hex(0x777676);
+
+/// An author's avatar: its initials, white, on one of [`AVATARS`]. Fork's one sampled avatar is
+/// lavender (`#D376E9`..`#DE9FF0`, the first); the rest are Cairn's, each dark enough under
+/// white initials, chosen from the author's name.
+pub const AVATAR_TEXT: Color = hex(0xFFFFFF);
+/// The fixed set an avatar's colour is chosen from, by the author's name.
+pub const AVATARS: [Color; 8] = [
+    hex(0xD88AEC),
+    hex(0x5B8FD6),
+    hex(0x3E9E86),
+    hex(0xD9824B),
+    hex(0xC85A72),
+    hex(0x7F9147),
+    hex(0x7A6FD8),
+    hex(0xB08A2E),
+];
 
 // Tones Fork Dark draws that the surfaces above do not name, each sampled in the same survey.
 
@@ -140,6 +159,13 @@ pub const BADGE_TEXT: Color = hex(0xFFFFFF);
 /// to black.
 pub fn chip_fill(lane: Color) -> Color {
     Color::lerp(lane, Color::BLACK, 0.635)
+}
+
+/// The border of the cloud-only chip a branch level with its upstream draws before its own: a
+/// darker shade of its lane's colour than the branch's own, as Fork borders it (`~#685727` on
+/// its second lane's `#F4C302`).
+pub fn upstream_chip_border(lane: Color) -> Color {
+    Color::lerp(lane, Color::BLACK, 0.57)
 }
 
 /// A selected row's band and text.

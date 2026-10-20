@@ -118,8 +118,9 @@ Every item but Exit and About Cairn is an action of the accelerator table, chose
 `shortcuts::act` exactly as its chord is, so a menu item and its key are one thing: Show
 Uncommitted Changes and Show All Commits switch the main region; Hide Commit Details collapses
 the detail pane to its tab strip and opens it again (Ctrl+Shift+D on Linux, Fork for Windows';
-the item alone on macOS); Show HEAD selects `HEAD`'s row as a press of its ref does
-(`history::head`); Show Lost Commits reopens the history; Refresh asks the worker; Fetch fetches
+the item alone on macOS); Show HEAD selects `HEAD`'s row and brings it into view as a press of
+its ref does, paging the walk for it when it is not loaded (`history::head`,
+`show_head_selects_heads_row`); Show Lost Commits reopens the history; Refresh asks the worker; Fetch fetches
 the default remote, as the toolbar's button does (`operations::fetch::start`); New Branch…
 opens Create Branch at `HEAD`; Zoom In and Out step the zoom. Hide Commit Details and Show Lost
 Commits are ticked while on, their labels unchanged
@@ -214,7 +215,7 @@ The zoom scales the whole window through Freya's custom scale factor
 (`zoom_scales_the_window_in_steps`, `the_zoom_steps_through_its_table_and_stops_at_each_end`).
 
 About Cairn (`cairn_ui::AboutDialog`) names Cairn, this build's version and licence and the `git`
-found as the application started — the worker's first word on a stream, `Update::GitFound`,
+found as the application started — the worker's first word on a stream, `Update::Started`,
 "git <version>, at <path>" — or that none has been found; Close, focused as it opens, and
 Escape close it. It is the last of the one modal state (`crate::modal`), so while it is open
 the window's chords do nothing (`about_cairn_names_the_version_and_the_git`). Fork's About box

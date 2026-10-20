@@ -10,7 +10,8 @@ use cairn_model::{
 use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{
     ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
-    FILTERING, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles, summary_parts,
+    FILTERING, LocalZone, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles,
+    summary_parts,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -265,16 +266,20 @@ fn the_filter_field_takes_the_text_and_an_empty_answer_says_so() {
     assert!(labels.iter().any(|l| l == NO_FILE_MATCHES), "{labels:?}");
 }
 
-/// Fork's summary line: who wrote the commit, its short id, the date at its own offset in
-/// the user's chosen format, and the subject. Caught by: the committer's name or date in the
-/// author's place, a full id, or the message's body.
+/// Fork's summary line: who wrote the commit, its short id, the date in the zone the window
+/// is handed, in Fork's format, and the subject. Caught by: the committer's name or date in the
+/// author's place, a full id, the offset the commit was recorded at drawn in the zone's place,
+/// or the message's body.
 #[test]
 fn the_summary_is_author_short_id_date_and_subject() {
     let signature = |name: &str, seconds| Signature {
         name: name.to_owned(),
         email: format!("{name}@example.com"),
-        time: Timestamp::new(seconds, -30 * 60),
+        time: Timestamp::new(seconds, 2 * 3_600),
     };
+    let zone = LocalZone::read(jiff::tz::TimeZone::fixed(
+        jiff::tz::Offset::from_seconds(-30 * 60).unwrap(),
+    ));
     let id = Oid::from_bytes(&[0xab; 20]).unwrap();
     let details = CommitDetails {
         id,
@@ -284,7 +289,7 @@ fn the_summary_is_author_short_id_date_and_subject() {
         message: "Subject line\n\nBody text\n".to_owned(),
     };
     assert_eq!(
-        summary_parts(&details),
+        summary_parts(&details, &zone),
         [
             "Ada".to_owned(),
             "abababa".to_owned(),

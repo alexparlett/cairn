@@ -1,16 +1,18 @@
-//! The refs on a history row, as Fork draws them: one outlined chip per ref between the graph
-//! and the subject, tinted with the row's lane colour — a tag indigo — each kind told by its
-//! glyph and shape: a local branch is a plain chip, the current one with a check mark before
-//! its name; a remote-tracking ref and a tag carry their glyph in a cap of their own at the
-//! chip's left; a stash's row carries a `stash@{n}` chip with a box.
+//! The refs on a history row, as Fork draws them (`docs/research/ui-review/
+//! fork-window-survey-2026-10-16.md`, §4; tones in the second survey, §1a): one outlined chip,
+//! 17 px tall, per ref between the graph and the subject — a branch's and a remote's tinted
+//! with the row's lane colour, a tag's and a stash's by their kind — each kind told by its
+//! glyph and shape: a local branch is a plain chip, the current one bold with a check mark
+//! before its name; a remote-tracking ref and a tag carry their glyph in an unfilled cap of
+//! their own at the chip's left; a stash's row carries a `stash@{n}` chip with a box.
 //!
 //! **Order.** The current branch first (git's `HEAD -> main` leads too), then the row's refs in
 //! the snapshot's order — local branches, remote-tracking refs, tags, each by name — Fork's
 //! local-before-remote; where Fork puts tags is not recorded.
 //!
 //! **Compact labels** (Fork's default): a local branch whose upstream is a remote-tracking ref
-//! labelling the same row draws that upstream as the remote glyph in front of its own chip, and
-//! the upstream draws no chip of its own; any other remote's ref at that commit keeps its chip
+//! labelling the same row draws that upstream as a cloud-only chip of its own just before the
+//! branch's chip, the remote's name unwritten, and the upstream draws no named chip; any other remote's ref at that commit keeps its chip
 //! (Fork, Tracker #1365). Which ref is a branch's upstream is read from the refs snapshot; that
 //! both label this row is read from the row.
 //!
@@ -30,8 +32,8 @@ use crate::history::lane_palette::lane_colour;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::style::{metrics, tones};
 
-/// A chip's height, inside a row's.
-pub const CHIP_HEIGHT: f32 = 18.0;
+/// A chip's height, inside a row's: Fork's.
+pub const CHIP_HEIGHT: f32 = metrics::CHIP;
 /// The space between two chips, and between the last and the subject.
 pub const CHIP_GAP: f32 = 4.0;
 /// The chip's name text size.
@@ -55,7 +57,7 @@ pub const TAG_INDIGO: Color = tones::TAG_CHIP_BORDER;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChipKind {
     /// A local branch: `current` when `HEAD` is on it, `tracked` when its upstream labels the
-    /// same row and is folded into this chip as the remote glyph.
+    /// same row and is folded into a cloud-only chip drawn just before this one.
     Branch {
         current: bool,
         tracked: bool,
@@ -68,13 +70,22 @@ pub enum ChipKind {
 }
 
 impl ChipKind {
-    /// The glyph in the chip's cap, if it has one.
+    /// The glyph in the chip's cap, if it has one. A tracked branch's upstream is a chip of its
+    /// own before it ([`Self::is_tracked`]), never a cap.
     pub fn cap(self) -> Option<RefGlyph> {
         match self {
-            Self::Branch { tracked: true, .. } | Self::Remote => Some(RefGlyph::Remote),
-            Self::Branch { tracked: false, .. } => None,
+            Self::Remote => Some(RefGlyph::Remote),
+            Self::Branch { .. } => None,
             Self::Tag => Some(RefGlyph::Tag),
             Self::Stash => Some(RefGlyph::Stash),
+        }
+    }
+
+    /// Whether a cloud-only chip, its upstream's, is drawn just before this one.
+    pub fn is_tracked(self) -> bool {
+        match self {
+            Self::Branch { tracked, .. } => tracked,
+            Self::Remote | Self::Tag | Self::Stash => false,
         }
     }
 
@@ -126,7 +137,12 @@ pub fn min_width(chip: &Chip) -> f32 {
     } else {
         0.
     };
-    cap + check + 2. * NAME_PADDING + chip.text.chars().count() as f32 * MIN_ADVANCE
+    let upstream = if chip.kind.is_tracked() {
+        CAP_WIDTH + CHIP_GAP
+    } else {
+        0.
+    };
+    upstream + cap + check + 2. * NAME_PADDING + chip.text.chars().count() as f32 * MIN_ADVANCE
 }
 
 /// The chips a row with `labels` draws in `room` pixels, in order, compacted and cut at the
@@ -263,25 +279,20 @@ fn fill(kind: ChipKind, lane: Lane) -> Color {
 }
 
 /// `chip` drawn: Fork's outlined, filled chip, its glyph in an unfilled cap at its left, the
-/// current branch's check mark before its name. Keyed by what it draws, so a glyph is never
-/// left painted where another chip now stands (`ref_glyphs`).
+/// current branch's check mark before its name, which is bold; a tracked branch's upstream a
+/// cloud-only chip just before it. Keyed by what it draws, so a glyph is never left painted
+/// where another chip now stands (`ref_glyphs`).
 pub fn chip_element(chip: &Chip, lane: Lane) -> Element {
     let colour = tint(chip.kind, lane);
     let text = tones::CHIP_TEXT;
-    rect()
-        .key(chip)
+    let current = chip.kind.is_current();
+    let named = rect()
         .horizontal()
         .height(Size::px(CHIP_HEIGHT))
         .cross_align(Alignment::center())
         .corner_radius(CORNER_RADIUS)
         .border(Border::new().fill(colour).width(1.))
-        .maybe_child(chip.kind.cap().map(|glyph| {
-            rect()
-                .width(Size::px(CAP_WIDTH))
-                .height(Size::fill())
-                .center()
-                .child(glyph.draw(text))
-        }))
+        .maybe_child(chip.kind.cap().map(|glyph| cap(glyph, chip.kind)))
         .child(
             rect()
                 .horizontal()
@@ -291,16 +302,55 @@ pub fn chip_element(chip: &Chip, lane: Lane) -> Element {
                 .background(fill(chip.kind, lane))
                 .padding(Gaps::new(0., NAME_PADDING, 0., NAME_PADDING))
                 .spacing(CHECK_GAP)
-                .maybe_child(chip.kind.is_current().then(|| RefGlyph::Current.draw(text)))
+                .maybe_child(current.then(|| RefGlyph::Current.draw(text)))
                 .child(
                     label()
                         .text(chip.text.clone())
                         .max_lines(1)
                         .font_size(CHIP_FONT_SIZE)
+                        .maybe(current, |label| label.font_weight(FontWeight::BOLD))
                         .color(text),
                 ),
-        )
+        );
+    rect()
+        .key(chip)
+        .horizontal()
+        .height(Size::px(CHIP_HEIGHT))
+        .cross_align(Alignment::center())
+        .spacing(CHIP_GAP)
+        .maybe_child(chip.kind.is_tracked().then(|| upstream_chip(lane)))
+        .child(named)
         .into()
+}
+
+/// A chip's cap: its glyph, unfilled — a remote's cloud grey, a tag's and a stash's the chip's
+/// text tone, as Fork Dark draws them.
+fn cap(glyph: RefGlyph, kind: ChipKind) -> Rect {
+    let tone = match kind {
+        ChipKind::Remote => tones::REMOTE_GLYPH,
+        ChipKind::Branch { .. } | ChipKind::Tag | ChipKind::Stash => tones::CHIP_TEXT,
+    };
+    rect()
+        .width(Size::px(CAP_WIDTH))
+        .height(Size::fill())
+        .center()
+        .child(glyph.draw(tone))
+}
+
+/// The cloud-only chip a branch level with its upstream draws before its own: unfilled, the
+/// cloud grey, bordered in a darker shade of the lane's colour than the branch's own.
+fn upstream_chip(lane: Lane) -> Rect {
+    rect()
+        .width(Size::px(CAP_WIDTH))
+        .height(Size::px(CHIP_HEIGHT))
+        .corner_radius(CORNER_RADIUS)
+        .border(
+            Border::new()
+                .fill(tones::upstream_chip_border(lane_colour(lane)))
+                .width(1.),
+        )
+        .center()
+        .child(RefGlyph::Remote.draw(tones::REMOTE_GLYPH))
 }
 
 /// A row of chips, unclipped: its container clips it.

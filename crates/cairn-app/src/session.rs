@@ -85,9 +85,13 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::history::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
-        Update::GitFound { described } => {
-            let mut git = view.frame.git;
-            git.set(Some(described));
+        Update::Started { git, zone } => {
+            let mut found = view.frame.git;
+            found.set(Some(git));
+            // The zone every date is drawn in from now on; UTC, said so, when none was read.
+            let mut drawn_in = view.zone;
+            drawn_in
+                .set(zone.map_or_else(cairn_ui::LocalZone::unreadable, cairn_ui::LocalZone::read));
         }
         Update::Opened { name } => repository.set(Some(name)),
         // The leftover lock's stat, from every refresh.
@@ -591,6 +595,7 @@ mod tests {
                         ),
                         confirming: State::create(None),
                         show_lost: State::create(false),
+                        zone: State::create(cairn_ui::LocalZone::default()),
                         activity: crate::operations::activity::ActivityView::created(),
                         branch: crate::operations::create_branch::CreateBranchView::created(),
                         frame: crate::frame::FrameView::created(),

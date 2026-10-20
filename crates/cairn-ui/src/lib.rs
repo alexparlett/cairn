@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod avatar;
 mod caption_row;
 mod check_box;
 mod commit_box;
@@ -11,12 +12,14 @@ mod edge_scroll;
 mod end_room;
 mod history;
 mod local_changes;
+mod local_time;
 pub mod menu;
 mod sidebar;
 pub mod style;
 mod text_field;
 mod toolbar;
 
+pub use avatar::{avatar, avatar_colour, initials};
 pub use caption_row::{CAPTION_TITLE, CaptionRow, Frame, FrameRequest};
 pub use commit_box::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, AMEND_TITLE, Busy, CANCEL_COMMIT_CAPTION, CANCELLING,
@@ -84,9 +87,10 @@ pub use edge_scroll::{
 };
 pub use end_room::{END_ROOM, SCROLLBAR_THICKNESS, with_end_room};
 pub use history::commit_row::{
-    AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
-    ROW_PADDING, SHOW_LOST_COMMITS_CAPTION, label_room,
+    AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, ID_WIDTH, ROW_FONT_SIZE, ROW_PADDING,
+    label_room,
 };
+pub use history::date_text::{history_date, long_date, time_of_day, utc_fallback_note};
 pub use history::graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history::list::{HistoryList, NEW_BRANCH_CAPTION, PREFETCH_ROWS, RowRender, reveal_row};
 pub use history::ref_chips::{
@@ -94,6 +98,7 @@ pub use history::ref_chips::{
     min_width, row_chips, tint,
 };
 pub use history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
+pub use history::reflog_strip::{REFLOG_STRIP_EXIT, REFLOG_STRIP_TEXT, ReflogStrip};
 pub use history::{graph_geometry, lane_palette};
 pub use local_changes::drag::DRAG_THRESHOLD;
 pub use local_changes::list::{
@@ -105,6 +110,7 @@ pub use local_changes::menu::{
     STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, kept, no_discard,
 };
 pub use local_changes::selection::{LocalSelection, nearest_remaining};
+pub use local_time::LocalZone;
 pub use sidebar::{
     ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
     MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,

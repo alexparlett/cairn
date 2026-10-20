@@ -7,9 +7,10 @@ use cairn_model::{
     CommitSummary, GraphRow, HeadState, History, Label as RefLabel, Lane, Oid, PagedCommit, Ref,
     RefKind, RefName, RefTarget, RefsSnapshot, RowEdges, RowsPage, Upstream,
 };
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     CHIP_HEIGHT, Chip, ChipKind, CommitRow, GLYPH_SIZE, ROW_HEIGHT, chip_element, label_room,
-    min_width, row_chips,
+    lane_palette::lane_colour, min_width, row_chips,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -539,4 +540,129 @@ fn the_room_is_the_subject_columns_width() {
         "the subject is {} px wide and the room {room}",
         subject.1 - subject.0
     );
+}
+
+/// Every bordered rect of the drawn row 17 px tall — each chip, and a tracked branch's
+/// cloud-only chip — as `(left, right, border, fill)`, left to right.
+fn chip_boxes(test: &TestingRunner) -> Vec<(f32, f32, Option<Color>, Fill)> {
+    let mut found = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|rect| area.height() == CHIP_HEIGHT && !rect.style.borders.is_empty())
+            .map(|rect| {
+                (
+                    area.min_x(),
+                    area.max_x(),
+                    rect.style.borders.first().map(|border| border.fill),
+                    rect.style.background.clone(),
+                )
+            })
+    });
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    found
+}
+
+/// The fill of the name segment the label reading `text` sits on.
+fn name_fill(test: &TestingRunner, text: &str) -> Fill {
+    let (left, right) = label_at(test, text);
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| {
+                area.min_x() <= left && right <= area.max_x() && area.height() == CHIP_HEIGHT
+            })
+            .map(|rect| (area.width(), rect.style.background.clone()))
+    })
+    .into_iter()
+    .filter(|(_, fill)| *fill != Fill::default())
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .map(|(_, fill)| fill)
+    .unwrap_or_else(|| panic!("no filled segment under {text:?}"))
+}
+
+/// Fork's chips: each a rounded rectangle 17 px tall; the current branch bold after its check
+/// mark; a branch level with its upstream a cloud-only chip, unfilled and bordered in a darker
+/// shade of the lane's colour, just before the branch's own chip, which carries no cap; a
+/// branch's and a remote's chip bordered in the lane's colour and filled with its dark shade;
+/// a tag's and a stash's in their kind's tones; and `HEAD` no chip of its own. Caught by: the
+/// old 18 px chip, a tracked branch's upstream folded into a cap of its chip, the current
+/// branch regular, a tag or stash tinted by the lane, or `HEAD` drawn as a chip.
+#[test]
+fn a_rows_chips_are_forks() {
+    assert_eq!(CHIP_HEIGHT, metrics::CHIP);
+    assert_eq!(CHIP_HEIGHT, 17.);
+    let chips = vec![
+        branch("main", true, false),
+        branch("synced", false, true),
+        chip(ChipKind::Remote, "origin/x"),
+        chip(ChipKind::Tag, "v1.0"),
+        chip(ChipKind::Stash, "stash@{0}"),
+    ];
+    let test = draw(chips, true, 1_600.);
+    let lane = lane_colour(Lane::new(0));
+    let boxes = chip_boxes(&test);
+    assert_eq!(
+        boxes.len(),
+        6,
+        "five chips and one cloud-only chip: {boxes:?}"
+    );
+
+    // The cloud-only chip: just before `synced`'s, unfilled, a darker border, one glyph.
+    let synced = label_at(&test, "synced");
+    let cloud = boxes
+        .iter()
+        .find(|(left, right, _, _)| *right < synced.0 && *left > label_at(&test, "main").1)
+        .unwrap_or_else(|| panic!("no chip between main and synced: {boxes:?}"));
+    assert_eq!(cloud.2, Some(tones::upstream_chip_border(lane)));
+    assert_eq!(cloud.3, Fill::default(), "the cloud-only chip is unfilled");
+    let glyphs_in_cloud = glyphs(&test)
+        .into_iter()
+        .filter(|left| cloud.0 <= *left && *left < cloud.1)
+        .count();
+    assert_eq!(
+        glyphs_in_cloud, 1,
+        "the cloud-only chip draws its cloud alone"
+    );
+    let synced_chip = boxes
+        .iter()
+        .find(|(left, right, _, _)| *left <= synced.0 && synced.1 <= *right)
+        .unwrap_or_else(|| panic!("no chip around synced"));
+    assert!(
+        !glyphs(&test)
+            .iter()
+            .any(|left| synced_chip.0 <= *left && *left < synced.0),
+        "the tracked branch's own chip carries a cap"
+    );
+
+    // Tones: by the lane for a branch and a remote, by kind for a tag and a stash.
+    let border_of = |text: &str| {
+        let (left, right) = label_at(&test, text);
+        boxes
+            .iter()
+            .find(|(l, r, _, _)| *l <= left && right <= *r)
+            .and_then(|(_, _, border, _)| *border)
+    };
+    assert_eq!(border_of("main"), Some(lane));
+    assert_eq!(border_of("origin/x"), Some(lane));
+    assert_eq!(border_of("v1.0"), Some(tones::TAG_CHIP_BORDER));
+    assert_eq!(border_of("stash@{0}"), Some(tones::STASH_CHIP_BORDER));
+    assert_eq!(name_fill(&test, "main"), Fill::from(tones::chip_fill(lane)));
+    assert_eq!(name_fill(&test, "v1.0"), Fill::from(tones::TAG_CHIP));
+    assert_eq!(name_fill(&test, "stash@{0}"), Fill::from(tones::STASH_CHIP));
+
+    // The current branch bold; another branch regular.
+    let weight = |text: &str| {
+        test.find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|label| label.text_style_data.font_weight)
+        })
+        .flatten()
+    };
+    assert_eq!(weight("main"), Some(FontWeight::BOLD));
+    assert_ne!(weight("synced"), Some(FontWeight::BOLD));
+
+    // `HEAD` alone labels nothing.
+    let head_only = one_row(&[], None, true);
+    assert!(laid(&head_only, None).is_empty(), "HEAD drew a chip");
 }

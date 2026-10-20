@@ -3,7 +3,7 @@
 The cross-session cheat sheet. Every session updates it before ending.
 
 **Status: in progress, 2026-10-19.** `history-topo-order` (roadmap 5c) merged as #142; the
-integration branch `feature/fork-alignment` was cut from it. Phases 01 and 02 done (packet mode).
+integration branch `feature/fork-alignment` was cut from it. Phases 01, 02 and 03 done (packet mode).
 
 ## Locked decisions (brainstorm.md has the evidence and the rejections)
 
@@ -116,13 +116,45 @@ accelerator actions, guard names, `deny.toml` pins.
   (context menu and bar); `accelerators::MenuKey::Unclaimed` (a modifier key, AltGraph
   included, left to the window).
 
+**Phase 03:**
+- `title_bar` renamed `toolbar` (`crates/cairn-ui/src/toolbar.rs` beside `toolbar/`); no guard named
+  the old path.
+- `cairn_ui::Toolbar` (`toolbar.rs`; buttons in `toolbar/button.rs`): `new(StatusBox)`,
+  `counts(Option<AheadBehind>)` (Push's and Pull's badges), `fetch_refusal`, `branch_refusal`,
+  `on_press(ToolbarPress)`, `on_status_sized((f32, f32))`. `ToolbarPress { ToggleSidebar, Fetch,
+  NewBranch, Activity }`. Constants: `SIDEBAR_TOGGLE_NAME`, `QUICK_LAUNCH_CAPTION`, `FETCH_CAPTION`,
+  `PULL_CAPTION`, `PUSH_CAPTION`, `STASH_CAPTION`, `BRANCH_CAPTION`, `APPEARANCE_CAPTION`,
+  `STASH_MENU_NAME`, `BRANCH_MENU_NAME`, `ACTIVITY_GLYPH_NAME`, `COMES_WITH_QUICK_LAUNCH`,
+  `COMES_WITH_PULL_AND_PUSH`, `COMES_WITH_PREFERENCES` (stash's is `COMES_WITH_STASHING`).
+- `StatusBox`: the lines alone (the toolbar draws the box and the glyph); `dirty`, `name_text`
+  removed; `progress_text` (git's line to its percentage, else to its first comma, else whole —
+  the user's option A); `running_text` is the name and " · N waiting" only. `counts_text` moved to
+  `sidebar.rs` (still exported).
+- `HIDE_DETAILS_TOOLTIP` replaces `COLLAPSE_CAPTION`/`EXPAND_CAPTION`: the strip's icon.
+- Icons: `quick_launch`, `fetch`, `pull`, `push`, `new_branch`, `appearance`, `chevron_down`,
+  `activity`, `bottom_pane`. Metrics: `TOOLBAR_ICON`, `TOOLBAR_INSET`, `CONTROL_RADIUS`,
+  `TOOLBAR_BUTTON_EDGE`, `TOOLBAR_BUTTON_MIN_WIDTH`, `TOOLBAR_BUTTON_PADDING`, `TOOLBAR_GROUP_GAP`,
+  `TOOLBAR_CHEVRON`, `TOOLBAR_BADGE`, `TOOLBAR_BADGE_TEXT`, `TOOLBAR_BADGE_PADDING`,
+  `STATUS_BOX_WIDTH`, `STATUS_BOX_HEIGHT`, `STATUS_BOX_MIN_WIDTH`, `STATUS_BOX_GLYPH`,
+  `STATUS_BOX_GLYPH_INSET`, `STATUS_BOX_TEXT_INSET`, `STRIP_ICON`. Tones: `STATUS_BOX`, `BADGE`,
+  `BADGE_TEXT`.
+- Accelerators: `ToggleDetails` is Ctrl+Shift+D on Linux, none on macOS; Linux `Discard` is
+  Backspace and Delete; the pin's Shift+D example.
+- `cairn-app`: `src/toolbar.rs` (`toolbar(view, submit)`, `pressed`, `running`);
+  `src/detail/split.rs` (`PaneSplit`: the pane's share of the measured room) replacing
+  `View::pane_height`/`PANE_HEIGHT` with `View::pane_split`; `SidebarView::shown`;
+  `frame::OPENING_SIZE` (1024×768) and `frame::MIN_SIZE` (880×620) on the window config; the
+  title row and its loaded count (`status_text::loaded_count`) gone.
+- Docs: `docs/systems/window-frame.md` "The toolbar", "The regions and the minimum size";
+  `history-graph.md` "The status box"; `ui.md` row for the status box's one cut.
+
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 | done (C1, C3, C4 met; C2 met but for `borderless`/`freya-borderless-plugin`, phase 02's) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 12 confirmed fixed, 3 deferred, 3 dismissed |
 | 02 | done (C5, C6, C20's About half met headlessly; C2's borderless arm met; pointer gestures and macOS UNVERIFIED, batched for the user) | full gate PASS | qa-checklist ×2, responsiveness ×2, test-coverage ×2, gate-integrity ×2; qa-confirm: 15 of 26 confirmed and fixed or recorded, 11 dismissed |
-| 03 | not started | — | — |
+| 03 | done (C7, C8, C9, C18's Ctrl+Shift+D half met; option A by the user; pointer gestures and macOS UNVERIFIED) | full gate PASS | qa-checklist, responsiveness, test-coverage, gate-integrity; qa-confirm: 10 of 14 confirmed and fixed (Q2 probed and fixed), 4 dismissed |
 | 04 | not started | — | — |
 | 05 | not started | — | — |
 | 06 | not started | — | — |

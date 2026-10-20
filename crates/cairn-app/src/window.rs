@@ -483,6 +483,8 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
         crate::operations::create_branch::open(view, at, subject);
     })
+    // Copy Commit SHA and Copy Commit Info, from the menu or the copy chords.
+    .on_copy(crate::clipboard::copy)
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
         if view.sidebar.finding.peek().is_some() {

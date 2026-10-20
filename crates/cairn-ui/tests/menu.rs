@@ -503,3 +503,97 @@ fn a_long_chord_stands_inside_the_menu() {
         rule.width()
     );
 }
+
+/// A context menu of `count` items in groups of ten, each "Item N", every chosen item
+/// recorded.
+fn launch_long(count: usize) -> (TestingRunner, Rc<RefCell<Vec<usize>>>) {
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let hearing = chosen.clone();
+    let (mut test, ()) = TestingRunner::new(
+        move || {
+            let chosen = hearing.clone();
+            rect()
+                .expanded()
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(40.))
+                        .on_press(move |_| {
+                            let chosen = chosen.clone();
+                            let groups: Groups<usize> = (0..count)
+                                .collect::<Vec<_>>()
+                                .chunks(10)
+                                .map(|chunk| {
+                                    chunk
+                                        .iter()
+                                        .map(|n| Item::new(format!("Item {n}"), *n))
+                                        .collect()
+                                })
+                                .collect();
+                            ContextMenu::open(context_menu(groups, move |n: usize| {
+                                chosen.borrow_mut().push(n);
+                            }));
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    (test, chosen)
+}
+
+/// The item labels built.
+fn items_built(test: &TestingRunner) -> Vec<String> {
+    texts(test)
+        .into_iter()
+        .filter(|text| text.starts_with("Item "))
+        .collect()
+}
+
+/// A menu too long to draw whole builds one viewport of rows, the same at its top and at its
+/// end, whether it holds a thousand items or a hundred thousand; ↑ from the first item wraps to
+/// the last and scrolls it into view, and Return chooses it. A short menu is drawn whole.
+/// Caught by: a menu building a row per item, a long menu that never scrolls the item reached
+/// into view, or one whose rows choose nothing.
+#[test]
+fn a_long_menu_builds_one_viewport() {
+    let mut built = Vec::new();
+    for count in [1_000, 100_000] {
+        let (mut test, chosen) = launch_long(count);
+        open_context(&mut test);
+        let top = items_built(&test);
+        assert!(top.contains(&"Item 0".to_owned()), "{top:?}");
+        assert!(
+            top.len() <= 30,
+            "{} rows built of {count} at the top",
+            top.len()
+        );
+        press(&mut test, NamedKey::ArrowUp);
+        test.sync_and_update();
+        let last = format!("Item {}", count - 1);
+        let end = items_built(&test);
+        assert!(
+            end.contains(&last),
+            "{last} not built after ↑ wrapped: {end:?}"
+        );
+        assert!(
+            end.len() <= 30,
+            "{} rows built of {count} at the end",
+            end.len()
+        );
+        assert_eq!(highlighted(&test), vec![last.clone()]);
+        press(&mut test, NamedKey::Enter);
+        assert_eq!(*chosen.borrow(), vec![count - 1]);
+        built.push((top.len(), end.len()));
+    }
+    assert_eq!(built[0], built[1], "the rows built grew with the menu");
+
+    // A short menu is drawn whole.
+    let (mut test, _) = launch_long(20);
+    open_context(&mut test);
+    assert_eq!(items_built(&test).len(), 20);
+}

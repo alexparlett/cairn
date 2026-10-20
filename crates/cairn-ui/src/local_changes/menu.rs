@@ -1,6 +1,7 @@
-//! What Local Changes offers a selection, and its context menu: Stage or Unstage, Discard
-//! Changes…, Stage All or Unstage All, and Copy Path — Fork's menu, less the items Cairn does
-//! not offer (open, external diff, blame, history, ignore, stash, save as patch).
+//! What Local Changes offers a selection, and its context menu, in Fork's groups and with Fork's
+//! chords: Stage (or Unstage) and, on the unstaged side, Discard Changes…; Stage All (or Unstage
+//! All); Copy Path and Copy Full Path — Fork's menu, less the items Cairn does not offer (open,
+//! external diff, blame, history, ignore, stash, save as patch).
 //!
 //! **What is never discarded.** Nothing on the staged side, anywhere. A conflicted path stages
 //! whole — `git add`, which marks it resolved — and is never discarded; a submodule's changes
@@ -17,7 +18,7 @@ use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::Action;
-use crate::menu::{Item, context_menu};
+use crate::menu::{Groups, Item, context_menu_over};
 
 /// The menu's words.
 pub const STAGE_CAPTION: &str = "Stage";
@@ -26,6 +27,7 @@ pub const STAGE_ALL_CAPTION: &str = "Stage All";
 pub const UNSTAGE_ALL_CAPTION: &str = "Unstage All";
 pub const DISCARD_CAPTION: &str = "Discard Changes…";
 pub const COPY_PATH_CAPTION: &str = "Copy Path";
+pub const COPY_FULL_PATH_CAPTION: &str = "Copy Full Path";
 
 /// A row a discard leaves as it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,37 +180,68 @@ pub fn no_discard<'a>(
 pub enum MenuChoice {
     /// An action of the table on the selection, or on every row of the list.
     Act(Action),
-    /// The selected paths, one per line, to the clipboard.
+    /// The selected paths, as git writes them from the repository's root, one per line, to the
+    /// clipboard.
     CopyPaths,
+    /// The selected paths, each the working tree's path joined to it, one per line, to the
+    /// clipboard.
+    CopyFullPaths,
 }
 
-/// The menu for a selection in `list`: Stage or Unstage, Discard Changes… — greyed with its
-/// reason as its tooltip when `refusal` says why, as it always does on the staged side — Stage
-/// All or Unstage All, Copy Path. Each item closes the menu as it is chosen.
+/// The items for a selection in `list`, in Fork's groups (FS1 §8, uv14 and uv15): Stage and
+/// Discard Changes… — greyed with its reason when `refusal` says why — then Stage All, then Copy
+/// Path and Copy Full Path, each beside its chord; on the staged side Unstage, then Unstage All,
+/// then the two copies, and no discard at all, as Fork's staged menu has none. The list's copy
+/// chords choose from these items (`crate::menu::chosen_by`).
+pub fn menu_groups(list: ChangeList, refusal: Option<&NoDiscard>) -> Groups<MenuChoice> {
+    let copies = vec![
+        Item::new(COPY_PATH_CAPTION, MenuChoice::CopyPaths).chord(Action::Copy),
+        Item::new(COPY_FULL_PATH_CAPTION, MenuChoice::CopyFullPaths).chord(Action::CopyFull),
+    ];
+    match list {
+        ChangeList::Unstaged => vec![
+            vec![
+                Item::new(STAGE_CAPTION, MenuChoice::Act(Action::StageOrUnstage))
+                    .chord(Action::StageOrUnstage),
+                Item::new(DISCARD_CAPTION, MenuChoice::Act(Action::Discard))
+                    .chord(Action::Discard)
+                    .greyed(refusal.map(NoDiscard::text)),
+            ],
+            vec![
+                Item::new(
+                    STAGE_ALL_CAPTION,
+                    MenuChoice::Act(Action::StageOrUnstageAll),
+                )
+                .chord(Action::StageOrUnstageAll),
+            ],
+            copies,
+        ],
+        ChangeList::Staged => vec![
+            vec![
+                Item::new(UNSTAGE_CAPTION, MenuChoice::Act(Action::StageOrUnstage))
+                    .chord(Action::StageOrUnstage),
+            ],
+            vec![
+                Item::new(
+                    UNSTAGE_ALL_CAPTION,
+                    MenuChoice::Act(Action::StageOrUnstageAll),
+                )
+                .chord(Action::StageOrUnstageAll),
+            ],
+            copies,
+        ],
+    }
+}
+
+/// The context menu over [`menu_groups`], opened over the list `owner` names, which a choice
+/// gives focus back to. Each item closes the menu as it is chosen.
 pub fn menu(
     list: ChangeList,
     refusal: Option<&NoDiscard>,
+    owner: AccessibilityId,
     chosen: EventHandler<MenuChoice>,
 ) -> Menu {
-    let (one, all) = match list {
-        ChangeList::Unstaged => (STAGE_CAPTION, STAGE_ALL_CAPTION),
-        ChangeList::Staged => (UNSTAGE_CAPTION, UNSTAGE_ALL_CAPTION),
-    };
-    // Never offered on the staged side, whatever `refusal` says.
-    let refusal = match list {
-        ChangeList::Staged => Some(&NoDiscard::Staged),
-        ChangeList::Unstaged => refusal,
-    };
-    context_menu(
-        vec![vec![
-            Item::new(one, MenuChoice::Act(Action::StageOrUnstage)),
-            Item::new(DISCARD_CAPTION, MenuChoice::Act(Action::Discard))
-                .greyed(refusal.map(NoDiscard::text)),
-            Item::new(all, MenuChoice::Act(Action::StageOrUnstageAll)),
-            Item::new(COPY_PATH_CAPTION, MenuChoice::CopyPaths),
-        ]],
-        chosen,
-    )
+    context_menu_over(menu_groups(list, refusal), owner, chosen)
 }
 
 #[cfg(test)]

@@ -494,3 +494,101 @@ fn a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom() {
         row.center().y
     );
 }
+
+/// A right press on a file makes it current and opens Fork's Copy Path and Copy Full Path, each
+/// beside its chord; an item chosen is reported for that file; and with the list focused the copy
+/// chords choose the same items for the current file. Caught by: a right press that leaves the
+/// current file, a menu without its chords, an item reported for another file, or the chords
+/// heard nowhere.
+#[test]
+fn a_files_menu_and_the_copy_chords_choose_its_copies() {
+    use cairn_ui::FileChoice;
+    use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
+    let menu: Rc<RefCell<Vec<(usize, FileChoice)>>> = Rc::default();
+    let hearing = menu.clone();
+    let (mut test, fixture) = TestingRunner::new(
+        move || {
+            let fixture = use_consume::<Fixture>();
+            let hearing = hearing.clone();
+            let mut current = fixture.current;
+            rect()
+                .expanded()
+                .child(
+                    ChangesList::new(fixture.changes, fixture.shown, fixture.filter)
+                        .current(*fixture.current.read())
+                        .on_file(move |index: usize| current.set(Some(index)))
+                        .on_file_menu(move |chosen: (usize, FileChoice)| {
+                            hearing.borrow_mut().push(chosen);
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(move || Fixture {
+                changes: State::create(change_set(3)),
+                shown: State::create(ShownFiles::All),
+                filter: State::create(String::new()),
+                current: State::create(None),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let at = |test: &TestingRunner, text: &str| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area.center())
+        })
+        .map(|centre| (f64::from(centre.x), f64::from(centre.y)))
+        .unwrap_or_else(|| panic!("{text} is not drawn"))
+    };
+    let second = file(1).new_path.display().into_owned();
+    let pressed = at(&test, &second);
+    test.move_cursor(pressed);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: pressed.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    test.sync_and_update();
+    assert_eq!(
+        *fixture.current.peek(),
+        Some(1),
+        "the right press left the current file"
+    );
+    let drawn: Vec<String> = test
+        .find_many(|_, element| Label::try_downcast(element).map(|label| label.text.to_string()));
+    for text in [
+        "Copy Path".to_owned(),
+        "Copy Full Path".to_owned(),
+        accelerators::chord_name(Action::Copy, Os::current()).unwrap(),
+        accelerators::chord_name(Action::CopyFull, Os::current()).unwrap(),
+    ] {
+        assert!(drawn.contains(&text), "{text} is not drawn: {drawn:?}");
+    }
+    test.click_cursor(at(&test, "Copy Full Path"));
+    test.sync_and_update();
+    assert_eq!(*menu.borrow(), [(1, FileChoice::CopyFullPath)]);
+
+    let (key, code, modifiers) = accelerators::chords(Action::Copy, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
+        .unwrap();
+    test.send_event(PlatformEvent::Keyboard {
+        name: KeyboardEventName::KeyDown,
+        key,
+        code,
+        modifiers,
+    });
+    test.sync_and_update();
+    assert_eq!(
+        *menu.borrow(),
+        [(1, FileChoice::CopyFullPath), (1, FileChoice::CopyPath)]
+    );
+}

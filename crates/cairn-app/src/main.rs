@@ -1,5 +1,6 @@
 //! The Cairn binary.
 
+mod clipboard;
 mod closing;
 mod commit_box;
 mod detail;

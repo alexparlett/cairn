@@ -8,4 +8,5 @@ pub(crate) mod button_order;
 pub(crate) mod confirm;
 pub(crate) mod create_branch;
 pub(crate) mod credential_prompt;
+pub(crate) mod frame;
 pub(crate) mod git_error;

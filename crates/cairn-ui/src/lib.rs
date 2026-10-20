@@ -15,6 +15,7 @@ mod history;
 mod local_changes;
 mod local_time;
 pub mod menu;
+mod push_button;
 mod sidebar;
 pub mod style;
 mod text_field;
@@ -41,6 +42,7 @@ pub use detail::commit_tab::{
 };
 pub use detail::expansion::{Expansion, Opened};
 pub use detail::file_filter::ShownFiles;
+pub use detail::file_menu::{FileChoice, FileMenuIn, file_menu};
 pub use detail::tabs::{DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, HIDE_DETAILS_TOOLTIP};
 pub use dialogs::about::{ABOUT_TITLE, AboutDialog, NO_GIT_FOUND, licence_line, version_line};
 pub use dialogs::confirm::{
@@ -101,6 +103,10 @@ pub use history::ref_chips::{
 };
 pub use history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 pub use history::reflog_strip::{REFLOG_STRIP_EXIT, REFLOG_STRIP_TEXT, ReflogStrip};
+pub use history::row_menu::{
+    COPY_COMMIT_INFO_CAPTION, COPY_COMMIT_SHA_CAPTION, RowChoice, commit_info_text,
+    commit_sha_text, row_menu,
+};
 pub use history::{graph_geometry, lane_palette};
 pub use local_changes::bar::{
     COMES_WITH_QUICK_LOOK, SIDE_BY_SIDE_TOOLTIP, VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP,
@@ -112,8 +118,9 @@ pub use local_changes::list::{
     change_text, list_caption,
 };
 pub use local_changes::menu::{
-    COPY_PATH_CAPTION, DISCARD_CAPTION, Kept, Left, MenuChoice, NoDiscard, STAGE_ALL_CAPTION,
-    STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, kept, no_discard,
+    COPY_FULL_PATH_CAPTION, COPY_PATH_CAPTION, DISCARD_CAPTION, Kept, Left, MenuChoice, NoDiscard,
+    STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, kept, menu_groups,
+    no_discard,
 };
 pub use local_changes::selection::{LocalSelection, nearest_remaining};
 pub use local_time::LocalZone;
@@ -122,7 +129,7 @@ pub use sidebar::{
     COPY_TAG_NAME_CAPTION, DETACHED_HEAD_CAPTION, DrawnRow, GearChoice, LOCAL_CHANGES_CAPTION,
     MainView, NO_COMMIT_TO_BRANCH_FROM, REPOSITORY_GEAR_NAME, RefChoice,
     SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarGlyph,
-    SidebarRefs, SidebarStep, SidebarTarget, chosen_when_walked, counts_text, drawn_row,
+    SidebarRefs, SidebarStep, SidebarTarget, chosen_when_walked, counts_text, drawn_row, gear_menu,
     local_changes_text, ref_menu, row_indent, section_caption, stash_text, walked_to,
 };
 pub use text_field::{text_field, text_field_in, text_field_recalling};

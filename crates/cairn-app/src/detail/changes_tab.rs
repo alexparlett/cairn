@@ -162,6 +162,9 @@ impl Component for ChangesTab {
         .current(current)
         .on_file(move |index: usize| {
             diff::actions::choose_file(index, view, choosing.as_deref());
+        })
+        .on_file_menu(move |(index, choice): (usize, cairn_ui::FileChoice)| {
+            crate::detail::file_copy::chosen(view, index, choice);
         });
 
         let mut width = view.changes_list_width;

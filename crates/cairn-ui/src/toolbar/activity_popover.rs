@@ -24,6 +24,8 @@ use std::sync::Arc;
 use cairn_model::Oid;
 use freya::prelude::*;
 
+use crate::push_button::{ButtonSize, PushButton};
+
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::style::{metrics, tones};
 
@@ -312,10 +314,8 @@ fn entry_row(item: VirtualItem, list: &EntryList) -> Element {
                 .color(tones::TEXT)
         }))
         .maybe_child(entry.cancellable.then(|| {
-            Button::new()
-                .compact()
-                .on_press(move |_| on_cancel.call(index))
-                .child(CANCEL_OPERATION_CAPTION)
+            PushButton::caption(CANCEL_OPERATION_CAPTION, ButtonSize::Compact)
+                .on_press(move || on_cancel.call(index))
         }))
         .into()
 }
@@ -500,10 +500,8 @@ impl Component for ActivityPopover {
                         )
                 }))
                 .maybe_child(replaced.map(|commit| {
-                    Button::new()
-                        .compact()
-                        .on_press(move |_| on_replaced.call(commit))
-                        .child(SHOW_IN_LOST_COMMITS_CAPTION)
+                    PushButton::caption(SHOW_IN_LOST_COMMITS_CAPTION, ButtonSize::Compact)
+                        .on_press(move || on_replaced.call(commit))
                 }))
                 .child(
                     rect()

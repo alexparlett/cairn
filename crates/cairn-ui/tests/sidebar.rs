@@ -1074,3 +1074,62 @@ fn a_folder_of_10000_branches_open_builds_one_viewport() {
     test.sync_and_update();
     assert_eq!(built_refs(&test).len(), 0, "a closed folder built its refs");
 }
+
+/// Presses `action`'s first chord, as a keyboard sends it.
+fn press_chord(test: &mut TestingRunner, action: cairn_ui::accelerators::Action) {
+    use cairn_ui::accelerators::{Os, chords};
+    let (key, code, modifiers) = chords(action, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
+        .unwrap_or_else(|| panic!("{action:?} has no key"));
+    test.send_event(PlatformEvent::Keyboard {
+        name: freya_testing::prelude::KeyboardEventName::KeyDown,
+        key: key.clone(),
+        code,
+        modifiers,
+    });
+    test.send_event(PlatformEvent::Keyboard {
+        name: freya_testing::prelude::KeyboardEventName::KeyUp,
+        key,
+        code,
+        modifiers: Modifiers::empty(),
+    });
+    settle(test);
+}
+
+/// With the sidebar focused on a ref, the copy chord chooses its menu's Copy Branch Name or
+/// Copy Tag Name, as Fork's Ctrl+C copies the name (fork-copy-and-dialogs §3, cp24-cp35); Copy
+/// Full's chord, which no ref's menu shows, chooses nothing, as Fork's Ctrl+Shift+C leaves the
+/// clipboard alone. Caught by: the chord left to the window, a name copied for Copy Full's
+/// chord, or the chord reading a row other than the one walked to.
+#[test]
+fn the_copy_chord_copies_the_walked_refs_name() {
+    use cairn_ui::accelerators::Action;
+    let refs = every_kind();
+    let (mut test, mut fixture, heard) =
+        launch(shown(refs.clone(), "", &Disclosure::default()), None);
+    let index_of = |name: &str| {
+        refs.refs
+            .iter()
+            .position(|listed| listed.name.as_str() == name)
+            .unwrap() as u32
+    };
+    let topic = SidebarRow::Ref {
+        index: index_of("refs/heads/topic"),
+        depth: 0,
+    };
+    test.click_cursor(centre_of(&test, "topic"));
+    settle(&mut test);
+    test.run_in(|| fixture.chosen.set(SidebarTarget::of(topic, &refs)));
+    settle(&mut test);
+    heard.borrow_mut().menu.clear();
+
+    press_chord(&mut test, Action::CopyFull);
+    assert!(
+        heard.borrow().menu.is_empty(),
+        "Copy Full's chord chose {:?}",
+        heard.borrow().menu
+    );
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(heard.borrow().menu, [(topic, RefChoice::CopyName)]);
+}

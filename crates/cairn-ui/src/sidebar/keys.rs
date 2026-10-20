@@ -15,8 +15,8 @@
 use cairn_model::SidebarRow;
 use freya::prelude::*;
 
-use super::{SIDEBAR_ROW_HEIGHT, SidebarRefs, SidebarTarget};
-use crate::accelerators;
+use super::{RefChoice, SIDEBAR_ROW_HEIGHT, SidebarRefs, SidebarTarget, ref_menu};
+use crate::accelerators::{self, Scope};
 
 /// The walk as the sidebar keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +187,8 @@ pub struct Keys {
     pub chosen: Option<SidebarTarget>,
     pub shown: Option<SidebarRefs>,
     pub on_row: EventHandler<SidebarRow>,
+    /// A ref's menu item chosen: here, by the copy chord the item shows.
+    pub on_ref_menu: EventHandler<(SidebarRow, RefChoice)>,
     pub controller: ScrollController,
 }
 
@@ -198,9 +200,29 @@ pub fn handler(keys: Keys) -> impl FnMut(Event<KeyboardEventData>) + 'static {
         chosen,
         shown,
         on_row,
+        on_ref_menu,
         mut controller,
     } = keys;
     move |e: Event<KeyboardEventData>| {
+        // The copy chords choose the walked row's menu item that shows them (Copy Branch Name,
+        // Copy Tag Name on Ctrl+C); a row with no such item, or none walked, copies nothing.
+        if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+            e.stop_propagation();
+            let Some(shown) = shown.as_ref() else {
+                return;
+            };
+            let at = place_now(walk.peek().as_ref(), chosen.as_ref(), Some(shown));
+            let picked = at
+                .and_then(|at| shown.rows.get(at).copied())
+                .and_then(|row| {
+                    let groups = ref_menu(row, &shown.refs)?;
+                    crate::menu::chosen_by(&groups, copy).map(|choice| (row, choice))
+                });
+            if let Some(picked) = picked {
+                on_ref_menu.call(picked);
+            }
+            return;
+        }
         if accelerators::is_chord(&e, &[]) {
             return;
         }

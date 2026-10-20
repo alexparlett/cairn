@@ -49,6 +49,12 @@ pub(crate) fn launch() -> (TestingRunner, View, Submitted) {
 /// The window as [`launch`] draws it, with how many times its root has been drawn: what a test
 /// of what draws the whole window again reads.
 pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell::Cell<usize>>) {
+    launch_with_theme(false)
+}
+
+/// The window as [`launch`] draws it, under the launch theme when `themed`, as `main` installs
+/// it: what a test reading the theme's tones — a field's focus — needs.
+fn launch_with_theme(themed: bool) -> (TestingRunner, View, Submitted, Rc<std::cell::Cell<usize>>) {
     let submitted = Submitted::default();
     let drawn = Rc::new(std::cell::Cell::new(0));
     let app = {
@@ -56,6 +62,9 @@ pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell:
         let drawn = Rc::clone(&drawn);
         move || {
             drawn.set(drawn.get() + 1);
+            if themed {
+                use_init_theme(cairn_ui::style::tones::theme);
+            }
             let view = use_consume::<View>();
             let submitted = submitted.clone();
             let submit: Rc<dyn Fn(Request)> =
@@ -943,4 +952,256 @@ fn a_filter_hiding_the_primary_selects_the_row_shown_in_its_place() {
         "the path shown was not asked again"
     );
     assert_eq!(highlighted_rows(&test), 1);
+}
+
+/// The rows of the lists drawn in the band of a list with focus (`focused`) or without.
+fn rows_in_band(test: &TestingRunner, focused: bool) -> usize {
+    let band = cairn_ui::style::tones::selected(focused).band;
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| {
+                area.min_x() > SIDEBAR_WIDTH && area.height() == cairn_ui::LOCAL_CHANGES_ROW_HEIGHT
+            })
+            .filter(|rect| rect.style.background.as_color() == Some(band))
+            .map(|_| ())
+    })
+    .len()
+}
+
+/// Fork's Ctrl+1 (FS2 §3, uw38) shows Local Changes with keyboard focus in Unstaged, its
+/// selected row in the focused blue; Local Changes opened by a press on the sidebar's row
+/// leaves focus where it was, the row grey (uw6); and the chord pressed again while Local
+/// Changes is shown, focus elsewhere, puts it back in Unstaged. Caught by: the chord only
+/// switching the main region, focus taken on every opening, or a request taken once and
+/// never again.
+#[test]
+fn ctrl_1_opens_local_changes_with_unstaged_focused() {
+    use cairn_ui::accelerators::Action;
+    let (mut test, view, submitted) = launch();
+    apply(&mut test, view, &submitted, status(every_kind()));
+
+    open_local_changes(&mut test);
+    assert_eq!(*view.sidebar.main.peek(), MainView::LocalChanges);
+    assert_eq!(
+        (rows_in_band(&test, true), rows_in_band(&test, false)),
+        (0, 1),
+        "a press on the sidebar's row put focus in the lists"
+    );
+
+    // Back to All Commits, then the chord.
+    crate::window::tests::press_chord(&mut test, Action::ShowAllCommits);
+    assert_eq!(*view.sidebar.main.peek(), MainView::AllCommits);
+    crate::window::tests::press_chord(&mut test, Action::ShowLocalChanges);
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(*view.sidebar.main.peek(), MainView::LocalChanges);
+    assert_eq!(
+        (rows_in_band(&test, true), rows_in_band(&test, false)),
+        (1, 0),
+        "Show Local Changes left Unstaged without focus"
+    );
+
+    // Focus moved on from Unstaged by Tab, and the chord again.
+    test.press_key(Key::Named(NamedKey::Tab));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(rows_in_band(&test, true), 0, "focus stayed in Unstaged");
+    crate::window::tests::press_chord(&mut test, Action::ShowLocalChanges);
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        (rows_in_band(&test, true), rows_in_band(&test, false)),
+        (1, 0),
+        "Show Local Changes again did not put focus back in Unstaged"
+    );
+}
+
+/// One commit, "Add note 5", held as the history the window draws, all of it read; its id.
+fn hold_one_commit(view: View) -> cairn_model::Oid {
+    use cairn_model::{GraphRow, Lane, Oid, PagedCommit, RowsPage};
+    let id = Oid::from_bytes(&[0x63; 20]).unwrap_or_else(|error| panic!("{error}"));
+    let mut page = RowsPage::new();
+    page.push(
+        GraphRow::new(id, Lane::new(0), Vec::new()),
+        PagedCommit {
+            parents: 1,
+            subject: "Add note 5",
+            author: "Ada",
+            author_time: 0,
+        },
+    );
+    let mut rows = view.rows;
+    rows.write()
+        .append(page)
+        .unwrap_or_else(|full| panic!("{full}"));
+    let mut progress = view.progress;
+    progress.write().received(1, true, 1);
+    id
+}
+
+#[path = "../../../cairn-ui/tests/support/focus_marks.rs"]
+mod focus_marks;
+
+/// Every Tab stop of the window shows where focus is as focus reaches it: in All
+/// Commits — the history, the sidebar, the filters, the detail pane — and in Local Changes —
+/// the bar's filter and its buttons, both lists, the diff, the commit box's fields, Amend and
+/// the Commit button — each by its selection turning to the focused tone or by the style's
+/// ring. Caught by: a focusable control drawing nothing as it takes focus, or a stop
+/// left out of the walk.
+#[test]
+fn every_tab_stop_shows_focus() {
+    let (mut test, view, submitted, _) = launch_with_theme(true);
+    hold_one_commit(view);
+    apply(&mut test, view, &submitted, status(every_kind()));
+    let all_commits = focus_marks::walk_tab_stops(&mut test, 40);
+    assert!(
+        all_commits.len() >= 3,
+        "All Commits: {} Tab stops: {all_commits:?}",
+        all_commits.len()
+    );
+    for stop in &all_commits {
+        assert!(
+            stop.shows,
+            "All Commits: a stop at {:?} shows no focus: {all_commits:?}",
+            stop.area
+        );
+    }
+
+    open_local_changes(&mut test);
+    // A subject typed, so the Commit button can be pressed and is a stop too.
+    let subject: Option<(f32, f32)> = test.find(|node, element| {
+        Paragraph::try_downcast(element)
+            .filter(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.as_ref())
+                    .collect::<String>()
+                    == cairn_ui::SUBJECT_PLACEHOLDER
+            })
+            .map(|_| {
+                let area = node.layout().area;
+                (area.min_x() + 4., area.center().y)
+            })
+    });
+    let (x, y) = subject.unwrap_or_else(|| panic!("no subject field"));
+    test.click_cursor((f64::from(x), f64::from(y)));
+    test.sync_and_update();
+    test.write_text("Fix the parser");
+    press_row(&mut test, "new/one.rs", 0);
+    let local = focus_marks::walk_tab_stops(&mut test, 40);
+    let commit_button = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text.starts_with("Commit ") && label.text.ends_with("Files"))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no Commit button: {:?}", labels(&test)));
+    assert!(
+        local.iter().any(|stop| stop.area.contains(commit_button)),
+        "the Commit button is no stop: {local:?}"
+    );
+    assert!(
+        local.len() >= 6,
+        "Local Changes: {} Tab stops: {local:?}",
+        local.len()
+    );
+    for stop in &local {
+        assert!(
+            stop.shows,
+            "Local Changes: a stop at {:?} shows no focus: {local:?}",
+            stop.area
+        );
+    }
+}
+
+/// Presses the label reading `text` in the main region, wherever it is drawn.
+fn press_label(test: &mut TestingRunner, text: &str) {
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .filter(|_| node.layout().area.min_x() > SIDEBAR_WIDTH)
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", labels(test)));
+    test.click_cursor((f64::from(centre.x) + 2., f64::from(centre.y)));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+}
+
+/// The copy chords copy what the focused list's menu offers under them, as Fork's do
+/// (`docs/research/ui-review/fork-copy-and-dialogs-2026-10-20.md`): in the history, Ctrl+C the
+/// selected commit's full id and Ctrl+Shift+C its short id and subject; in Local Changes'
+/// Unstaged list, the selected path and that path joined to the repository's root. In the commit
+/// box's subject Ctrl+C is the field's own copy, and nothing of a list's is copied. Caught by: a
+/// chord heard by the window rather than the list it names, Copy and Copy Full swapped, the
+/// short id copied as the SHA, a path without its root as the full path, or a field's Ctrl+C
+/// taken by the list behind it.
+#[test]
+fn copy_and_copy_full_copy_what_the_focused_view_names() {
+    use cairn_ui::accelerators::Action;
+
+    use crate::clipboard::take_copied;
+    use crate::window::tests::press_chord;
+
+    let (mut test, view, submitted) = launch();
+    let mut root = view.repository_path;
+    root.set(Some(std::path::PathBuf::from("/home/ada/engine")));
+    let id = hold_one_commit(view);
+    apply(&mut test, view, &submitted, status(every_kind()));
+    take_copied();
+
+    // The history, its row pressed.
+    press_label(&mut test, "Add note 5");
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(take_copied(), Some(id.hex().to_string()));
+    press_chord(&mut test, Action::CopyFull);
+    assert_eq!(take_copied(), Some(format!("{} - Add note 5", id.short())));
+
+    // Local Changes' Unstaged list, a path pressed.
+    open_local_changes(&mut test);
+    press_row(&mut test, "new/one.rs", 0);
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(take_copied().as_deref(), Some("new/one.rs"));
+    press_chord(&mut test, Action::CopyFull);
+    assert_eq!(
+        take_copied().as_deref(),
+        Some("/home/ada/engine/new/one.rs")
+    );
+
+    // The commit box's subject, typed in: the field's own copy.
+    let subject: Option<(f32, f32)> = test.find(|node, element| {
+        Paragraph::try_downcast(element)
+            .filter(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.as_ref())
+                    .collect::<String>()
+                    == cairn_ui::SUBJECT_PLACEHOLDER
+            })
+            .map(|_| {
+                let area = node.layout().area;
+                (area.min_x() + 4., area.center().y)
+            })
+    });
+    let (x, y) = subject.unwrap_or_else(|| panic!("no subject field"));
+    test.click_cursor((f64::from(x), f64::from(y)));
+    test.sync_and_update();
+    test.write_text("hello");
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    press_chord(&mut test, Action::Copy);
+    assert_eq!(
+        take_copied(),
+        None,
+        "a list copied over the commit box's field"
+    );
 }

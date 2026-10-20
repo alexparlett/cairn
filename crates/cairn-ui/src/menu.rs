@@ -105,8 +105,20 @@ pub fn context_menu<T: Clone + PartialEq + 'static>(
     groups: Groups<T>,
     on_choose: impl Into<EventHandler<T>>,
 ) -> Menu {
-    let on_choose = on_choose.into();
     let return_focus = *Platform::get().focused_accessibility_id.peek();
+    context_menu_over(groups, return_focus, on_choose)
+}
+
+/// [`context_menu`] opened over the view `owner` names — a list that asked for focus in the
+/// same press that opens the menu, before the toolkit moved it there — which a choice or Escape
+/// gives focus back to.
+pub fn context_menu_over<T: Clone + PartialEq + 'static>(
+    groups: Groups<T>,
+    owner: AccessibilityId,
+    on_choose: impl Into<EventHandler<T>>,
+) -> Menu {
+    let on_choose = on_choose.into();
+    let return_focus = owner;
     Menu::new().child(
         Panel::new(groups, return_focus)
             .highlight_first(true)
@@ -116,4 +128,54 @@ pub fn context_menu<T: Clone + PartialEq + 'static>(
                 on_choose.call(choice);
             }),
     )
+}
+
+/// The choice of the item in `groups` that shows `action`'s chord and can be chosen now — what
+/// a list does when that chord is pressed with it focused, so the chord a menu shows and the key
+/// are one source (Fork's Copy Commit SHA on Ctrl+C, Copy Full Path on Ctrl+Shift+C). `None`
+/// when no item shows it, or the one that does is greyed. A submenu's items are not looked in:
+/// a chord is the row's own.
+pub fn chosen_by<T: Clone>(groups: &Groups<T>, action: Action) -> Option<T> {
+    groups
+        .iter()
+        .flatten()
+        .find(|item| item.chord == Some(action))
+        .filter(|item| item.is_enabled())
+        .and_then(|item| match &item.kind {
+            ItemKind::Choose(choice) => Some(choice.clone()),
+            ItemKind::Submenu(_) => None,
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chord picks the item that shows it, in any group, and nothing when that item is
+    /// greyed, is a submenu, or no item shows it. Caught by: a lookup that reads only the
+    /// first group, takes a greyed item, or answers the first item whatever its chord.
+    #[test]
+    fn a_chord_chooses_the_item_that_shows_it_when_it_can_be_chosen() {
+        let groups: Groups<u8> = vec![
+            vec![Item::new("New Branch…", 1).chord(Action::NewBranch)],
+            vec![
+                Item::new("Copy Path", 2).chord(Action::Copy),
+                Item::new("Copy Full Path", 3).chord(Action::CopyFull),
+            ],
+        ];
+        assert_eq!(chosen_by(&groups, Action::Copy), Some(2));
+        assert_eq!(chosen_by(&groups, Action::CopyFull), Some(3));
+        assert_eq!(chosen_by(&groups, Action::NewBranch), Some(1));
+        assert_eq!(chosen_by(&groups, Action::Refresh), None);
+        let greyed: Groups<u8> = vec![vec![
+            Item::new("Copy Path", 2)
+                .chord(Action::Copy)
+                .greyed(Some("why".into())),
+        ]];
+        assert_eq!(chosen_by(&greyed, Action::Copy), None);
+        let submenu: Groups<u8> = vec![vec![
+            Item::submenu("Copy", groups.clone()).chord(Action::Copy),
+        ]];
+        assert_eq!(chosen_by(&submenu, Action::Copy), None);
+    }
 }

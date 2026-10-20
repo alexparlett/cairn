@@ -15,15 +15,17 @@
 use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
 
-use crate::accelerators;
+use crate::accelerators::{self, Scope};
 use crate::avatar::{AvatarSize, avatar_of};
 use crate::detail::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
 use crate::detail::file_filter::ShownFiles;
+use crate::detail::file_menu::{FileChoice, FileMenuIn, file_menu, open_file_menu};
 use crate::diff::header::DIFF_HEADER_HEIGHT;
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::date_text;
 use crate::local_time::LocalZone;
-use crate::style::{icons, metrics, tones};
+use crate::push_button::{ButtonFace, ButtonGlyph, ButtonSize, PushButton};
+use crate::style::{focus, icons, metrics, tones};
 use crate::text_field::text_field;
 
 /// The filter field's placeholder.
@@ -58,6 +60,7 @@ pub struct ChangesList {
     filter: Writable<String>,
     current: Option<usize>,
     on_file: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     key: DiffKey,
 }
 
@@ -73,6 +76,7 @@ impl ChangesList {
             filter: filter.into(),
             current: None,
             on_file: EventHandler::new(|_| {}),
+            on_file_menu: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -87,6 +91,17 @@ impl ChangesList {
     /// A file was pressed, or reached with ↑ or ↓, by its index in the change set.
     pub fn on_file(mut self, on_file: impl Into<EventHandler<usize>>) -> Self {
         self.on_file = on_file.into();
+        self
+    }
+
+    /// A file's menu item was chosen — from the menu a right press opens on it, which first
+    /// makes it the current file, or by the item's copy chord with the list focused on the
+    /// current file — by the file's index in the change set.
+    pub fn on_file_menu(
+        mut self,
+        on_file_menu: impl Into<EventHandler<(usize, FileChoice)>>,
+    ) -> Self {
+        self.on_file_menu = on_file_menu.into();
         self
     }
 }
@@ -122,6 +137,7 @@ struct ListData {
     rows: usize,
     current: Option<usize>,
     on_file: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     list_id: AccessibilityId,
     /// Whether the list has focus, which the chosen file's tone says.
     focused: bool,
@@ -159,6 +175,7 @@ impl Component for ChangesList {
             rows,
             current: self.current,
             on_file: self.on_file.clone(),
+            on_file_menu: self.on_file_menu.clone(),
             list_id,
             // Read from the toolkit's focus, so the rows are drawn again as it moves.
             focused: focus().is_focused(),
@@ -252,14 +269,12 @@ impl Component for ChangesList {
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
-                    .maybe(focus() == Focus::Keyboard, |el| {
-                        el.border(Border::new().fill(tones::ACCENT).width(1.))
-                    })
+                    .border(focus::ring_when(focus()))
                     .on_key_down(keyboard(
                         self.shown.clone(),
                         self.changes.clone(),
                         self.current,
-                        self.on_file.clone(),
+                        (self.on_file.clone(), self.on_file_menu.clone()),
                         controller,
                     ))
                     .child(list),
@@ -309,16 +324,27 @@ impl Component for FileRows {
     }
 }
 
-/// ↑ and ↓ over the files shown; every other key, and every chord, is left unhandled. Nothing
-/// current yet: either arrow starts at the first file shown.
+/// ↑ and ↓ over the files shown, and the copy chords on the current file's menu; every other
+/// key, and every chord, is left unhandled. Nothing current yet: either arrow starts at the
+/// first file shown.
 fn keyboard(
     shown: Readable<ShownFiles>,
     changes: Readable<ChangeSet>,
     current: Option<usize>,
-    on_file: EventHandler<usize>,
+    (on_file, on_file_menu): (EventHandler<usize>, EventHandler<(usize, FileChoice)>),
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
+        if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+            e.stop_propagation();
+            if let Some(index) = current
+                && let Some(choice) =
+                    crate::menu::chosen_by(&file_menu(FileMenuIn::ChangesTab), copy)
+            {
+                on_file_menu.call((index, choice));
+            }
+            return;
+        }
         if accelerators::is_chord(&e, &[]) {
             return;
         }
@@ -370,10 +396,22 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         return row.into();
     };
     let (list_id, on_file) = (data.list_id, data.on_file.clone());
+    let (choosing, on_file_menu) = (data.on_file.clone(), data.on_file_menu.clone());
     row.maybe(current, |el| el.background(chosen.band))
         .on_press(move |_| {
             list_id.request_focus();
             on_file.call(index);
+        })
+        // A right press makes the file current, as a press does, and opens its menu.
+        .on_pointer_down(move |e: Event<PointerEventData>| {
+            if e.button() != Some(MouseButton::Right) {
+                return;
+            }
+            list_id.request_focus();
+            if !current {
+                choosing.call(index);
+            }
+            open_file_menu(FileMenuIn::ChangesTab, list_id, index, on_file_menu.clone());
         })
         .child(drawn)
         .into()
@@ -572,15 +610,14 @@ impl Component for ComparisonHeader {
             )
             .child(
                 TooltipContainer::new(Tooltip::new_text(SWAP_LABEL)).child(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_: Event<PressEventData>| on_swap.call(()))
-                        // The button takes its name from its first child's value.
-                        .child(
-                            rect()
-                                .a11y_builder(move |node| node.set_value(SWAP_LABEL))
-                                .child(icons::swap(metrics::DIFF_BAR_ICON, tones::TEXT)),
-                        ),
+                    PushButton::new(
+                        ButtonFace::Glyph {
+                            glyph: ButtonGlyph::Swap,
+                            name: SWAP_LABEL.to_owned(),
+                        },
+                        ButtonSize::Compact,
+                    )
+                    .on_press(move || on_swap.call(())),
                 ),
             )
     }

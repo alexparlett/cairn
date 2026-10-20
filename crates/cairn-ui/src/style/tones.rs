@@ -74,6 +74,10 @@ pub const MENU_CHORD: Color = hex(0x9A9797);
 pub const DIALOG: Color = hex(0x2B2B2B);
 /// A dialog's 1 px border.
 pub const DIALOG_BORDER: Color = hex(0x3BACED);
+/// A dialog's title (`fork-copy-and-dialogs-2026-10-20.md` §6, cp60).
+pub const DIALOG_TITLE: Color = hex(0xFFFFFF);
+/// A dialog's body text (cp60).
+pub const DIALOG_TEXT: Color = hex(0xCAC6C6);
 /// Fork's blue: a focused text field's border, and the chosen tab's caption in the detail
 /// pane's strip.
 pub const ACCENT: Color = hex(0x0078D7);
@@ -324,6 +328,20 @@ pub fn theme() -> Theme {
             focus_ring_fill: Preference::Specific(ACCENT),
         },
     );
+    // A flat field (a filter in a bar) shows focus as every field does: Fork's blue border.
+    if let Some(flat) = theme
+        .get::<InputColorsThemePreference>("flat_input")
+        .cloned()
+    {
+        theme.set(
+            "flat_input",
+            InputColorsThemePreference {
+                focus_border_fill: Preference::Specific(ACCENT),
+                focus_ring_fill: Preference::Specific(ACCENT),
+                ..flat
+            },
+        );
+    }
     theme.set(
         "resizable_handle",
         ResizableHandleThemePreference {
@@ -335,9 +353,13 @@ pub fn theme() -> Theme {
     if let Some(popup) = theme.get::<PopupThemePreference>("popup").cloned() {
         theme.set(
             "popup",
+            // The toolkit's popup is a bare holder: its ground, padding and rounding are drawn
+            // over by the dialog's own frame, Fork's square one (`dialogs::frame`).
             PopupThemePreference {
-                background: Preference::Specific(DIALOG),
+                background: Preference::Specific(Color::TRANSPARENT),
                 color: Preference::Specific(TEXT),
+                padding: Preference::Specific(Gaps::new_all(0.)),
+                spacing: Preference::Specific(0.),
                 ..popup
             },
         );

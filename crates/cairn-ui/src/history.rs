@@ -11,3 +11,4 @@ pub(crate) mod list;
 pub(crate) mod ref_chips;
 pub(crate) mod ref_glyphs;
 pub(crate) mod reflog_strip;
+pub(crate) mod row_menu;

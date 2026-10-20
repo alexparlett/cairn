@@ -28,11 +28,13 @@ use cairn_model::{Confirmed, Consequence, NameRefusal, Oid, OperationInProgress}
 use freya::prelude::*;
 
 use crate::accelerators::Os;
+use crate::dialogs::answer_button::{Answer, answer, greyed_answer};
 use crate::dialogs::button_order::ordered;
+use crate::dialogs::frame;
 
 use crate::check_box::check_box;
 use crate::history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
-use crate::style::{metrics, tones};
+use crate::style::{focus, metrics, tones};
 use crate::text_field::text_field;
 
 /// The dialog's title, Fork's.
@@ -279,6 +281,7 @@ impl Component for CreateBranchDialog {
         // not name.
         let colours = get_theme_or_default().read().colors().clone();
         let ready = self.ready;
+        let (create_id, cancel_id) = (use_a11y(), use_a11y());
         // Discard chosen: the press is the acknowledgement, and builds the token from the
         // consequence the engine computed; otherwise it asks the create.
         let create = {
@@ -340,13 +343,9 @@ impl Component for CreateBranchDialog {
                 let create = create.clone();
                 move |_: String| create()
             });
-        let mut content = PopupContent::new()
+        let mut content = frame::content()
             .child(row(CREATE_BRANCH_AT, commit.into()))
-            // The field's text at the body's size, not the 15 px `PopupContent` sets.
-            .child(row(
-                BRANCH_NAME_CAPTION,
-                rect().font_size(metrics::BODY).child(field).into(),
-            ))
+            .child(row(BRANCH_NAME_CAPTION, field.into()))
             .child(row(
                 "",
                 check_box(
@@ -447,43 +446,47 @@ impl Component for CreateBranchDialog {
             // In the platform's order.
             .children(ordered(
                 self.platform,
-                vec![
-                    Button::new()
-                        .filled()
-                        .enabled(ready)
-                        .on_press(move |_| create())
-                        .child(primary)
-                        .into(),
-                ],
-                Button::new()
-                    .on_press({
+                vec![if ready {
+                    answer(
+                        self.serial,
+                        create_id,
+                        primary.to_owned(),
+                        false,
+                        Answer::Primary,
+                        create,
+                    )
+                } else {
+                    greyed_answer(primary.to_owned())
+                }],
+                answer(
+                    self.serial,
+                    cancel_id,
+                    CANCEL_BRANCH_CAPTION.to_owned(),
+                    false,
+                    Answer::Other,
+                    {
                         let on_cancel = self.on_cancel.clone();
-                        move |_| on_cancel.call(())
-                    })
-                    .child(CANCEL_BRANCH_CAPTION)
-                    .into(),
+                        move || on_cancel.call(())
+                    },
+                ),
             ));
         let on_close = self.on_cancel.clone();
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(move |()| on_close.call(()))
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .a11y_modal(true)
-                    .a11y_role(AccessibilityRole::Dialog)
-                    .child(PopupTitle::new(CREATE_BRANCH_TITLE.to_owned()))
-                    .child(
-                        label()
-                            .text(CREATE_BRANCH_SUBTITLE)
-                            .width(Size::fill())
-                            .padding(Gaps::new(0., 8., 4., 8.))
-                            .font_size(metrics::BODY)
-                            .color(tones::DETAIL_LABEL),
-                    )
-                    .child(content)
-                    .child(buttons),
-            )
+        frame::framed(
+            DIALOG_WIDTH,
+            EventHandler::new(move |()| on_close.call(())),
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::Dialog)
+                .child(frame::title(CREATE_BRANCH_TITLE))
+                .child(
+                    label()
+                        .text(CREATE_BRANCH_SUBTITLE)
+                        .width(Size::fill())
+                        .padding(Gaps::new(0., 8., 4., 8.)),
+                )
+                .child(content)
+                .child(buttons),
+        )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -524,38 +527,45 @@ fn radio(caption: &'static str, selected: bool, pressed: Option<impl Fn() + 'sta
                 .corner_radius(3.)
                 .background(tones::SELECTION_FOCUSED)
         }));
-    let choice = rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .spacing(6.)
-        .a11y_role(AccessibilityRole::RadioButton)
-        .a11y_alt(caption)
-        .a11y_focusable(enabled)
-        .a11y_builder(move |node| {
-            node.set_toggled(Toggled::from(selected));
-            if !enabled {
-                node.set_disabled();
-            }
-        })
-        .child(dot)
-        .child(
-            label()
-                .text(caption)
-                .font_size(metrics::BODY)
-                .color(if enabled {
-                    tones::TEXT
-                } else {
-                    tones::DISABLED_TEXT
-                }),
-        );
-    match pressed {
-        Some(pressed) => choice
-            .cursor(CursorIcon::Pointer)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                pressed();
+    let pressed = pressed.map(std::rc::Rc::new);
+    focus::ringed(move |id, ring| {
+        let choice = rect()
+            .a11y_id(id)
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(6.)
+            // Room for the focus ring round the dot and its caption.
+            .padding(Gaps::new(1., 2., 1., 2.))
+            .border(ring)
+            .a11y_role(AccessibilityRole::RadioButton)
+            .a11y_alt(caption)
+            .a11y_focusable(enabled)
+            .a11y_builder(move |node| {
+                node.set_toggled(Toggled::from(selected));
+                if !enabled {
+                    node.set_disabled();
+                }
             })
-            .into(),
-        None => choice.into(),
-    }
+            .child(dot.clone())
+            .child(
+                label()
+                    .text(caption)
+                    .font_size(metrics::BODY)
+                    .color(if enabled {
+                        tones::TEXT
+                    } else {
+                        tones::DISABLED_TEXT
+                    }),
+            );
+        match pressed.clone() {
+            Some(pressed) => choice
+                .cursor(CursorIcon::Pointer)
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    pressed();
+                })
+                .into(),
+            None => choice.into(),
+        }
+    })
 }

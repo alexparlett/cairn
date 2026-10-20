@@ -21,6 +21,12 @@ pub const TOOLBAR_INSET: f32 = 6.0;
 /// The corner radius of a toolbar button's hover box and of the status box, Fork's rounded
 /// rectangles.
 pub const CONTROL_RADIUS: f32 = 4.0;
+/// A dialog's button: the room above and below its caption, and beside it.
+pub const DIALOG_BUTTON_PADDING_Y: f32 = 6.0;
+pub const DIALOG_BUTTON_PADDING_X: f32 = 14.0;
+/// A button inside a line of text: the room above and below its caption, and beside it.
+pub const COMPACT_BUTTON_PADDING_Y: f32 = 3.0;
+pub const COMPACT_BUTTON_PADDING_X: f32 = 6.0;
 /// The room above and below a toolbar button's icon and label, and between the two.
 pub const TOOLBAR_BUTTON_EDGE: f32 = 2.0;
 /// The room either side of a count badge's figures.
@@ -115,6 +121,9 @@ pub const MENU_TICK_GUTTER: f32 = 18.0;
 pub const MENU_CHORD_GAP: f32 = 40.0;
 /// The width a greyed menu item's reason wraps at, drawn under it while the pointer is on it.
 pub const MENU_REASON_WIDTH: f32 = 300.0;
+/// A long menu's width, fixed: one too long to draw whole is measured by no row it does not
+/// build, so its width cannot follow its widest label.
+pub const MENU_LONG_WIDTH: f32 = 360.0;
 /// The room either side of a menu bar's name.
 pub const MENU_BAR_PADDING: f32 = 8.0;
 /// A diff row: Cairn's measured choice, kept (`diff::view`); the Commit tab's one pitch too.

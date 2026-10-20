@@ -285,6 +285,7 @@ pub(crate) fn draw_row(
 impl Component for DiffView {
     fn render(&self) -> impl IntoElement {
         let focus_id = use_a11y();
+        let diff_focus = use_focus(focus_id);
         let mut viewport = use_state(|| (0.0f32, 0.0f32));
         let view_width = viewport.read().0;
         // The gesture's state, made whether or not a gesture is drawn: a view's hooks are the
@@ -341,6 +342,7 @@ impl Component for DiffView {
             .a11y_id(focus_id)
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::List)
+            .border(crate::style::focus::ring_when(diff_focus()))
             .on_press(move |_| focus_id.request_focus())
             .on_sized(move |e: Event<SizedEventData>| {
                 viewport.set_if_modified((e.area.width(), e.area.height()));

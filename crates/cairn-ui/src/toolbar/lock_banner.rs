@@ -10,6 +10,8 @@ use std::time::{Duration, SystemTime};
 use async_io::Timer;
 use freya::prelude::*;
 
+use crate::push_button::{ButtonSize, PushButton};
+
 use crate::dialogs::git_error::REMOVE_LOCK_CAPTION;
 use crate::style::{metrics, tones};
 
@@ -104,10 +106,8 @@ impl Component for LockBanner {
                     .width(Size::flex(1.)),
             )
             .child(
-                Button::new()
-                    .compact()
-                    .on_press(move |_| on_remove.call(()))
-                    .child(REMOVE_LOCK_CAPTION),
+                PushButton::caption(REMOVE_LOCK_CAPTION, ButtonSize::Compact)
+                    .on_press(move || on_remove.call(())),
             )
             .into_element()
     }

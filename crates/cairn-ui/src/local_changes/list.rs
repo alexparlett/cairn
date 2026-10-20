@@ -42,10 +42,10 @@ use crate::local_changes::bar::ListsBar;
 use crate::local_changes::drag::ListDrag;
 use crate::local_changes::menu::{
     MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
-    no_discard,
+    menu_groups, no_discard,
 };
 use crate::local_changes::selection::LocalSelection;
-use crate::style::{icons, metrics, tones};
+use crate::style::{focus, icons, metrics, tones};
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
 /// caller decides what each does to its selection and what it asks.
@@ -66,6 +66,8 @@ pub enum ListIntent {
     Drop { from: ChangeList, path: RepoPath },
     /// Copy Path: the selection's paths of `list`.
     CopyPaths(ChangeList),
+    /// Copy Full Path: the selection's paths of `list`, each joined to the working tree's.
+    CopyFullPaths(ChangeList),
 }
 
 /// The heading over the upper list.
@@ -148,6 +150,8 @@ pub struct LocalChangesList {
     held: Option<Readable<HeldKeys>>,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
+    /// A request for the Unstaged list to take focus: each new value given takes it once.
+    focus_unstaged: Option<u64>,
     key: DiffKey,
 }
 
@@ -172,8 +176,18 @@ impl LocalChangesList {
             held: None,
             on_choose: EventHandler::new(|_| {}),
             on_intent: EventHandler::new(|_| {}),
+            focus_unstaged: None,
             key: DiffKey::None,
         }
+    }
+
+    /// Puts focus in the Unstaged list, once for each new request (Fork's Ctrl+1, "Show
+    /// Uncommitted Changes", which leaves focus there): a list mounted with a request takes
+    /// focus as it mounts, and one already shown takes it when the request changes. `None` —
+    /// Local Changes reached by a press — asks nothing.
+    pub fn focus_unstaged(mut self, request: Option<u64>) -> Self {
+        self.focus_unstaged = request;
+        self
     }
 
     /// How many distinct paths the filter's rows show, as the pass that left them counted them
@@ -230,6 +244,7 @@ impl PartialEq for LocalChangesList {
             && self.shown_paths == other.shown_paths
             && self.selection == other.selection
             && self.held == other.held
+            && self.focus_unstaged == other.focus_unstaged
             && self.key == other.key
     }
 }
@@ -288,6 +303,10 @@ impl Component for LocalChangesList {
             drag,
             on_choose: self.on_choose.clone(),
             on_intent: self.on_intent.clone(),
+            focus_request: match list {
+                ChangeList::Unstaged => self.focus_unstaged,
+                ChangeList::Staged => None,
+            },
         };
         let lists: Element = if filtering && !waiting && unstaged + staged == 0 {
             rect()
@@ -366,11 +385,14 @@ struct ListSection {
     drag: ListDrag,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
+    /// Takes focus once for each new value (`LocalChangesList::focus_unstaged`).
+    focus_request: Option<u64>,
 }
 
 impl PartialEq for ListSection {
     fn eq(&self, other: &Self) -> bool {
-        self.list == other.list
+        self.focus_request == other.focus_request
+            && self.list == other.list
             && self.changes == other.changes
             && self.shown == other.shown
             && self.rows == other.rows
@@ -469,6 +491,12 @@ impl Component for ListSection {
     fn render(&self) -> impl IntoElement {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
+        // A focus request taken as the list mounts with one, and again each time it changes.
+        use_side_effect_with_deps(&self.focus_request, move |request| {
+            if request.is_some() {
+                list_id.request_focus();
+            }
+        });
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut edge = crate::edge_scroll::use_edge_scroll(controller);
         let doubled = use_state(|| false);
@@ -617,8 +645,9 @@ impl Component for ListSection {
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
-                    .maybe(focus() == Focus::Keyboard || targeted, |el| {
-                        el.border(Border::new().fill(tones::ACCENT).width(1.))
+                    // The ring for keyboard focus, and for the list a drag would drop on.
+                    .maybe(focus::shown(focus()) || targeted, |el| {
+                        el.border(focus::ring())
                     })
                     .on_key_down(keyboard(&data, controller)))
                     .child(
@@ -666,6 +695,24 @@ fn keyboard(
         data.on_intent.clone(),
     );
     move |e: Event<KeyboardEventData>| {
+        // The copy chords choose the menu's item that shows them, for the selection in this
+        // list; with none here, nothing.
+        if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+            e.stop_propagation();
+            let in_list = selection.as_ref().is_some_and(|selection| {
+                selection
+                    .peek()
+                    .as_ref()
+                    .is_some_and(|selection| selection.list() == list)
+            });
+            if let Some(choice) = in_list
+                .then(|| crate::menu::chosen_by(&menu_groups(list, None), copy))
+                .flatten()
+            {
+                on_intent.call(intent_of(list, choice));
+            }
+            return;
+        }
         let heard = accelerators::resolve_key(&e, Scope::LocalChanges)
             .or_else(|| accelerators::resolve_key(&e, Scope::LocalChangesLists));
         let extending = match heard {
@@ -791,11 +838,9 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                     ContextMenu::open_from_down(menu(
                         list,
                         refusal.as_ref(),
+                        list_id,
                         EventHandler::new(move |choice: MenuChoice| {
-                            choosing.call(match choice {
-                                MenuChoice::Act(action) => ListIntent::Act(list, action),
-                                MenuChoice::CopyPaths => ListIntent::CopyPaths(list),
-                            })
+                            choosing.call(intent_of(list, choice))
                         }),
                     ));
                 }
@@ -826,6 +871,15 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         })
         .child(drawn)
         .into()
+}
+
+/// What choosing `choice` from `list`'s menu asks of the window.
+fn intent_of(list: ChangeList, choice: MenuChoice) -> ListIntent {
+    match choice {
+        MenuChoice::Act(action) => ListIntent::Act(list, action),
+        MenuChoice::CopyPaths => ListIntent::CopyPaths(list),
+        MenuChoice::CopyFullPaths => ListIntent::CopyFullPaths(list),
+    }
 }
 
 /// One path's row: its badge and its text, the text bold in `selected`'s tone when the row is

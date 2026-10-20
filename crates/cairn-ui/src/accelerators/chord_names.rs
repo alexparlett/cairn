@@ -1,8 +1,9 @@
 //! A chord spelled for a person to read — the one place Cairn does that, and the one
 //! exception to the modifier invariant: a tooltip names an action's chord, written as Fork's
-//! own shortcut lists write it (`fork-dev/Docs`, `keyboard-shortcuts-windows.md` and
-//! `keyboard-shortcuts-mac.md`) — on Linux Fork's Windows form, each held key then the key
-//! joined by `+` (`Ctrl+Alt+Shift+S`); on macOS the held keys' symbols run together in Fork's
+//! own menus and shortcut lists write it (`fork-dev/Docs`, `keyboard-shortcuts-windows.md` and
+//! `keyboard-shortcuts-mac.md`) — on Linux Fork for Windows' menus' form, each held key in the
+//! order Control, Shift, Alt, then the key, joined by `+` (`Ctrl+Shift+Alt+S`, as its Local
+//! Changes menu shows Stage All); on macOS the held keys' symbols run together in Fork's
 //! order, then the key (`⌘⌥⇧S`, `⌘Return`, `⌫`).
 //!
 //! Every name is rendered from the accelerator table's data — the chord [`super::chords`]
@@ -30,8 +31,8 @@ fn spelled(chord: Chord, platform: Os) -> Option<String> {
     let order = match platform {
         Os::Linux => [
             (freya::prelude::Modifiers::CONTROL, "Ctrl"),
-            (freya::prelude::Modifiers::ALT, "Alt"),
             (freya::prelude::Modifiers::SHIFT, "Shift"),
+            (freya::prelude::Modifiers::ALT, "Alt"),
             (freya::prelude::Modifiers::META, "Super"),
         ],
         Os::MacOs => [
@@ -111,9 +112,11 @@ mod tests {
     fn a_chord_is_named_from_the_table_as_forks_lists_write_it() {
         for (action, linux, mac) in [
             (Action::ShowLostCommits, "Ctrl+Shift+.", "⌘⇧."),
-            (Action::StageOrUnstageAll, "Ctrl+Alt+Shift+S", "⌘⌥⇧S"),
+            (Action::StageOrUnstageAll, "Ctrl+Shift+Alt+S", "⌘⌥⇧S"),
             (Action::Commit, "Ctrl+Enter", "⌘Return"),
-            (Action::Discard, "Backspace", "⌫"),
+            (Action::Discard, "Delete", "⌫"),
+            (Action::Copy, "Ctrl+C", "⌘C"),
+            (Action::CopyFull, "Ctrl+Shift+C", "⌘⇧C"),
             (Action::ShowCommitTab, "Ctrl+Alt+1", "⌘⌥1"),
             (Action::NextChange, "Ctrl+↓", "⌘↓"),
             (Action::Refresh, "F5", "⌘R"),

@@ -216,6 +216,7 @@ impl Component for LocalChangesPane {
         )
         .shown_paths(shown_paths)
         .split(view.local.lists_split)
+        .focus_unstaged(*view.local.focus_unstaged.read())
         .selection(readable.map(selection_of, |_| true))
         .held(view.held_keys)
         .on_choose(move |(list, row): (ChangeList, usize)| {

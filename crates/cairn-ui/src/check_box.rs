@@ -5,7 +5,7 @@
 
 use freya::prelude::*;
 
-use crate::style::{metrics, tones};
+use crate::style::{focus, metrics, tones};
 
 /// `caption`'s check box, ticked or not; pressed while `enabled`, it reports the state it is
 /// turned to through `on_toggle`.
@@ -43,35 +43,42 @@ pub fn check_box(
                 .font_size(metrics::CAPTION)
                 .color(tones::SELECTED_TEXT)
         }));
-    let toggle = rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .spacing(6.)
-        .a11y_role(AccessibilityRole::CheckBox)
-        .a11y_alt(caption.clone())
-        .a11y_focusable(enabled)
-        .a11y_builder(move |node| node.set_toggled(Toggled::from(ticked)))
-        .child(mark)
-        .child(
-            label()
-                .text(caption)
-                .font_size(metrics::BODY)
-                .max_lines(1)
-                .color(if enabled {
-                    tones::TEXT
-                } else {
-                    tones::DISABLED_TEXT
-                }),
-        );
-    if enabled {
-        toggle
-            .cursor(CursorIcon::Pointer)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                on_toggle.call(!ticked);
-            })
-            .into()
-    } else {
-        toggle.into()
-    }
+    focus::ringed(move |id, ring| {
+        let toggle = rect()
+            .a11y_id(id)
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(6.)
+            // Room for the focus ring round the box and its caption, as Fork's dotted one.
+            .padding(Gaps::new(1., 2., 1., 2.))
+            .border(ring)
+            .a11y_role(AccessibilityRole::CheckBox)
+            .a11y_alt(caption.clone())
+            .a11y_focusable(enabled)
+            .a11y_builder(move |node| node.set_toggled(Toggled::from(ticked)))
+            .child(mark.clone())
+            .child(
+                label()
+                    .text(caption.clone())
+                    .font_size(metrics::BODY)
+                    .max_lines(1)
+                    .color(if enabled {
+                        tones::TEXT
+                    } else {
+                        tones::DISABLED_TEXT
+                    }),
+            );
+        if enabled {
+            let on_toggle = on_toggle.clone();
+            toggle
+                .cursor(CursorIcon::Pointer)
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    on_toggle.call(!ticked);
+                })
+                .into()
+        } else {
+            toggle.into()
+        }
+    })
 }

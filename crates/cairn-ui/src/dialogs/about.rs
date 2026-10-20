@@ -6,7 +6,8 @@
 
 use freya::prelude::*;
 
-use super::answer_button::{AnswerColours, answer};
+use super::answer_button::{Answer, answer};
+use super::frame;
 use crate::style::{metrics, tones};
 
 /// The dialog's title: the product's name.
@@ -91,7 +92,8 @@ impl Component for AboutDialog {
             close_id,
             "Close".to_owned(),
             true,
-            &AnswerColours::of_theme(),
+            // The one answer, and what Return gives: the default.
+            Answer::Primary,
             move || closing.call(()),
         );
         let on_close = self.on_close.clone();
@@ -101,26 +103,23 @@ impl Component for AboutDialog {
                 .width(Size::fill())
                 .font_size(metrics::BODY)
         };
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(move |_| on_close.call(()))
-            .child(
-                PopupContent::new()
-                    .child(
-                        label()
-                            .text(ABOUT_TITLE)
-                            .font_size(metrics::HEADING)
-                            .font_weight(FontWeight::BOLD)
-                            .color(tones::TEXT),
-                    )
-                    .child(line(version_line(&self.version)).color(tones::TEXT))
-                    .child(line(licence_line(&self.licence)).color(tones::DETAIL_LABEL))
-                    .child(
-                        line(self.git.clone().unwrap_or_else(|| NO_GIT_FOUND.to_owned()))
-                            .color(tones::DETAIL_LABEL),
-                    ),
-            )
-            .child(PopupButtons::new().child(close))
+        frame::framed(
+            DIALOG_WIDTH,
+            EventHandler::new(move |()| on_close.call(())),
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::Dialog)
+                .child(frame::title(ABOUT_TITLE))
+                .child(
+                    frame::content()
+                        .child(line(version_line(&self.version)).color(tones::TEXT))
+                        .child(line(licence_line(&self.licence)))
+                        .child(line(
+                            self.git.clone().unwrap_or_else(|| NO_GIT_FOUND.to_owned()),
+                        )),
+                )
+                .child(frame::buttons(vec![close])),
+        )
     }
 
     fn render_key(&self) -> DiffKey {

@@ -15,6 +15,8 @@
 use cairn_model::{ChangeStatus, DiffContent, DiffLimits, FileMode, Oid, ShownDiff, SizeLimit};
 use freya::prelude::*;
 
+use crate::push_button::{ButtonSize, PushButton};
+
 use crate::diff::palette::{
     ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, GROUND,
     REMOVED_EMPHASIS,
@@ -517,10 +519,8 @@ impl Component for DiffNoticeView {
                 body.child(title(TOO_LARGE_TO_DISPLAY))
                     .child(muted(too_large_reason(*crossed, *loadable)))
                     .maybe_child(loadable.then(|| {
-                        Button::new()
-                            .compact()
-                            .on_press(move |_| on_load.call(()))
-                            .child(LOAD_DIFF_CAPTION)
+                        PushButton::caption(LOAD_DIFF_CAPTION, ButtonSize::Compact)
+                            .on_press(move || on_load.call(()))
                     }))
             }
             DiffNotice::LfsPointer { old, new } => {

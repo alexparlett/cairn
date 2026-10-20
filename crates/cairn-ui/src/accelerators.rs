@@ -105,11 +105,17 @@ pub enum Action {
     ZoomIn,
     /// Scales the whole window down a step.
     ZoomOut,
+    /// Copies what the focused list's context menu offers first to copy — a commit's id, a
+    /// ref's name, a file's path: the menu's item that shows this chord, chosen.
+    Copy,
+    /// Copies what the focused list's context menu offers second to copy — a commit's info, a
+    /// file's full path: the menu's item that shows this chord, chosen.
+    CopyFull,
 }
 
 impl Action {
     /// Every action, in the order the table lists them.
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 29] = [
         Action::PreviousChange,
         Action::NextChange,
         Action::ToggleSideBySide,
@@ -137,6 +143,8 @@ impl Action {
         Action::Fetch,
         Action::ZoomIn,
         Action::ZoomOut,
+        Action::Copy,
+        Action::CopyFull,
     ];
 }
 
@@ -161,16 +169,21 @@ pub enum Scope {
     /// there, and no list or staging chord fires — Backspace deletes a character and Enter
     /// makes a new line — while the window's chords still do, as from any field.
     CommitBox,
+    /// Only while a list with a context menu has focus — the history, the sidebar, the Changes
+    /// tab's files, Local Changes' lists: its copy chords are read by that list's menu, so the chord a menu item shows and the key are one source. Never a
+    /// text field's, so ⌘C or Ctrl+C in a field copies its text.
+    List,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 5] = [
+    pub const ALL: [Scope; 6] = [
         Scope::Window,
         Scope::Detail,
         Scope::LocalChanges,
         Scope::LocalChangesLists,
         Scope::CommitBox,
+        Scope::List,
     ];
 }
 
@@ -331,7 +344,7 @@ pub fn chords(action: Action, platform: Os) -> Chords {
             ]),
             Os::MacOs => Chords::of([(bare, key(NamedKey::Enter)), (command, at(Code::KeyS))]),
         },
-        // ⌥⇧⌘S / Ctrl+Alt+Shift+S on a focused list or diff; and the key held over a list's
+        // ⌥⇧⌘S / Ctrl+Shift+Alt+S on a focused list or diff; and the key held over a list's
         // Stage or Unstage button that makes it Stage All or Unstage All — a heading press:
         // Fork for Mac's ⌥, and Fork for Windows' Shift on Linux (Fork's TrackerWin #2429,
         // #2466), which no window manager takes with a click, where Alt is taken by xfwm,
@@ -346,12 +359,13 @@ pub fn chords(action: Action, platform: Os) -> Chords {
                 Trigger::HeadingPress,
             ),
         ]),
-        // ⌫ or ⇧⌘D on macOS; Backspace or Delete on Linux, where Fork for Windows' Ctrl+Shift+D
-        // is Hide Commit Details ([`Action::ToggleDetails`]).
+        // ⌫ or ⇧⌘D on macOS; Delete or Backspace on Linux, where Fork for Windows' Ctrl+Shift+D
+        // is Hide Commit Details ([`Action::ToggleDetails`]). Delete first, the chord Fork for
+        // Windows' context menu shows beside "Discard changes...".
         Action::Discard => match platform {
             Os::Linux => Chords::of([
-                (bare, key(NamedKey::Backspace)),
                 (bare, key(NamedKey::Delete)),
+                (bare, key(NamedKey::Backspace)),
             ]),
             Os::MacOs => Chords::of([
                 (bare, key(NamedKey::Backspace)),
@@ -375,6 +389,11 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         Action::Fetch => Chords::of([(command | shift, at(Code::KeyF))]),
         Action::ZoomIn => Chords::of([(command, at(Code::Equal))]),
         Action::ZoomOut => Chords::of([(command, at(Code::Minus))]),
+        // Fork for Windows' context menus' Ctrl+C and Ctrl+Shift+C (Copy Commit SHA and Copy
+        // Commit Info, Copy Path and Copy Full Path, Copy Branch Name), the letter matched where
+        // it sits; ⌘C and ⇧⌘C on macOS, not yet checked against Fork for macOS.
+        Action::Copy => Chords::of([(command, at(Code::KeyC))]),
+        Action::CopyFull => Chords::of([(command | shift, at(Code::KeyC))]),
         // Fork for Windows' View menu's Ctrl+Shift+D, the D matched where it sits. On macOS
         // ⇧⌘D stays Local Changes' discard and ⌥⌘D is the desktop's own Dock toggle, so the
         // View menu's item alone until Fork for macOS is observed.
@@ -411,6 +430,7 @@ pub fn heard_in(action: Action) -> Scope {
         Action::StageOrUnstage | Action::StageOrUnstageAll | Action::Discard => Scope::LocalChanges,
         Action::ExtendSelectionUp | Action::ExtendSelectionDown => Scope::LocalChangesLists,
         Action::Commit => Scope::CommitBox,
+        Action::Copy | Action::CopyFull => Scope::List,
         // A press is resolved by the list it lands on, wherever focus is.
         Action::ExtendSelection | Action::SelectRange => Scope::Window,
         Action::ToggleSideBySide
@@ -1014,7 +1034,7 @@ mod tests {
         let (alt, shift, none) = (M::ALT, M::SHIFT, M::empty());
         let unbound = |action| (action, Vec::new(), Scope::Window);
         for (platform, command) in [(Os::Linux, M::CONTROL), (Os::MacOs, M::META)] {
-            let expected: [(Action, Vec<Chord>, Scope); 27] = [
+            let expected: [(Action, Vec<Chord>, Scope); 29] = [
                 (
                     Action::PreviousChange,
                     vec![keyed(command, NamedKey::ArrowUp)],
@@ -1093,8 +1113,8 @@ mod tests {
                     Action::Discard,
                     match platform {
                         Os::Linux => vec![
-                            keyed(none, NamedKey::Backspace),
                             keyed(none, NamedKey::Delete),
+                            keyed(none, NamedKey::Backspace),
                         ],
                         Os::MacOs => vec![
                             keyed(none, NamedKey::Backspace),
@@ -1155,6 +1175,12 @@ mod tests {
                     Action::ZoomOut,
                     vec![placed(command, Code::Minus)],
                     Scope::Window,
+                ),
+                (Action::Copy, vec![placed(command, Code::KeyC)], Scope::List),
+                (
+                    Action::CopyFull,
+                    vec![placed(command | shift, Code::KeyC)],
+                    Scope::List,
                 ),
             ];
             assert_eq!(
@@ -1345,7 +1371,7 @@ mod tests {
                 Trigger::Named(named) => match *where_heard {
                     Scope::LocalChanges => LOCAL_CHANGES_BARE_KEYS.contains(&named),
                     Scope::LocalChangesLists => LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named),
-                    Scope::Window | Scope::Detail | Scope::CommitBox => false,
+                    Scope::Window | Scope::Detail | Scope::CommitBox | Scope::List => false,
                 },
                 Trigger::Physical(_) | Trigger::Press | Trigger::HeadingPress => false,
             };
@@ -1417,7 +1443,7 @@ mod tests {
                     let admitted = match where_heard {
                         Scope::LocalChanges => LOCAL_CHANGES_BARE_KEYS.contains(&named),
                         Scope::LocalChangesLists => LOCAL_CHANGES_LISTS_BARE_KEYS.contains(&named),
-                        Scope::Window | Scope::Detail | Scope::CommitBox => false,
+                        Scope::Window | Scope::Detail | Scope::CommitBox | Scope::List => false,
                     };
                     if admitted {
                         continue;
@@ -1520,6 +1546,22 @@ mod tests {
                     .iter()
                     .any(|v| v.contains("Commit and ShowLostCommits")),
                 "two actions sharing a chord passed on {platform:?}"
+            );
+            // Copy's chord given to Copy Full as well fails: the two copy actions are one
+            // chord each, which each list's menu reads.
+            let mut copy_twice = rows.clone();
+            let copy = chords(Action::Copy, platform).first().unwrap();
+            copy_twice
+                .iter_mut()
+                .find(|(action, _, _)| *action == Action::CopyFull)
+                .unwrap()
+                .2
+                .push(copy);
+            assert!(
+                pin_violations(&copy_twice)
+                    .iter()
+                    .any(|v| v.contains("Copy and CopyFull")),
+                "Copy's chord on Copy Full as well passed on {platform:?}"
             );
         }
     }
@@ -1843,6 +1885,19 @@ mod tests {
                     field(None, character(letter), Code::Unidentified, command),
                     FieldKey::Edit { bubbles: false },
                     "{letter} with the command key on {platform:?}"
+                );
+            }
+            // Copy's chord, as a keyboard sends it — the letter at its place — is the field's
+            // own copy, never the list's Copy: a field is in no list's scope.
+            let (_, copy_code, copy_held) = chords(Action::Copy, platform)
+                .first()
+                .and_then(|c| c.key_press())
+                .unwrap();
+            for own in [None, Some(FieldScope::CommitBox)] {
+                assert_eq!(
+                    field(own, character("c"), copy_code, copy_held),
+                    FieldKey::Edit { bubbles: false },
+                    "Copy's chord in {own:?} on {platform:?}"
                 );
             }
             // Typing, Shift's capitals and Option's characters are the field's.

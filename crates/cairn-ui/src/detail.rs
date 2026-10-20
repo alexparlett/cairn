@@ -6,5 +6,6 @@ pub(crate) mod changes_list;
 pub(crate) mod commit_tab;
 pub(crate) mod expansion;
 pub(crate) mod file_filter;
+pub(crate) mod file_menu;
 pub(crate) mod message_lines;
 pub(crate) mod tabs;

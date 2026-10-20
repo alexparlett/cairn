@@ -5,7 +5,7 @@
 
 use freya::prelude::*;
 
-use crate::style::{metrics, tones};
+use crate::style::{focus, metrics, tones};
 
 /// One glyph button of a bar.
 #[derive(Clone)]
@@ -68,14 +68,7 @@ impl Component for BarButton {
                 .maybe(enabled && *hovered.read(), |el| {
                     el.background(tones::DIFF_BAR_HOVER)
                 })
-                .maybe(focus() == Focus::Keyboard, |el| {
-                    el.border(
-                        Border::new()
-                            .fill(tones::ACCENT)
-                            .width(1.)
-                            .alignment(BorderAlignment::Inner),
-                    )
-                })
+                .border(focus::ring_when(focus()))
                 .on_pointer_enter(move |_| hovered.set(true))
                 .on_pointer_leave(move |_| hovered.set_if_modified(false))
                 .on_press(move |_| {

@@ -19,6 +19,8 @@ pub enum Side {
 /// The rows of one menu, holding the keyboard while it is shown.
 pub struct Panel<T> {
     groups: Rc<Groups<T>>,
+    /// The groups laid out once, as the panel is made: what each render reads by index.
+    layout: Rc<Layout>,
     /// What held focus as the menu opened, given it back on a choice or Escape.
     return_focus: AccessibilityId,
     highlight_first: bool,
@@ -36,6 +38,7 @@ pub struct Panel<T> {
 impl<T> Panel<T> {
     pub fn new(groups: Groups<T>, return_focus: AccessibilityId) -> Self {
         Self {
+            layout: Rc::new(Layout::of(&groups)),
             groups: Rc::new(groups),
             return_focus,
             highlight_first: false,
@@ -109,9 +112,87 @@ impl<T> KeyExt for Panel<T> {
     }
 }
 
-/// The items of `groups` in order, flattened: each one's group and place in it.
-fn flattened<T>(groups: &Groups<T>) -> Vec<&Item<T>> {
-    groups.iter().flatten().collect()
+/// A menu's groups laid out once, when its panel is made, so a render, a key press and a row
+/// built read an item by its index rather than walking the groups.
+#[derive(Debug, Default)]
+struct Layout {
+    /// Each item's group and place in it, in order.
+    places: Vec<(usize, usize)>,
+    /// Whether each item can be chosen.
+    enabled: Vec<bool>,
+    /// Whether each item opens a group after the first ([`group_starts`]).
+    starts: Vec<bool>,
+    /// The lines a short menu draws, items and rules.
+    lines: Vec<Line>,
+    /// Whether any item is ticked, which opens the ✓ gutter for the whole menu.
+    ticks: bool,
+}
+
+impl Layout {
+    fn of<T>(groups: &Groups<T>) -> Self {
+        let places = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(g, group)| (0..group.len()).map(move |n| (g, n)))
+            .collect();
+        Self {
+            places,
+            enabled: groups.iter().flatten().map(Item::is_enabled).collect(),
+            starts: group_starts(groups),
+            lines: lines_of(groups),
+            ticks: groups.iter().flatten().any(|item| item.ticked),
+        }
+    }
+
+    /// Item `n` of `groups`, the groups it was laid out from.
+    fn item<'g, T>(&self, groups: &'g Groups<T>, n: usize) -> Option<&'g Item<T>> {
+        let (g, at) = *self.places.get(n)?;
+        groups.get(g)?.get(at)
+    }
+
+    /// Whether the menu is too long to draw whole.
+    fn is_long(&self) -> bool {
+        self.lines.len() > LONG_MENU_LINES
+    }
+}
+
+/// The most lines — items and rules — a menu draws whole; a longer one shows this many rows
+/// and scrolls, building only the rows its viewport shows.
+pub(crate) const LONG_MENU_LINES: usize = 24;
+
+/// One line of a menu as it is laid out: an item, by its place among every item, or the rule
+/// between two groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Line {
+    Item(usize),
+    Rule,
+}
+
+/// The lines of `groups` in order: each group's items, a rule between every two groups.
+fn lines_of<T>(groups: &Groups<T>) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut n = 0;
+    for (g, group) in groups.iter().enumerate() {
+        if g > 0 {
+            lines.push(Line::Rule);
+        }
+        for _ in group {
+            lines.push(Line::Item(n));
+            n += 1;
+        }
+    }
+    lines
+}
+
+/// Which items open a group after the first: a long menu draws the rule between two groups
+/// along the top of the second group's first row, so every row is one height and the view
+/// finds any of them without summing the rows above it.
+fn group_starts<T>(groups: &Groups<T>) -> Vec<bool> {
+    groups
+        .iter()
+        .enumerate()
+        .flat_map(|(g, group)| (0..group.len()).map(move |n| g > 0 && n == 0))
+        .collect()
 }
 
 /// The item that can be chosen `side` of `from` (the first or the last from none), wrapping
@@ -140,11 +221,11 @@ fn step(enabled: &[bool], from: Option<usize>, down: bool) -> Option<usize> {
 impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
     fn render(&self) -> impl IntoElement {
         let id = use_a11y();
-        let items = flattened(&self.groups);
-        let enabled: Rc<Vec<bool>> = Rc::new(items.iter().map(|item| item.is_enabled()).collect());
+        let mut controller = use_scroll_controller(ScrollConfig::default);
+        let layout = self.layout.clone();
         let first = self
             .highlight_first
-            .then(|| step(&enabled, None, true))
+            .then(|| step(&layout.enabled, None, true))
             .flatten();
         let mut highlighted = use_state(move || first);
         // The submenu open, by its row, and whether it holds the keyboard.
@@ -153,14 +234,15 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
         // The greyed row under the pointer, whose reason is drawn under it: Freya's own tooltip
         // hides while a context menu is open, so a menu draws its reasons itself.
         let mut pointed_greyed = use_state(|| None::<usize>);
-        let ticks = items.iter().any(|item| item.ticked);
+        let ticks = layout.ticks;
         let return_focus = self.return_focus;
 
         let choose = {
             let groups = self.groups.clone();
+            let layout = layout.clone();
             let on_choose = self.on_choose.clone();
             move |n: usize| {
-                let Some(item) = groups.iter().flatten().nth(n) else {
+                let Some(item) = layout.item(&groups, n) else {
                     return;
                 };
                 if !item.is_enabled() {
@@ -181,7 +263,7 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
         };
 
         let keys = {
-            let enabled = enabled.clone();
+            let layout = layout.clone();
             let groups = self.groups.clone();
             let mut choose = choose.clone();
             let on_sideways = self.on_sideways.clone();
@@ -189,14 +271,24 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
             let on_dismiss = self.on_dismiss.clone();
             move |e: Event<KeyboardEventData>| {
                 let is_submenu = |n: Option<usize>| {
-                    n.and_then(|n| groups.iter().flatten().nth(n))
+                    n.and_then(|n| layout.item(&groups, n))
                         .is_some_and(|item| matches!(item.kind, ItemKind::Submenu(_)))
                 };
                 match accelerators::menu_key(&e) {
                     key @ (MenuKey::Down | MenuKey::Up) => {
-                        let next = step(&enabled, *highlighted.peek(), key == MenuKey::Down);
+                        let next = step(&layout.enabled, *highlighted.peek(), key == MenuKey::Down);
                         highlighted.set(next);
                         open.set(None);
+                        // A long menu scrolls the item reached into view.
+                        if let Some(at) = next
+                            && layout.is_long()
+                        {
+                            controller.scroll_to_offset(
+                                at as f32 * metrics::MENU_ITEM,
+                                metrics::MENU_ITEM,
+                                Direction::Vertical,
+                            );
+                        }
                     }
                     MenuKey::Choose => {
                         if let Some(n) = *highlighted.peek() {
@@ -245,82 +337,253 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
         let lit = *highlighted.read();
         let opened = *open.read();
         let explained = *pointed_greyed.read();
-        let mut children: Vec<Element> = Vec::new();
-        let mut n = 0usize;
-        for (g, group) in self.groups.iter().enumerate() {
-            if g > 0 {
-                children.push(separator());
-            }
-            for item in group {
-                let at = n;
-                n += 1;
-                let mut choosing = choose.clone();
-                let submenu = match (&item.kind, opened == Some(at)) {
-                    (ItemKind::Submenu(groups), true) => Some(
-                        Panel::new(groups.clone(), return_focus)
-                            .highlight_first(*sub_focused.peek())
-                            .take_focus(*sub_focused.peek())
-                            .on_choose(self.on_choose.clone())
-                            .on_back(move |()| {
-                                open.set(None);
-                                sub_focused.set(false);
-                                id.request_focus();
-                            })
-                            .into(),
-                    ),
-                    (ItemKind::Submenu(_) | ItemKind::Choose(_), _) => None,
+        let long = layout.is_long();
+
+        // One item's row with its handlers. `inline`: whether the row carries its own submenu
+        // and greyed reason, as a short menu's rows do; a long menu's rows are clipped by the
+        // view that scrolls them, so it draws both itself, beside the view.
+        let build = {
+            let groups = self.groups.clone();
+            let layout = layout.clone();
+            let on_choose = self.on_choose.clone();
+            let choose = choose.clone();
+            Rc::new(move |at: usize, inline: bool| -> Element {
+                let Some(item) = layout.item(&groups, at) else {
+                    return rect().height(Size::px(metrics::MENU_ITEM)).into();
                 };
+                let mut choosing = choose.clone();
+                let submenu = inline
+                    .then(|| {
+                        submenu_of(
+                            item,
+                            opened == Some(at),
+                            return_focus,
+                            &on_choose,
+                            id,
+                            open,
+                            sub_focused,
+                        )
+                    })
+                    .flatten();
                 let is_submenu = matches!(item.kind, ItemKind::Submenu(_));
                 let enabled_here = item.is_enabled();
-                children.push(
-                    row(item, lit == Some(at), ticks, submenu, explained == Some(at))
-                        .on_pointer_enter(move |_| {
-                            pointed_greyed.set_if_modified((!enabled_here).then_some(at));
-                            if enabled_here {
-                                highlighted.set(Some(at));
-                                if is_submenu {
-                                    open.set(Some(at));
-                                    sub_focused.set(false);
-                                } else {
-                                    open.set(None);
-                                }
-                            } else {
-                                highlighted.set(None);
-                                open.set(None);
-                            }
-                        })
-                        .on_pointer_leave(move |_| {
-                            if *pointed_greyed.peek() == Some(at) {
-                                pointed_greyed.set(None);
-                            }
-                        })
-                        .maybe(enabled_here, |row| {
-                            row.on_press(move |e: Event<PressEventData>| {
-                                e.stop_propagation();
-                                choosing(at);
-                            })
-                        })
-                        .into(),
-                );
-            }
-        }
+                row(
+                    item,
+                    lit == Some(at),
+                    ticks,
+                    submenu,
+                    inline && explained == Some(at),
+                )
+                .on_pointer_enter(move |_| {
+                    pointed_greyed.set_if_modified((!enabled_here).then_some(at));
+                    if enabled_here {
+                        highlighted.set(Some(at));
+                        if is_submenu {
+                            open.set(Some(at));
+                            sub_focused.set(false);
+                        } else {
+                            open.set(None);
+                        }
+                    } else {
+                        highlighted.set(None);
+                        open.set(None);
+                    }
+                })
+                .on_pointer_leave(move |_| {
+                    if *pointed_greyed.peek() == Some(at) {
+                        pointed_greyed.set(None);
+                    }
+                })
+                .maybe(enabled_here, |row| {
+                    row.on_press(move |e: Event<PressEventData>| {
+                        e.stop_propagation();
+                        choosing(at);
+                    })
+                })
+                .into()
+            })
+        };
 
-        rect()
+        let panel = rect()
             .a11y_id(id)
             .a11y_role(AccessibilityRole::Menu)
             .a11y_focusable(true)
             .a11y_auto_focus(self.take_focus)
-            .min_width(Size::px(metrics::MENU_MIN_WIDTH))
-            .width(Size::fill_minimum())
-            .content(Content::fit())
             .font_size(metrics::BODY)
-            .on_key_down(keys)
-            .children(children)
+            .on_key_down(keys);
+        if !long {
+            let mut children: Vec<Element> = Vec::new();
+            for line in layout.lines.iter() {
+                children.push(match *line {
+                    Line::Rule => separator(),
+                    Line::Item(at) => build(at, true),
+                });
+            }
+            return panel
+                .min_width(Size::px(metrics::MENU_MIN_WIDTH))
+                .width(Size::fill_minimum())
+                .content(Content::fit())
+                .children(children);
+        }
+
+        // A long menu: a fixed width, its rows virtualised, the open submenu and the greyed
+        // reason drawn beside the view at their row's place.
+        let (_, scrolled): (i32, i32) = controller.into();
+        let top_of = |at: usize| at as f32 * metrics::MENU_ITEM + scrolled as f32;
+        let beside: Option<Element> = opened
+            .and_then(|at| {
+                let item = layout.item(&self.groups, at)?;
+                let panel = submenu_of(
+                    item,
+                    true,
+                    return_focus,
+                    &self.on_choose,
+                    id,
+                    open,
+                    sub_focused,
+                )?;
+                Some(
+                    rect()
+                        .position(Position::new_absolute().top(top_of(at) - 4.).right(-4.))
+                        .width(Size::px(0.))
+                        .height(Size::px(0.))
+                        .child(
+                            rect()
+                                .content(Content::fit())
+                                .child(MenuContainer::new().child(panel)),
+                        )
+                        .into(),
+                )
+            })
+            .or_else(|| {
+                let at = explained?;
+                let item = layout.item(&self.groups, at)?;
+                let reason = item.reason.clone()?;
+                Some(
+                    rect()
+                        .position(
+                            Position::new_absolute()
+                                .top(top_of(at) + metrics::MENU_ITEM)
+                                .left(metrics::MENU_INSET),
+                        )
+                        .width(Size::px(0.))
+                        .height(Size::px(0.))
+                        .child(reason_box(reason))
+                        .into(),
+                )
+            });
+        let rows = layout.starts.len();
+        let height = rows.min(LONG_MENU_LINES) as f32 * metrics::MENU_ITEM;
+        let data = LongRows {
+            layout: layout.clone(),
+            build: build.clone(),
+            lit,
+            opened,
+            explained,
+        };
+        panel
+            .width(Size::px(metrics::MENU_LONG_WIDTH))
+            .height(Size::px(height))
+            .child(
+                VirtualScrollView::new_with_data_controlled(data, build_line, controller)
+                    .length(rows)
+                    .item_size(metrics::MENU_ITEM)
+                    .scroll_with_arrows(false)
+                    .expanded(),
+            )
+            .maybe_child(beside)
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
+}
+
+/// What a long menu's virtualising view draws from: its lines and the row builder, with what
+/// decides which rows are drawn again.
+#[derive(Clone)]
+struct LongRows {
+    layout: Rc<Layout>,
+    build: Rc<dyn Fn(usize, bool) -> Element>,
+    lit: Option<usize>,
+    opened: Option<usize>,
+    explained: Option<usize>,
+}
+
+impl PartialEq for LongRows {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.layout, &other.layout)
+            && self.lit == other.lit
+            && self.opened == other.opened
+            && self.explained == other.explained
+    }
+}
+
+fn build_line(item: VirtualItem, data: &LongRows) -> Element {
+    let opens_group = data.layout.starts.get(item.index).copied().unwrap_or(false);
+    rect()
+        .key(item.index)
+        .width(Size::fill())
+        .height(Size::px(item.size))
+        .maybe(opens_group, |row| {
+            row.border(
+                Border::new()
+                    .fill(tones::MENU_SEPARATOR)
+                    .width(BorderWidth {
+                        top: 1.,
+                        right: 0.,
+                        bottom: 0.,
+                        left: 0.,
+                    })
+                    .alignment(BorderAlignment::Inner),
+            )
+        })
+        .child((data.build)(item.index, false))
+        .into()
+}
+
+/// The submenu `item` opens, while it is `open`: a panel of its own, to its row's right.
+fn submenu_of<T: Clone + PartialEq + 'static>(
+    item: &Item<T>,
+    open: bool,
+    return_focus: AccessibilityId,
+    on_choose: &EventHandler<T>,
+    id: AccessibilityId,
+    mut opened: State<Option<usize>>,
+    mut sub_focused: State<bool>,
+) -> Option<Element> {
+    match (&item.kind, open) {
+        (ItemKind::Submenu(groups), true) => Some(
+            Panel::new(groups.clone(), return_focus)
+                .highlight_first(*sub_focused.peek())
+                .take_focus(*sub_focused.peek())
+                .on_choose(on_choose.clone())
+                .on_back(move |()| {
+                    opened.set(None);
+                    sub_focused.set(false);
+                    id.request_focus();
+                })
+                .into(),
+        ),
+        (ItemKind::Submenu(_) | ItemKind::Choose(_), _) => None,
+    }
+}
+
+/// A greyed item's reason, in the tooltip's look.
+fn reason_box(reason: String) -> Rect {
+    rect()
+        .layer(Layer::Overlay)
+        .interactive(Interactive::No)
+        .width(Size::px(metrics::MENU_REASON_WIDTH))
+        .padding(Gaps::new(4., 10., 4., 10.))
+        .background(tones::MENU)
+        .border(
+            Border::new()
+                .width(1.)
+                .alignment(BorderAlignment::Inner)
+                .fill(tones::MENU_BORDER),
+        )
+        .child(label().text(reason).width(Size::fill()).color(tones::TEXT))
 }
 
 /// The rule between two groups, as wide as the menu's widest row: drawn by the panel's own
@@ -364,21 +627,7 @@ fn row<T>(
             )
             .width(Size::px(0.))
             .height(Size::px(0.))
-            .child(
-                rect()
-                    .layer(Layer::Overlay)
-                    .interactive(Interactive::No)
-                    .width(Size::px(metrics::MENU_REASON_WIDTH))
-                    .padding(Gaps::new(4., 10., 4., 10.))
-                    .background(tones::MENU)
-                    .border(
-                        Border::new()
-                            .width(1.)
-                            .alignment(BorderAlignment::Inner)
-                            .fill(tones::MENU_BORDER),
-                    )
-                    .child(label().text(reason).width(Size::fill()).color(tones::TEXT)),
-            )
+            .child(reason_box(reason))
     });
     let trailing = match &item.kind {
         ItemKind::Submenu(_) => Some("›".to_owned()),

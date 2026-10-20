@@ -5,13 +5,14 @@ use std::sync::Arc;
 use cairn_model::{History, HistoryRow, Oid, RefsSnapshot, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
-use crate::accelerators::{self, Action, HeldKeys};
+use crate::accelerators::{self, Action, HeldKeys, Scope};
 use crate::history::commit_row::label_room;
 use crate::history::graph_geometry::ROW_HEIGHT;
 use crate::history::ref_chips::{Chip, chips_of_row};
+use crate::history::row_menu::{RowChoice, menu_commits, row_menu};
 use crate::local_time::LocalZone;
-use crate::menu::{Item, context_menu};
-use crate::style::tones;
+use crate::menu::context_menu_over;
+use crate::style::{focus, tones};
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -64,6 +65,7 @@ pub struct HistoryList {
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     on_new_branch: EventHandler<(Oid, String)>,
+    on_copy: EventHandler<String>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
     cursor: Option<State<usize>>,
@@ -84,6 +86,7 @@ impl HistoryList {
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
             on_new_branch: EventHandler::new(|_: (Oid, String)| {}),
+            on_copy: EventHandler::new(|_: String| {}),
             row: Callback::new(row),
             controller: None,
             cursor: None,
@@ -173,6 +176,13 @@ impl HistoryList {
         self.on_new_branch = on_new_branch.into();
         self
     }
+
+    /// Copy Commit SHA or Copy Commit Info chosen — from a commit row's menu, or by the item's
+    /// copy chord with the list focused — reporting the text to put on the clipboard.
+    pub fn on_copy(mut self, on_copy: impl Into<EventHandler<String>>) -> Self {
+        self.on_copy = on_copy.into();
+        self
+    }
 }
 
 // Hand-written: `EventHandler` and `Callback` never compare equal, and their identity is stable.
@@ -223,6 +233,7 @@ struct ListData {
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     on_new_branch: EventHandler<(Oid, String)>,
+    on_copy: EventHandler<String>,
     list_id: AccessibilityId,
     cursor: State<usize>,
     focused: bool,
@@ -276,6 +287,7 @@ impl Component for HistoryList {
             on_extend: self.on_extend.clone(),
             on_reach_end: self.on_reach_end.clone(),
             on_new_branch: self.on_new_branch.clone(),
+            on_copy: self.on_copy.clone(),
             list_id,
             cursor,
             // Read from the toolkit's focus, so the rows are drawn again as it moves.
@@ -291,9 +303,7 @@ impl Component for HistoryList {
             .a11y_role(AccessibilityRole::List)
             .on_key_down(self.keyboard(cursor, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(tones::ACCENT).width(1.))
-            })
+            .border(focus::ring_when(focus()))
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                     .length(length)
@@ -318,9 +328,30 @@ impl HistoryList {
     ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
         let rows = self.rows;
         let selected = self.selected;
+        let also_selected = self.also_selected;
         let on_select = self.on_select.clone();
+        let on_copy = self.on_copy.clone();
 
         move |e: Event<KeyboardEventData>| {
+            // The copy chords choose the selection's menu item that shows them: Copy Commit SHA
+            // on Ctrl+C, Copy Commit Info on Ctrl+Shift+C, over both rows of a comparison.
+            if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+                e.stop_propagation();
+                let copied = {
+                    let held = rows.peek();
+                    let indices: Vec<usize> = [selected, also_selected]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| index_of(&held, id, *cursor.peek()))
+                        .collect();
+                    row_menu(&menu_commits(&held, &indices))
+                        .and_then(|groups| crate::menu::chosen_by(&groups, copy))
+                };
+                if let Some(RowChoice::Copy(text)) = copied {
+                    on_copy.call(text);
+                }
+                return;
+            }
             // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
             // "next commit", even while the pane that hears it does not have focus.
             if accelerators::is_chord(&e, &[]) {
@@ -391,6 +422,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let held = data.held.clone();
     let on_reach_end = data.on_reach_end.clone();
     let on_new_branch = data.on_new_branch.clone();
+    let on_copy = data.on_copy.clone();
+    let (selected, also_selected) = (data.selected, data.also_selected);
     let rows = data.rows;
     // A right-click selects its row, unless it lands in the selection already made, as Fork
     // for Windows does.
@@ -421,8 +454,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .maybe(asks_for_more, |el| {
             el.on_visible(move |_| on_reach_end.call(()))
         })
-        // A right-click selects its row, and every commit's row offers Fork's "New Branch…";
-        // a stash's row offers nothing.
+        // A right-click selects its row, unless it lands in the selection, and opens the menu
+        // over the commits selected then (`row_menu`); a stash's row offers nothing.
         .on_pointer_down(move |e: Event<PointerEventData>| {
             if e.button() != Some(MouseButton::Right) {
                 return;
@@ -432,23 +465,33 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                 right_cursor.set(index);
                 right_selects.call(id);
             }
-            let commit = match id {
-                RowId::Commit(commit) => commit,
-                RowId::Stash(_) => return,
+            // Read as the menu opens, never per frame: the pressed row by its index, and the
+            // other row of a comparison it lands in found among the loaded rows.
+            let commits = {
+                let held = rows.peek();
+                let mut indices = vec![index];
+                if in_selection {
+                    indices.extend(
+                        [selected, also_selected]
+                            .into_iter()
+                            .flatten()
+                            .filter(|other| *other != id)
+                            .filter_map(|other| held.position(other)),
+                    );
+                }
+                menu_commits(&held, &indices)
             };
-            let on_new_branch = on_new_branch.clone();
-            // Read by index as the menu opens, never per frame. No wildcard arm.
-            let subject = rows
-                .peek()
-                .row(index)
-                .map(|row| match row.content() {
-                    RowContent::Commit(commit) => commit.summary,
-                    RowContent::Stash(stash) => stash.message,
-                })
-                .unwrap_or_default();
-            ContextMenu::open_from_down(context_menu(
-                vec![vec![Item::new(NEW_BRANCH_CAPTION, ())]],
-                move |()| on_new_branch.call((commit, subject.clone())),
+            let Some(groups) = row_menu(&commits) else {
+                return;
+            };
+            let (on_new_branch, on_copy) = (on_new_branch.clone(), on_copy.clone());
+            ContextMenu::open_from_down(context_menu_over(
+                groups,
+                list_id,
+                move |choice: RowChoice| match choice {
+                    RowChoice::NewBranch(commit, subject) => on_new_branch.call((commit, subject)),
+                    RowChoice::Copy(text) => on_copy.call(text),
+                },
             ));
         })
         .child(drawn)

@@ -69,6 +69,8 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         // Heard only in their own scopes — Local Changes' lists and diff, the commit box — by
         // the view that has focus there, never by the window.
         Action::StageOrUnstage | Action::StageOrUnstageAll | Action::Discard | Action::Commit => {}
+        // Heard by the focused list alone, which chooses its own menu's item showing the chord.
+        Action::Copy | Action::CopyFull => {}
         // Fork's New Branch, at `HEAD`, wherever focus is.
         Action::NewBranch => crate::operations::create_branch::open_at_head(view),
         // Read again on the worker; the window only asks.
@@ -78,9 +80,7 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
             }
         }
         Action::ShowLostCommits => crate::history::lost_commits::toggle(view, submit),
-        Action::ShowLocalChanges => {
-            crate::history::selection::show_main(MainView::LocalChanges, view, submit);
-        }
+        Action::ShowLocalChanges => crate::history::selection::focus_local_changes(view, submit),
         Action::ShowAllCommits => {
             crate::history::selection::show_main(MainView::AllCommits, view, submit);
         }

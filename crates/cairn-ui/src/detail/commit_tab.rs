@@ -38,9 +38,12 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Lane, Oid, Signature};
 use freya::prelude::*;
 
+use crate::push_button::{ButtonSize, PushButton};
+
 use crate::accelerators;
 use crate::avatar::{AvatarSize, avatar_of};
 use crate::detail::expansion::{Expansion, Item, Opened};
+use crate::detail::file_menu::{FileChoice, FileMenuIn, open_file_menu};
 use crate::detail::message_lines;
 use crate::diff::header::HIDDEN_CHANGES_NOTICE;
 use crate::diff::notice::{DiffNotice, NoticeRow, NoticeTone, grouped, notice_rows};
@@ -51,7 +54,7 @@ use crate::diff::view::{RowGeometry, draw_row};
 use crate::history::date_text;
 use crate::history::ref_chips::{Chip, chips_row};
 use crate::local_time::LocalZone;
-use crate::style::{icons, metrics, tones};
+use crate::style::{focus, icons, metrics, tones};
 
 /// A row of the Changes tab's file list and of Local Changes' lists.
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
@@ -361,6 +364,7 @@ pub struct CommitTab {
     on_file_pressed: EventHandler<usize>,
     on_expand_all: EventHandler<bool>,
     on_load: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     key: DiffKey,
 }
 
@@ -377,6 +381,7 @@ impl CommitTab {
             on_file_pressed: EventHandler::new(|_| {}),
             on_expand_all: EventHandler::new(|_| {}),
             on_load: EventHandler::new(|_| {}),
+            on_file_menu: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -440,6 +445,17 @@ impl CommitTab {
         self.on_load = on_load.into();
         self
     }
+
+    /// A file's menu item was chosen from the menu a right press on its row opens, which first
+    /// makes it the current file without opening or closing it, by the file's index in the
+    /// change set.
+    pub fn on_file_menu(
+        mut self,
+        on_file_menu: impl Into<EventHandler<(usize, FileChoice)>>,
+    ) -> Self {
+        self.on_file_menu = on_file_menu.into();
+        self
+    }
 }
 
 // Hand-written: `EventHandler` never compares equal, and its identity is stable.
@@ -482,6 +498,7 @@ struct TabContent {
     on_file_pressed: EventHandler<usize>,
     on_expand_all: EventHandler<bool>,
     on_load: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     /// The tab's focus target, which a pressed row takes.
     tab_id: AccessibilityId,
 }
@@ -563,9 +580,7 @@ impl Component for TabBody {
             .a11y_role(AccessibilityRole::List)
             .on_key_down(keyboard(&data, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(tones::ACCENT).width(1.))
-            })
+            .border(focus::ring_when(focus()))
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                     .length(length)
@@ -581,7 +596,8 @@ impl Component for TabBody {
     }
 }
 
-/// ↑ and ↓ over the files; every other key, and every chord, is left unhandled.
+/// ↑ and ↓ over the files; every other key, and every chord, is left unhandled — the copy
+/// chords too, which Fork's Commit tab menu shows none of.
 fn keyboard(
     data: &TabData,
     mut controller: ScrollController,
@@ -645,6 +661,7 @@ impl Component for CommitTab {
             on_file_pressed: self.on_file_pressed.clone(),
             on_expand_all: self.on_expand_all.clone(),
             on_load: self.on_load.clone(),
+            on_file_menu: self.on_file_menu.clone(),
             tab_id,
         };
 
@@ -708,6 +725,7 @@ fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     };
     let open = content.expansion.read().is_open(index);
     let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
+    let mut right_cursor = data.cursor;
     let on_file_pressed = content.on_file_pressed.clone();
     // Turned horizontal, the row's main axis is its width, where the centring `build_row`
     // gives a vertical row would put the file in the middle of the pane: it starts at its
@@ -725,6 +743,21 @@ fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
             cursor.set(Some(index));
             on_file.call(index);
             on_file_pressed.call(index);
+        })
+        // A right press makes the file current, opening or closing nothing, and opens its menu.
+        .on_pointer_down({
+            let (on_file, on_file_menu) = (content.on_file.clone(), content.on_file_menu.clone());
+            move |e: Event<PointerEventData>| {
+                if e.button() != Some(MouseButton::Right) {
+                    return;
+                }
+                tab_id.request_focus();
+                if !current {
+                    right_cursor.set(Some(index));
+                    on_file.call(index);
+                }
+                open_file_menu(FileMenuIn::CommitTab, tab_id, index, on_file_menu.clone());
+            }
         })
         .child(if open {
             icons::chevron_down
@@ -775,10 +808,11 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
                             .main_align(Alignment::Center)
                             .padding(Gaps::new(0., PADDING, 0., PADDING))
                             .child(
-                                Button::new()
-                                    .compact()
-                                    .on_press(move |_| on_load.call(file))
-                                    .child(crate::diff::notice::LOAD_DIFF_CAPTION),
+                                PushButton::caption(
+                                    crate::diff::notice::LOAD_DIFF_CAPTION,
+                                    ButtonSize::Compact,
+                                )
+                                .on_press(move || on_load.call(file)),
                             )
                             .into()
                     }
@@ -896,14 +930,7 @@ impl Component for ExpandAll {
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::Button)
             .cursor(CursorIcon::Pointer)
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(
-                    Border::new()
-                        .fill(tones::ACCENT)
-                        .width(1.)
-                        .alignment(BorderAlignment::Inner),
-                )
-            })
+            .border(focus::ring_when(focus()))
             .on_press(move |_| on_expand_all.call(!any_open))
             .child(text(
                 if any_open {

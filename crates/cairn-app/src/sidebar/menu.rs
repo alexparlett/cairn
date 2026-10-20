@@ -95,8 +95,7 @@ pub fn chosen(row: SidebarRow, choice: RefChoice, view: View) {
 }
 
 fn copy(text: String) {
-    // A clipboard the platform does not offer copies nothing; there is nothing to lose.
-    let _ = freya::clipboard::Clipboard::set(text);
+    crate::clipboard::copy(text);
 }
 
 #[cfg(test)]

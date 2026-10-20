@@ -17,8 +17,9 @@ use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::dialogs::answer_button::{AnswerColours, answer};
+use crate::dialogs::answer_button::{Answer, answer};
 use crate::dialogs::button_order::ordered;
+use crate::dialogs::frame;
 
 use crate::style::{metrics, tones};
 use crate::text_field::text_field;
@@ -97,11 +98,12 @@ impl Component for CredentialPrompt {
     fn render(&self) -> impl IntoElement {
         let mut typed = use_state(String::new);
         let cancel_id = use_a11y();
+        let primary_id = use_a11y();
         let kind = PromptKind::of(&self.text);
         let secondary = tones::DETAIL_LABEL;
 
         let on_cancel = self.on_cancel.clone();
-        let cancel = move |_| on_cancel.call(());
+        let cancel = EventHandler::new(move |()| on_cancel.call(()));
         let on_submit = self.on_submit.clone();
         let submit = EventHandler::new(move |()| {
             // Moved out, not cloned: the buffer that held the characters is the one
@@ -110,7 +112,7 @@ impl Component for CredentialPrompt {
             on_submit.call(answer);
         });
         let on_accept = self.on_submit.clone();
-        let accept = move |_| on_accept.call(PromptKind::ACCEPTED.to_owned());
+        let accept = move || on_accept.call(PromptKind::ACCEPTED.to_owned());
 
         // ssh's host-key question opens on Cancel, the safe answer, so a Return or Space
         // pressed by habit declines; a field's prompt opens in its field.
@@ -125,14 +127,14 @@ impl Component for CredentialPrompt {
             cancel_id,
             "Cancel".to_owned(),
             kind == PromptKind::Confirmation,
-            &AnswerColours::of_theme(),
+            Answer::Other,
             {
                 let on_cancel = self.on_cancel.clone();
                 move || on_cancel.call(())
             },
         );
         let primary: Element;
-        let mut content = PopupContent::new().child(
+        let mut content = frame::content().child(
             label()
                 .text(asking(kind, &self.text))
                 .width(Size::fill())
@@ -156,11 +158,14 @@ impl Component for CredentialPrompt {
                     .font_size(metrics::BODY)
                     .color(secondary),
             );
-            primary = Button::new()
-                .filled()
-                .on_press(accept)
-                .child("Yes, connect")
-                .into();
+            primary = answer(
+                identity,
+                primary_id,
+                "Yes, connect".to_owned(),
+                false,
+                Answer::Primary,
+                accept,
+            );
         } else {
             content = content
                 .child(
@@ -170,7 +175,6 @@ impl Component for CredentialPrompt {
                         .font_size(metrics::BODY)
                         .color(secondary),
                 )
-                // The field's text at the body's size, not the 15 px `PopupContent` sets.
                 .child(
                     rect().width(Size::fill()).font_size(metrics::BODY).child(
                         text_field(typed)
@@ -187,25 +191,31 @@ impl Component for CredentialPrompt {
                             }),
                     ),
                 );
-            primary = Button::new()
-                .filled()
-                .on_press(move |_| submit.call(()))
-                .child("Continue")
-                .into();
+            primary = answer(
+                identity,
+                primary_id,
+                "Continue".to_owned(),
+                false,
+                Answer::Primary,
+                move || submit.call(()),
+            );
         }
         // In the platform's order.
-        let buttons =
-            PopupButtons::new().children(ordered(self.platform, vec![primary], cancel_button));
+        let buttons = frame::buttons(ordered(self.platform, vec![primary], cancel_button));
 
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(cancel)
-            .child(PopupTitle::new(format!(
-                "{} is asking for a credential",
-                self.remote
-            )))
-            .child(content)
-            .child(buttons)
+        frame::framed(
+            DIALOG_WIDTH,
+            cancel,
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::Dialog)
+                .child(frame::title(format!(
+                    "{} is asking for a credential",
+                    self.remote
+                )))
+                .child(content)
+                .child(buttons),
+        )
     }
 
     fn render_key(&self) -> DiffKey {

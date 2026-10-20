@@ -208,6 +208,9 @@ fn commit_body(
                 .on_load(move |index: usize| {
                     diff::actions::load_in_place(index, view, loading.as_deref());
                 })
+                .on_file_menu(move |(index, choice): (usize, cairn_ui::FileChoice)| {
+                    crate::detail::file_copy::chosen(view, index, choice);
+                })
                 .into()
         }
     }

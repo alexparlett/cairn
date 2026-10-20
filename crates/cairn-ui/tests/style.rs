@@ -81,6 +81,8 @@ fn the_style_module_holds_forks_metrics_and_fork_darks_tones() {
         ("Menu chord text", tones::MENU_CHORD, "#9A9797"),
         ("Dialog", tones::DIALOG, "#2B2B2B"),
         ("Dialog, border", tones::DIALOG_BORDER, "#3BACED"),
+        ("Dialog title", tones::DIALOG_TITLE, "#FFFFFF"),
+        ("Dialog text", tones::DIALOG_TEXT, "#CAC6C6"),
         ("Text field, focused", tones::ACCENT, "#0078D7"),
         ("Button", tones::BUTTON, "#373737"),
         ("Button, border", tones::BUTTON_BORDER, "#525252"),

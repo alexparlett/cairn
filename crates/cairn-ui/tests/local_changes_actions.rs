@@ -16,9 +16,10 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, HeldKeys, Os};
 use cairn_ui::{
-    COPY_PATH_CAPTION, DISCARD_CAPTION, LIST_HEADER_HEIGHT, LOCAL_CHANGES_ROW_HEIGHT, ListIntent,
-    LocalChangesList, LocalSelection, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
-    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, UNSTAGED_CAPTION,
+    COPY_FULL_PATH_CAPTION, COPY_PATH_CAPTION, DISCARD_CAPTION, LIST_HEADER_HEIGHT,
+    LOCAL_CHANGES_ROW_HEIGHT, ListIntent, LocalChangesList, LocalSelection, STAGE_ALL_CAPTION,
+    STAGE_CAPTION, STAGED_CAPTION, ShownFiles, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION,
+    UNSTAGED_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -535,13 +536,12 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     );
 }
 
-/// An unstaged row's menu offers Stage, Discard Changes…, Stage All and Copy Path, each closing
-/// the menu as it is chosen; a submodule's and a conflicted row's offer Stage and their Discard
-/// greyed, saying why in its tooltip; a staged row's offers Unstage, Unstage All and Copy Path,
-/// and its Discard greyed with "Staged changes can't be discarded. Unstage them first." as its
-/// tooltip. A right-press on an unselected row chooses it first. Caught by: a discard offered on
-/// Staged, for a submodule or a conflict, a reason missing, or a menu left open after its item
-/// was chosen.
+/// An unstaged row's menu offers Stage, Discard Changes…, Stage All, Copy Path and Copy Full
+/// Path, each closing the menu as it is chosen; a submodule's and a conflicted row's offer Stage
+/// and their Discard greyed, saying why in its tooltip; a staged row's offers Unstage, Unstage
+/// All and the two copies, and no discard at all, as Fork's staged menu has none. A right-press
+/// on an unselected row chooses it first. Caught by: a discard offered on Staged, for a submodule
+/// or a conflict, a reason missing, or a menu left open after its item was chosen.
 #[test]
 fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let (mut test, _, log) = launch(lists());
@@ -617,25 +617,14 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let drawn = texts(&test);
     assert!(drawn.iter().any(|t| t == UNSTAGE_CAPTION));
     assert!(drawn.iter().any(|t| t == UNSTAGE_ALL_CAPTION));
-    let drawn = said_over_discard(&mut test);
+    // Fork's staged menu has no discard at all (FS1 §8, uv15), and both copies.
     assert!(
-        drawn
-            .iter()
-            .any(|t| t == "Staged changes can't be discarded. Unstage them first."),
-        "a staged row's menu does not say why: {drawn:?}"
+        !drawn.iter().any(|t| t == DISCARD_CAPTION),
+        "a staged row's menu offers a discard: {drawn:?}"
     );
-    let disabled = labels(&test)
-        .into_iter()
-        .rfind(|(text, ..)| text == DISCARD_CAPTION)
-        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y)))
-        .expect("the staged row's greyed Discard Changes…");
-    test.click_cursor(disabled);
-    test.sync_and_update();
     assert!(
-        heard(&log)
-            .iter()
-            .all(|heard| !matches!(heard, Heard::Intent(ListIntent::Act(_, Action::Discard)))),
-        "a staged row's greyed discard acted"
+        drawn.iter().any(|t| t == COPY_FULL_PATH_CAPTION),
+        "{drawn:?}"
     );
     let copy = at(&test, COPY_PATH_CAPTION);
     test.click_cursor(copy);

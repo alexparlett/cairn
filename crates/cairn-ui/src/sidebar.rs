@@ -31,8 +31,8 @@ use freya::prelude::*;
 
 use crate::accelerators::Action;
 use crate::history::list::NEW_BRANCH_CAPTION;
-use crate::menu::{Item, context_menu};
-use crate::style::{icons, metrics, tones};
+use crate::menu::{Item, context_menu, context_menu_over};
+use crate::style::{focus, icons, metrics, tones};
 use crate::text_field::text_field;
 
 pub(crate) mod keys;
@@ -453,10 +453,7 @@ impl Component for Sidebar {
                             .on_press(move |_| {
                                 let on_gear = on_gear.clone();
                                 ContextMenu::open(context_menu(
-                                    vec![vec![Item::new(
-                                        COPY_REPOSITORY_PATH_CAPTION,
-                                        GearChoice::CopyRepositoryPath,
-                                    )]],
+                                    gear_menu(),
                                     move |choice: GearChoice| on_gear.call(choice),
                                 ));
                             })
@@ -498,6 +495,7 @@ impl Component for Sidebar {
             chosen: self.chosen.clone(),
             shown: self.shown.clone(),
             on_row: self.on_row.clone(),
+            on_ref_menu: self.on_ref_menu.clone(),
             controller,
         });
 
@@ -508,9 +506,7 @@ impl Component for Sidebar {
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::List)
             .on_key_down(on_key)
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(tones::ACCENT).width(1.))
-            })
+            .border(focus::ring_when(focus()))
             .padding(Gaps::new(4., 0., 0., 0.))
             .child(header)
             .child(entry(
@@ -746,6 +742,14 @@ pub fn drawn_row(
     })
 }
 
+/// The gear's menu: Copy Repository Path alone, the one item of Fork's gear that works.
+pub fn gear_menu() -> Vec<Vec<Item<GearChoice>>> {
+    vec![vec![Item::new(
+        COPY_REPOSITORY_PATH_CAPTION,
+        GearChoice::CopyRepositoryPath,
+    )]]
+}
+
 /// The menu a right press on `row` opens: a branch's or a remote-tracking ref's New Branch… and
 /// Copy Branch Name, a tag's New Branch… and Copy Tag Name (FS1 §8, the items that work); a
 /// stash, a detached `HEAD`, a folder and a heading open none. New Branch… is greyed on a ref
@@ -772,7 +776,7 @@ pub fn ref_menu(row: SidebarRow, refs: &RefsSnapshot) -> Option<Vec<Vec<Item<Ref
                 .chord(Action::NewBranch)
                 .greyed(no_commit),
         ],
-        vec![Item::new(copy, RefChoice::CopyName)],
+        vec![Item::new(copy, RefChoice::CopyName).chord(Action::Copy)],
     ])
 }
 
@@ -917,9 +921,11 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
             return;
         };
         let on_ref_menu = on_ref_menu.clone();
-        ContextMenu::open_from_down(context_menu(groups, move |choice: RefChoice| {
-            on_ref_menu.call((sidebar_row, choice));
-        }));
+        ContextMenu::open_from_down(context_menu_over(
+            groups,
+            sidebar_id,
+            move |choice: RefChoice| on_ref_menu.call((sidebar_row, choice)),
+        ));
     })
     .child(band)
     .into()

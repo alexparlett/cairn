@@ -44,7 +44,8 @@ use crate::accelerators::{Action, FieldScope, RecallStep};
 use crate::bar_button::BarButton;
 use crate::diff::palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
 use crate::menu::{Item, context_menu};
-use crate::style::{icons, metrics, tones};
+use crate::push_button::{ButtonSize, PushButton};
+use crate::style::{focus, icons, metrics, tones};
 use crate::text_field::{field_part, text_field_in, text_field_recalling};
 use crate::toolbar::COMES_WITH_PULL_AND_PUSH;
 
@@ -551,53 +552,6 @@ fn ruler_x() -> f32 {
     FIELD_MARGIN + RULER_COLUMN as f32 * MONO_ADVANCE_EM * DESCRIPTION_FONT_SIZE
 }
 
-/// A plain button: named for assistive technology, pressed by the pointer or, focused, by
-/// Return or Space; disabled, it does nothing and is not focusable.
-fn control(caption: String, name: String, enabled: bool, pressed: impl Fn() + 'static) -> Element {
-    let control = rect()
-        .a11y_role(AccessibilityRole::Button)
-        .a11y_alt(name)
-        .a11y_focusable(enabled)
-        .padding(Gaps::new(5., 14., 5., 14.))
-        .corner_radius(6.)
-        .border(
-            Border::new()
-                .fill(if enabled {
-                    tones::BUTTON_BORDER
-                } else {
-                    tones::DISABLED_BORDER
-                })
-                .width(1.)
-                .alignment(BorderAlignment::Inner),
-        )
-        .background(if enabled {
-            tones::BUTTON
-        } else {
-            tones::DISABLED_FILL
-        })
-        .child(
-            label()
-                .text(caption)
-                .font_size(metrics::BODY)
-                .color(if enabled {
-                    tones::TEXT
-                } else {
-                    tones::DISABLED_TEXT
-                }),
-        );
-    if enabled {
-        control
-            .cursor(CursorIcon::Pointer)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                pressed();
-            })
-            .into()
-    } else {
-        control.into()
-    }
-}
-
 /// The Amend toggle: a check box to assistive technology, its toggled state set, pressed by
 /// the pointer or, focused, by Space or Return.
 fn amend_toggle(ticked: bool, enabled: bool, on_amend: EventHandler<bool>) -> Element {
@@ -637,37 +591,44 @@ fn split_button(caption: String, enabled: bool, pressed: impl Fn() + 'static) ->
     } else {
         tones::DISABLED_BORDER
     };
-    let main = rect()
-        .a11y_role(AccessibilityRole::Button)
-        .a11y_alt(caption.clone())
-        .a11y_focusable(enabled)
-        .height(Size::fill())
-        .main_align(Alignment::Center)
-        .padding(Gaps::new(0., 10., 0., 10.))
-        .background(if enabled {
-            tones::BUTTON
-        } else {
-            tones::DISABLED_FILL
-        })
-        .child(
-            label()
-                .text(caption)
-                .font_size(metrics::BODY)
-                .color(if enabled {
-                    tones::TEXT
-                } else {
-                    tones::DISABLED_TEXT
-                }),
-        );
-    let main = if enabled {
-        main.cursor(CursorIcon::Pointer)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                pressed();
+    let pressed = std::rc::Rc::new(pressed);
+    let main = focus::ringed(move |id, ring| {
+        let main = rect()
+            .a11y_id(id)
+            .a11y_role(AccessibilityRole::Button)
+            .a11y_alt(caption.clone())
+            .a11y_focusable(enabled)
+            .height(Size::fill())
+            .main_align(Alignment::Center)
+            .padding(Gaps::new(0., 10., 0., 10.))
+            .border(ring)
+            .background(if enabled {
+                tones::BUTTON
+            } else {
+                tones::DISABLED_FILL
             })
-    } else {
-        main
-    };
+            .child(
+                label()
+                    .text(caption.clone())
+                    .font_size(metrics::BODY)
+                    .color(if enabled {
+                        tones::TEXT
+                    } else {
+                        tones::DISABLED_TEXT
+                    }),
+            );
+        if enabled {
+            let pressed = pressed.clone();
+            main.cursor(CursorIcon::Pointer)
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    pressed();
+                })
+                .into()
+        } else {
+            main.into()
+        }
+    });
     let options = TooltipContainer::new(Tooltip::new_text(COMMIT_OPTIONS_TOOLTIP)).child(
         rect()
             .a11y_role(AccessibilityRole::Button)
@@ -737,12 +698,10 @@ fn busy_place(busy: Busy, on_cancel: EventHandler<()>) -> Element {
             .cross_align(Alignment::Center)
             .spacing(8.)
             .child(Elapsed { verb, started }.into_element())
-            .child(control(
-                CANCEL_COMMIT_CAPTION.to_owned(),
-                CANCEL_COMMIT_CAPTION.to_owned(),
-                true,
-                move || on_cancel.call(()),
-            ))
+            .child(
+                PushButton::caption(CANCEL_COMMIT_CAPTION, ButtonSize::Dialog)
+                    .on_press(move || on_cancel.call(())),
+            )
             .into(),
     }
 }

@@ -89,9 +89,35 @@ as the menu opened. Pinned by `a_menu_is_drawn_from_its_data`,
 `a_menu_hears_its_keys_bare_and_leaves_the_modifiers_to_the_window` (the table).
 
 `menu::context_menu` builds a context menu from groups for Freya's `ContextMenu`, its first item
-highlighted. The three context menus are built by it: a commit row's "New Branch…"
-(`history::list`), Local Changes' (`local_changes::menu`) and the commit box's Recent Commit
-Messages (`commit_box`). A menu is not virtualized: none today holds more than ten items.
+highlighted, handing focus back to what held it as the menu opened; `menu::context_menu_over`
+names that view itself, for a list that asked for focus in the same press that opens its menu.
+Every context menu is built by them: a commit row's (`history::row_menu`), a commit's file's in
+the Commit and Changes tabs (`detail::file_menu`), a ref's and the gear's in the sidebar, Local
+Changes' (`local_changes::menu`), the commit box's Recent Commit Messages and the bar's View
+Mode. Each row's items are Fork's that work, in Fork's groups and beside Fork's chords
+(`docs/systems/sidebar.md`, `local-changes.md`, `history-graph.md`; pinned whole as data by
+`every_context_menu_holds_its_rows_working_items`, `crates/cairn-ui/tests/context_menus.rs`).
+
+**The copy chords.** Copy (Ctrl+C, ⌘C) and Copy Full (Ctrl+Shift+C, ⇧⌘C) are heard by a focused
+list with a context menu alone (`Scope::List`): the history, the sidebar, the Changes tab's files
+and Local Changes' lists. The list builds its menu for what it holds selected and chooses the
+item showing the chord (`menu::chosen_by`), so the chord a menu shows and the key are one source;
+an item that shows neither, or a list with nothing selected, copies nothing. No text field is in
+that scope, so a field's Ctrl+C is the editor's own copy (`field_key`). What is copied is Fork's
+(`docs/research/ui-review/fork-copy-and-dialogs-2026-10-20.md`): a commit's full id, or its seven-
+character id, " - " and its subject (`commit_sha_text`, `commit_info_text`), each selected commit
+one line, the upper row first; a ref's name past its namespace; a path as git writes it, or that
+path joined to the repository's root (`crate::clipboard::full_path`), one per line in the lists'
+order. The window writes the clipboard in one place, `crates/cairn-app/src/clipboard.rs`. Pinned by
+`copy_and_copy_full_copy_what_the_focused_view_names` (the window), `the_copy_chord_copies_the_walked_refs_name`,
+`a_files_menu_and_the_copy_chords_choose_its_copies` and the table's tests.
+
+**A long menu** — more than `LONG_MENU_LINES` lines, items and rules — stands that many rows
+tall at a fixed width (`metrics::MENU_LONG_WIDTH`) and draws its rows through a virtualizing view
+of one row height, each group's rule along the top of its first row; ↑ and ↓ scroll the item
+reached into view, and an open submenu or a greyed item's reason is drawn beside the view at its
+row. Every menu's items are laid out once, as its panel is made, and read by index
+(`a_long_menu_builds_one_viewport`). No menu today is that long.
 
 ## The menu bar
 

@@ -92,8 +92,11 @@ Branch…** then **Copy Branch Name**, a tag's **New Branch…** then **Copy Tag
 items, New Branch… greyed on a tag that names no commit. New Branch… opens Create Branch at the
 ref's commit, its subject the loaded row's (`sidebar::menu::chosen`); Copy puts the ref's name past
 its namespace on the clipboard — `feature/login`, `origin/main`, `v0.2` — as Fork's copies
-(`sidebar::menu::ref_name_text`, sb84-sb86). A right press on a stash or a detached `HEAD` chooses
-it and opens nothing; on a heading or folder it does nothing.
+(`sidebar::menu::ref_name_text`, sb84-sb86). Copy Branch Name and Copy Tag Name show Copy's
+chord, and with the sidebar focused on a ref the chord copies its name, as Fork's Ctrl+C does;
+Copy Full's chord, which no ref's menu shows, copies nothing (fork-copy-and-dialogs §3,
+`the_copy_chord_copies_the_walked_refs_name`). A right press on a stash or a detached `HEAD`
+chooses it and opens nothing; on a heading or folder it does nothing.
 
 ## Where its rows are laid out
 
@@ -280,8 +283,6 @@ page asked.
 - New Branch… from a ref opens Create Branch at the ref's commit, its short id and subject in
   "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82). No requirement
   asks for it yet.
-- Copy Branch Name and Copy Tag Name show no chord: Fork's Ctrl+C is the `Copy` action, still
-  to come with the focused view's copy items (`docs/prd/fork-alignment.md` R10.1).
 - Pressing All Commits does not move focus to the history, where Fork's does (sb73). No
   requirement asks for it yet.
 - `docs/prd/fork-alignment.md` C14 and R10.3 ask for Return to open Local Changes or All

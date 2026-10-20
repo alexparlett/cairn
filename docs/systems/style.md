@@ -62,8 +62,8 @@ tables to the module's value.
   table names (`the_launch_theme_carries_fork_darks_tones_into_freyas_components`).
 - **The body size** is set once at the window's root (`crates/cairn-app/src/window.rs`), so a
   text given no size of its own — a menu's, a button's — is 12 px, never Freya's 16 px
-  default. Freya's dialog parts set their own (`PopupTitle` 18 px, `PopupContent` 15 px): a
-  label inside them is given the body's size where it is built.
+  default. No dialog draws Freya's `PopupTitle` or `PopupContent`, which set 18 px and 15 px:
+  each is framed by `dialogs::frame` (below).
 - **The diff's palette** (`diff::palette`) reads its ground, bands, changed word, hunk header
   and bar from the tones (`docs/systems/diff.md`, "Colours and typeface").
 
@@ -79,6 +79,36 @@ and nothing else: the history (`HistoryList`, through `RowRender::focused` to
 Local Changes' lists, the Changes tab's files and the Commit tab's file rows. A list takes focus
 from a press on one of its rows; the history also as the window opens.
 `a_selection_is_blue_while_its_list_has_focus_and_grey_when_not` holds the five lists to it.
+
+## Focus at every stop
+
+Every focusable control shows keyboard focus by one treatment, `style::focus`: a 1 px ring in
+Fork's blue (`focus::ring`), drawn while focus came by the keyboard (`focus::shown`), so a press
+focuses a control without a ring, as Fork's do. A list draws it round itself and shows focus by
+its selection's tone as well; a bordered button draws it inset, `focus::RING_INSET` inside its
+own border, as Fork draws its focus rectangle, so a dialog's default button — bordered in the
+same blue — still shows focus apart; a control drawn by a plain function (a check box, a radio,
+the Commit button's caption) takes it through `focus::ringed`. A text field shows focus as the
+toolkit's `Input` does, its border and an outer ring in the same blue (the theme's `input` and
+`flat_input`), two pixels each, which `Input` does not let a theme narrow. Fork draws no ring on a
+list and a dashed one on a dialog's button (`fork-copy-and-dialogs-2026-10-20.md` §6-7); the ring
+at every stop is a `ui.md` row. Pinned by `every_tab_stop_shows_focus` (the window, All Commits and
+Local Changes) and `every_dialogs_tab_stop_shows_focus`, each walking Tab until it comes round and
+requiring a mark to appear inside each stop as focus reaches it (`tests/support/focus_marks.rs`).
+
+## Buttons and dialogs
+
+Every push button is one component, `PushButton` (`crates/cairn-ui/src/push_button.rs`): Fork Dark's
+`#373737` in a 1 px `#525252` border, greyed in the disabled tones, and a dialog's default answer
+— its primary — bordered in Fork's blue `#0078D7` rather than filled, as Fork's default button is
+(cp60-cp76). Every dialog is framed by `dialogs::frame`: a square `#2B2B2B` ground in a 1 px
+`#3BACED` border over the toolkit's shade, the title white and bold at the heading's size
+(`tones::DIALOG_TITLE`), the body Fork's `#CAC6C6` at the body's (`tones::DIALOG_TEXT`); the launch
+theme's popup is a bare holder, its ground, padding and rounding drawn over by the frame. Fork's
+logo and ✕ are not drawn. Pinned by `every_dialogs_primary_button_is_forks_default_in_forks_frame`
+(`crates/cairn-ui/tests/dialog_buttons.rs`): the confirmation, Create Branch, the credential
+prompt and About Cairn each with its primary bordered in blue and its other answers in grey, the
+Git Error dialog with no default, as Fork's has none.
 
 ## Held by
 

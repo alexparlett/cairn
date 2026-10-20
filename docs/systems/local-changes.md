@@ -228,7 +228,7 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
 - a double press on a row — the first press makes the row the selection, and the double press
   acts on the selection, so it stages that row;
 - the table's chords on either focused list: Enter, Ctrl+S or Ctrl+Shift+S (Return or ⌘S) on
-  the selection, wherever it is, and, for the list heard, Ctrl+Alt+Shift+S (⌥⇧⌘S) — heard by
+  the selection, wherever it is, and, for the list heard, Ctrl+Shift+Alt+S (⌥⇧⌘S) — heard by
   the lists' own key handler (`Scope::LocalChanges`, and the bare Enter from
   `Scope::LocalChangesLists`, the lists' alone) and, but for Enter, the diff's, so nowhere else,
   and never from a text field, which keeps Enter and Backspace;
@@ -253,10 +253,14 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   Unstage All only while Shift is held). The
   heading press is told apart from a row's: Shift on a row is still the range press, and a held
   Alt does nothing on Linux;
-- the context menu (`local_changes::menu`, drawn by the one menu component, `cairn_ui::menu`):
-  Stage or Unstage, Discard Changes… (greyed on the staged side, its reason drawn under it
-  while the pointer is on it), Stage All or Unstage All, Copy Path; a right-press on a row
-  outside the selection chooses it first; each item closes the menu as it is chosen.
+- the context menu (`local_changes::menu_groups`, drawn by the one menu component,
+  `cairn_ui::menu`), in Fork's groups and beside Fork's chords (FS1 §8, uv14 and uv15): on the
+  unstaged side Stage and Discard Changes… (greyed with its reason, drawn under it while the
+  pointer is on it, where nothing selected can be discarded), then Stage All, then Copy Path and
+  Copy Full Path; on the staged side Unstage, then Unstage All, then the two copies, and no
+  discard, as Fork's staged menu has none. A right-press on a row outside the selection chooses
+  it first; each item closes the menu as it is chosen and gives focus back to the list. With a
+  list focused, Copy's and Copy Full's chords choose its copies for the selection in it.
 
 Stage All and Unstage All ask `LocalWrite::StageAll` or `LocalWrite::UnstageAll` with the
 lists drawn, shared, and — with a filter on — the rows it shows (the user's decision,
@@ -837,10 +841,8 @@ typed, the arrows are the editor's.
   next press — but a press on another view's text field (the sidebar's filter) is not heard,
   since the field cancels the global pointer-down as it takes it, so a release over the other
   list after it still drops.
-- The menu offers Stage or Unstage, Discard Changes…, Stage All or Unstage All and Copy Path:
-  Fork's Open, External Diff, Show in Files, Blame, History, Ignore, LFS, Stash and Save as
-  Patch are not built; its items name no chord, since a chord spelled in a label is a modifier
-  named in a component; nothing opens the menu from the keyboard.
+- The menu offers Fork's working items: its Open, External Diff, Show in Files, Blame, History,
+  Ignore, LFS, Stash and Save as Patch are not built; nothing opens the menu from the keyboard.
 - A submodule's row offers no discard (Fork's Discard Submodule Changes) and says why; a
   nested repository among untracked rows is left as it is, where Fork deletes it and its
   history (the user's decision of 2026-10-10); the confirmation's default is Cancel

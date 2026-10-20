@@ -2243,8 +2243,9 @@ turns `.` into `>`), or by a primary pointer press.
 
 A chord is spelled for a person in one place, from this data: `accelerators::chord_name(action,
 os)` (`crates/cairn-ui/src/accelerators/chord_names.rs`, the user's decision)
-renders an action's first chord as Fork's own lists write it — on Linux Fork's Windows form,
-`Ctrl+Alt+Shift+S`, held keys in that order joined by `+`; on macOS the symbols run together,
+renders an action's first chord as Fork's own menus write it — on Linux Fork for Windows' form,
+`Ctrl+Shift+Alt+S` (its Local Changes menu's Stage All, FS1 §8), held keys in that order joined
+by `+`; on macOS the symbols run together,
 `⌘⌥⇧S`, `⌘Return`, `⌫` — and `None` for a press or an action with none
 (`a_chord_is_named_from_the_table_as_forks_lists_write_it`). Show Lost Commits' check box shows
 it as its tooltip. It is the one render file the modifier guard lets spell a chord, each of its
@@ -2263,8 +2264,9 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | extend Local Changes' list selection up / down | Shift+↑ / Shift+↓ | Shift+↑ / Shift+↓ | in Local Changes' lists |
 | Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
 | stage or unstage the selection | Enter; Ctrl+S, Ctrl+Shift+S | Return; ⌘S | Enter and Return in Local Changes' lists alone; the rest in its lists and diff |
-| stage all or unstage all | Ctrl+Alt+Shift+S; Shift+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
-| discard the selection | Backspace, Delete | ⌫, ⇧⌘D | in Local Changes' lists and diff |
+| stage all or unstage all | Ctrl+Shift+Alt+S; Shift+press | ⌥⇧⌘S; ⌥+press | the keys in Local Changes' lists and diff; the press on a list's Stage or Unstage button |
+| discard the selection | Delete, Backspace (Delete first, as Fork's menu shows it) | ⌫, ⇧⌘D | in Local Changes' lists and diff |
+| Copy, Copy Full: the focused list's menu item showing the chord — Copy Commit SHA or Copy Commit Info, Copy Path or Copy Full Path, Copy Branch Name or Copy Tag Name (`docs/systems/window-frame.md`, "The copy chords") | Ctrl+C, Ctrl+Shift+C | ⌘C, ⇧⌘C (not yet checked against Fork for macOS) | in a focused list with a context menu (`Scope::List`), never a text field |
 | Hide Commit Details: the detail pane to its tab strip and back | Ctrl+Shift+D | none (the View menu's item alone) | anywhere |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
 | Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |

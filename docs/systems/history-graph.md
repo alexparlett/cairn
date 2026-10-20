@@ -1233,7 +1233,9 @@ The way back to a lost commit — or to any — is Fork's Create Branch dialog
 (`crates/cairn-ui/src/dialogs/create_branch.rs`, `crates/cairn-app/src/operations/create_branch.rs`; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md` and
 `fork-observed-2026-10-10.md`), opened by `New Branch…` in
-any commit row's context menu, a lost row's too, a stash's row offering none
+any commit row's context menu (`history::row_menu`: Fork's New Branch… beside its chord, then
+Copy Commit SHA and Copy Commit Info beside the copy chords; with two rows compared, the copies
+alone, copying both), a lost row's too, a stash's row offering none
 (`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
 right-click selecting its row first unless it lands in the selection already made, either of a
 compared pair

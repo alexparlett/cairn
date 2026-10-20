@@ -57,6 +57,7 @@ fn app() -> impl IntoElement {
     head.summary = format!("head {SUBJECT}");
     head.author_name = "Grace Hopper".to_owned();
     head.author_time = WHEN + 60;
+    head.id = Oid::parse(HEAD_HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
     rect()
         .width(Size::fill())
         .child(CommitRow::new(commit, graph.clone(), lanes).zone(zone()))
@@ -202,6 +203,7 @@ fn a_history_row_is_forks() {
         format!("head {SUBJECT}"),
         "Grace Hopper".to_owned(),
         "9 Mar 2024 17:06".to_owned(),
+        HEAD_HEX[..7].to_owned(),
     ] {
         assert_eq!(style_of(&test, &text).0, Some(FontWeight::BOLD), "{text:?}");
     }
@@ -267,6 +269,11 @@ fn the_date_and_the_short_id_fit_their_columns() {
         );
     }
 }
+
+/// `HEAD`'s row's id, its short form unlike the other rows'.
+const HEAD_HEX: &str = "aaaabbbbccccddddeeeeffff0000111122223333";
+/// A row beyond `HEAD`'s reach: its id, its short form unlike the other rows'.
+const BEYOND_HEX: &str = "1111222233334444555566667777888899990000";
 
 const LOST_HEX: &str = "fedcba9876543210fedcba9876543210fedcba98";
 
@@ -334,6 +341,9 @@ fn a_row_head_cannot_reach_is_greyed_and_one_it_reaches_is_not() {
             let mut beyond = commit.clone();
             beyond.summary = format!("beyond {SUBJECT}");
             beyond.author_name = "Side Author".to_owned();
+            beyond.author_time = WHEN + 120;
+            beyond.id =
+                Oid::parse(BEYOND_HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
             let mut chosen = commit.clone();
             chosen.summary = format!("chosen {SUBJECT}");
             rect()
@@ -359,7 +369,12 @@ fn a_row_head_cannot_reach_is_greyed_and_one_it_reaches_is_not() {
     );
     test.sync_and_update();
     let grey = Some(Fill::from(tones::UNREACHABLE_TEXT));
-    for text in [&format!("beyond {SUBJECT}"), "Side Author"] {
+    for text in [
+        &format!("beyond {SUBJECT}"),
+        "Side Author",
+        &BEYOND_HEX[..7],
+        "9 Mar 2024 17:07",
+    ] {
         assert_eq!(style_of(&test, text).1, grey, "{text:?}");
     }
     assert_eq!(style_of(&test, SUBJECT).1, Some(Fill::from(tones::TEXT)));

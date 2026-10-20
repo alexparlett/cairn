@@ -1158,7 +1158,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// A frozen table's `YYYY-MM-DD HH:MM` as the list draws the same instant now: Fork's
+    /// A frozen table's `YYYY-MM-DD HH:MM` as the list draws the same instant: Fork's
     /// `d Mon yyyy HH:mm`.
     fn fork_date(before: &str) -> String {
         const MONTHS: [&str; 12] = [
@@ -1287,8 +1287,8 @@ pub(crate) mod tests {
             line.push((!filled).to_string());
             drawn.push(line);
         }
-        // The table's dates are in the form the list drew then, `YYYY-MM-DD HH:MM` in UTC; the
-        // list draws the same instant now in Fork's `d Mon yyyy HH:mm`, in UTC here, and the
+        // The table writes each date as `YYYY-MM-DD HH:MM` in UTC; the list draws the same
+        // instant in Fork's `d Mon yyyy HH:mm`, in UTC here, and the
         // author's initials in an avatar before the name.
         let before: Vec<Vec<String>> = MAIN_DRAWN_BEFORE
             .iter()

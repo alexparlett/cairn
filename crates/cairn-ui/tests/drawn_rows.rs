@@ -5,10 +5,10 @@
 //! full parents and their author's address. The slim rows, read through a history built page
 //! by page, are held to it. Each row is drawn by the window's own row, `CommitRow`, and read
 //! back from the drawn tree: its labels' text, and the pixel at the centre of its node, which
-//! a dot fills and a merge's ring leaves empty. The oracle's dates are in the form the list
-//! drew then, `YYYY-MM-DD HH:MM` in UTC; the list now draws Fork's `d Mon yyyy HH:mm` in the
-//! zone it is handed, UTC here, so each is read in that form (`fork_date`) — the same instant
-//! — and the author's avatar, drawn before the name, is its initials (`initials`).
+//! a dot fills and a merge's ring leaves empty. The oracle writes each date as
+//! `YYYY-MM-DD HH:MM` in UTC and the list draws Fork's `d Mon yyyy HH:mm` in the zone it is
+//! handed, UTC here, so each is compared in the list's form (`fork_date`) — the same instant —
+//! and the author's avatar, drawn before the name, is compared as its initials (`initials`).
 
 use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowContent, RowsPage};
 use cairn_ui::graph_geometry::{lane_x, row_middle};
@@ -186,7 +186,7 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
         .collect()
 }
 
-/// An oracle's `YYYY-MM-DD HH:MM` as the list draws the same instant now: Fork's
+/// An oracle's `YYYY-MM-DD HH:MM` as the list draws the same instant: Fork's
 /// `d Mon yyyy HH:mm`.
 fn fork_date(before: &str) -> String {
     const MONTHS: [&str; 12] = [

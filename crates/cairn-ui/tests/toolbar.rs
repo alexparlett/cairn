@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use cairn_model::{AheadBehind, HeadState, RefName};
 use cairn_ui::accelerators::{self, Action, Os};
+use cairn_ui::style::tones;
 use cairn_ui::{
     ACTIVITY_GLYPH_NAME, APPEARANCE_CAPTION, BRANCH_CAPTION, BRANCH_MENU_NAME,
     COMES_WITH_PREFERENCES, COMES_WITH_PULL_AND_PUSH, COMES_WITH_QUICK_LAUNCH, COMES_WITH_STASHING,
@@ -67,6 +68,22 @@ fn label_area(test: &TestingRunner, text: &str) -> Area {
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
 }
 
+/// The colour the label reading `text` is drawn in.
+fn label_colour(test: &TestingRunner, text: &str) -> Option<Color> {
+    test.find(|_, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|label| {
+                label
+                    .text_style_data
+                    .color
+                    .as_ref()
+                    .and_then(Fill::as_color)
+            })
+    })
+    .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
+}
+
 /// Where the button assistive technology reads as `name` is laid out.
 fn named(test: &TestingRunner, name: &str) -> Area {
     test.find(|node, element| {
@@ -81,6 +98,25 @@ fn click(test: &mut TestingRunner, at: Area) {
     let centre = at.center();
     test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
     test.sync_and_update();
+}
+
+/// Whether a button under `at` lights its hover box while the pointer rests on it: a rect
+/// over `at`'s centre in the hover tone.
+fn lit_when_hovered(test: &mut TestingRunner, at: Area) -> bool {
+    let centre = at.center();
+    test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+    let lit = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|_| node.layout().area.contains(centre))
+                .and_then(|rect| rect.style.background.as_color())
+                .filter(|tone| *tone == tones::MENU_HOVER)
+        })
+        .is_some();
+    test.move_cursor((f64::from(WIDTH - 2.), f64::from(HEIGHT - 2.)));
+    test.sync_and_update();
+    lit
 }
 
 /// Rests the pointer on `at` long enough for its tooltip, and the labels drawn then.
@@ -100,8 +136,9 @@ fn hovered(test: &mut TestingRunner, at: Area) -> Vec<String> {
 /// anything; Fetch's tooltip its name over its chord from the table, Branch's none; Fetch,
 /// Branch, the sidebar toggle and the status box's glyph each reporting their press; Branch's ⌄
 /// a menu of New Branch… alone, with its chord. Caught by: a button out of Fork's order, an
-/// unplanned button drawn, a greyed button that acts or says another sentence, a chord typed
-/// rather than read from the table, or New Worktree… offered.
+/// unplanned button drawn, a greyed button that acts, says another sentence or is drawn in the
+/// enabled tone or lighting its hover box, a chord typed rather than read from the table, or New
+/// Worktree… offered.
 #[test]
 fn the_toolbar_is_forks_with_the_unbuilt_buttons_greyed() {
     let (mut test, pressed) = launch(|| Toolbar::new(status()));
@@ -152,7 +189,36 @@ fn the_toolbar_is_forks_with_the_unbuilt_buttons_greyed() {
             COMES_WITH_PREFERENCES,
         ),
     ];
+    // A greyed button is drawn disabled — its caption in the disabled tone — where an enabled
+    // one's caption is the toolbar's.
+    for caption in [
+        QUICK_LAUNCH_CAPTION,
+        PULL_CAPTION,
+        PUSH_CAPTION,
+        STASH_CAPTION,
+        APPEARANCE_CAPTION,
+    ] {
+        assert_eq!(
+            label_colour(&test, caption),
+            Some(tones::DISABLED_TEXT),
+            "{caption} is not drawn disabled"
+        );
+    }
+    assert_eq!(
+        label_colour(&test, FETCH_CAPTION),
+        Some(tones::TOOLBAR_TEXT),
+        "Fetch is drawn disabled"
+    );
+    let fetch = label_area(&test, FETCH_CAPTION);
+    assert!(
+        lit_when_hovered(&mut test, fetch),
+        "Fetch does not light its hover box"
+    );
     for (at, sentence) in greyed {
+        assert!(
+            !lit_when_hovered(&mut test, at),
+            "a greyed button lit its hover box at {at:?}"
+        );
         assert!(
             hovered(&mut test, at).iter().any(|text| text == sentence),
             "no tooltip reads {sentence:?} over {at:?}"

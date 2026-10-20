@@ -1,11 +1,8 @@
-//! The glyphs a ref's chip, the title bar and the sidebar carry, drawn as Fork draws its label
-//! icons: a tag for a tag, a generic remote — a cloud — for a remote-tracking ref, a box for a
-//! stash, a check mark for the current branch, a branch for any other branch with an upstream
-//! and the title bar's, a single line of commits for a branch with none (Fork's local-only
-//! icon); and, in the sidebar, a folder, a warning triangle for a branch whose upstream is gone
-//! (Fork's icon for it), and the triangle that says whether a section or folder is open; and, in
-//! Local Changes, the submodule's badge (a box holding a smaller one) and the same warning
-//! triangle for a conflicted path.
+//! The glyphs a ref's chip carries, drawn as Fork draws its label icons: a tag for a tag, a
+//! generic remote — a cloud — for a remote-tracking ref, a box for a stash, a check mark for the
+//! current branch; and, in Local Changes, the submodule's badge (a box holding a smaller one)
+//! and a warning triangle for a conflicted path, which Create Branch's warnings draw too. The
+//! sidebar draws the icon set's glyphs (`style::icons`), not these.
 //!
 //! Each is painted as a path on a canvas — strokes and fills, never a character — so no font
 //! is needed and none can be missing. Each is drawn in one colour, the chip's text colour, so
@@ -34,35 +31,19 @@ pub enum RefGlyph {
     Stash,
     /// The branch `HEAD` is on.
     Current,
-    /// The title bar's current branch, and a branch with an upstream in the sidebar.
-    Branch,
-    /// A branch in the sidebar with no upstream: one line of commits, its newest hollow, where
-    /// a branch with an upstream forks — Fork's local-only icon, told by its shape.
-    LocalOnly,
-    /// A folder of refs in the sidebar.
-    Folder,
-    /// A branch whose upstream is configured but gone: a warning triangle.
+    /// A warning triangle: a conflicted path in Local Changes, and Create Branch's warnings.
     Gone,
-    /// An open section or folder: a triangle pointing down.
-    Opened,
-    /// A closed section or folder: a triangle pointing right.
-    Closed,
     /// A submodule's badge in Local Changes: a box holding a smaller, filled one.
     Submodule,
 }
 
 impl RefGlyph {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 6] = [
         Self::Remote,
         Self::Tag,
         Self::Stash,
         Self::Current,
-        Self::Branch,
-        Self::LocalOnly,
-        Self::Folder,
         Self::Gone,
-        Self::Opened,
-        Self::Closed,
         Self::Submodule,
     ];
 
@@ -139,40 +120,6 @@ pub(crate) fn paint(canvas: &freya::engine::prelude::Canvas, glyph: RefGlyph, co
                 .line_to((8.8, 1.8));
             canvas.draw_path(&path.detach(), &paint);
         }
-        RefGlyph::Branch => {
-            // Two commits on a line and a third branched off it.
-            paint.set_style(PaintStyle::Stroke);
-            canvas.draw_line((2.6, 2.4), (2.6, 7.6), &paint);
-            let mut fork = PathBuilder::new();
-            fork.move_to((7.4, 3.6))
-                .cubic_to((7.4, 6.0), (2.6, 5.2), (2.6, 7.0));
-            canvas.draw_path(&fork.detach(), &paint);
-            paint.set_style(PaintStyle::Fill);
-            canvas.draw_circle((2.6, 1.8), 1.4, &paint);
-            canvas.draw_circle((2.6, 8.2), 1.4, &paint);
-            canvas.draw_circle((7.4, 2.4), 1.4, &paint);
-        }
-        RefGlyph::LocalOnly => {
-            // One line of two commits, the newer hollow: nothing pushed it anywhere.
-            paint.set_style(PaintStyle::Stroke);
-            canvas.draw_line((5.0, 3.4), (5.0, 7.0), &paint);
-            canvas.draw_circle((5.0, 2.0), 1.4, &paint);
-            paint.set_style(PaintStyle::Fill);
-            canvas.draw_circle((5.0, 8.2), 1.5, &paint);
-        }
-        RefGlyph::Folder => {
-            // A folder: its tab and its body, outlined.
-            paint.set_style(PaintStyle::Stroke);
-            let mut path = PathBuilder::new();
-            path.move_to((0.8, 2.0))
-                .line_to((4.0, 2.0))
-                .line_to((5.2, 3.4))
-                .line_to((9.2, 3.4))
-                .line_to((9.2, 8.6))
-                .line_to((0.8, 8.6))
-                .close();
-            canvas.draw_path(&path.detach(), &paint);
-        }
         RefGlyph::Gone => {
             // A warning triangle with its mark.
             paint.set_style(PaintStyle::Stroke);
@@ -185,15 +132,6 @@ pub(crate) fn paint(canvas: &freya::engine::prelude::Canvas, glyph: RefGlyph, co
             canvas.draw_line((5.0, 3.8), (5.0, 6.0), &paint);
             paint.set_style(PaintStyle::Fill);
             canvas.draw_circle((5.0, 7.5), 0.8, &paint);
-        }
-        RefGlyph::Opened => {
-            paint.set_style(PaintStyle::Fill);
-            let mut path = PathBuilder::new();
-            path.move_to((0.6, 2.2))
-                .line_to((9.4, 2.2))
-                .line_to((5.0, 8.6))
-                .close();
-            canvas.draw_path(&path.detach(), &paint);
         }
         RefGlyph::Submodule => {
             // A repository inside another: a box outlined, a smaller box filled inside it.
@@ -215,15 +153,6 @@ pub(crate) fn paint(canvas: &freya::engine::prelude::Canvas, glyph: RefGlyph, co
                 .line_to((3.4, 6.6))
                 .close();
             canvas.draw_path(&inner.detach(), &paint);
-        }
-        RefGlyph::Closed => {
-            paint.set_style(PaintStyle::Fill);
-            let mut path = PathBuilder::new();
-            path.move_to((2.2, 0.6))
-                .line_to((8.6, 5.0))
-                .line_to((2.2, 9.4))
-                .close();
-            canvas.draw_path(&path.detach(), &paint);
         }
     }
 }

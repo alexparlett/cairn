@@ -102,6 +102,45 @@ pub fn bottom_pane(size: f32, colour: Color) -> Element {
     drawn(("panel-bottom", lucide::panel_bottom()), size, colour)
 }
 
+/// The ⌄'s sideways twin: a closed section or folder of the sidebar.
+pub fn chevron_right(size: f32, colour: Color) -> Element {
+    drawn(("chevron-right", lucide::chevron_right()), size, colour)
+}
+
+/// A tag's outline.
+pub fn tag(size: f32, colour: Color) -> Element {
+    drawn(("tag", lucide::tag()), size, colour)
+}
+
+/// The check mark the current branch draws in place of its glyph.
+pub fn check(size: f32, colour: Color) -> Element {
+    drawn(("check", lucide::check()), size, colour)
+}
+
+/// A branch with no upstream: a line of commits that does not fork.
+pub fn local_branch(size: f32, colour: Color) -> Element {
+    drawn(
+        ("git-commit-vertical", lucide::git_commit_vertical()),
+        size,
+        colour,
+    )
+}
+
+/// A warning: a branch whose upstream is gone.
+pub fn warning(size: f32, colour: Color) -> Element {
+    drawn(("triangle-alert", lucide::triangle_alert()), size, colour)
+}
+
+/// Local Changes: a document with a plus over a minus.
+pub fn local_changes(size: f32, colour: Color) -> Element {
+    drawn(("file-diff", lucide::file_diff()), size, colour)
+}
+
+/// All Commits: a stack of pages.
+pub fn all_commits(size: f32, colour: Color) -> Element {
+    drawn(("file-stack", lucide::file_stack()), size, colour)
+}
+
 /// One icon, square, its strokes in `colour`: drawn at once, without a loader's flash, since
 /// the set is compiled in.
 fn drawn(source: impl Into<ImageSource>, size: f32, colour: Color) -> Element {
@@ -124,7 +163,7 @@ mod tests {
     /// turned off, or a name that resolves to something other than an SVG.
     #[test]
     fn every_icon_is_an_svg_of_the_set() {
-        let sources: [Source; 16] = [
+        let sources: [Source; 23] = [
             ("git-branch", || lucide::git_branch().to_vec()),
             ("cloud", || lucide::cloud().to_vec()),
             ("archive", || lucide::archive().to_vec()),
@@ -145,6 +184,15 @@ mod tests {
             ("chevron-down", || lucide::chevron_down().to_vec()),
             ("text-align-start", || lucide::text_align_start().to_vec()),
             ("panel-bottom", || lucide::panel_bottom().to_vec()),
+            ("chevron-right", || lucide::chevron_right().to_vec()),
+            ("tag", || lucide::tag().to_vec()),
+            ("check", || lucide::check().to_vec()),
+            ("git-commit-vertical", || {
+                lucide::git_commit_vertical().to_vec()
+            }),
+            ("triangle-alert", || lucide::triangle_alert().to_vec()),
+            ("file-diff", || lucide::file_diff().to_vec()),
+            ("file-stack", || lucide::file_stack().to_vec()),
         ];
         for (name, source) in sources {
             let svg = String::from_utf8(source()).unwrap_or_default();

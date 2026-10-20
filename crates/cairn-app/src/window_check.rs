@@ -434,6 +434,7 @@ fn launch(path: &str) -> Harness {
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                 refreshed: State::create(crate::refresh::state::RefreshState::default()),
                 repository: State::create(None),
+                repository_path: State::create(None),
                 sidebar: crate::sidebar::state::SidebarView::created(),
                 local: crate::local_changes::state::LocalChangesView::created(),
                 writes: State::create(crate::operations::local_writes::LocalWrites::default()),

@@ -20,8 +20,8 @@ use freya::prelude::*;
 use crate::history::ref_find::Find;
 use crate::worker::{Request, Retired};
 
-/// The sidebar's share of the window, in pixels, until it is dragged.
-pub const SIDEBAR_WIDTH: f32 = 240.0;
+/// The sidebar's share of the window, in pixels, until it is dragged: Fork's 300.
+pub const SIDEBAR_WIDTH: f32 = cairn_ui::style::metrics::SIDEBAR_WIDTH;
 /// The narrowest the sidebar is dragged or squeezed to.
 pub const SIDEBAR_MIN_WIDTH: f32 = 140.0;
 

@@ -103,6 +103,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let refreshed = use_state(refresh::state::RefreshState::default);
     // What the title bar calls the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
+    let repository_path = use_state(|| None::<std::path::PathBuf>);
     // The sidebar's state, for the session.
     let sidebar = sidebar::state::SidebarView::used();
     // Local Changes' lists, filter and diff, for the session.
@@ -145,6 +146,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         held_keys,
         refreshed,
         repository,
+        repository_path,
         sidebar,
         local,
         writes,

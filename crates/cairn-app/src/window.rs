@@ -91,6 +91,9 @@ pub struct View {
     /// What the title bar calls the repository, once the worker has opened it
     /// (`Update::Opened`).
     pub repository: State<Option<String>>,
+    /// The repository's root, absolute, once the worker has opened it: what Copy Repository
+    /// Path copies (`Update::Opened`).
+    pub repository_path: State<Option<std::path::PathBuf>>,
     /// The sidebar: its rows, the filter, what the main region shows, a press's find.
     pub sidebar: SidebarView,
     /// Local Changes: its lists, its filter and its diff's scroll.
@@ -773,6 +776,7 @@ pub(crate) mod tests {
             held_keys: State::create(HeldKeys::default()),
             refreshed: State::create(RefreshState::default()),
             repository: State::create(Some("engine".to_owned())),
+            repository_path: State::create(None),
             sidebar: SidebarView::created(),
             local: crate::local_changes::state::LocalChangesView::created(),
             writes: State::create(crate::operations::local_writes::LocalWrites::default()),
@@ -3565,6 +3569,7 @@ pub(crate) mod tests {
             crate::session::apply(
                 crate::worker::Update::Opened {
                     name: "folder".to_owned(),
+                    path: std::path::PathBuf::from("/srv/folder"),
                 },
                 view,
                 &crate::session::Worker {

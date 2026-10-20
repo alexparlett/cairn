@@ -19,6 +19,7 @@ use cairn_ui::{
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use freya_testing::prelude::{MouseEventName, PlatformEvent};
 
 use crate::diff::state::DiffState;
 use crate::history::ref_find::{FIND_PAGE_ROWS, finding_text, no_commit_text, not_in_graph_text};
@@ -174,6 +175,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     held_keys: State::create(HeldKeys::default()),
                     refreshed: State::create(RefreshState::default()),
                     repository: State::create(Some("engine".to_owned())),
+                    repository_path: State::create(None),
                     sidebar: SidebarView::created(),
                     local: crate::local_changes::state::LocalChangesView::created(),
                     writes: State::create(crate::operations::local_writes::LocalWrites::default()),
@@ -214,6 +216,34 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
         test.sync_and_update();
     }
     (test, view, submitted)
+}
+
+/// Tags opened, as Fork's opens closed: its heading pressed and the rows a worker lays out for it
+/// applied.
+fn open_tags(test: &mut TestingRunner, view: View, submitted: &Submitted) {
+    press(test, "Tags");
+    let rows = answer(submitted);
+    let refs = view
+        .sidebar
+        .state
+        .peek()
+        .shown()
+        .map(|shown| Arc::clone(&shown.refs))
+        .unwrap_or_else(|| panic!("no rows are shown"));
+    apply(
+        test,
+        view,
+        submitted,
+        Update::FilteredRefs {
+            refs,
+            text: String::new(),
+            rows,
+        },
+    );
+    submitted.borrow_mut().clear();
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
 }
 
 /// What a worker answers the last `FilterRefs` asked.
@@ -474,6 +504,7 @@ fn a_row_chosen_during_a_find_supersedes_it() {
 #[test]
 fn a_tag_on_a_tree_says_it_is_not_in_the_graph() {
     let (mut test, view, submitted) = launch(10, false);
+    open_tags(&mut test, view, &submitted);
     press(&mut test, "on-tree");
     assert!(finds(&submitted).is_empty());
     assert!(
@@ -491,7 +522,7 @@ fn a_tag_on_a_tree_says_it_is_not_in_the_graph() {
 #[test]
 fn a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph() {
     let (mut test, view, submitted) = launch(10, false);
-    press(&mut test, "On main: lost");
+    press(&mut test, "lost");
     assert_eq!(finds(&submitted), [oid(950)]);
     rows_arrive(&mut test, view, &submitted, 10..30, true);
     assert!(
@@ -503,7 +534,7 @@ fn a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph() {
     assert_eq!(view.rows.read().position(RowId::Stash(oid(950))), None);
 
     let (mut test, _, submitted) = launch(10, true);
-    press(&mut test, "On main: lost");
+    press(&mut test, "lost");
     assert!(finds(&submitted).is_empty(), "a complete history was paged");
     assert!(texts(&test).contains(&not_in_graph_text("stash@{0}")));
     assert_eq!(changes_asked(&submitted), [Comparison::Stash(oid(950))]);
@@ -713,5 +744,91 @@ fn show_head_selects_heads_row() {
     assert!(
         row_shown(&test, 150),
         "the found row was not brought into view"
+    );
+}
+
+fn right_click(test: &mut TestingRunner, caption: &str) {
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == caption)
+                .filter(|_| node.layout().area.min_x() < SIDEBAR_WIDTH)
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("the sidebar draws no {caption:?}: {:?}", texts(test)));
+    let at = (f64::from(centre.x), f64::from(centre.y));
+    test.move_cursor(at);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: at.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+}
+
+/// A right press on a ref selects its commit in the history, as Fork's does (FS1 §8), and its
+/// menu's New Branch… opens Create Branch at that commit. Caught by: a right press that leaves
+/// the history where it was, or New Branch… at another commit.
+#[test]
+fn a_right_press_on_a_ref_selects_its_commit_in_the_history() {
+    let (mut test, view, submitted) = launch(200, false);
+    right_click(&mut test, "near");
+    assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(5))));
+    assert_eq!(changes_asked(&submitted), [Comparison::Commit(oid(5))]);
+    let item = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == cairn_ui::NEW_BRANCH_CAPTION)
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("the ref's menu offers no New Branch…"));
+    test.click_cursor((f64::from(item.x), f64::from(item.y)));
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+    assert!(
+        view.branch.state.peek().is_up(),
+        "New Branch… opened no dialog"
+    );
+    let at = format!("{} commit 5", oid(5).short().as_str());
+    assert!(
+        texts(&test).contains(&at),
+        "the dialog is not at near's commit: {:?}",
+        texts(&test)
+    );
+}
+
+/// Once a press gives the sidebar focus, ↓ and ↑ walk its rows and each ref walked to is selected
+/// in the history at once, as Fork's sidebar does (sb_follow): a key reaches the sidebar without
+/// the history being pressed first. Caught by: a sidebar that hears no key, or a walk that moves
+/// the band without choosing the ref's commit.
+#[test]
+fn the_arrows_walk_the_sidebar_and_select_each_refs_commit() {
+    let (mut test, view, _) = launch(200, false);
+    press(&mut test, "main");
+    assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(0))));
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        *view.selected.read(),
+        Some(RowId::Commit(oid(5))),
+        "↓ from main did not choose near"
+    );
+    test.press_key(Key::Named(NamedKey::ArrowUp));
+    test.press_key(Key::Named(NamedKey::ArrowUp));
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        *view.selected.read(),
+        Some(RowId::Commit(oid(180))),
+        "↑ twice from near did not choose farther"
     );
 }

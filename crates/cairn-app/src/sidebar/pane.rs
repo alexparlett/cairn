@@ -1,12 +1,13 @@
 //! The sidebar as the window draws it: `cairn_ui::Sidebar` over the rows
-//! the window keeps (`sidebar::state`), each branch's counts from the last refresh, the count
-//! of paths the last status listed, and what a press is doing. A component of its own, so a
+//! the window keeps (`sidebar::state`), the repository's name, each branch's counts from the
+//! last refresh, the count of paths the last status listed, and what a press is doing; its
+//! menus' choices are `sidebar::menu`'s. A component of its own, so a
 //! keystroke in its filter or an answer for it redraws the sidebar and not the window.
 
 use std::rc::Rc;
 
 use cairn_model::{LocalChanges, SidebarRow, WorkingTreeStatus};
-use cairn_ui::{MainView, Sidebar};
+use cairn_ui::{GearChoice, MainView, RefChoice, Sidebar};
 use freya::prelude::*;
 
 use crate::history::ref_find;
@@ -29,6 +30,7 @@ impl PartialEq for SidebarPane {
     fn eq(&self, other: &Self) -> bool {
         self.view.sidebar == other.view.sidebar
             && self.view.refreshed == other.view.refreshed
+            && self.view.repository == other.view.repository
             && self.submit.is_some() == other.submit.is_some()
     }
 }
@@ -72,6 +74,7 @@ impl Component for SidebarPane {
         let pressing = self.submit.clone();
         let switching = self.submit.clone();
         Sidebar::new(state.shown().cloned(), view.sidebar.filter_text)
+            .name(view.repository.read().clone())
             .counts(refreshed.ahead_behind().cloned())
             .local_changes(local_changes_count(
                 refreshed.local_changes().map(|changes| &**changes),
@@ -82,6 +85,10 @@ impl Component for SidebarPane {
             .on_row(move |row: SidebarRow| ref_find::press(row, view, pressing.as_deref()))
             .on_main(move |chosen: MainView| {
                 crate::history::selection::show_main(chosen, view, switching.as_deref());
+            })
+            .on_gear(move |choice: GearChoice| crate::sidebar::menu::gear(choice, view))
+            .on_ref_menu(move |(row, choice): (SidebarRow, RefChoice)| {
+                crate::sidebar::menu::chosen(row, choice, view);
             })
     }
 }

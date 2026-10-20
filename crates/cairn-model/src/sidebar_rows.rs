@@ -6,8 +6,9 @@
 //!
 //! At each level of a section, folders come first and then the refs, each in natural order — case
 //! ignored, a run of digits read as a number, so `b2` comes before `b10` and `Alpha` before `beta`
-//! before `Gamma` ([`natural_order`]): Fork's natural sort, folders first. Tags are listed whole in
-//! the same order; stashes in the stash list's. The snapshot's own order (bytewise by name) sorts
+//! before `Gamma` ([`natural_order`]): Fork's natural sort, folders first. Tags are listed whole,
+//! newest first by the date of the commit each identifies (`Ref::commit_time`), as Fork lists them
+//! (`docs/research/ui-review/fork-sidebar-2026-10-20.md` §1); stashes in the stash list's. The snapshot's own order (bytewise by name) sorts
 //! every name under one folder together — the names between two that start `feature/` start
 //! `feature/` too — so a folder is found as a run of the refs at its level, and only then put in
 //! its place.
@@ -45,6 +46,14 @@ impl SidebarSection {
         }
     }
 
+    /// Whether the section starts closed, as Fork's Tags does; the rest start open.
+    pub fn opens_closed(self) -> bool {
+        match self {
+            Self::Tags => true,
+            Self::Branches | Self::Remotes | Self::Stashes => false,
+        }
+    }
+
     /// Whether the section's refs are grouped into folders by `/`: branches and
     /// remote-tracking refs, never tags.
     fn has_folders(self) -> bool {
@@ -56,12 +65,26 @@ impl SidebarSection {
 }
 
 /// Which sections are closed and which folders are open: what the sidebar's rows are laid
-/// out under. A section is open until it is closed; a folder is closed until it is opened.
-/// A folder is named by its full path, `refs/heads/feature` or `refs/remotes/origin`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// out under. Fork's defaults: Branches, Remotes and Stashes open and Tags closed
+/// (`SidebarSection::opens_closed`), every folder closed until it is opened — a remote's own
+/// folder, `origin`, among them. A folder is named by its full path, `refs/heads/feature` or
+/// `refs/remotes/origin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Disclosure {
     closed_sections: BTreeSet<SidebarSection>,
     open_folders: BTreeSet<String>,
+}
+
+impl Default for Disclosure {
+    fn default() -> Self {
+        Self {
+            closed_sections: SidebarSection::ALL
+                .into_iter()
+                .filter(|section| section.opens_closed())
+                .collect(),
+            open_folders: BTreeSet::new(),
+        }
+    }
 }
 
 impl Disclosure {
@@ -299,9 +322,7 @@ impl RefsSnapshot {
                             }
                             tags.push(index);
                         }
-                        tags.sort_by(|a, b| {
-                            natural_order(lay_out.short_name(*a), lay_out.short_name(*b))
-                        });
+                        tags.sort_by(|a, b| lay_out.newest_tag_first(*a, *b));
                         rows.extend(
                             tags.into_iter()
                                 .map(|index| SidebarRow::Ref { index, depth: 0 }),
@@ -331,6 +352,22 @@ impl LayOut<'_> {
             .refs
             .get(index as usize)
             .map_or("", |listed| listed.name.shorthand())
+    }
+
+    /// Fork's order of two tags: newest first by the date of the commit each identifies, a tag
+    /// with none after every dated one, and tags of one date by name, last first — the one tie
+    /// observed (`b-light` above `a-annot-new` on one commit).
+    fn newest_tag_first(&self, a: u32, b: u32) -> Ordering {
+        let date = |index: u32| {
+            self.snapshot
+                .refs
+                .get(index as usize)
+                .and_then(|listed| listed.commit_time)
+        };
+        // `None` sorts below every date, so the reversed comparison puts it last.
+        date(b)
+            .cmp(&date(a))
+            .then_with(|| natural_order(self.short_name(b), self.short_name(a)))
     }
 
     /// The `depth`th part of the name of the ref at `index`, and whether more parts follow it.
@@ -522,6 +559,7 @@ mod tests {
         let mut disclosure = Disclosure::default();
         disclosure.toggle_folder("refs/heads/feature");
         disclosure.toggle_folder("refs/remotes/origin");
+        disclosure.toggle_section(SidebarSection::Tags);
         let rows = snapshot.sidebar_rows("", &disclosure, || true).unwrap();
         assert_eq!(
             drawn(&snapshot, &rows),
@@ -540,8 +578,8 @@ mod tests {
                 "  refs/remotes/origin/main",
                 "upstream/",
                 "[Tags open]",
-                "refs/tags/release/2.0",
                 "refs/tags/v1.0",
+                "refs/tags/release/2.0",
                 "[Stashes open]",
                 "stash On main: wip",
                 "stash On main: wip",
@@ -563,8 +601,9 @@ mod tests {
             HeadState::Branch(RefName::new("refs/heads/main")),
             &["On main: login wip"],
         );
-        let mut disclosure = Disclosure::default();
-        disclosure.toggle_section(SidebarSection::Tags);
+        // Tags is closed, as it opens: the filter draws it open all the same.
+        let disclosure = Disclosure::default();
+        assert!(!disclosure.is_section_open(SidebarSection::Tags));
         let rows = snapshot
             .sidebar_rows("LOGIN", &disclosure, || true)
             .unwrap();
@@ -596,9 +635,9 @@ mod tests {
     }
 
     /// Fork's natural order, folders first — at each level
-    /// folders, then refs, each with case ignored and numbers read as numbers; tags the same.
-    /// Caught by: bytewise order (`Gamma` before `alpha`, `b10` before `b2`), or folders mixed
-    /// in among the refs.
+    /// folders, then refs, each with case ignored and numbers read as numbers; tags of one date
+    /// the same, last first. Caught by: bytewise order (`Gamma` before `alpha`, `b10` before
+    /// `b2`), or folders mixed in among the refs.
     #[test]
     fn each_level_is_in_natural_order_folders_first() {
         let snapshot = snapshot(
@@ -617,9 +656,9 @@ mod tests {
             HeadState::Branch(RefName::new("refs/heads/alpha")),
             &[],
         );
-        let rows = snapshot
-            .sidebar_rows("", &Disclosure::default(), || true)
-            .unwrap();
+        let mut tags_open = Disclosure::default();
+        tags_open.toggle_section(SidebarSection::Tags);
+        let rows = snapshot.sidebar_rows("", &tags_open, || true).unwrap();
         assert_eq!(
             drawn(&snapshot, &rows),
             [
@@ -633,10 +672,93 @@ mod tests {
                 "refs/heads/Gamma",
                 "[Remotes open]",
                 "[Tags open]",
-                "refs/tags/V1.2",
-                "refs/tags/v1.9",
                 "refs/tags/v1.10",
+                "refs/tags/v1.9",
+                "refs/tags/V1.2",
                 "[Stashes open]",
+            ]
+        );
+    }
+
+    /// Fork's disclosure as the sidebar opens: Branches, Remotes and Stashes open, Tags
+    /// closed, every folder closed — a remote's own folder too — and a closed section still
+    /// draws its caption. Caught by: Tags drawn open, another section drawn closed, a remote's
+    /// folder opened, or a closed section left out.
+    #[test]
+    fn tags_and_every_folder_start_closed_and_the_other_sections_open() {
+        let snapshot = snapshot(
+            NAMES,
+            HeadState::Branch(RefName::new("refs/heads/main")),
+            &["On main: wip"],
+        );
+        let rows = snapshot
+            .sidebar_rows("", &Disclosure::default(), || true)
+            .unwrap();
+        assert_eq!(
+            drawn(&snapshot, &rows),
+            [
+                "[Branches open]",
+                "a/",
+                "feature/",
+                "refs/heads/feature-x",
+                "refs/heads/main",
+                "refs/heads/zeta",
+                "[Remotes open]",
+                "origin/",
+                "upstream/",
+                "[Tags]",
+                "[Stashes open]",
+                "stash On main: wip",
+            ]
+        );
+        let opens_closed: Vec<SidebarSection> = SidebarSection::ALL
+            .into_iter()
+            .filter(|section| section.opens_closed())
+            .collect();
+        assert_eq!(opens_closed, [SidebarSection::Tags]);
+    }
+
+    /// Fork's tag order (uirev's sb14): newest first by the date of the commit each tag
+    /// identifies — never by name, nor by a tag's own date, which the snapshot does not carry —
+    /// two tags of one date by name, last first, and a tag that identifies no commit last.
+    /// Caught by: tags in name order, oldest first, an undated tag first, or a tie broken the
+    /// other way.
+    #[test]
+    fn tags_are_listed_newest_first_by_their_commits_date() {
+        let mut snapshot = snapshot(
+            &[
+                "refs/tags/a-annot-new",
+                "refs/tags/b-light",
+                "refs/tags/m-light",
+                "refs/tags/on-tree",
+                "refs/tags/z-annot-old",
+            ],
+            HeadState::Branch(RefName::new("refs/heads/main")),
+            &[],
+        );
+        for listed in &mut snapshot.refs {
+            listed.commit_time = match listed.name.shorthand() {
+                "m-light" => Some(2022),
+                "z-annot-old" => Some(2021),
+                "a-annot-new" | "b-light" => Some(2020),
+                _ => None,
+            };
+        }
+        let mut tags_open = Disclosure::default();
+        tags_open.toggle_section(SidebarSection::Tags);
+        let rows = snapshot.sidebar_rows("", &tags_open, || true).unwrap();
+        let tags: Vec<String> = drawn(&snapshot, &rows)
+            .into_iter()
+            .filter(|row| row.starts_with("refs/tags/"))
+            .collect();
+        assert_eq!(
+            tags,
+            [
+                "refs/tags/m-light",
+                "refs/tags/z-annot-old",
+                "refs/tags/b-light",
+                "refs/tags/a-annot-new",
+                "refs/tags/on-tree",
             ]
         );
     }

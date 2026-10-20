@@ -93,7 +93,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             drawn_in
                 .set(zone.map_or_else(cairn_ui::LocalZone::unreadable, cairn_ui::LocalZone::read));
         }
-        Update::Opened { name } => repository.set(Some(name)),
+        Update::Opened { name, path } => {
+            repository.set(Some(name));
+            let mut root = view.repository_path;
+            root.set(Some(path));
+        }
         // The leftover lock's stat, from every refresh.
         Update::IndexLock { changed } => {
             let mut lock = view.lock;
@@ -588,6 +592,7 @@ mod tests {
                         change_cursor: State::create(None),
                         refreshed: State::create(crate::refresh::state::RefreshState::default()),
                         repository: State::create(None),
+                        repository_path: State::create(None),
                         sidebar: crate::sidebar::state::SidebarView::created(),
                         local: crate::local_changes::state::LocalChangesView::created(),
                         writes: State::create(

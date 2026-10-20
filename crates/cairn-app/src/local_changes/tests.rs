@@ -91,6 +91,7 @@ pub(crate) fn launch_counted() -> (TestingRunner, View, Submitted, Rc<std::cell:
                 held_keys: State::create(HeldKeys::default()),
                 refreshed: State::create(RefreshState::default()),
                 repository: State::create(Some("engine".to_owned())),
+                repository_path: State::create(None),
                 sidebar: SidebarView::created(),
                 local: crate::local_changes::state::LocalChangesView::created(),
                 writes: State::create(crate::operations::local_writes::LocalWrites::default()),

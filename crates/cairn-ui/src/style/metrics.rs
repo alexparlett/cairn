@@ -108,6 +108,22 @@ pub const DIFF_ROW: f32 = 17.0;
 pub const SIDEBAR_WIDTH: f32 = 300.0;
 /// How far each level of the sidebar indents what it holds.
 pub const SIDEBAR_INDENT: f32 = 12.0;
+/// An icon of the sidebar — a branch, a folder, a tag — ~14 px across in uw27.
+pub const SIDEBAR_ICON: f32 = 14.0;
+/// A section's or folder's chevron, and the slot it stands in before an icon: a leaf keeps the
+/// slot empty, so its icon lines up with its folders' (uw27).
+pub const SIDEBAR_CHEVRON: f32 = 12.0;
+/// The room between a sidebar row's icon and its name, and before its counts.
+pub const SIDEBAR_GAP: f32 = 6.0;
+/// How far a sidebar row stands in from the sidebar's left edge, and its counts from the right.
+pub const SIDEBAR_INSET: f32 = 8.0;
+/// How far a selected sidebar row's band stands in from either edge: Fork's runs x 5-296 of a
+/// 301 px sidebar (sb22z).
+pub const SIDEBAR_BAND_INSET: f32 = 5.0;
+/// A selected sidebar row's band's corners: ~3 px in Fork (sb22z).
+pub const SIDEBAR_BAND_RADIUS: f32 = 3.0;
+/// The warning a branch whose upstream is gone carries on its glyph's bottom right (sb14g).
+pub const SIDEBAR_BADGE: f32 = 8.0;
 
 /// The diff's text size: Fork's, measured. Fork's Mac default diff font is Menlo at 11 pt
 /// (`Menlo-Regular - 11.0` in two screenshots four years apart) with a 6.6 pt advance; a

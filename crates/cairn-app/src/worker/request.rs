@@ -594,8 +594,12 @@ pub enum Update {
     /// The repository is open: `name` is what the title bar calls it — the last component of
     /// its working tree, or of its git directory when it is bare, as Fork names a
     /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
-    /// Sent once, after `Started`, tied to no request.
-    Opened { name: String },
+    /// `path` is that working tree's root, or the git directory of a bare one, made absolute:
+    /// what Copy Repository Path copies. Sent once, after `Started`, tied to no request.
+    Opened {
+        name: String,
+        path: std::path::PathBuf,
+    },
     /// The default remote first, when there is one.
     Remotes { remotes: Vec<RemoteSummary> },
     /// `diff.context` as the user's `git diff` reads it, raised to one: once asked, and again

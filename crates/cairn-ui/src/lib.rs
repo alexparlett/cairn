@@ -112,9 +112,12 @@ pub use local_changes::menu::{
 pub use local_changes::selection::{LocalSelection, nearest_remaining};
 pub use local_time::LocalZone;
 pub use sidebar::{
-    ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
-    MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,
-    SidebarTarget, counts_text, drawn_row, local_changes_text, section_caption,
+    ALL_COMMITS_CAPTION, BranchCounts, COPY_BRANCH_NAME_CAPTION, COPY_REPOSITORY_PATH_CAPTION,
+    COPY_TAG_NAME_CAPTION, DETACHED_HEAD_CAPTION, DrawnRow, GearChoice, LOCAL_CHANGES_CAPTION,
+    MainView, NO_COMMIT_TO_BRANCH_FROM, REPOSITORY_GEAR_NAME, RefChoice,
+    SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarGlyph,
+    SidebarRefs, SidebarStep, SidebarTarget, chosen_when_walked, counts_text, drawn_row,
+    local_changes_text, ref_menu, row_indent, section_caption, stash_text, walked_to,
 };
 pub use text_field::{text_field, text_field_in, text_field_recalling};
 pub use toolbar::activity_popover::{

@@ -131,6 +131,16 @@ pub const AVATARS: [Color; 8] = [
 pub const PLACEHOLDER: Color = hex(0x999898);
 /// The sidebar's chosen entry, Local Changes or All Commits.
 pub const SIDEBAR_CHOSEN: Color = hex(0x3F3F3F);
+/// The sidebar's icons — a folder, a branch, the check mark, a tag, a stash's box, the gear,
+/// Local Changes' and All Commits' — sampled `#CFCFCF` in uw27.
+pub const SIDEBAR_ICON: Color = hex(0xCFCFCF);
+/// The sidebar's quieter marks: a section's or folder's chevron and a branch with no upstream,
+/// sampled `#777777`..`#7B7A7A` in uw27 (a remote's cloud is [`REMOTE_GLYPH`]).
+pub const SIDEBAR_DIM_ICON: Color = hex(0x777777);
+/// The warning on a branch whose upstream is gone, sampled `#FFC501` (sb14g).
+pub const UPSTREAM_GONE: Color = hex(0xFFC501);
+/// The sidebar's filter field, sampled `#292929` (FS2 §1).
+pub const FILTER_FIELD: Color = hex(0x292929);
 /// A banner across the window (Fork's `.gitignore` banner).
 pub const BANNER: Color = hex(0x333333);
 /// A text field's fill, and an unticked check box's.

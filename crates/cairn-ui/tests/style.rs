@@ -35,6 +35,7 @@ fn the_style_module_holds_forks_metrics_and_fork_darks_tones() {
         ("Menu item", metrics::MENU_ITEM, 23.),
         ("Sidebar default width", metrics::SIDEBAR_WIDTH, 300.),
         ("Indent per sidebar level", metrics::SIDEBAR_INDENT, 12.),
+        ("Sidebar icon", metrics::SIDEBAR_ICON, 14.),
         ("Diff row", metrics::DIFF_ROW, 17.),
     ] {
         assert_eq!(value, expected, "{row}");
@@ -92,6 +93,14 @@ fn the_style_module_holds_forks_metrics_and_fork_darks_tones() {
         ("Chip: stash", tones::STASH_CHIP, "#545454"),
         ("Chip: stash, border", tones::STASH_CHIP_BORDER, "#929292"),
         ("Chip text", tones::CHIP_TEXT, "#F0F0F0"),
+        ("Sidebar icons", tones::SIDEBAR_ICON, "#CFCFCF"),
+        (
+            "Sidebar chevrons, a local-only branch",
+            tones::SIDEBAR_DIM_ICON,
+            "#777777",
+        ),
+        ("Sidebar filter field", tones::FILTER_FIELD, "#292929"),
+        ("A gone upstream's warning", tones::UPSTREAM_GONE, "#FFC501"),
         ("Status box", tones::STATUS_BOX, "#303030"),
         ("Push's count badge", tones::BADGE, "#606060"),
         (

@@ -138,7 +138,7 @@ fn separators(test: &TestingRunner) -> usize {
         Rect::try_downcast(element)
             .filter(|rect| {
                 rect.style.background == Fill::Color(tones::MENU_SEPARATOR)
-                    && node.layout().area.height() == 1.
+                    && node.layout().visible_area().height() == 1.
             })
             .map(|_| ())
     })
@@ -148,9 +148,10 @@ fn separators(test: &TestingRunner) -> usize {
 /// A context menu draws its groups parted by a rule, each chord read from the accelerator
 /// table and right-aligned, a greyed item in the disabled tone with its reason drawn while the
 /// pointer is on it, and a ticked item's ✓ in a gutter that moves every label of the menu right
-/// by Fork's 18 px; a press on a greyed item chooses nothing and leaves the menu open. Caught
-/// by: a chord typed rather than read from the table, groups run together, a greyed item that
-/// does not say why or acts, or a gutter opened for the ticked item alone.
+/// by Fork's 18 px; the menu as wide as its widest row; a press on a greyed item chooses nothing
+/// and leaves the menu open. Caught by: a chord typed rather than read from the table, groups
+/// run together, a rule stretching the menu across the window, a greyed item that does not say
+/// why or acts, or a gutter opened for the ticked item alone.
 #[test]
 fn a_menu_is_drawn_from_its_data() {
     let (mut test, heard) = launch_context(true);
@@ -168,6 +169,20 @@ fn a_menu_is_drawn_from_its_data() {
     assert!(
         chord_x > alpha_x + 60.,
         "the chord is not right-aligned: {chord_x} against {alpha_x}"
+    );
+    // As wide as its widest row and no wider, rules and all: a rule that fills what the
+    // window offers would stretch the menu across it.
+    let widest = test
+        .find_many(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.style.background == Fill::Color(tones::MENU_SEPARATOR))
+                .map(|_| node.layout().area.width())
+        })
+        .into_iter()
+        .fold(0., f32::max);
+    assert!(
+        widest > 0. && widest < WIDTH / 2.,
+        "a rule is {widest} px wide in an {WIDTH} px window"
     );
     assert!(drawn.iter().any(|t| t == "✓"), "Charlie's tick: {drawn:?}");
     let colour_of = |text: &str| {
@@ -412,4 +427,79 @@ fn the_menu_bar_opens_moves_and_closes_as_forks() {
     assert_eq!(heard.chosen.borrow().as_slice(), [Choice::About]);
     assert_eq!(shown(&test), None, "a choice closes the menu");
     test.poll(Duration::from_millis(10), Duration::from_millis(20));
+}
+
+/// A context menu is as wide as its widest row, chord and all: a long chord stands inside the
+/// menu, right-aligned on its row, and the rule spans the same width. Caught by: a chord drawn
+/// past the menu's edge (a row laid out wider than the menu that holds it), or a rule as wide as
+/// the window.
+#[test]
+fn a_long_chord_stands_inside_the_menu() {
+    let (mut test, ()) = TestingRunner::new(
+        || {
+            rect()
+                .expanded()
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .height(Size::px(40.))
+                        .on_press(|_| {
+                            ContextMenu::open(context_menu(
+                                vec![
+                                    vec![
+                                        Item::new("Stage All", Choice::Alpha)
+                                            .chord(Action::StageOrUnstageAll),
+                                    ],
+                                    vec![Item::new("Copy", Choice::Bravo)],
+                                ],
+                                |_: Choice| {},
+                            ));
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    open_context(&mut test);
+    let chord = accelerators::chord_name(Action::StageOrUnstageAll, Os::current())
+        .unwrap_or_else(|| panic!("Stage All has a chord"));
+    // The label reading `text` in `colour`: a copy of the chord holds its room unseen.
+    let area_of = |text: &str, colour: Color| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| {
+                    label.text == text && label.text_style_data.color == Some(Fill::Color(colour))
+                })
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", texts(&test)))
+    };
+    let rule = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.style.background == Fill::Color(tones::MENU_SEPARATOR))
+                .map(|_| node.layout().visible_area())
+        })
+        .unwrap_or_else(|| panic!("no rule is drawn"));
+    let caption = area_of("Stage All", tones::SELECTED_TEXT);
+    let chord = area_of(&chord, tones::MENU_CHORD);
+    assert!(
+        (chord.max_x() - (rule.max_x() - metrics::MENU_INSET)).abs() < 0.5,
+        "the chord ends at {}, not at the menu's {} less its inset",
+        chord.max_x(),
+        rule.max_x()
+    );
+    assert!(
+        chord.min_x() >= caption.max_x() + metrics::MENU_CHORD_GAP - 0.5,
+        "the chord crowds its caption"
+    );
+    assert!(
+        rule.width() < WIDTH / 2.,
+        "the rule is {} px wide",
+        rule.width()
+    );
 }

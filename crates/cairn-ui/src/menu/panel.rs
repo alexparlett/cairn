@@ -323,17 +323,15 @@ impl<T: Clone + PartialEq + 'static> Component for Panel<T> {
     }
 }
 
-/// The rule between two groups.
+/// The rule between two groups, as wide as the menu's widest row: drawn by the panel's own
+/// child, which `Content::fit` widens to its widest sibling, since a child of its own filling
+/// what that child offers would stretch the menu across the window.
 fn separator() -> Element {
     rect()
         .width(Size::fill_minimum())
-        .padding(Gaps::new(3., 0., 3., 0.))
-        .child(
-            rect()
-                .width(Size::fill())
-                .height(Size::px(1.))
-                .background(tones::MENU_SEPARATOR),
-        )
+        .height(Size::px(1.))
+        .margin(Gaps::new(3., 0., 3., 0.))
+        .background(tones::MENU_SEPARATOR)
         .into()
 }
 
@@ -392,9 +390,6 @@ fn row<T>(
         .width(Size::fill_minimum())
         .height(Size::px(metrics::MENU_ITEM))
         .horizontal()
-        // The chord at the far end of a row as wide as the menu's widest, never wider: a
-        // flexible gap would stretch the menu across the window.
-        .main_align(Alignment::SpaceBetween)
         .cross_align(Alignment::Center)
         .padding(Gaps::new(0., metrics::MENU_INSET, 0., metrics::MENU_INSET))
         .maybe(lit, |row| row.background(tones::MENU_HOVER))
@@ -411,12 +406,26 @@ fn row<T>(
                 })
                 .child(caption),
         )
+        // The chord's room is held by a copy of it nobody sees, after the gap, so the menu is
+        // measured wide enough for it; the chord itself is placed against the row's right edge
+        // once the menu's width is known. A chord placed by the row's own alignment would be
+        // set against the room the window offered before the menu was measured, past its edge.
+        .maybe_child(trailing.clone().map(|trailing| {
+            rect()
+                .horizontal()
+                .child(rect().width(Size::px(metrics::MENU_CHORD_GAP)))
+                .child(label().text(trailing).max_lines(1).color(tones::UNSEEN))
+        }))
         .maybe_child(trailing.map(|trailing| {
-            label()
-                .text(trailing)
-                .max_lines(1)
-                .margin(Gaps::new(0., 0., 0., metrics::MENU_CHORD_GAP))
-                .color(if enabled { tones::MENU_CHORD } else { text })
+            rect()
+                .position(Position::new_absolute().top(0.).right(0.))
+                .height(Size::px(metrics::MENU_ITEM))
+                .main_align(Alignment::Center)
+                .child(label().text(trailing).max_lines(1).color(if enabled {
+                    tones::MENU_CHORD
+                } else {
+                    text
+                }))
         }))
         .maybe_child(reason)
         .maybe_child(submenu.map(|panel| {

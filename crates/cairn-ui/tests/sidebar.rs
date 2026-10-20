@@ -618,6 +618,18 @@ fn a_right_press_on_a_ref_selects_its_commit() {
         menu_items(&test),
         [NEW_BRANCH_CAPTION, COPY_BRANCH_NAME_CAPTION]
     );
+    // New Branch… shows its chord, read from the table, on its row.
+    let chord = cairn_ui::accelerators::chord_name(
+        cairn_ui::accelerators::Action::NewBranch,
+        cairn_ui::accelerators::Os::current(),
+    )
+    .unwrap_or_else(|| panic!("New Branch has a chord"));
+    let row_of = |text: &str| centre_of_label(&test, text).1;
+    assert_eq!(
+        row_of(&chord),
+        row_of(NEW_BRANCH_CAPTION),
+        "New Branch…'s chord"
+    );
     test.click_cursor(centre_of_label(&test, COPY_BRANCH_NAME_CAPTION));
     settle(&mut test);
     assert_eq!(heard.borrow().menu, [(topic, RefChoice::CopyName)]);

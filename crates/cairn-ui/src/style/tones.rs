@@ -137,6 +137,9 @@ pub const SIDEBAR_ICON: Color = hex(0xCFCFCF);
 /// The sidebar's quieter marks: a section's or folder's chevron and a branch with no upstream,
 /// sampled `#777777`..`#7B7A7A` in uw27 (a remote's cloud is [`REMOTE_GLYPH`]).
 pub const SIDEBAR_DIM_ICON: Color = hex(0x777777);
+/// Ink nobody sees: text laid out only to hold its room, as a menu's copy of a chord holds the
+/// chord's.
+pub const UNSEEN: Color = Color::TRANSPARENT;
 /// The warning on a branch whose upstream is gone, sampled `#FFC501` (sb14g).
 pub const UPSTREAM_GONE: Color = hex(0xFFC501);
 /// The sidebar's filter field, sampled `#292929` (FS2 §1).

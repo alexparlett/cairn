@@ -1,6 +1,9 @@
-//! The commit box under Local Changes' diff, as Fork draws it: a one-line subject with Fork's
-//! characters-left counter and the `≡` that opens Recent Commit Messages, a description with a
-//! ruler at column 72, `Amend` at the left and the one button at the right.
+//! The commit box under Local Changes' diff, as Fork draws it (`docs/research/ui-review/
+//! fork-window-survey-2026-10-16.md` §7, uv12c; `fork-window-survey-2-2026-10-16.md` §2, uw36):
+//! one bordered field of two parts — the one-line subject, bold once it has text, with Fork's
+//! characters-left counter shown only then and the glyph that opens Recent Commit Messages at
+//! its right end, over a rule and the description with a ruler at column 72 — and under it
+//! `Amend` at the left and Fork's split button at the right.
 //!
 //! **What it draws, and what it decides.** It draws what it is handed and reports what is
 //! pressed; the window decides what the press does (`crates/cairn-app/src/commit_box/pane.rs`).
@@ -16,7 +19,9 @@
 //! last recalled.
 //!
 //! **One button**: `Commit N Files`, or Fork's "Amend Last Commit" while Amend is ticked, and
-//! nothing under it; the commit chord presses it, in every state. It builds no token: what an
+//! nothing under it; the commit chord presses it, in every state. Its ⌄ is a segment of its own,
+//! always greyed: Fork's holds Commit Options and Commit and Push, which come with pull and push
+//! ([`COMMIT_OPTIONS_TOOLTIP`]), so it opens nothing. It builds no token: what an
 //! amend costs is read when it is pressed, in the job that runs it, and one that must be
 //! confirmed opens the window's confirmation dialog. While a commit is asked the button's place
 //! says what it is doing — "Waiting for the commit to finish…", "Committing 0:03" with Cancel
@@ -36,10 +41,12 @@ use cairn_model::OperationInProgress;
 use freya::prelude::*;
 
 use crate::accelerators::{Action, FieldScope, RecallStep};
+use crate::bar_button::BarButton;
 use crate::diff::palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
 use crate::menu::{Item, context_menu};
-use crate::style::{metrics, tones};
-use crate::text_field::{text_field_in, text_field_recalling};
+use crate::style::{icons, metrics, tones};
+use crate::text_field::{field_part, text_field_in, text_field_recalling};
+use crate::toolbar::COMES_WITH_PULL_AND_PUSH;
 
 /// The subject field's placeholder, as Fork's reads.
 pub const SUBJECT_PLACEHOLDER: &str = "Commit subject";
@@ -47,8 +54,14 @@ pub const SUBJECT_PLACEHOLDER: &str = "Commit subject";
 pub const DESCRIPTION_PLACEHOLDER: &str = "Description";
 /// The toggle's name, drawn beside it and read by assistive technology.
 pub const AMEND_CAPTION: &str = "Amend";
-/// The `≡` button's name, and the menu it opens.
+/// The Recent Commit Messages glyph's name and tooltip, Fork's, and the menu it opens.
 pub const RECENT_MESSAGES_CAPTION: &str = "Recent Commit Messages";
+/// The commit button's ⌄'s name: what Fork's menu there is headed.
+pub const COMMIT_OPTIONS_CAPTION: &str = "Commit Options";
+/// Why the ⌄ is greyed: its items come with pull and push.
+pub const COMMIT_OPTIONS_TOOLTIP: &str = COMES_WITH_PULL_AND_PUSH;
+/// The one field's name, which assistive technology reads: its subject and description.
+pub const COMMIT_FIELD_NAME: &str = "Commit message";
 /// What the running commit's cancel says.
 pub const CANCEL_COMMIT_CAPTION: &str = "Cancel";
 /// The button's caption while Amend is ticked, Fork's: it names no commit; the dialog, where
@@ -365,34 +378,58 @@ impl Component for CommitBox {
                 }
             })
         };
-        let subject_field = text_field_recalling(
-            self.subject,
-            FieldScope::CommitBox,
-            chord.clone(),
-            self.recall.clone(),
-        )
-        .on_validate(edits(self.subject, self.on_edit.clone()))
-        .placeholder(SUBJECT_PLACEHOLDER)
-        .width(Size::fill())
-        .enabled(open);
-        let counter = label()
-            .text(count.left.to_string())
-            .font_size(metrics::BODY)
-            .color(if count.past_hard_limit {
-                error
-            } else {
-                tones::DETAIL_LABEL
-            })
-            .a11y_alt(format!("{} characters left", count.left));
+        // Both parts of the one field are flat on its fill, its border and the rule between
+        // them the box's own.
+        let part = |field| field_part(field).width(Size::fill()).enabled(open);
+        let typed = !subject.read().is_empty();
+        let subject_field = part(
+            text_field_recalling(
+                self.subject,
+                FieldScope::CommitBox,
+                chord.clone(),
+                self.recall.clone(),
+            )
+            .on_validate(edits(self.subject, self.on_edit.clone()))
+            .placeholder(SUBJECT_PLACEHOLDER)
+            .height(Size::px(metrics::COMMIT_SUBJECT))
+            .theme_layout(InputLayoutThemePartial {
+                inner_margin: Some(Preference::Specific(Gaps::new(
+                    0.,
+                    FIELD_MARGIN,
+                    0.,
+                    FIELD_MARGIN,
+                ))),
+                ..Default::default()
+            }),
+        );
+        // Fork's counter appears once the subject has text, before the glyph.
+        let counter = typed.then(|| {
+            label()
+                .text(count.left.to_string())
+                .font_size(metrics::BODY)
+                .color(if count.past_hard_limit {
+                    error
+                } else {
+                    tones::DETAIL_LABEL
+                })
+                .a11y_alt(format!("{} characters left", count.left))
+        });
         let recent = recent_button(self.recent.clone(), open, self.on_recall.clone());
         let subject_row = rect()
             .width(Size::fill())
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .child(rect().width(Size::flex(1.)).child(subject_field))
-            .child(counter)
+            .padding(Gaps::new(0., 4., 0., 0.))
+            .spacing(6.)
+            .child(
+                rect()
+                    .width(Size::flex(1.))
+                    // Fork's subject is bold once typed; its placeholder is not.
+                    .maybe(typed, |el| el.font_weight(FontWeight::BOLD))
+                    .child(subject_field),
+            )
+            .maybe_child(counter)
             .child(recent);
 
         // The description's height as laid out: the ruler stands its whole height.
@@ -402,16 +439,23 @@ impl Component for CommitBox {
             .on_sized(move |e: Event<SizedEventData>| described.set_if_modified(e.area.height()))
             .font_family(DIFF_FONT_FAMILY)
             .font_size(DESCRIPTION_FONT_SIZE)
-            .child(
+            .child(part(
                 text_field_in(self.description, FieldScope::CommitBox, chord)
                     .on_validate(edits(self.description, self.on_edit.clone()))
                     .multiline(true)
                     .placeholder(DESCRIPTION_PLACEHOLDER)
-                    .width(Size::fill())
                     .min_height(DESCRIPTION_MIN_HEIGHT)
                     .max_height(DESCRIPTION_MAX_HEIGHT)
-                    .enabled(open),
-            )
+                    .theme_layout(InputLayoutThemePartial {
+                        inner_margin: Some(Preference::Specific(Gaps::new(
+                            4.,
+                            FIELD_MARGIN,
+                            4.,
+                            FIELD_MARGIN,
+                        ))),
+                        ..Default::default()
+                    }),
+            ))
             .child(
                 rect()
                     .interactive(Interactive::No)
@@ -421,13 +465,36 @@ impl Component for CommitBox {
                     .height(Size::px(*described.read()))
                     .background(tones::RULE),
             );
+        // One bordered field of two parts, a rule between them.
+        let field = rect()
+            .width(Size::fill())
+            .background(tones::FIELD)
+            .corner_radius(metrics::CONTROL_RADIUS)
+            .border(
+                Border::new()
+                    .fill(tones::RULE)
+                    .width(1.)
+                    .alignment(BorderAlignment::Inner),
+            )
+            .a11y_role(AccessibilityRole::Group)
+            .a11y_alt(COMMIT_FIELD_NAME)
+            // The border's pixel is kept clear of the parts' fills.
+            .padding(Gaps::new_all(1.))
+            .child(subject_row)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(1.))
+                    .background(tones::RULE),
+            )
+            .child(description);
 
         let toggle = amend_toggle(
             self.amend,
             self.amend_enabled && open && self.busy.is_none(),
             self.on_amend.clone(),
         );
-        // The button, or in its place what the commit asked is doing.
+        // The split button, or in its place what the commit asked is doing.
         let place = match self.busy.clone() {
             Some(busy) => busy_place(busy, self.on_cancel.clone()),
             None => {
@@ -436,7 +503,7 @@ impl Component for CommitBox {
                     CommitButton::Amend => AMEND_BUTTON_CAPTION.to_owned(),
                 };
                 let on_commit = self.on_commit.clone();
-                control(caption.clone(), caption, ready, move || on_commit.call(()))
+                split_button(caption, ready, move || on_commit.call(()))
             }
         };
         let actions = rect()
@@ -451,8 +518,8 @@ impl Component for CommitBox {
 
         rect()
             .width(Size::fill())
-            .padding(Gaps::new(8., 8., 8., 8.))
-            .spacing(6.)
+            .padding(Gaps::new_all(metrics::COMMIT_BOX_INSET))
+            .spacing(metrics::COMMIT_BOX_INSET)
             .background(tones::HEADING_BAR)
             .border(Border::new().fill(tones::RULE).width(BorderWidth {
                 top: 1.,
@@ -465,8 +532,7 @@ impl Component for CommitBox {
                     .font_size(metrics::BODY)
                     .color(tones::DETAIL_LABEL)
             }))
-            .child(subject_row)
-            .child(description)
+            .child(field)
             .child(actions)
     }
 
@@ -533,14 +599,17 @@ fn amend_toggle(ticked: bool, enabled: bool, on_amend: EventHandler<bool>) -> El
     crate::check_box::check_box(AMEND_CAPTION, ticked, enabled, on_amend)
 }
 
-/// The `≡` that opens Recent Commit Messages: each message's subject, newest first.
+/// The glyph at the subject's right end that opens Recent Commit Messages: each message's
+/// subject, newest first.
 fn recent_button(recent: Rc<Vec<String>>, open: bool, on_recall: EventHandler<usize>) -> Element {
     let enabled = open && !recent.is_empty();
-    control(
-        "≡".to_owned(),
-        RECENT_MESSAGES_CAPTION.to_owned(),
+    BarButton {
+        glyph: icons::recent_messages,
+        name: RECENT_MESSAGES_CAPTION,
+        tooltip: RECENT_MESSAGES_CAPTION.to_owned(),
+        toggle: None,
         enabled,
-        move || {
+        on_press: EventHandler::new(move |()| {
             let items = recent
                 .iter()
                 .enumerate()
@@ -549,8 +618,92 @@ fn recent_button(recent: Rc<Vec<String>>, open: bool, on_recall: EventHandler<us
                 })
                 .collect();
             ContextMenu::open(context_menu(vec![items], on_recall.clone()));
-        },
-    )
+        }),
+    }
+    .into()
+}
+
+/// Fork's split button: the caption, pressable while `enabled`, and beside it behind a rule its
+/// ⌄, a segment of its own, always greyed with why ([`COMMIT_OPTIONS_TOOLTIP`]) and opening
+/// nothing. One outline round both, in the caption's state.
+fn split_button(caption: String, enabled: bool, pressed: impl Fn() + 'static) -> Element {
+    let border = if enabled {
+        tones::BUTTON_BORDER
+    } else {
+        tones::DISABLED_BORDER
+    };
+    let main = rect()
+        .a11y_role(AccessibilityRole::Button)
+        .a11y_alt(caption.clone())
+        .a11y_focusable(enabled)
+        .height(Size::fill())
+        .main_align(Alignment::Center)
+        .padding(Gaps::new(0., 10., 0., 10.))
+        .background(if enabled {
+            tones::BUTTON
+        } else {
+            tones::DISABLED_FILL
+        })
+        .child(
+            label()
+                .text(caption)
+                .font_size(metrics::BODY)
+                .color(if enabled {
+                    tones::TEXT
+                } else {
+                    tones::DISABLED_TEXT
+                }),
+        );
+    let main = if enabled {
+        main.cursor(CursorIcon::Pointer)
+            .on_press(move |e: Event<PressEventData>| {
+                e.stop_propagation();
+                pressed();
+            })
+    } else {
+        main
+    };
+    let options = TooltipContainer::new(Tooltip::new_text(COMMIT_OPTIONS_TOOLTIP)).child(
+        rect()
+            .a11y_role(AccessibilityRole::Button)
+            .a11y_alt(COMMIT_OPTIONS_CAPTION)
+            .a11y_builder(|node| node.set_disabled())
+            .width(Size::px(metrics::COMMIT_CHEVRON))
+            .height(Size::fill())
+            .center()
+            .background(tones::DISABLED_FILL)
+            .border(
+                Border::new()
+                    .fill(border)
+                    .width(BorderWidth {
+                        top: 0.,
+                        right: 0.,
+                        bottom: 0.,
+                        left: 1.,
+                    })
+                    .alignment(BorderAlignment::Inner),
+            )
+            .child(icons::chevron_down(
+                metrics::TOOLBAR_CHEVRON,
+                tones::DISABLED_TEXT,
+            )),
+    );
+    rect()
+        .horizontal()
+        .height(Size::px(metrics::COMMIT_BUTTON))
+        .corner_radius(metrics::CONTROL_RADIUS)
+        .overflow(Overflow::Clip)
+        // The outline's pixel is kept clear of the segments' fills.
+        .padding(Gaps::new_all(1.))
+        .border(
+            Border::new()
+                .fill(border)
+                .width(1.)
+                .alignment(BorderAlignment::Inner),
+        )
+        .child(main)
+        .child(options)
+        .into()
 }
 
 /// What stands in the button's place while a commit is asked: "Waiting for the commit to

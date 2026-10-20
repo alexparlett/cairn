@@ -1,6 +1,8 @@
-//! Local Changes' left side: a filter field, then Unstaged above Staged behind a draggable
-//! splitter, each headed by its name and each one flat, virtualised list of paths with Fork's
-//! badges. The diff of the selection's primary is the caller's, on the right.
+//! Local Changes' left side: Fork's bar across both lists — the filter, Stage All, the
+//! side-by-side eye and View Mode (`local_changes::bar`) — then Unstaged above Staged behind a
+//! draggable splitter, each under its bold heading and each one flat, virtualised list of paths
+//! with Fork's badges, 20 px apart. The diff of the selection's primary is the caller's, on the
+//! right.
 //!
 //! **A row.** Its badge, then its path, a rename's or a copy's source before it. The badges are
 //! Fork's, told apart by their shape: `M` for a modified file and a type change alike, `+` for
@@ -22,20 +24,22 @@
 //! its edges), each list's Stage or Unstage button — greyed while the selection is in the other
 //! list — and the context menu (`local_changes::menu`); Stage All and Unstage All by the
 //! heading's button with the table's heading press held (Shift on Linux, ⌥ on macOS: both
-//! buttons read Stage All and Unstage All while it is, enabled whatever is selected) and by the
-//! small double chevrons always drawn, ⇊ in Unstaged and ⇈ in Staged; and the discard chord and
-//! menu item, on the unstaged side only. The selection it draws is the caller's
-//! ([`LocalSelection`]), read by a binary search per row built; ↑ and ↓ move from its primary.
+//! buttons read Stage All and Unstage All while it is, enabled whatever is selected), by Stage
+//! All's double chevron in the bar over both lists, as Fork's, and by the small ⇈ on the Staged
+//! heading, always drawn; and the discard chord and menu item, on the unstaged side only. The
+//! eye in the bar is reported to [`LocalChangesList::on_side_by_side`]. The selection it draws
+//! is the caller's ([`LocalSelection`]), read by a binary search per row built; ↑ and ↓ move
+//! from its primary.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys, Scope};
-use crate::detail::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
-use crate::detail::commit_tab::DETAIL_ROW_HEIGHT;
+use crate::detail::changes_list::{FILTERING, filter_count};
 use crate::detail::file_filter::ShownFiles;
 use crate::diff::palette::DIFF_FONT_FAMILY;
 use crate::history::ref_glyphs::RefGlyph;
+use crate::local_changes::bar::ListsBar;
 use crate::local_changes::drag::ListDrag;
 use crate::local_changes::menu::{
     MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
@@ -43,7 +47,6 @@ use crate::local_changes::menu::{
 };
 use crate::local_changes::selection::LocalSelection;
 use crate::style::{icons, metrics, tones};
-use crate::text_field::text_field;
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
 /// caller decides what each does to its selection and what it asks.
@@ -73,8 +76,12 @@ pub const STAGED_CAPTION: &str = "Staged";
 /// Said in place of both lists when the filter leaves no path.
 pub const NO_PATH_MATCHES: &str = "No path matches the filter.";
 
-/// A heading's height.
-pub const LIST_HEADER_HEIGHT: f32 = 26.0;
+/// A heading's height, its rule included.
+pub const LIST_HEADER_HEIGHT: f32 = metrics::LIST_HEADING;
+/// A row's height: Fork's 20 px.
+pub const LOCAL_CHANGES_ROW_HEIGHT: f32 = metrics::LOCAL_CHANGES_ROW;
+/// The bar over both lists, its rule included.
+pub const LISTS_BAR_HEIGHT: f32 = metrics::LISTS_BAR;
 
 const BADGE_WIDTH: f32 = 18.0;
 
@@ -140,8 +147,10 @@ pub struct LocalChangesList {
     split: Option<Writable<f32>>,
     selection: Option<Readable<Option<LocalSelection>>>,
     held: Option<Readable<HeldKeys>>,
+    side_by_side: bool,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
+    on_side_by_side: EventHandler<()>,
     key: DiffKey,
 }
 
@@ -164,8 +173,10 @@ impl LocalChangesList {
             split: None,
             selection: None,
             held: None,
+            side_by_side: false,
             on_choose: EventHandler::new(|_| {}),
             on_intent: EventHandler::new(|_| {}),
+            on_side_by_side: EventHandler::new(|()| {}),
             key: DiffKey::None,
         }
     }
@@ -214,6 +225,18 @@ impl LocalChangesList {
         self.on_intent = on_intent.into();
         self
     }
+
+    /// Whether the diff beside the lists is drawn side by side: the bar's eye is lit while it is.
+    pub fn side_by_side(mut self, side_by_side: bool) -> Self {
+        self.side_by_side = side_by_side;
+        self
+    }
+
+    /// The bar's eye was pressed: the caller turns the shared side-by-side setting.
+    pub fn on_side_by_side(mut self, on_side_by_side: impl Into<EventHandler<()>>) -> Self {
+        self.on_side_by_side = on_side_by_side.into();
+        self
+    }
 }
 
 impl PartialEq for LocalChangesList {
@@ -224,6 +247,7 @@ impl PartialEq for LocalChangesList {
             && self.shown_paths == other.shown_paths
             && self.selection == other.selection
             && self.held == other.held
+            && self.side_by_side == other.side_by_side
             && self.key == other.key
     }
 }
@@ -325,21 +349,23 @@ impl Component for LocalChangesList {
                 )
                 .into()
         };
+        let bar = ListsBar {
+            filter: self.filter.clone(),
+            stage_all: unstaged > 0,
+            side_by_side: self.side_by_side,
+            on_intent: self.on_intent.clone(),
+            on_side_by_side: self.on_side_by_side.clone(),
+        };
         drag.on(rect())
             .expanded()
             .content(Content::Flex)
-            .child(
+            .child(bar.element())
+            .maybe_child(count.map(|count| {
                 rect()
                     .width(Size::fill())
-                    .padding(Gaps::new(4., 6., 4., 6.))
-                    .child(
-                        text_field(self.filter.clone())
-                            .placeholder(FILTER_PLACEHOLDER)
-                            .compact()
-                            .width(Size::fill()),
-                    )
-                    .maybe_child(count),
-            )
+                    .padding(Gaps::new(2., 8., 2., 8.))
+                    .child(count)
+            }))
             .child(lists)
     }
 
@@ -418,17 +444,21 @@ fn button_caption(list: ChangeList, all: bool) -> &'static str {
     }
 }
 
-/// A small control of a list's heading: pressable without taking focus from the list, as
-/// Freya's `Button` would. Disabled, it reports nothing and draws in Fork's disabled tones.
+/// A control of a list's heading, bordered as Fork's: pressable without taking focus from the
+/// list, as Freya's `Button` would. Disabled, it reports nothing and draws in Fork's disabled
+/// tones.
 fn heading_control(
     child: Element,
     name: &str,
     enabled: bool,
+    padding: f32,
     pressed: impl Fn() + 'static,
 ) -> Rect {
     let control = rect()
-        .padding(Gaps::new(1., 6., 1., 6.))
-        .corner_radius(4.)
+        .height(Size::px(metrics::LIST_HEADING_BUTTON))
+        .main_align(Alignment::Center)
+        .padding(Gaps::new(0., padding, 0., padding))
+        .corner_radius(metrics::CONTROL_RADIUS)
         .background(if enabled {
             tones::BUTTON
         } else {
@@ -519,6 +549,7 @@ impl Component for ListSection {
                 .into(),
             caption,
             pressable,
+            metrics::LIST_HEADING_BUTTON_PADDING,
             move || {
                 let action = if all {
                     Action::StageOrUnstageAll
@@ -528,33 +559,27 @@ impl Component for ListSection {
                 acting.call(ListIntent::Act(list, action));
             },
         );
-        // The double chevron in each heading, kept deliberately small, as Fork keeps its own:
-        // ⇊ Stage All in Unstaged (Fork's), ⇈ Unstage All in Staged (where Fork for Windows
-        // shows Unstage All only while Shift is held).
+        // The Staged heading's double chevron, ⇈ Unstage All, kept deliberately small, as Fork
+        // keeps its own Stage All in the bar over both lists — where Fork for Windows shows
+        // Unstage All only while Shift is held. Unstaged's heading has none: Stage All is the
+        // bar's.
         let staging_all = self.on_intent.clone();
-        let (glyph, all_caption) = match list {
-            ChangeList::Unstaged => (
-                icons::stage_all as fn(f32, Color) -> Element,
-                STAGE_ALL_CAPTION,
-            ),
-            ChangeList::Staged => (
-                icons::unstage_all as fn(f32, Color) -> Element,
+        let chevron = (list == ChangeList::Staged).then(|| {
+            TooltipContainer::new(Tooltip::new_text(UNSTAGE_ALL_CAPTION)).child(heading_control(
+                icons::unstage_all(
+                    metrics::DIFF_BAR_ICON,
+                    if listed {
+                        tones::TEXT
+                    } else {
+                        tones::DISABLED_TEXT
+                    },
+                ),
                 UNSTAGE_ALL_CAPTION,
-            ),
-        };
-        let chevron = TooltipContainer::new(Tooltip::new_text(all_caption)).child(heading_control(
-            glyph(
-                metrics::DIFF_BAR_ICON,
-                if listed {
-                    tones::TEXT
-                } else {
-                    tones::DISABLED_TEXT
-                },
-            ),
-            all_caption,
-            listed,
-            move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),
-        ));
+                listed,
+                metrics::LIST_HEADING_BUTTON_PADDING / 2.,
+                move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),
+            ))
+        });
         let dropping = self.on_intent.clone();
         rect()
             .expanded()
@@ -578,19 +603,30 @@ impl Component for ListSection {
                     .width(Size::fill())
                     .height(Size::px(LIST_HEADER_HEIGHT))
                     .cross_align(Alignment::Center)
-                    .padding(Gaps::new(0., 8., 0., 8.))
+                    .padding(Gaps::new(0., 4., 0., 6.))
                     .spacing(6.)
                     .background(tones::HEADING_BAR)
+                    .border(
+                        Border::new()
+                            .fill(tones::RULE)
+                            .width(BorderWidth {
+                                top: 0.,
+                                right: 0.,
+                                bottom: 1.,
+                                left: 0.,
+                            })
+                            .alignment(BorderAlignment::Inner),
+                    )
                     .child(
                         label()
                             .text(list_caption(list))
                             .width(Size::flex(1.))
                             .max_lines(1)
-                            .font_size(metrics::BODY)
+                            .font_size(metrics::HEADING)
                             .font_weight(FontWeight::BOLD)
                             .color(tones::TEXT),
                     )
-                    .child(chevron)
+                    .maybe_child(chevron)
                     .child(button),
             )
             .child(
@@ -609,8 +645,11 @@ impl Component for ListSection {
                         VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                             // Room for the horizontal scrollbar after the last row
                             // (`end_room`); a row past the list's own builds empty.
-                            .length(crate::end_room::with_end_room(self.rows, DETAIL_ROW_HEIGHT))
-                            .item_size(DETAIL_ROW_HEIGHT)
+                            .length(crate::end_room::with_end_room(
+                                self.rows,
+                                LOCAL_CHANGES_ROW_HEIGHT,
+                            ))
+                            .item_size(LOCAL_CHANGES_ROW_HEIGHT)
                             // The arrows move the selection, not the viewport.
                             .scroll_with_arrows(false)
                             .expanded(),
@@ -695,8 +734,8 @@ fn keyboard(
             None => on_choose.call((list, row)),
         }
         controller.scroll_to_offset(
-            drawn as f32 * DETAIL_ROW_HEIGHT,
-            DETAIL_ROW_HEIGHT,
+            drawn as f32 * LOCAL_CHANGES_ROW_HEIGHT,
+            LOCAL_CHANGES_ROW_HEIGHT,
             Direction::Vertical,
         );
     }

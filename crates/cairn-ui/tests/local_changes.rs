@@ -10,8 +10,9 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::HeldKeys;
 use cairn_ui::{
-    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList, LocalSelection,
-    NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
+    FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LISTS_BAR_HEIGHT, LOCAL_CHANGES_ROW_HEIGHT,
+    LocalChangesList, LocalSelection, NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS,
+    STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
 use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
@@ -546,8 +547,10 @@ fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
         .map(|change| change.path.display().into_owned())
         .unwrap_or_default();
     let (mut test, fixture, _) = launch(changes);
-    // Each list has about half the height under the filter and the two headings.
-    let viewport = ((HEIGHT - 40. - 2. * LIST_HEADER_HEIGHT) / DETAIL_ROW_HEIGHT).ceil() as usize;
+    // Each list has about half the height under the bar and the two headings.
+    let viewport = ((HEIGHT - LISTS_BAR_HEIGHT - 2. * LIST_HEADER_HEIGHT)
+        / LOCAL_CHANGES_ROW_HEIGHT)
+        .ceil() as usize;
     let within = |test: &TestingRunner, place: &str| {
         let built = built(test).len();
         assert!(
@@ -630,7 +633,9 @@ fn a_status_of_50000_paths_all_selected_builds_one_viewport() {
             .map(|selection| selection.paths().len()),
         Some(PATHS)
     );
-    let viewport = ((HEIGHT - 40. - 2. * LIST_HEADER_HEIGHT) / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let viewport = ((HEIGHT - LISTS_BAR_HEIGHT - 2. * LIST_HEADER_HEIGHT)
+        / LOCAL_CHANGES_ROW_HEIGHT)
+        .ceil() as usize;
     let within = |test: &TestingRunner, place: &str| {
         let built = built(test).len();
         assert!(
@@ -671,7 +676,7 @@ fn scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar(
             .into_iter()
             .next()
             .unwrap_or_else(|| panic!("{path} is not drawn at the end of its list"));
-        centre + DETAIL_ROW_HEIGHT / 2.
+        centre + LOCAL_CHANGES_ROW_HEIGHT / 2.
     };
     let staged_heading_top = y_of(&test, STAGED_CAPTION)
         .into_iter()

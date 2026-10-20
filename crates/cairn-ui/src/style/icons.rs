@@ -195,6 +195,25 @@ pub fn unstage_all(size: f32, colour: Color) -> Element {
     drawn(("chevrons-up", lucide::chevrons_up()), size, colour)
 }
 
+/// An eye: Local Changes' Show diff side-by-side, in the bar over its lists.
+pub fn eye(size: f32, colour: Color) -> Element {
+    drawn(("eye", lucide::eye()), size, colour)
+}
+
+/// A list: Local Changes' View Mode, whose one mode is the list.
+pub fn view_mode(size: f32, colour: Color) -> Element {
+    drawn(("list", lucide::list()), size, colour)
+}
+
+/// Lines of text: the commit box's Recent Commit Messages.
+pub fn recent_messages(size: f32, colour: Color) -> Element {
+    drawn(
+        ("text-align-justify", lucide::text_align_justify()),
+        size,
+        colour,
+    )
+}
+
 /// `icon` turned left for right: Lucide draws a list's sign at the lines' right, Fork at their
 /// left.
 fn mirrored(icon: Element) -> Element {
@@ -223,7 +242,7 @@ mod tests {
     /// turned off, or a name that resolves to something other than an SVG.
     #[test]
     fn every_icon_is_an_svg_of_the_set() {
-        let sources: [Source; 32] = [
+        let sources: [Source; 35] = [
             ("git-branch", || lucide::git_branch().to_vec()),
             ("cloud", || lucide::cloud().to_vec()),
             ("archive", || lucide::archive().to_vec()),
@@ -264,6 +283,11 @@ mod tests {
             ("arrow-up-down", || lucide::arrow_up_down().to_vec()),
             ("chevrons-down", || lucide::chevrons_down().to_vec()),
             ("chevrons-up", || lucide::chevrons_up().to_vec()),
+            ("eye", || lucide::eye().to_vec()),
+            ("list", || lucide::list().to_vec()),
+            ("text-align-justify", || {
+                lucide::text_align_justify().to_vec()
+            }),
         ];
         for (name, source) in sources {
             let svg = String::from_utf8(source()).unwrap_or_default();

@@ -84,6 +84,22 @@ pub const AVATAR_TEXT: f32 = 8.0;
 pub const SIDEBAR_ROW: f32 = 22.0;
 /// A row of Local Changes' lists.
 pub const LOCAL_CHANGES_ROW: f32 = 20.0;
+/// The bar over Local Changes' two lists and the rule under it: Fork's 17 px and 1 px (uw6).
+pub const LISTS_BAR: f32 = 18.0;
+/// A heading of Local Changes' lists and the rule under it: Fork's 32 px and 1 px (uw6).
+pub const LIST_HEADING: f32 = 33.0;
+/// A heading's bordered Stage or Unstage button: Fork's 22 px tall (uw6).
+pub const LIST_HEADING_BUTTON: f32 = 22.0;
+/// The room the button gives either side of its caption: Fork's Stage is 54 px across (uw6).
+pub const LIST_HEADING_BUTTON_PADDING: f32 = 12.0;
+/// The commit box's margin round its field and its buttons: Fork's 15 px (uw6).
+pub const COMMIT_BOX_INSET: f32 = 15.0;
+/// The commit box's subject, one part of its field: Fork's 22 px (uw6).
+pub const COMMIT_SUBJECT: f32 = 22.0;
+/// The commit button's height: Fork's 22 px (uw6).
+pub const COMMIT_BUTTON: f32 = 22.0;
+/// The commit button's ⌄, a segment of its own: Fork's 16 px across (uw6).
+pub const COMMIT_CHEVRON: f32 = 16.0;
 /// A menu item: the pitch between items of a context menu and a menu bar's menu.
 pub const MENU_ITEM: f32 = 23.0;
 /// A menu's narrowest width: Cairn's, so a menu of short items is not a sliver; Fork's own are

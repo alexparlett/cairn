@@ -13,8 +13,8 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, HeldKeys, Os};
 use cairn_ui::{
-    COPY_PATH_CAPTION, DETAIL_ROW_HEIGHT, DISCARD_CAPTION, ListIntent, LocalChangesList,
-    LocalSelection, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
+    COPY_PATH_CAPTION, DISCARD_CAPTION, LIST_HEADER_HEIGHT, LOCAL_CHANGES_ROW_HEIGHT, ListIntent,
+    LocalChangesList, LocalSelection, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
     UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, UNSTAGED_CAPTION,
 };
 use freya::prelude::*;
@@ -151,6 +151,22 @@ fn at(test: &TestingRunner, text: &str) -> (f64, f64) {
         .find(|(drawn, ..)| drawn == text)
         .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y)))
         .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", labels(test)))
+}
+
+/// The centre of the control assistive technology reads as `name`: a glyph button's value, or
+/// a heading control's name.
+fn named(test: &TestingRunner, name: &str) -> (f64, f64) {
+    let centre = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| {
+                    let builder = &rect.accessibility.builder;
+                    builder.value() == Some(name) || builder.label() == Some(name)
+                })
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no control is named {name:?}"));
+    (f64::from(centre.x), f64::from(centre.y))
 }
 
 fn texts(test: &TestingRunner) -> Vec<String> {
@@ -322,10 +338,10 @@ fn a_double_press_stages_or_unstages_its_row() {
 /// Each list's button acts on the selection only while it is in that list — greyed with nothing
 /// selected and while the selection is in the other list — and, with the table's heading press
 /// held (Shift on Linux, ⌥ on macOS), both read Stage All and Unstage All, enabled whatever is
-/// selected, and act on the whole list; the double chevron is drawn in each heading, ⇊ Stage
-/// All in Unstaged and ⇈ Unstage All in Staged, with no key held. Caught by: a button that acts
-/// with nothing selected or on the other list's selection, a held press not heard, Unstage All
-/// reachable only with a key held, or a chevron missing.
+/// selected, and act on the whole list; with no key held, Stage All's double chevron is the
+/// bar's over both lists, as Fork's (uv12a), and ⇈ Unstage All the Staged heading's. Caught by:
+/// a button that acts with nothing selected or on the other list's selection, a held press not
+/// heard, Unstage All reachable only with a key held, or a chevron missing.
 #[test]
 fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything() {
     let (mut test, fixture, log) = launch(lists());
@@ -358,12 +374,12 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
     test.click_cursor(at(&test, UNSTAGE_ALL_CAPTION));
     test.sync_and_update();
     let_go(&mut test, fixture);
-    // The double chevrons, beside each list's button, with no key held.
-    for caption in [STAGE_CAPTION, UNSTAGE_CAPTION] {
-        let (x, y) = at(&test, caption);
-        test.click_cursor((x - 20., y));
-        test.sync_and_update();
-    }
+    // Stage All in the bar over both lists, and Unstage All beside Staged's button, with no
+    // key held.
+    test.click_cursor(named(&test, STAGE_ALL_CAPTION));
+    test.sync_and_update();
+    test.click_cursor(named(&test, UNSTAGE_ALL_CAPTION));
+    test.sync_and_update();
     use ChangeList::{Staged as S, Unstaged as U};
     assert_eq!(
         heard(&log),
@@ -424,7 +440,7 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     let staged_heading = at(&test, STAGED_CAPTION);
     let into_staged = (
         staged_heading.0 + 40.,
-        staged_heading.1 + DETAIL_ROW_HEIGHT as f64 * 2.,
+        staged_heading.1 + LOCAL_CHANGES_ROW_HEIGHT as f64 * 2.,
     );
     let drag = |test: &mut TestingRunner, from: (f64, f64), to: (f64, f64)| {
         test.press_cursor(from);
@@ -458,8 +474,12 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
 
     // Released over its own list, outside both lists, or after Escape: nothing.
     let a = at(&test, "a.rs");
-    drag(&mut test, a, (a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
-    test.release_cursor((a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
+    drag(
+        &mut test,
+        a,
+        (a.0, a.1 + 2. * LOCAL_CHANGES_ROW_HEIGHT as f64),
+    );
+    test.release_cursor((a.0, a.1 + 2. * LOCAL_CHANGES_ROW_HEIGHT as f64));
     test.sync_and_update();
     // Over Staged first, then released outside both lists, over the filter.
     let filter = (100., 15.);
@@ -495,8 +515,11 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     let (mut test, _, log) = launch(LocalChanges::new(WorkingTreeStatus::Listed(entries)));
     let staged_heading = at(&test, STAGED_CAPTION);
     let from = at(&test, "s.rs");
-    // Unstaged's bottom band: just above Staged's heading.
-    let edge = (from.0, staged_heading.1 - DETAIL_ROW_HEIGHT as f64);
+    // Unstaged's bottom band: a row above the top of Staged's heading, clear of the splitter.
+    let edge = (
+        from.0,
+        staged_heading.1 - f64::from(LIST_HEADER_HEIGHT / 2. + LOCAL_CHANGES_ROW_HEIGHT),
+    );
     test.press_cursor(from);
     test.move_cursor((from.0, from.1 - 10.));
     test.sync_and_update();
@@ -644,7 +667,7 @@ fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
     let staged_heading = at(&test, STAGED_CAPTION);
     let into_staged = (
         staged_heading.0 + 40.,
-        staged_heading.1 + DETAIL_ROW_HEIGHT as f64 * 2.,
+        staged_heading.1 + LOCAL_CHANGES_ROW_HEIGHT as f64 * 2.,
     );
     let start = |test: &mut TestingRunner| {
         let from = at(test, "a.rs");

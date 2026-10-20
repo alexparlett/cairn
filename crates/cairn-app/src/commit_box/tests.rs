@@ -20,7 +20,8 @@ use freya::prelude::*;
 use freya_testing::TestingRunner;
 
 use crate::local_changes::tests::{
-    Submitted, apply, asked, changed, labels, launch, open_local_changes, press_row, status,
+    Submitted, apply, asked, changed, labels, launch, open_local_changes, press_named, press_row,
+    status,
 };
 use crate::window::View;
 use crate::worker::{
@@ -1119,7 +1120,7 @@ fn amends_staged_list_unread_is_said_and_the_status_lists_stay() {
     assert!(drawn(&test, AMEND_BUTTON_CAPTION));
 }
 
-/// The `≡` lists the recent messages' subjects and a choice fills both fields; ↑ in an empty
+/// The Recent Commit Messages glyph lists the recent messages' subjects and a choice fills both fields; ↑ in an empty
 /// subject recalls the newest, ↑ again the next older, ↓ back, and ↓ from the newest empties the
 /// draft; in a subject the person typed, ↑ is the editor's. Caught by: a recall over a typed
 /// subject, or a choice filling the subject alone.
@@ -1132,7 +1133,7 @@ fn recent_messages_fill_both_fields_from_the_menu_and_the_arrows() {
         &submitted,
         reads(None, None, &["Fix A\n\nBody A\n", "Fix B\n"]),
     );
-    click(&mut test, "≡");
+    press_named(&mut test, cairn_ui::RECENT_MESSAGES_CAPTION);
     click(&mut test, "Fix B");
     assert_eq!(draft(view), ("Fix B".to_owned(), String::new()));
     set(&mut test, view.local.commit.subject, "");

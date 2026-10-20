@@ -7,13 +7,16 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, Busy, CANCEL_COMMIT_CAPTION, CANCELLING, CLOSE_CAPTION,
-    CommitBox, CommitButton, GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT,
+    COMMIT_FIELD_NAME, COMMIT_OPTIONS_CAPTION, COMMIT_OPTIONS_TOOLTIP, CommitBox, CommitButton,
+    GIT_ERROR_TITLE, GitErrorDialog, OUTPUT_ROW_HEIGHT, RECENT_MESSAGES_CAPTION,
     SKIP_HOOKS_CAPTION,
 };
+use freya::elements::rect::RectElement;
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
@@ -66,6 +69,19 @@ fn launch(
     line: Option<&str>,
     busy: Option<Busy>,
 ) -> (TestingRunner, Reports) {
+    launch_ready(ticked, button, subject, stopped, line, busy, true)
+}
+
+/// [`launch`], the button's press `ready` or not.
+fn launch_ready(
+    ticked: bool,
+    button: CommitButton,
+    subject: &str,
+    stopped: bool,
+    line: Option<&str>,
+    busy: Option<Busy>,
+    ready: bool,
+) -> (TestingRunner, Reports) {
     let reports = Reports::default();
     let subject = subject.to_owned();
     let line = line.map(str::to_owned);
@@ -84,7 +100,7 @@ fn launch(
                 rect().expanded().child(
                     CommitBox::new(typed, body)
                         .amend(ticked, true)
-                        .button(button.clone(), true)
+                        .button(button.clone(), ready)
                         .stopped(stopped)
                         .line(line.clone())
                         .busy(busy.clone())
@@ -314,6 +330,210 @@ fn an_edit_in_a_field_is_reported() {
     test.write_text("a");
     settle(&mut test);
     assert!(*reports.edits.borrow() >= 1, "typing was no edit");
+}
+
+/// Every control assistive technology reads as `name`, with where it is laid out.
+fn named(test: &TestingRunner, name: &str) -> Vec<(RectElement, Area)> {
+    test.find_many(|node, element| {
+        Rect::try_downcast(element)
+            .filter(|rect| {
+                let builder = &rect.accessibility.builder;
+                builder.value() == Some(name) || builder.label() == Some(name)
+            })
+            .map(|rect| (rect, node.layout().area))
+    })
+}
+
+/// The one control named `name`.
+fn one_named(test: &TestingRunner, name: &str) -> (RectElement, Area) {
+    let mut found = named(test, name);
+    assert_eq!(
+        found.len(),
+        1,
+        "{} controls are named {name:?}",
+        found.len()
+    );
+    found.remove(0)
+}
+
+/// Where the first text input of `role` is laid out.
+fn input_of(test: &TestingRunner, role: AccessibilityRole) -> Area {
+    test.find(|node, element| {
+        Rect::try_downcast(element)
+            .filter(|rect| rect.accessibility.builder.role() == role)
+            .map(|_| node.layout().area)
+    })
+    .unwrap_or_else(|| panic!("no {role:?}"))
+}
+
+/// Rests the pointer on `at` long enough for its tooltip, and the labels drawn then.
+fn hovered(test: &mut TestingRunner, at: Area) -> Vec<String> {
+    let centre = at.center();
+    test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.poll(Duration::from_millis(50), Duration::from_millis(900));
+    let shown = labels(test);
+    test.move_cursor((f64::from(WIDTH - 2.), 2.));
+    test.poll(Duration::from_millis(50), Duration::from_millis(400));
+    shown
+}
+
+fn contains(outer: Area, inner: Area) -> bool {
+    inner.min_x() >= outer.min_x()
+        && inner.max_x() <= outer.max_x()
+        && inner.min_y() >= outer.min_y()
+        && inner.max_y() <= outer.max_y()
+}
+
+/// Fork's box (uv12c, uw36a): one bordered field holding the subject over a rule over the
+/// description, the Recent Commit Messages glyph at the subject's right end inside it; under it
+/// Amend at the left and the split button at the right — its caption, then its ⌄ beside it, a
+/// control of its own, greyed and saying it comes with pull and push whether the caption can be
+/// pressed or not, its press reporting nothing. Caught by: two separate fields, the glyph
+/// outside the field, the ⌄ missing, enabled, or silent, or a press on it committing.
+#[test]
+fn the_commit_box_is_one_field_and_a_split_button() {
+    for ready in [false, true] {
+        let subject = if ready { "Fix" } else { "" };
+        let (mut test, reports) = launch_ready(
+            false,
+            CommitButton::Commit { files: 1 },
+            subject,
+            false,
+            None,
+            None,
+            ready,
+        );
+        let (field_rect, field) = one_named(&test, COMMIT_FIELD_NAME);
+        assert_eq!(
+            field_rect.style.borders.first().map(|border| border.fill),
+            Some(tones::RULE),
+            "the field is not bordered"
+        );
+        let subject_area = input_of(&test, AccessibilityRole::TextInput);
+        let description = input_of(&test, AccessibilityRole::MultilineTextInput);
+        assert!(
+            contains(field, subject_area) && contains(field, description),
+            "the subject and the description are not parts of one field: {field:?}"
+        );
+        assert!(subject_area.max_y() <= description.min_y());
+        assert_eq!(subject_area.height(), metrics::COMMIT_SUBJECT);
+        let rules = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|rect| rect.style.background == Fill::Color(tones::RULE))
+                .filter(|_| area.height() == 1. && area.width() > field.width() / 2.)
+                .map(|_| area.center().y)
+        });
+        assert!(
+            rules
+                .iter()
+                .any(|y| *y >= subject_area.max_y() && *y <= description.min_y()),
+            "no rule between the subject and the description: {rules:?}"
+        );
+        let (_, recent) = one_named(&test, RECENT_MESSAGES_CAPTION);
+        assert!(
+            contains(field, recent)
+                && recent.min_x() >= subject_area.max_x()
+                && recent.center().y > subject_area.min_y()
+                && recent.center().y < subject_area.max_y(),
+            "Recent Commit Messages is not at the subject's right end: {recent:?}"
+        );
+
+        let (_, amend) = one_named(&test, AMEND_CAPTION);
+        let caption = "Commit 1 File";
+        let (_, button) = one_named(&test, caption);
+        let (options, chevron) = one_named(&test, COMMIT_OPTIONS_CAPTION);
+        assert!(
+            amend.max_x() < button.min_x(),
+            "Amend is not left of the button"
+        );
+        assert!(
+            chevron.min_x() >= button.max_x() - 1.
+                && (chevron.center().y - button.center().y).abs() < 1.,
+            "the ⌄ is not beside the caption: {button:?} {chevron:?}"
+        );
+        assert!(
+            field.max_y() <= button.min_y(),
+            "the button is not under the field"
+        );
+        assert!(
+            options.accessibility.builder.is_disabled(),
+            "the ⌄ is not greyed"
+        );
+        let shown = hovered(&mut test, chevron);
+        assert!(
+            shown.iter().any(|label| label == COMMIT_OPTIONS_TOOLTIP),
+            "the ⌄ does not say why it is greyed (ready: {ready}): {shown:?}"
+        );
+        assert_eq!(COMMIT_OPTIONS_TOOLTIP, "Comes with pull and push.");
+        let centre = chevron.center();
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+        settle(&mut test);
+        assert_eq!(*reports.commits.borrow(), 0, "the ⌄ committed");
+        click(&mut test, caption);
+        assert_eq!(
+            *reports.commits.borrow(),
+            usize::from(ready),
+            "the caption's press (ready: {ready})"
+        );
+    }
+}
+
+/// Fork's counter appears only once the subject has text, and the subject is bold then: with
+/// none, no figure is drawn and nothing is bold; with "x", "49" stands between the subject and
+/// Recent Commit Messages. Caught by: the counter's "50" over an empty subject, the counter
+/// after the glyph, or the typed subject at the body's weight.
+#[test]
+fn the_counter_and_the_bold_subject_appear_once_the_subject_has_text() {
+    let bold_round = |test: &TestingRunner, subject: Area| {
+        test.find_many(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.text_style_data.font_weight == Some(FontWeight::BOLD))
+                .filter(|_| contains(node.layout().area, subject))
+        })
+        .len()
+    };
+    let (test, _) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "",
+        false,
+        None,
+        None,
+    );
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|l| l == "50"),
+        "a counter while empty: {shown:?}"
+    );
+    let subject = input_of(&test, AccessibilityRole::TextInput);
+    assert_eq!(bold_round(&test, subject), 0, "the empty subject is bold");
+
+    let (test, _) = launch(
+        false,
+        CommitButton::Commit { files: 1 },
+        "x",
+        false,
+        None,
+        None,
+    );
+    let subject = input_of(&test, AccessibilityRole::TextInput);
+    let counter = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == "49")
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no counter once typed: {:?}", labels(&test)));
+    let (_, recent) = one_named(&test, RECENT_MESSAGES_CAPTION);
+    assert!(
+        counter.min_x() >= subject.max_x() && counter.max_x() <= recent.min_x(),
+        "the counter is not between the subject and the glyph"
+    );
+    assert!(
+        bold_round(&test, subject) >= 1,
+        "the typed subject is not bold"
+    );
 }
 
 /// What the Git Error dialog reported.

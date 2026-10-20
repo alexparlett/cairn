@@ -1,5 +1,6 @@
 //! Local Changes: in the main region in place of the history when Local Changes is pressed in
-//! the sidebar — the filter and the two lists on the left, Unstaged above Staged, and the
+//! the sidebar — Fork's bar over the two lists on the left (the filter, Stage All, the eye that
+//! turns the shared side-by-side setting and View Mode), Unstaged above Staged, and the
 //! selection's primary's diff on the right under the diff view's bar, as Fork lays the view
 //! out. A component of its own, mounted only while it is shown, so the work it watches for — a
 //! filter's text, a path to choose, a diff to ask again — is done only for a view someone is
@@ -44,7 +45,7 @@ use cairn_model::{
     ChangeList, ChangeStatus, ChangedFile, DiffContent, ShownDiff, UnreadableIndex,
     WorkingTreeStatus,
 };
-use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::accelerators::{self, Action, Scope};
 use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     DiffHeader, DiffNotice, DiffNoticeView, DiffView, Gesture, GestureAct, GestureSide, LineDrag,
@@ -206,6 +207,7 @@ impl Component for LocalChangesPane {
 
         let choosing = self.submit.clone();
         let intending = self.submit.clone();
+        let eyeing = self.submit.clone();
         let readable = view.local.state.into_readable();
         let list = LocalChangesList::new(
             readable.map(drawn_changes, |_| true),
@@ -222,6 +224,11 @@ impl Component for LocalChangesPane {
         })
         .on_intent(move |intent: ListIntent| {
             actions::intent(intent, view, intending.clone());
+        })
+        // The bar's eye turns the shared setting, as the diff bar's own button does.
+        .side_by_side(view.diff_settings.read().side_by_side())
+        .on_side_by_side(move |()| {
+            shortcuts::act(Action::ToggleSideBySide, view, eyeing.as_deref());
         });
         // Nothing is drawn under the lists: a write's progress is the status box's, its
         // ending its dialog's.

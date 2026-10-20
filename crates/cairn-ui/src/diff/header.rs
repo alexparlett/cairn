@@ -20,6 +20,7 @@ use cairn_model::{ChangeStatus, ChangedFile};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, Os};
+use crate::bar_button::BarButton;
 use crate::diff::palette::HEADER_BAR;
 use crate::diff::settings::DiffSettings;
 use crate::style::{icons, metrics, tones};
@@ -229,11 +230,14 @@ impl Component for DiffHeader {
                 HeaderAction::EntireFile => (Some(settings.entire_file()), true),
                 HeaderAction::SideBySide => (Some(settings.side_by_side()), true),
             };
+            let on_action = self.on_action.clone();
             BarButton {
-                which,
+                glyph: which.glyph(),
+                name: which.label(),
+                tooltip: bar_tooltip(which, Os::current()),
                 toggle,
                 enabled,
-                on_action: self.on_action.clone(),
+                on_press: EventHandler::new(move |()| on_action.call(which)),
             }
             .into()
         };
@@ -310,80 +314,6 @@ impl Component for DiffHeader {
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
-    }
-}
-
-/// One button of the bar: its glyph in Fork's blue while its toggle is on and in the bar's
-/// tone otherwise, a square behind it under the pointer, its name for assistive technology and
-/// Fork's tooltip. A disabled button is greyed and reports nothing.
-#[derive(Clone)]
-struct BarButton {
-    which: HeaderAction,
-    toggle: Option<bool>,
-    enabled: bool,
-    on_action: EventHandler<HeaderAction>,
-}
-
-impl PartialEq for BarButton {
-    fn eq(&self, other: &Self) -> bool {
-        self.which == other.which && self.toggle == other.toggle && self.enabled == other.enabled
-    }
-}
-
-impl Component for BarButton {
-    fn render(&self) -> impl IntoElement {
-        let mut hovered = use_state(|| false);
-        let a11y_id = use_a11y();
-        let focus = use_focus(a11y_id);
-        let (which, toggle, enabled) = (self.which, self.toggle, self.enabled);
-        let colour = if !enabled {
-            tones::DISABLED_TEXT
-        } else if toggle == Some(true) {
-            tones::DIFF_BAR_ON
-        } else {
-            tones::DIFF_BAR_ICON
-        };
-        let on_action = self.on_action.clone();
-        let name = which.label();
-        TooltipContainer::new(Tooltip::new_text(bar_tooltip(which, Os::current()))).child(
-            rect()
-                .a11y_id(a11y_id)
-                // A Tab stop while it can be pressed, so the five buttons with no chord are
-                // reached from the keyboard; Space or Enter presses it.
-                .a11y_focusable(enabled)
-                .a11y_role(AccessibilityRole::Button)
-                .a11y_builder(move |node| {
-                    node.set_value(name);
-                    if let Some(on) = toggle {
-                        node.set_toggled(Toggled::from(on));
-                    }
-                    if !enabled {
-                        node.set_disabled();
-                    }
-                })
-                .width(Size::px(metrics::DIFF_BAR_BUTTON))
-                .height(Size::px(metrics::DIFF_BAR_BUTTON))
-                .center()
-                .maybe(enabled && *hovered.read(), |el| {
-                    el.background(tones::DIFF_BAR_HOVER)
-                })
-                .maybe(focus() == Focus::Keyboard, |el| {
-                    el.border(
-                        Border::new()
-                            .fill(tones::ACCENT)
-                            .width(1.)
-                            .alignment(BorderAlignment::Inner),
-                    )
-                })
-                .on_pointer_enter(move |_| hovered.set(true))
-                .on_pointer_leave(move |_| hovered.set_if_modified(false))
-                .on_press(move |_| {
-                    if enabled {
-                        on_action.call(which);
-                    }
-                })
-                .child(which.glyph()(metrics::DIFF_BAR_ICON, colour)),
-        )
     }
 }
 

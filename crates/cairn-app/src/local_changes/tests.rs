@@ -294,6 +294,25 @@ pub(crate) fn click_heading(test: &mut TestingRunner, caption: &str) {
     }
 }
 
+/// Presses the control assistive technology reads as `name` — a glyph button's value or a
+/// control's name: the bar's Stage All, the commit box's Recent Commit Messages.
+pub(crate) fn press_named(test: &mut TestingRunner, name: &str) {
+    let centre = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| {
+                    let builder = &rect.accessibility.builder;
+                    builder.value() == Some(name) || builder.label() == Some(name)
+                })
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no control is named {name}"));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+}
+
 /// Presses the row of the list reading `text`, the `nth` drawn from the top.
 pub(crate) fn press_row(test: &mut TestingRunner, text: &str, nth: usize) {
     let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
@@ -808,7 +827,7 @@ fn highlighted_rows(test: &TestingRunner) -> usize {
         let area = node.layout().area;
         Rect::try_downcast(element)
             .filter(|_| {
-                area.min_x() > SIDEBAR_WIDTH && area.height() == cairn_ui::DETAIL_ROW_HEIGHT
+                area.min_x() > SIDEBAR_WIDTH && area.height() == cairn_ui::LOCAL_CHANGES_ROW_HEIGHT
             })
             .filter(|rect| {
                 rect.style

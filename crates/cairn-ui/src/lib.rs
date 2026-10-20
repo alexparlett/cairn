@@ -2,6 +2,7 @@
 
 pub mod accelerators;
 mod avatar;
+mod bar_button;
 mod caption_row;
 mod check_box;
 mod commit_box;
@@ -23,9 +24,10 @@ pub use avatar::{AvatarSize, avatar, avatar_colour, avatar_of, initials};
 pub use caption_row::{CAPTION_TITLE, CaptionRow, Frame, FrameRequest};
 pub use commit_box::{
     AMEND_BUTTON_CAPTION, AMEND_CAPTION, AMEND_TITLE, Busy, CANCEL_COMMIT_CAPTION, CANCELLING,
-    CommitBox, CommitButton, DESCRIPTION_PLACEHOLDER, DETACHED_LINE, RECENT_MESSAGES_CAPTION,
-    RULER_COLUMN, SKIP_HOOKS_CAPTION, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER, SUBJECT_SOFT_LIMIT,
-    SubjectCount, UNBORN_LINE, commit_caption, elapsed_text, operation_line, subject_count,
+    COMMIT_FIELD_NAME, COMMIT_OPTIONS_CAPTION, COMMIT_OPTIONS_TOOLTIP, CommitBox, CommitButton,
+    DESCRIPTION_PLACEHOLDER, DETACHED_LINE, RECENT_MESSAGES_CAPTION, RULER_COLUMN,
+    SKIP_HOOKS_CAPTION, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER, SUBJECT_SOFT_LIMIT, SubjectCount,
+    UNBORN_LINE, commit_caption, elapsed_text, operation_line, subject_count,
 };
 pub use detail::changes_list::{
     BASE_CAPTION, ChangesList, ChangesSummary, ComparisonHeader, FILTER_PLACEHOLDER, FILTERING,
@@ -100,10 +102,12 @@ pub use history::ref_chips::{
 pub use history::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 pub use history::reflog_strip::{REFLOG_STRIP_EXIT, REFLOG_STRIP_TEXT, ReflogStrip};
 pub use history::{graph_geometry, lane_palette};
+pub use local_changes::bar::{SIDE_BY_SIDE_TOOLTIP, VIEW_AS_LIST_CAPTION, VIEW_MODE_TOOLTIP};
 pub use local_changes::drag::DRAG_THRESHOLD;
 pub use local_changes::list::{
-    ChangeBadge, LIST_HEADER_HEIGHT, LISTS_SPLIT, ListIntent, LocalChangesList, NO_PATH_MATCHES,
-    STAGED_CAPTION, UNSTAGED_CAPTION, change_badge, change_text, list_caption,
+    ChangeBadge, LIST_HEADER_HEIGHT, LISTS_BAR_HEIGHT, LISTS_SPLIT, LOCAL_CHANGES_ROW_HEIGHT,
+    ListIntent, LocalChangesList, NO_PATH_MATCHES, STAGED_CAPTION, UNSTAGED_CAPTION, change_badge,
+    change_text, list_caption,
 };
 pub use local_changes::menu::{
     COPY_PATH_CAPTION, DISCARD_CAPTION, Kept, Left, MenuChoice, NoDiscard, STAGE_ALL_CAPTION,

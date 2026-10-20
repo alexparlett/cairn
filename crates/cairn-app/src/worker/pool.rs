@@ -1137,6 +1137,11 @@ impl Drop for Outbox {
     }
 }
 
+/// What the window says when a worker thread dies: what happened, and what the person can do
+/// about it — the window cannot open the repository again by itself.
+const WORKER_LOST: &str = "The repository's worker stopped unexpectedly. Close Cairn and start \
+                           it again to carry on.";
+
 /// Announces a worker's death from `Drop`, so unwinding runs it.
 #[derive(Debug)]
 struct WorkerExit {
@@ -1152,9 +1157,7 @@ impl Drop for WorkerExit {
             outbox.send(
                 None,
                 Update::WorkerLost {
-                    message: "the repository worker stopped unexpectedly; \
-                              reopen the repository to carry on"
-                        .to_owned(),
+                    message: WORKER_LOST.to_owned(),
                 },
             );
         }
@@ -2284,6 +2287,46 @@ mod tests {
             }) => assert!(!message.is_empty(), "an empty notice tells nobody anything"),
             other => panic!("a panicking worker announced {other:?}"),
         }
+    }
+
+    /// A dead worker's notice says what the person can do — close Cairn and start it again —
+    /// never to reopen the repository, which no control of the window does. Caught by: the
+    /// notice worded to reopen the repository, or a notice naming nothing to do.
+    #[test]
+    fn no_message_asks_to_reopen_the_repository() {
+        let (updates_tx, inbox) = channel::<Envelope>();
+        let wake = Wake::new();
+        let outbox = Outbox {
+            updates: Some(updates_tx),
+            wake: Arc::clone(&wake),
+        };
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let died = std::thread::spawn(move || {
+            let _exit = WorkerExit {
+                outbox: Some(outbox),
+                wake,
+            };
+            panic!("the worker died");
+        })
+        .join();
+        std::panic::set_hook(previous);
+        assert!(died.is_err());
+        let Ok(Envelope {
+            update: Update::WorkerLost { message },
+            ..
+        }) = inbox.try_recv()
+        else {
+            panic!("no notice");
+        };
+        assert!(
+            !message.to_lowercase().contains("reopen"),
+            "the notice asks to reopen: {message}"
+        );
+        assert!(
+            message.contains("Close Cairn and start it again"),
+            "the notice names nothing to do: {message}"
+        );
     }
 
     /// A waker that panics the first time it is woken — on whichever worker thread sends

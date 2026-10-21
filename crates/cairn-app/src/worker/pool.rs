@@ -306,10 +306,10 @@ fn repository_root(shared: &SharedRepository) -> std::path::PathBuf {
     std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
-/// What the toolbar's status box and the window's title call `shared`: the last component of
-/// its working tree — of its git directory, when it is bare — which discovery has already made
-/// absolute and free of `.` and `..`, so a repository opened at `.`, `..`, a subdirectory or its
-/// `.git` is named by its own folder
+/// What the toolbar's status box, the sidebar's header and the window's title call `shared`:
+/// the last component of its working tree — of its git directory, when it is bare — which
+/// discovery has already made absolute and free of `.` and `..`, so a repository opened at `.`,
+/// `..`, a subdirectory or its `.git` is named by its own folder
 /// (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
 fn repository_name(shared: &SharedRepository) -> String {
     let root = shared.workdir().unwrap_or_else(|| shared.git_dir());

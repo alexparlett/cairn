@@ -96,8 +96,8 @@ pub struct View {
     pub held_keys: State<HeldKeys>,
     /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
     pub refreshed: State<RefreshState>,
-    /// What the status box and the window's title call the repository, once the worker has
-    /// opened it
+    /// What the status box, the sidebar's header and the window's title call the repository, once
+    /// the worker has opened it
     /// (`Update::Opened`).
     pub repository: State<Option<String>>,
     /// The repository's root, absolute, once the worker has opened it: what Copy Repository

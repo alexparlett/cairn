@@ -16,7 +16,7 @@ nuance that run must not lose.
 | 5 | `staging-and-commit` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 2, 2a, 3, 4 |
 | 5b | `stash-and-ignore` | brief only | 5, 5d |
 | 5c | `history-topo-order` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1 |
-| 5d | `fork-alignment` | **planned** — next (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
+| 5d | `fork-alignment` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 5, 5c |
 | 5e | `file-tree-view` | brief only | 5d |
 | 5f | `quick-launch` | brief only | 5d |
 | 5g | `preferences` | brief only | 5d |
@@ -306,14 +306,21 @@ the whole-history pass a repository without a commit-graph needs before its firs
 the bench, as in git and Fork) never holds up a filter, and the window says it is reading.
 fork-alignment's greyed rows (`HEAD`'s reach, #67) and stash lane rely on this order.
 
-## 5d. fork-alignment — planned
+## 5d. fork-alignment — shipped
 
-`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`, evidence
-`docs/research/ui-review/`. Cairn's window drawn as Fork for Windows': its caption row and
-menu bar, toolbar and status box, sidebar, history, detail pane and Local Changes at
-Fork's density and in Fork Dark's tones, every context menu, Fork's keys. The shell is
-built now; the toolbar greys what a later packet owns ("Comes with <feature>."), and the
-menus list only what works, so each later packet below adds its items into Fork's groups.
+`docs/prd/fork-alignment.md` (frozen), evidence `docs/research/ui-review/` — among it
+`measured.md` (the window's frames on the bench after the alignment). Merge bar passed on
+2026-10-20 and the real window compared with Fork on 2026-10-21; the work directory was torn
+down and the packet lands on `main` as one pull request. As built: `docs/systems/style.md`
+(the style module, Fork Dark's tones, Lucide's icons, focus and the dialogs' frame),
+`docs/systems/window-frame.md` (the caption row, the menus, the toolbar and the status box,
+the regions and the minimum size), and what it changed in `history-graph.md`, `sidebar.md`,
+`diff.md`, `local-changes.md` and `git-processes.md`. Cairn's window drawn as Fork for
+Windows': its caption row and menu bar, toolbar and status box, sidebar, history, detail pane
+and Local Changes at Fork's density and in Fork Dark's tones, every context menu, Fork's keys.
+The toolbar greys what a later packet owns ("Comes with <feature>."), and the menus list only
+what works, so each later packet below adds its items into Fork's groups. Closes #67 and #103.
+Leftovers: #143-#153.
 
 ## 5e. file-tree-view — brief
 

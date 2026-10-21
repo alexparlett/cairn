@@ -44,13 +44,18 @@ X11 it sets `_MOTIF_WM_HINTS` with no decorations. On Hyprland 0.56 (the develop
 yet nothing of the compositor's own is drawn on the window: its decoration plugin, `hyprbars`,
 draws no bar on a window whose most recent request was client-side, nor on an X11 window whose
 Motif hints ask for none (it still lists its decoration as present, hidden, in `hyprctl
-decorations`). Seen on screen on both, the caption row the top of the window; no window rule is
-needed. The desktop's title for the window reads `<repository> — Cairn` and its class `cairn`
-on both.
+decorations`). On Isle the same request is answered `configure(client_side)` and the window is
+drawn as Cairn draws it. Seen on screen on each, the caption row the top of the window; no
+window rule is needed. The desktop's title for the window reads `<repository> — Cairn` and its
+app id `cairn`.
 
-A press and drag, a double press, the window menu and the resize bands were not driven by a
-pointer on either (no tool on the host moves the pointer into a Wayland window), nor were the
-menus opened by the pointer or the pointer's move along the bar. What no headless test sees
+Driven by a virtual pointer on Isle (release build, the fixture): a press and drag on the
+caption row's empty space moves the window by the drag; a double press there maximizes it,
+the maximize button then drawing its restore glyph, and a second double press restores the box
+it had; a secondary press opens Isle's window menu at the press (`show_window_menu`), which a
+press elsewhere in the window dismisses; a drag on the right edge resizes the window, and Isle
+stops that drag at the minimum width. The menus open by a press and switch as the pointer moves
+along the bar. Hyprland's gestures were never driven by a pointer. What no headless test sees
 either: `freya-testing` drops the requests the window makes of the platform, so what
 `frame::ask` hands winit (`drag_window`, `set_maximized`, `set_minimized`, `show_window_menu`,
 `request_close_window`), the scale factor the zoom sets, the title `frame::use_title` sets and
@@ -211,14 +216,16 @@ As the window narrows the history's subject column gives the room, the author, i
 keeping their widths (`the_subject_column_shrinks_first`).
 
 The window opens at 1024 × 768 and stops at **880 × 620** (`frame::OPENING_SIZE`,
-`frame::MIN_SIZE`, `WindowConfig::with_min_size`), at the zoom's own size. Measured in the
-headless window and checked in the real one (release build, the fixture, Hyprland, which holds
-the window at 880 × 620 when asked for less):
+`frame::MIN_SIZE`, `WindowConfig::with_min_size`, which reaches Wayland as
+`xdg_toplevel.set_min_size`), at the zoom's own size. Hyprland holds the window at 880 × 620
+when asked for less, and Isle stops an edge drag there; Isle's own `isle windows set-box`
+ignores the minimum and configures a smaller box, which the window takes and clips. Measured in
+the headless window and checked in the real one (release build, the fixture):
 
 - the toolbar's groups take about 550 px at the body's size and the status box its 300, so the
   toolbar needs about 780 px; 880 leaves it whole with Fork's 300 px box;
-- at 880 px the history keeps about 218 px for a subject beside the sidebar's 240 — room left for
-  the sidebar's planned 300;
+- at 880 px, beside the sidebar's 300, the history keeps about 180 px for a row's chips and
+  subject, cut with "…" where a row's chips take most of it, as Fork's subjects are cut;
 - at 620 px the main region's half is 276 px, enough for the pane's strip and a one-line commit's
   Commit tab down to Expand All, which the pane's floor then keeps when a banner takes room;
 - the diff bar's seven buttons stay inside the window.

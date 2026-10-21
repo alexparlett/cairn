@@ -1,4 +1,4 @@
-//! Fork's Activity Manager, opened from the title bar's status box: on the left the session's
+//! Fork's Activity Manager, opened from the toolbar's status box: on the left the session's
 //! operations, newest first — each its one name, Fork's result line under it ("staged",
 //! "Switched to branch 'topic'"), when it started, ⚠ on a failure and a shape of its own on a
 //! cancel, with a cancel for a running one that can be cancelled, and no status word — and on
@@ -60,7 +60,8 @@ const ARROW_INSET: f32 = 18.;
 pub const ENTRY_ROW_HEIGHT: f32 = 38.;
 /// One line on the right.
 pub const LINE_ROW_HEIGHT: f32 = 16.;
-/// Where the popover hangs before the status box has been laid out: under the title bar.
+/// Where the popover hangs before the status box has reported its place: near the window's top,
+/// until the box's first layout hangs it under the box.
 const TOP: f32 = 44.;
 
 /// One line of an operation's detail.

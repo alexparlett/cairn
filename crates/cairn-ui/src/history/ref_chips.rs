@@ -8,7 +8,7 @@
 //!
 //! **Order.** The current branch first (git's `HEAD -> main` leads too), then the row's refs in
 //! the snapshot's order — local branches, remote-tracking refs, tags, each by name — Fork's
-//! local-before-remote; where Fork puts tags is not recorded.
+//! local before remote, and a remote before a tag (§4: `origin/main`, then `v0.2`).
 //!
 //! **Compact labels** (Fork's default): a local branch whose upstream is a remote-tracking ref
 //! labelling the same row draws that upstream as a cloud-only chip of its own just before the

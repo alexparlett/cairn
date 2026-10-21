@@ -43,9 +43,11 @@ pub const GUTTER_SEPARATOR: Color = rgb((0x4B, 0x4B, 0x4B));
 pub const FILLER: Color = rgb((0x42, 0x42, 0x42));
 /// The header bar over the diff: Fork Dark's `#333333`, the detail pane's.
 pub const HEADER_BAR: Color = tones::DETAIL;
-/// The change last moved to with previous or next change, and an active toggle on the diff
-/// bar: Fork outlines its active chunk in the system accent; Cairn's accent is Fork's blue
-/// (`style::tones::ACCENT`), which the detail pane's strip marks its chosen tab with too.
+/// The change last moved to with previous or next change, and the staging gesture's outline
+/// and actions over a hovered chunk: Fork outlines its active chunk in the system accent;
+/// Cairn's accent is Fork's blue (`style::tones::ACCENT`), which the detail pane's strip marks
+/// its chosen tab with too. The diff bar lights a toggle that is on in a blue of its own,
+/// `style::tones::DIFF_BAR_ON`.
 pub const CURRENT_CHANGE: Color = tones::ACCENT;
 
 /// The diff's typeface: IBM Plex Mono, embedded by the application with its licence.
@@ -122,8 +124,8 @@ mod tests {
         assert!(contrast(HUNK_HEADER, GROUND) >= 4.5);
     }
 
-    /// The accent is the launch theme's, as its doc says: the change moved to, an active
-    /// toggle and the chosen tab are lit in one colour. Caught by: an accent drifting from the
+    /// The accent is the launch theme's, as its doc says: the change moved to, the staging
+    /// gesture and the chosen tab are lit in one colour. Caught by: an accent drifting from the
     /// theme's.
     #[test]
     fn the_current_change_is_the_themes_accent() {

@@ -1,4 +1,4 @@
-//! The leftover lock's banner: drawn under the title bar while `<gitdir>/index.lock` is there,
+//! The leftover lock's banner: drawn under the toolbar while `<gitdir>/index.lock` is there,
 //! no `git` of Cairn's runs or waits in the repository — the window decides those, and draws
 //! this only then — and the lock is older than [`LOCK_STALE_AFTER`], which this component
 //! decides: a lock younger than that is likely a running git's, and the banner waits on the

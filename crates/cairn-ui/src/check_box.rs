@@ -1,5 +1,5 @@
-//! A check box with its caption beside it: the Amend toggle, Show Lost Commits in the
-//! history's heading strip and Create Branch's "Check out after create". A check box to
+//! A check box with its caption beside it: the commit box's Amend toggle and Create Branch's
+//! "Check out after create". A check box to
 //! assistive technology, its toggled state set — which Freya's own `Checkbox` does not set —
 //! pressed by the pointer or, focused, by Space or Return.
 

@@ -3,6 +3,20 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-21 — fork-alignment shipped and torn down
+
+Packet 5d passed its merge bar (every C1-C22 met against its test; C13, C14 and C20 as the
+user ratified Fork's first-hand evidence over the PRD's words, C22 accepted as measured by the
+user with one 19.28 ms frame recorded; full gate green), and its real window was compared with
+Fork surface by surface on the user's desktop (Isle) at 1024×768 and 880×620, chords left to
+the headless suites. Torn down on `feature/fork-alignment`: PRD `docs/prd/fork-alignment.md`
+stamped shipped, amended inline where Fork's evidence contradicted it; as built in
+`docs/systems/style.md`, `window-frame.md` and the systems docs it changed; the paths-in-mono
+row added to `docs/design/ui.md`; its invariants (the style, icon and zone guards, the
+Ctrl+Shift+D move, the `freya` and `jiff` feature pins) already in the root `CLAUDE.md` with
+their twins; leftovers filed as #143-#153; the decisions made in flight, PENDING the user's
+review, listed in the packet pull request. Next: the user's choice among 5b, 5e-5h, 6, 7 and 8.
+
 ## 2026-10-18 — history-topo-order shipped and torn down
 
 Packet 5c passed its merge bar (every C1-C10 met, each test checked to fail under a mutation;

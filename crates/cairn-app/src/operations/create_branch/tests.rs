@@ -349,6 +349,7 @@ fn refs_read(test: &mut TestingRunner, view: View, head: HeadState, main: Oid) {
             target: RefTarget::Commit(main),
             symbolic: None,
             upstream: None,
+            commit_time: None,
         }],
         head,
         stashes: Vec::new(),

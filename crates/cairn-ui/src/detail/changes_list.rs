@@ -8,18 +8,24 @@
 //! asks for anything: it reports a file by its index in the change set and the caller
 //! decides what that shows.
 //!
-//! The summary is Fork's: who wrote the commit, its short id, its date and its subject, on
-//! one line — no avatar.
+//! The summary is Fork's (`docs/research/ui-review/fork-window-survey-2026-10-16.md` §6,
+//! `fork-window-survey-2-2026-10-16.md` §1b): the author's avatar and name, the commit's id at
+//! nine characters and its date in the secondary tone, and its subject in bold, on one line.
 
 use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
 
-use crate::accelerators;
+use crate::accelerators::{self, Scope};
+use crate::avatar::{AvatarSize, avatar_of};
 use crate::detail::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
 use crate::detail::file_filter::ShownFiles;
+use crate::detail::file_menu::{FileChoice, FileMenuIn, file_menu, open_file_menu};
+use crate::diff::header::DIFF_HEADER_HEIGHT;
 use crate::diff::palette::DIFF_FONT_FAMILY;
-use crate::diff::toggle_glyphs::Glyph;
 use crate::history::date_text;
+use crate::local_time::LocalZone;
+use crate::push_button::{ButtonFace, ButtonGlyph, ButtonSize, PushButton};
+use crate::style::{focus, icons, metrics, tones};
 use crate::text_field::text_field;
 
 /// The filter field's placeholder.
@@ -40,10 +46,11 @@ pub fn filter_count(shown: usize, total: usize) -> String {
         if total == 1 { "" } else { "s" }
     )
 }
-/// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up.
-pub const SUMMARY_HEIGHT: f32 = crate::diff::header::DIFF_HEADER_HEIGHT;
-
-const FONT_SIZE: f32 = 13.0;
+/// The summary line's height: Fork's 23 px and the rule under it
+/// (`style::metrics::DETAIL_SUMMARY`).
+pub const SUMMARY_HEIGHT: f32 = metrics::DETAIL_SUMMARY;
+/// How many characters of the commit's id the summary draws: Fork's nine ("f93015d03", uw5).
+pub const SUMMARY_ID_LENGTH: usize = 9;
 
 /// The changed files of one change set, through a filter. `changes` and `shown` are handles,
 /// not copies: a row reads its file by index as it is built.
@@ -53,6 +60,7 @@ pub struct ChangesList {
     filter: Writable<String>,
     current: Option<usize>,
     on_file: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     key: DiffKey,
 }
 
@@ -68,6 +76,7 @@ impl ChangesList {
             filter: filter.into(),
             current: None,
             on_file: EventHandler::new(|_| {}),
+            on_file_menu: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -82,6 +91,17 @@ impl ChangesList {
     /// A file was pressed, or reached with ↑ or ↓, by its index in the change set.
     pub fn on_file(mut self, on_file: impl Into<EventHandler<usize>>) -> Self {
         self.on_file = on_file.into();
+        self
+    }
+
+    /// A file's menu item was chosen — from the menu a right press opens on it, which first
+    /// makes it the current file, or by the item's copy chord with the list focused on the
+    /// current file — by the file's index in the change set.
+    pub fn on_file_menu(
+        mut self,
+        on_file_menu: impl Into<EventHandler<(usize, FileChoice)>>,
+    ) -> Self {
+        self.on_file_menu = on_file_menu.into();
         self
     }
 }
@@ -117,12 +137,18 @@ struct ListData {
     rows: usize,
     current: Option<usize>,
     on_file: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     list_id: AccessibilityId,
+    /// Whether the list has focus, which the chosen file's tone says.
+    focused: bool,
 }
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows && self.current == other.current && self.list_id == other.list_id
+        self.rows == other.rows
+            && self.current == other.current
+            && self.list_id == other.list_id
+            && self.focused == other.focused
     }
 }
 
@@ -149,9 +175,11 @@ impl Component for ChangesList {
             rows,
             current: self.current,
             on_file: self.on_file.clone(),
+            on_file_menu: self.on_file_menu.clone(),
             list_id,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
-        let colours = get_theme_or_default().read().colors().clone();
         let filtering = !self.filter.read().is_empty();
 
         let count = filtering.then(|| {
@@ -162,8 +190,8 @@ impl Component for ChangesList {
                     filter_count(rows, total)
                 })
                 .max_lines(1)
-                .font_size(12.)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(tones::DETAIL_LABEL)
         });
         let list: Element = if rows == 0 && filtering && !waiting {
             rect()
@@ -172,8 +200,8 @@ impl Component for ChangesList {
                 .child(
                     label()
                         .text(NO_FILE_MATCHES)
-                        .font_size(FONT_SIZE)
-                        .color(colours.text_placeholder),
+                        .font_size(metrics::BODY)
+                        .color(tones::PLACEHOLDER),
                 )
                 .into()
         } else {
@@ -190,33 +218,63 @@ impl Component for ChangesList {
         rect()
             .expanded()
             .content(Content::Flex)
+            // Fork's bar over the files, level with the diff's: a magnifier and the field, on
+            // the detail pane's tone with the rule under it (uw5).
             .child(
                 rect()
                     .width(Size::fill())
-                    .padding(Gaps::new(4., 6., 4., 6.))
+                    .height(Size::px(DIFF_HEADER_HEIGHT))
+                    .background(tones::DETAIL)
+                    .border(
+                        Border::new()
+                            .fill(tones::RULE)
+                            .width(BorderWidth {
+                                top: 0.,
+                                right: 0.,
+                                bottom: 1.,
+                                left: 0.,
+                            })
+                            .alignment(BorderAlignment::Inner),
+                    )
                     .child(
                         text_field(self.filter.clone())
                             .placeholder(FILTER_PLACEHOLDER)
-                            .compact()
+                            .flat()
+                            .background(tones::DETAIL)
+                            .hover_background(tones::DETAIL)
+                            .focus_background(tones::DETAIL)
+                            .leading(icons::magnifier(
+                                metrics::DIFF_BAR_ICON,
+                                tones::DIFF_BAR_ICON,
+                            ))
+                            .height(Size::px(DIFF_HEADER_HEIGHT - 1.))
+                            .theme_layout(InputLayoutThemePartial {
+                                inner_margin: Some(Preference::Specific(Gaps::new(0., 6., 0., 6.))),
+                                ..Default::default()
+                            })
                             .width(Size::fill()),
-                    )
-                    .maybe_child(count),
+                    ),
             )
+            .maybe_child(count.map(|count| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new(2., 8., 2., 8.))
+                    .child(count)
+            }))
             .child(
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
+                    .background(tones::HISTORY)
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
-                    .maybe(focus() == Focus::Keyboard, |el| {
-                        el.border(Border::new().fill(colours.border_focus).width(1.))
-                    })
+                    .border(focus::ring_when(focus()))
                     .on_key_down(keyboard(
                         self.shown.clone(),
                         self.changes.clone(),
                         self.current,
-                        self.on_file.clone(),
+                        (self.on_file.clone(), self.on_file_menu.clone()),
                         controller,
                     ))
                     .child(list),
@@ -266,16 +324,27 @@ impl Component for FileRows {
     }
 }
 
-/// ↑ and ↓ over the files shown; every other key, and every chord, is left unhandled. Nothing
-/// current yet: either arrow starts at the first file shown.
+/// ↑ and ↓ over the files shown, and the copy chords on the current file's menu; every other
+/// key, and every chord, is left unhandled. Nothing current yet: either arrow starts at the
+/// first file shown.
 fn keyboard(
     shown: Readable<ShownFiles>,
     changes: Readable<ChangeSet>,
     current: Option<usize>,
-    on_file: EventHandler<usize>,
+    (on_file, on_file_menu): (EventHandler<usize>, EventHandler<(usize, FileChoice)>),
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
+        if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+            e.stop_propagation();
+            if let Some(index) = current
+                && let Some(choice) =
+                    crate::menu::chosen_by(&file_menu(FileMenuIn::ChangesTab), copy)
+            {
+                on_file_menu.call((index, choice));
+            }
+            return;
+        }
         if accelerators::is_chord(&e, &[]) {
             return;
         }
@@ -314,16 +383,35 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let Some(index) = data.shown.read().file_at(item.index) else {
         return row.into();
     };
-    let Some(drawn) = data.changes.read().files.get(index).map(file_row) else {
+    let current = data.current == Some(index);
+    let chosen = tones::selected(data.focused);
+    let Some(drawn) = data
+        .changes
+        .read()
+        .files
+        .get(index)
+        .map(|file| file_row(file, current.then_some(chosen.text)))
+    else {
         // The count and the files can disagree for one frame.
         return row.into();
     };
     let (list_id, on_file) = (data.list_id, data.on_file.clone());
-    let highlight = get_theme_or_default().read().colors().surface_secondary;
-    row.maybe(data.current == Some(index), |el| el.background(highlight))
+    let (choosing, on_file_menu) = (data.on_file.clone(), data.on_file_menu.clone());
+    row.maybe(current, |el| el.background(chosen.band))
         .on_press(move |_| {
             list_id.request_focus();
             on_file.call(index);
+        })
+        // A right press makes the file current, as a press does, and opens its menu.
+        .on_pointer_down(move |e: Event<PointerEventData>| {
+            if e.button() != Some(MouseButton::Right) {
+                return;
+            }
+            list_id.request_focus();
+            if !current {
+                choosing.call(index);
+            }
+            open_file_menu(FileMenuIn::ChangesTab, list_id, index, on_file_menu.clone());
         })
         .child(drawn)
         .into()
@@ -334,20 +422,35 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChangesSummary {
     details: CommitDetails,
+    zone: LocalZone,
 }
 
 impl ChangesSummary {
     pub fn new(details: CommitDetails) -> Self {
-        Self { details }
+        Self {
+            details,
+            zone: LocalZone::default(),
+        }
+    }
+
+    /// The zone the date is drawn in, handed down by the window.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
+        self
     }
 }
 
-/// The summary's four parts, in order: author, short id, date, subject.
-pub fn summary_parts(details: &CommitDetails) -> [String; 4] {
+/// The summary's four parts after its avatar, in order: author, the id's first nine
+/// characters, the author's date in `zone` as the history draws it, subject.
+pub fn summary_parts(details: &CommitDetails, zone: &LocalZone) -> [String; 4] {
+    let hex = details.id.hex();
     [
         details.author.name.clone(),
-        short(details.id),
-        date_text::long_date(details.author.time),
+        hex.as_str()
+            .get(..SUMMARY_ID_LENGTH)
+            .unwrap_or(hex.as_str())
+            .to_owned(),
+        date_text::history_date(details.author.time.seconds, zone),
         details.subject().to_owned(),
     ]
 }
@@ -358,13 +461,12 @@ fn short(id: Oid) -> String {
 
 impl Component for ChangesSummary {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
-        let [author, id, date, subject] = summary_parts(&self.details);
+        let [author, id, date, subject] = summary_parts(&self.details, &self.zone);
         let part = |text: String, colour: Color| {
             label()
                 .text(text)
                 .max_lines(1)
-                .font_size(FONT_SIZE)
+                .font_size(metrics::BODY)
                 .color(colour)
         };
         rect()
@@ -373,13 +475,26 @@ impl Component for ChangesSummary {
             .width(Size::fill())
             .height(Size::px(SUMMARY_HEIGHT))
             .cross_align(Alignment::Center)
-            .padding(Gaps::new(0., 12., 0., 12.))
-            .spacing(12.)
-            .child(part(author, colours.text_primary))
-            .child(part(id, colours.text_secondary).font_family(DIFF_FONT_FAMILY))
-            .child(part(date, colours.text_secondary))
+            .padding(Gaps::new(0., 10., 0., 10.))
+            .spacing(8.)
+            .border(
+                Border::new()
+                    .fill(tones::RULE)
+                    .width(BorderWidth {
+                        top: 0.,
+                        right: 0.,
+                        bottom: 1.,
+                        left: 0.,
+                    })
+                    .alignment(BorderAlignment::Inner),
+            )
+            .child(avatar_of(&author, AvatarSize::Summary))
+            .child(part(author, tones::TEXT))
+            .child(part(id, tones::DETAIL_LABEL))
+            .child(part(date, tones::DETAIL_LABEL))
             .child(
-                part(subject, colours.text_primary)
+                part(subject, tones::TEXT)
+                    .font_weight(FontWeight::BOLD)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
@@ -452,12 +567,11 @@ impl KeyExt for ComparisonHeader {
 
 impl Component for ComparisonHeader {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let part = |text: String, colour: Color| {
             label()
                 .text(text)
                 .max_lines(1)
-                .font_size(FONT_SIZE)
+                .font_size(metrics::BODY)
                 .color(colour)
         };
         let line = |caption: &'static str, commit: &CommitSummary| -> Element {
@@ -469,11 +583,11 @@ impl Component for ComparisonHeader {
                 .height(Size::px(SUMMARY_HEIGHT))
                 .cross_align(Alignment::Center)
                 .spacing(12.)
-                .child(part(caption.to_owned(), colours.text_placeholder).width(Size::px(32.)))
-                .child(part(id, colours.text_secondary).font_family(DIFF_FONT_FAMILY))
-                .child(part(author, colours.text_primary))
+                .child(part(caption.to_owned(), tones::PLACEHOLDER).width(Size::px(32.)))
+                .child(part(id, tones::DETAIL_LABEL).font_family(DIFF_FONT_FAMILY))
+                .child(part(author, tones::TEXT))
                 .child(
-                    part(subject, colours.text_primary)
+                    part(subject, tones::TEXT)
                         .width(Size::flex(1.))
                         .text_overflow(TextOverflow::Ellipsis),
                 )
@@ -496,15 +610,14 @@ impl Component for ComparisonHeader {
             )
             .child(
                 TooltipContainer::new(Tooltip::new_text(SWAP_LABEL)).child(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_: Event<PressEventData>| on_swap.call(()))
-                        // The button takes its name from its first child's value.
-                        .child(
-                            Glyph::Swap
-                                .draw(colours.text_primary)
-                                .a11y_builder(move |node| node.set_value(SWAP_LABEL)),
-                        ),
+                    PushButton::new(
+                        ButtonFace::Glyph {
+                            glyph: ButtonGlyph::Swap,
+                            name: SWAP_LABEL.to_owned(),
+                        },
+                        ButtonSize::Compact,
+                    )
+                    .on_press(move || on_swap.call(())),
                 ),
             )
     }

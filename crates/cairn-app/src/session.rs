@@ -85,7 +85,19 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::history::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
-        Update::Opened { name } => repository.set(Some(name)),
+        Update::Started { git, zone } => {
+            let mut found = view.frame.git;
+            found.set(Some(git));
+            // The zone every date is drawn in from now on; UTC, said so, when none was read.
+            let mut drawn_in = view.zone;
+            drawn_in
+                .set(zone.map_or_else(cairn_ui::LocalZone::unreadable, cairn_ui::LocalZone::read));
+        }
+        Update::Opened { name, path } => {
+            repository.set(Some(name));
+            let mut root = view.repository_path;
+            root.set(Some(path));
+        }
         // The leftover lock's stat, from every refresh.
         Update::IndexLock { changed } => {
             let mut lock = view.lock;
@@ -299,9 +311,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = refreshed.write().ahead_behind_arrived(counts);
             retire(replaced, worker);
         }
-        // Kept for the title bar and the sidebar's count; laid out for Local Changes' lists,
-        // drawn at once or once a filter's rows are here. What either lets go of is freed
-        // on a worker.
+        // Kept for the sidebar's count, the commit box and Create Branch; laid out for Local
+        // Changes' lists, drawn at once or once a filter's rows are here. What either lets go of
+        // is freed on a worker.
         Update::Status { changes } => {
             // Every status lands in the lists' state; while Amend is ticked it asks amend's lists
             // over it, its overlay.
@@ -574,12 +586,13 @@ mod tests {
                         history_cursor: State::create(0),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
-                        pane_height: State::create(crate::window::PANE_HEIGHT),
+                        pane_split: State::create(crate::detail::split::PaneSplit::default()),
                         diff_settings: State::create(cairn_ui::DiffSettings::default()),
                         diff_scroll: ScrollController::new(0, 0, Vec::new()),
                         change_cursor: State::create(None),
                         refreshed: State::create(crate::refresh::state::RefreshState::default()),
                         repository: State::create(None),
+                        repository_path: State::create(None),
                         sidebar: crate::sidebar::state::SidebarView::created(),
                         local: crate::local_changes::state::LocalChangesView::created(),
                         writes: State::create(
@@ -587,8 +600,10 @@ mod tests {
                         ),
                         confirming: State::create(None),
                         show_lost: State::create(false),
+                        zone: State::create(cairn_ui::LocalZone::default()),
                         activity: crate::operations::activity::ActivityView::created(),
                         branch: crate::operations::create_branch::CreateBranchView::created(),
+                        frame: crate::frame::FrameView::created(),
                     }
                 })
             },
@@ -1196,16 +1211,23 @@ mod tests {
         assert_eq!(view.lock.read().changed(), None);
     }
 
+    /// git's progress lines land whole — the latest in the fetch's state, for the status box to
+    /// keep to its percentage as it draws it, and every one in the fetch's activity entry, for
+    /// the popover — and the remotes in theirs. Caught by: a line trimmed before it is kept, so
+    /// the popover could never say it whole.
     #[test]
     fn progress_and_remotes_land_in_their_states() {
         let (test, view, asked) = launch(running());
+        let mut log = view.activity.log;
+        test.run_in(|| log.write().fetch_started("origin"));
+        let whole = "Receiving objects:  45% (12345/27000), 12.00 MiB | 3.00 MiB/s";
         applying(
             &test,
             view,
             &asked,
             Update::FetchProgress {
                 tap: crate::worker::OutputTap::holding(&cairn_model::ScrubbedLines::scrubbing(
-                    "Receiving objects: 20%\nReceiving objects: 40%\n",
+                    &format!("Receiving objects: 20%\n{whole}\n"),
                 )),
             },
         );
@@ -1213,9 +1235,15 @@ mod tests {
             *view.fetch.read(),
             FetchStatus::Running {
                 remote: "origin".to_owned(),
-                line: Some("Receiving objects: 40%".to_owned())
+                line: Some(whole.to_owned())
             }
         );
+        let (entries, _) = view.activity.log.peek().shown();
+        let kept = entries
+            .iter()
+            .flat_map(|entry| entry.lines.iter())
+            .any(|line| *line == cairn_ui::ActivityLine::Output(whole.to_owned()));
+        assert!(kept, "the activity entry does not keep the whole line");
         applying(
             &test,
             view,
@@ -1426,6 +1454,7 @@ mod tests {
                 target: cairn_model::RefTarget::Commit(commit),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             }],
             head: cairn_model::HeadState::Branch(cairn_model::RefName::new("refs/heads/main")),
             stashes: Vec::new(),

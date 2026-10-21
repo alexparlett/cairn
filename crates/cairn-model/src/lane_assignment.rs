@@ -27,7 +27,8 @@ pub struct LaneAssigner {
 }
 
 /// How a row's lines to its parents are laid: joining a line already descending to the
-/// parent, as a commit's are, or each in a lane of its own, as a stash's is.
+/// parent, as a commit's are, or each in a lane of its own, as a stash's is — the lane the
+/// line to its base crossed it in, when one did ([`LaneAssigner::push_stash`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParentLines {
     Join,
@@ -152,13 +153,23 @@ impl LaneAssigner {
 
     /// A stash's row: `id` is the stash commit, which no commit the walk
     /// reaches names as a parent, and `base` the commit it was made on — its first parent,
-    /// and the only one laid out: its index and untracked commits are never awaited. Its
-    /// line descends in a lane of its own to `base`, even where another line already awaits
-    /// `base`, so several stashes on one commit each keep their own lane down to it, all
-    /// ending there. Pushed before `base`, as the stream places a stash; a `base` already
-    /// laid out above is joined late, as any parent is. Returns the row this push forced
-    /// out of the window.
+    /// and the only one laid out: its index and untracked commits are never awaited. As Fork
+    /// for Windows draws it, the stash sits on its base's lane: where a line already descends
+    /// to `base`, the stash's node is put on that line, which runs on through it to `base`
+    /// still waiting for it — the lowest such lane, so several stashes on one commit sit on
+    /// one line. Where none does, it takes the lowest free lane, as a commit whose one parent
+    /// is `base` would, and its line descends in that lane to `base`, which takes it. Pushed
+    /// before `base`, as the stream places a stash; a `base` already laid out above is joined
+    /// late, as any parent is. Returns the row this push forced out of the window.
     pub fn push_stash(&mut self, id: Oid, base: Oid) -> Option<GraphRow> {
+        // The line awaiting `base` is the stash's own while it crosses the stash's row: it
+        // ends at the node and starts again below it, in the same lane, waiting for `base`.
+        let awaited_by_stash = self.lanes.contains(&Some(id));
+        if !awaited_by_stash
+            && let Some(lane) = self.lanes.iter().position(|slot| *slot == Some(base))
+        {
+            self.lanes[lane] = Some(id);
+        }
         self.lay_out(id, &[base], ParentLines::OwnLane)
     }
 
@@ -722,12 +733,14 @@ mod tests {
         }
     }
 
-    /// Two stashes on one commit, which a branch's line already awaits: two
-    /// rows, each in a lane of its own — never joining the branch's line, as a commit's
-    /// line would — and all three lines end at that commit. Caught by: a stash's line laid
-    /// as a commit's (`push`), which joins lane 0 at once and puts both stashes in lane 1.
+    /// Two stashes on one commit, which a branch's line already awaits: both sit on that
+    /// line, in its lane, which runs on through each of them to the commit still waiting for
+    /// it, as Fork for Windows draws a stash on its base's lane; a commit with no parent laid
+    /// out between them takes the next lane, and only the branch's line ends at the commit.
+    /// Caught by: a stash given a lane of its own beside the line awaiting its base, or a
+    /// stash that ends the line it sits on, so its base is no longer awaited.
     #[test]
-    fn two_stashes_on_one_commit_each_keep_a_lane_down_to_it() {
+    fn a_stash_is_drawn_on_its_base_commits_lane() {
         let (tip, first, second, other, base) = (id(1), id(20), id(21), id(30), id(2));
         let walk = [
             (tip, Some(vec![base]), base),
@@ -738,25 +751,28 @@ mod tests {
         ];
         let (kept, rows) = lay_out_with_stashes(&walk);
         let lanes: Vec<usize> = rows.iter().map(|row| row.lane.index()).collect();
-        assert_eq!(lanes, [0, 1, 2, 3, 0], "each stash in a lane of its own");
-        assert_eq!(rows[1].changes(), &[LaneChange::Starts(Lane::new(1))]);
-        assert_eq!(rows[2].changes(), &[LaneChange::Starts(Lane::new(2))]);
+        assert_eq!(lanes, [0, 0, 0, 1, 0], "each stash on its base's lane");
+        for stash in [1, 2] {
+            assert_eq!(
+                rows[stash].changes(),
+                &[
+                    LaneChange::Ends(Lane::new(0)),
+                    LaneChange::Starts(Lane::new(0))
+                ],
+                "the base's line runs on through stash row {stash}"
+            );
+            assert_eq!(
+                kept[stash],
+                vec![
+                    EdgeSegment::into_commit(Lane::new(0), Lane::new(0)),
+                    EdgeSegment::out_of_commit(Lane::new(0), Lane::new(0)),
+                ]
+            );
+        }
         assert_eq!(
             rows[4].changes(),
-            &[
-                LaneChange::Ends(Lane::new(0)),
-                LaneChange::Ends(Lane::new(1)),
-                LaneChange::Ends(Lane::new(2)),
-            ],
-            "the branch's and both stashes' lines end at the commit"
-        );
-        assert_eq!(
-            kept[4],
-            vec![
-                EdgeSegment::into_commit(Lane::new(0), Lane::new(0)),
-                EdgeSegment::into_commit(Lane::new(1), Lane::new(0)),
-                EdgeSegment::into_commit(Lane::new(2), Lane::new(0)),
-            ]
+            &[LaneChange::Ends(Lane::new(0))],
+            "one line ends at the commit"
         );
         for (index, edges) in kept.iter().enumerate() {
             assert_eq!(
@@ -767,18 +783,86 @@ mod tests {
                 "row {index} derives other edges than the assigner kept"
             );
         }
+    }
 
-        // The control: the same walk with each stash laid out as a commit joins lane 0.
-        let mut joined = LaneAssigner::with_window(usize::MAX);
-        for (id, parents, base) in walk {
-            joined.push(id, parents.unwrap_or_else(|| vec![base]));
+    /// A stash whose base no line awaits yet, while the lowest lane carries another line:
+    /// the stash takes the lowest free lane, as a commit whose one parent is its base would,
+    /// and its base takes that lane from it. Caught by: a stash put on a line awaiting another
+    /// commit, or its base given a lane of its own beside the stash's line.
+    #[test]
+    fn a_stash_whose_base_no_line_awaits_takes_a_new_lane() {
+        let (tip, stash, base, root) = (id(1), id(20), id(2), id(3));
+        let walk = [
+            (tip, Some(vec![root]), base),
+            (stash, None, base),
+            (base, Some(vec![root]), base),
+            (root, Some(vec![]), base),
+        ];
+        let (kept, rows) = lay_out_with_stashes(&walk);
+        let lanes: Vec<usize> = rows.iter().map(|row| row.lane.index()).collect();
+        assert_eq!(
+            lanes,
+            [0, 1, 1, 0],
+            "the stash in a lane of its own, its base after it"
+        );
+        assert_eq!(rows[1].changes(), &[LaneChange::Starts(Lane::new(1))]);
+        assert_eq!(
+            rows[2].changes()[0],
+            LaneChange::Ends(Lane::new(1)),
+            "the base took the stash's line"
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
         }
-        let joined_lanes: Vec<usize> = joined
-            .into_rows()
-            .iter()
-            .map(|row| row.lane.index())
-            .collect();
-        assert_eq!(joined_lanes, [0, 1, 1, 1, 0], "the control decided nothing");
+    }
+
+    /// A stash commit a walked commit names as a parent — a merge of the stash — already has a
+    /// line descending to it: the stash sits on that line, which runs on to the base, and the
+    /// line that already awaited the base keeps waiting, so two lines end at the base. A second
+    /// stash on that base then sits on the lower of the two lines awaiting it. Caught by: the
+    /// stash re-targeting the base's line as well as taking its own (one line ends at the base,
+    /// and the stash moves to lane 0), or a stash taking the higher of two lines awaiting its
+    /// base.
+    #[test]
+    fn a_stash_already_awaited_keeps_its_line_and_a_second_takes_the_lower_waiting_lane() {
+        let (tip, merger, first, second, base) = (id(1), id(2), id(20), id(21), id(3));
+        let walk = [
+            (tip, Some(vec![base]), base),
+            (merger, Some(vec![first]), base),
+            (first, None, base),
+            (second, None, base),
+            (base, Some(vec![]), base),
+        ];
+        let (kept, rows) = lay_out_with_stashes(&walk);
+        let lanes: Vec<usize> = rows.iter().map(|row| row.lane.index()).collect();
+        assert_eq!(
+            lanes,
+            [0, 1, 1, 0, 0],
+            "the awaited stash on its own line, the second on the lower lane awaiting the base"
+        );
+        assert_eq!(
+            rows[4].changes(),
+            &[
+                LaneChange::Ends(Lane::new(0)),
+                LaneChange::Ends(Lane::new(1))
+            ],
+            "both lines that awaited the base end there"
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
+        }
     }
 
     /// Stashes among late parents and their repaints, a snapshot every third row: every
@@ -803,7 +887,7 @@ mod tests {
         // The late line leaves the base's row (row 2) for the stash two rows below it.
         assert!(
             rows[2].changes().contains(&LaneChange::StartsLate {
-                lane: Lane::new(4),
+                lane: Lane::new(3),
                 rows: 2,
                 order: 0
             }),

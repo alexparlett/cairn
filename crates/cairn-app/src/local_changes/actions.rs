@@ -218,7 +218,8 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
             }
             stage_or_unstage(view, asking);
         }
-        ListIntent::CopyPaths(_) => copy_paths(view),
+        ListIntent::CopyPaths(_) => copy_paths(view, false),
+        ListIntent::CopyFullPaths(_) => copy_paths(view, true),
     }
 }
 
@@ -459,7 +460,17 @@ fn act(list: Option<ChangeList>, action: Action, view: View, submit: Option<&Sub
         | Action::Refresh
         | Action::Commit
         | Action::ShowLostCommits
-        | Action::NewBranch => {}
+        | Action::NewBranch
+        | Action::ShowLocalChanges
+        | Action::ShowAllCommits
+        | Action::ShowHead
+        | Action::ToggleDetails
+        | Action::Fetch
+        | Action::ZoomIn
+        | Action::ZoomOut
+        // The lists' copy chords choose their menu's copy items, reported as those items are.
+        | Action::Copy
+        | Action::CopyFull => {}
     }
 }
 
@@ -649,26 +660,32 @@ fn discard_rows(list: ChangeList, rows: Vec<usize>, view: View, submit: Option<&
     ask_discard_files(paths, left, view, submit);
 }
 
-/// Copy Path: the paths selected, one per line, to the clipboard.
-fn copy_paths(view: View) {
+/// Copy Path, or Copy Full Path when `full`: the paths selected, one per line, to the
+/// clipboard — each as git writes it from the repository's root, or joined to the working
+/// tree's path the window was opened on.
+fn copy_paths(view: View, full: bool) {
     let Some((list, rows)) = selected_rows(view) else {
         return;
     };
+    let root = full.then(|| view.repository_path.peek().clone()).flatten();
+    if full && root.is_none() {
+        return;
+    }
     let text = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
         rows.into_iter()
             .filter_map(|row| {
-                lists
-                    .get(list, row)
-                    .map(|change| change.path.display().into_owned())
+                lists.get(list, row).map(|change| match &root {
+                    Some(root) => crate::clipboard::full_path(root, change.path),
+                    None => change.path.display().into_owned(),
+                })
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
     if !text.is_empty() {
-        // A clipboard the platform does not offer copies nothing; there is nothing to lose.
-        let _ = freya::clipboard::Clipboard::set(text);
+        crate::clipboard::copy(text);
     }
 }
 

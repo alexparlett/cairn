@@ -1,13 +1,17 @@
-//! The detail pane's strip: its tabs, and the control that collapses the pane. Fork draws
+//! The detail pane's strip: its tabs, and the icon that hides the pane's body. Fork draws
 //! the tabs as text with no count on either; the strip stays when the pane collapses, so
-//! the pane can be opened again from where it went.
+//! the pane can be opened again from where it went. The icon at the strip's right is Fork's
+//! "Hide commit details" (`docs/research/ui-review/fork-window-survey-2-2026-10-16.md`, section
+//! 2), lit in the accent while the pane is hidden, as Fork's is (section 3); Fork's pop-out icon
+//! beside it is not drawn.
 
 use freya::prelude::*;
 
-/// Height of the strip, which is what a collapsed pane keeps.
-pub const DETAIL_STRIP_HEIGHT: f32 = 30.0;
+use crate::style::{icons, metrics, tones};
 
-const TAB_FONT_SIZE: f32 = 12.0;
+/// Height of the strip, which is what a collapsed pane keeps: Fork's 31 px between two rules
+/// (`style::metrics::DETAIL_STRIP`).
+pub const DETAIL_STRIP_HEIGHT: f32 = metrics::DETAIL_STRIP;
 
 /// The detail pane's tabs. Commit is the default; a File Tree tab is issue #31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -28,10 +32,9 @@ impl DetailTab {
     }
 }
 
-/// The caption of the control that collapses an open pane.
-pub const COLLAPSE_CAPTION: &str = "Collapse";
-/// The caption of the control that opens a collapsed pane.
-pub const EXPAND_CAPTION: &str = "Expand";
+/// The tooltip of the icon that hides the pane's body and brings it back, Fork's words, and its
+/// name for assistive technology.
+pub const HIDE_DETAILS_TOOLTIP: &str = "Hide commit details";
 
 pub struct DetailTabs {
     selected: DetailTab,
@@ -106,13 +109,8 @@ impl KeyExt for DetailTabs {
 
 impl Component for DetailTabs {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let border = colours.read().colors().border;
-        let primary = colours.read().colors().text_primary;
-        let muted = colours.read().colors().text_placeholder;
-        let accent = colours.read().colors().text_highlight;
-        let surface = colours.read().colors().surface_tertiary;
-        let disabled = colours.read().colors().disabled;
+        // Fork Dark's strip: the chosen tab's caption in its blue, the others in the body's.
+        let (border, accent, surface) = (tones::RULE, tones::ACCENT, tones::HEADING_BAR);
 
         let collapsed = self.collapsed;
         let on_collapse = self.on_collapse.clone();
@@ -123,8 +121,7 @@ impl Component for DetailTabs {
             .width(Size::fill())
             .height(Size::px(DETAIL_STRIP_HEIGHT))
             .cross_align(Alignment::End)
-            .padding(Gaps::new(0., 12., 0., 12.))
-            .spacing(2.)
+            .padding(Gaps::new(0., 8., 0., 0.))
             .background(surface)
             .border(
                 Border::new()
@@ -144,7 +141,9 @@ impl Component for DetailTabs {
                 rect()
                     .key(tab.caption())
                     .height(Size::fill())
+                    .min_width(Size::px(metrics::DETAIL_TAB))
                     .main_align(Alignment::Center)
+                    .cross_align(Alignment::Center)
                     .padding(Gaps::new(0., 12., 0., 12.))
                     .a11y_role(AccessibilityRole::Tab)
                     .maybe(shown, |el| {
@@ -169,13 +168,13 @@ impl Component for DetailTabs {
                         label()
                             .text(tab.caption())
                             .max_lines(1)
-                            .font_size(TAB_FONT_SIZE)
+                            .font_size(metrics::BODY)
                             .color(if !available {
-                                disabled
+                                tones::DISABLED_TEXT
                             } else if shown {
-                                primary
+                                accent
                             } else {
-                                muted
+                                tones::TEXT
                             }),
                     )
                     .into()
@@ -186,14 +185,17 @@ impl Component for DetailTabs {
                     .height(Size::fill())
                     .main_align(Alignment::Center)
                     .child(
-                        Button::new()
-                            .compact()
-                            .on_press(move |_| on_collapse.call(!collapsed))
-                            .child(if collapsed {
-                                EXPAND_CAPTION
-                            } else {
-                                COLLAPSE_CAPTION
-                            }),
+                        TooltipContainer::new(Tooltip::new_text(HIDE_DETAILS_TOOLTIP)).child(
+                            rect()
+                                .a11y_role(AccessibilityRole::Button)
+                                .a11y_builder(|node| node.set_value(HIDE_DETAILS_TOOLTIP))
+                                .padding(4.)
+                                .on_press(move |_| on_collapse.call(!collapsed))
+                                .child(icons::bottom_pane(
+                                    metrics::STRIP_ICON,
+                                    if collapsed { accent } else { tones::TEXT },
+                                )),
+                        ),
                     ),
             )
     }

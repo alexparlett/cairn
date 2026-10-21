@@ -1,12 +1,18 @@
-//! The Commit tab: who wrote the commit and who committed it, each with the full timestamp at
-//! its own offset; the full commit id; each parent as a link; the whole message; then the
-//! changed files, a rename or a copy showing both names.
+//! The Commit tab, as Fork lays it out (`docs/research/ui-review/fork-window-survey-2026-10-16.md`
+//! §5, `fork-committer-2026-10-20.md`): the AUTHOR block — the author's 42 px avatar beside the
+//! name, the address and the date with its seconds and offset, in the zone the window is handed
+//! — and, beside it on the same rows, the COMMITTER block only where the committer differs from
+//! the author by name, address or instant ([`committer_differs`]); REFS, SHA and PARENTS; a rule,
+//! the whole message, a rule; then Expand All and the changed files, a rename or a copy showing
+//! both names.
 //!
-//! Laid out as Fork lays it out, with one difference forced by the list's size: the whole tab
-//! is ONE virtualised list of equal rows — header, message lines, then one row per changed
-//! file — because a commit can touch 55,184 paths and a list that builds a row each is the
-//! thing this repository's invariants exist to stop. So a message line is never wrapped, as
-//! git never re-wraps one; a line wider than the pane scrolls sideways rather than being cut.
+//! The whole tab is ONE virtualised list of equal rows — header, message lines, then one row
+//! per changed file — because a commit can touch 55,184 paths and a list that builds a row each
+//! is the thing this repository's invariants exist to stop. Its one pitch is the diff's
+//! ([`COMMIT_TAB_ROW_HEIGHT`]), so a file opened in place draws its diff at the diff's row
+//! height; the avatar spans three rows, each drawing its band of it. A message line is never
+//! wrapped, as git never re-wraps one; a line wider than the pane scrolls sideways rather than
+//! being cut.
 //!
 //! A file's diff opens in place under its row, as Fork opens it: a file pressed reports it,
 //! and the caller opens or closes it; what an opened file draws — its rows, unified or side by
@@ -18,11 +24,13 @@
 //!
 //! Above the id, Fork's REFS row: the chips of the refs pointing at the commit, as its row in
 //! the history draws them — given to the tab laid out already, and cut at the pane's edge as
-//! Fork's Mac pane cuts them — and no row for a commit with none.
+//! Fork's Mac pane cuts them — and no row for a commit with none. PARENTS stands for a root
+//! commit too, with nothing beside it, as Fork's does.
 //!
-//! No avatar, and the tab never asks for anything: a parent link reports the parent and the
-//! caller decides what pressing it reaches. The commit's id, its parents and the files' paths
-//! are drawn in the diff's typeface, IBM Plex Mono.
+//! The tab never asks for anything: a parent link reports the parent and the caller decides
+//! what pressing it reaches. The commit's id, its parents and the files' paths are drawn in the
+//! diff's typeface, IBM Plex Mono. Fork's ⌄ beside each address is not drawn: nothing Cairn
+//! builds fills its menu.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -30,24 +38,33 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Lane, Oid, Signature};
 use freya::prelude::*;
 
+use crate::push_button::{ButtonSize, PushButton};
+
 use crate::accelerators;
+use crate::avatar::{AvatarSize, avatar_of};
 use crate::detail::expansion::{Expansion, Item, Opened};
+use crate::detail::file_menu::{FileChoice, FileMenuIn, open_file_menu};
 use crate::detail::message_lines;
 use crate::diff::header::HIDDEN_CHANGES_NOTICE;
 use crate::diff::notice::{DiffNotice, NoticeRow, NoticeTone, grouped, notice_rows};
 use crate::diff::palette::{
     ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, REMOVED_EMPHASIS,
 };
-use crate::diff::toggle_glyphs::Glyph;
 use crate::diff::view::{RowGeometry, draw_row};
 use crate::history::date_text;
 use crate::history::ref_chips::{Chip, chips_row};
+use crate::local_time::LocalZone;
+use crate::style::{focus, icons, metrics, tones};
 
-/// Every row of the tab is this tall — a file opened in place's rows too, its diff's among
-/// them: a fixed size is what keeps the list O(viewport), and the virtualising view lays
-/// rows of one size out without a walk (the Commit tab's one pitch, Cairn's; the Changes tab's
-/// diff keeps Fork's 17 px, `DIFF_ROW_HEIGHT`).
+/// A row of the Changes tab's file list and of Local Changes' lists.
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
+
+/// Every row of the Commit tab is this tall — a file opened in place's rows, its diff's among
+/// them, at the diff's own row height (`style::metrics::DIFF_ROW`), and so every row above
+/// them: a fixed size is what keeps the list O(viewport), and the virtualising view lays rows
+/// of one size out without a walk. Fork's own header and file rows are taller (20 and 22 px,
+/// uv7b) than its diff's 17; the one pitch is the diff's.
+pub const COMMIT_TAB_ROW_HEIGHT: f32 = metrics::DIFF_ROW;
 
 /// Fork's control above the files that opens every file.
 pub const EXPAND_ALL_CAPTION: &str = "Expand All";
@@ -66,13 +83,21 @@ pub fn budget_notice(collapsed: usize) -> String {
     )
 }
 
-const FONT_SIZE: f32 = 13.0;
-const SUBJECT_FONT_SIZE: f32 = 15.0;
-const CAPTION_FONT_SIZE: f32 = 11.0;
-const CAPTION_WIDTH: f32 = 72.0;
+const CAPTION_WIDTH: f32 = metrics::COMMIT_TAB_CAPTIONS;
 const BADGE_WIDTH: f32 = 18.0;
-const PADDING: f32 = 12.0;
-const GAP: f32 = 10.0;
+const PADDING: f32 = metrics::COMMIT_TAB_INSET;
+const GAP: f32 = metrics::COMMIT_TAB_GAP;
+/// The room between the parent links, and between a file row's parts.
+const VALUE_GAP: f32 = 8.0;
+/// Where a file's row starts: its chevron, badge and document glyph then end where the values
+/// start, `PADDING + CAPTION_WIDTH + GAP` from the pane's edge.
+const FILE_INSET: f32 = PADDING + CAPTION_WIDTH + GAP
+    - metrics::SIDEBAR_CHEVRON
+    - BADGE_WIDTH
+    - FILE_GLYPH
+    - 3. * VALUE_GAP;
+/// A file row's document glyph.
+const FILE_GLYPH: f32 = 12.0;
 
 /// The caption over the author's column.
 pub const AUTHOR_CAPTION: &str = "AUTHOR";
@@ -127,18 +152,13 @@ pub fn file_text(file: &ChangedFile) -> String {
 /// One row above the files.
 #[derive(Debug, Clone, PartialEq)]
 enum Line {
-    Captions,
-    People {
-        author: Signature,
-        committer: Signature,
-    },
-    Dates {
-        author: String,
-        committer: String,
-    },
+    /// A row of the people's block: the author's, and the committer's beside it where it
+    /// differs from the author ([`committer_differs`]).
+    People(PeopleRow),
     /// The refs pointing at the commit, drawn as its row draws them, in its lane's colour.
     Refs(Refs),
     Id(String),
+    /// The parent links: none for a root commit, whose row still stands, as Fork's does.
     Parents(Vec<Oid>),
     Rule,
     Subject(String),
@@ -147,6 +167,61 @@ enum Line {
     NoFiles,
     /// Expand All, above the files, and what it stopped at.
     FilesBar,
+}
+
+/// Who a block of the people's rows is about: a name, its address and its date.
+#[derive(Debug, Clone, PartialEq)]
+struct Person {
+    caption: &'static str,
+    name: String,
+    email: String,
+    date: String,
+}
+
+/// Which row of a person's block: its caption, then the rows its avatar spans — the name and
+/// address, the date, and the room under them the avatar still needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockRow {
+    Caption,
+    Name,
+    Date,
+    Tail,
+}
+
+impl BlockRow {
+    const ALL: [BlockRow; 4] = [
+        BlockRow::Caption,
+        BlockRow::Name,
+        BlockRow::Date,
+        BlockRow::Tail,
+    ];
+
+    /// Which slice of the avatar the row draws, counted from its top: the avatar spans the
+    /// rows under the caption.
+    fn avatar_slice(self) -> Option<usize> {
+        match self {
+            Self::Caption => None,
+            Self::Name => Some(0),
+            Self::Date => Some(1),
+            Self::Tail => Some(2),
+        }
+    }
+}
+
+/// One row of the people's block.
+#[derive(Debug, Clone, PartialEq)]
+struct PeopleRow {
+    row: BlockRow,
+    author: Rc<Person>,
+    committer: Option<Rc<Person>>,
+}
+
+/// Whether the Commit tab draws the committer's block: only where the committer differs from
+/// the author, as Fork draws it (`docs/research/ui-review/fork-committer-2026-10-20.md`).
+pub fn committer_differs(author: &Signature, committer: &Signature) -> bool {
+    author.name != committer.name
+        || author.email != committer.email
+        || author.time.seconds != committer.time.seconds
 }
 
 /// The chips of the refs pointing at a commit and the lane its row is in: what the REFS row
@@ -168,27 +243,37 @@ impl Default for Refs {
 
 /// The rows above the files, for `changes`. Proportional to the message and the refs drawn,
 /// never to the files: those are read by index as they scroll into view.
-fn header_lines(changes: &ChangeSet, refs: &Refs) -> Vec<Line> {
+fn header_lines(changes: &ChangeSet, refs: &Refs, zone: &LocalZone) -> Vec<Line> {
     #[cfg(test)]
     tests::HEADER_BUILDS.with(|builds| builds.set(builds.get() + 1));
     let mut lines = Vec::new();
     if let Some(details) = &changes.details {
-        lines.push(Line::Captions);
-        lines.push(Line::People {
-            author: details.author.clone(),
-            committer: details.committer.clone(),
-        });
-        lines.push(Line::Dates {
-            author: date_text::long_date(details.author.time),
-            committer: date_text::long_date(details.committer.time),
-        });
+        let person = |caption, signature: &Signature, note: &str| Person {
+            caption,
+            name: signature.name.clone(),
+            email: signature.email.clone(),
+            date: format!("{}{note}", date_text::long_date(signature.time, zone)),
+        };
+        // An unreadable zone is said once, after the author's date.
+        let author = Rc::new(person(
+            AUTHOR_CAPTION,
+            &details.author,
+            date_text::utc_fallback_note(zone),
+        ));
+        let committer = committer_differs(&details.author, &details.committer)
+            .then(|| Rc::new(person(COMMITTER_CAPTION, &details.committer, "")));
+        for row in BlockRow::ALL {
+            lines.push(Line::People(PeopleRow {
+                row,
+                author: author.clone(),
+                committer: committer.clone(),
+            }));
+        }
         if !refs.chips.is_empty() {
             lines.push(Line::Refs(refs.clone()));
         }
         lines.push(Line::Id(details.id.hex().as_str().to_owned()));
-        if !details.parents.is_empty() {
-            lines.push(Line::Parents(details.parents.clone()));
-        }
+        lines.push(Line::Parents(details.parents.clone()));
         lines.push(Line::Rule);
         // The lines `git log` shows, not the bytes stored: git trims and expands them.
         for (n, text) in message_lines::shown_lines(&details.message)
@@ -224,15 +309,17 @@ struct HeaderKey {
     needed_limit: Option<usize>,
     no_files: bool,
     refs: Refs,
+    zone: LocalZone,
 }
 
 impl HeaderKey {
-    fn of(changes: &ChangeSet, refs: &Refs) -> Self {
+    fn of(changes: &ChangeSet, refs: &Refs, zone: &LocalZone) -> Self {
         Self {
             commit: changes.details.as_ref().map(|details| details.id),
             needed_limit: changes.renames.needed_limit,
             no_files: changes.files.is_empty(),
             refs: refs.clone(),
+            zone: zone.clone(),
         }
     }
 }
@@ -241,15 +328,20 @@ impl HeaderKey {
 type HeaderCache = Rc<RefCell<Option<(HeaderKey, Rc<Vec<Line>>)>>>;
 
 /// The header for `changes`: the one in `cache` while its key still holds.
-fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Vec<Line>> {
-    let key = HeaderKey::of(changes, refs);
+fn cached_header(
+    cache: &HeaderCache,
+    changes: &ChangeSet,
+    refs: &Refs,
+    zone: &LocalZone,
+) -> Rc<Vec<Line>> {
+    let key = HeaderKey::of(changes, refs, zone);
     let mut cached = cache.borrow_mut();
     if let Some((built_for, lines)) = cached.as_ref()
         && *built_for == key
     {
         return lines.clone();
     }
-    let lines = Rc::new(header_lines(changes, refs));
+    let lines = Rc::new(header_lines(changes, refs, zone));
     *cached = Some((key, lines.clone()));
     lines
 }
@@ -264,6 +356,7 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Ve
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
     refs: Refs,
+    zone: LocalZone,
     expansion: Readable<Expansion>,
     side_by_side: bool,
     on_parent: EventHandler<Oid>,
@@ -271,6 +364,7 @@ pub struct CommitTab {
     on_file_pressed: EventHandler<usize>,
     on_expand_all: EventHandler<bool>,
     on_load: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     key: DiffKey,
 }
 
@@ -279,6 +373,7 @@ impl CommitTab {
         Self {
             changes: changes.into(),
             refs: Refs::default(),
+            zone: LocalZone::default(),
             expansion: Readable::from_value(Expansion::new()),
             side_by_side: false,
             on_parent: EventHandler::new(|_| {}),
@@ -286,6 +381,7 @@ impl CommitTab {
             on_file_pressed: EventHandler::new(|_| {}),
             on_expand_all: EventHandler::new(|_| {}),
             on_load: EventHandler::new(|_| {}),
+            on_file_menu: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -294,6 +390,12 @@ impl CommitTab {
     /// them out, and that row's lane: the REFS row.
     pub fn refs(mut self, refs: Refs) -> Self {
         self.refs = refs;
+        self
+    }
+
+    /// The zone the author's and committer's dates are drawn in, handed down by the window.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
         self
     }
 
@@ -343,6 +445,17 @@ impl CommitTab {
         self.on_load = on_load.into();
         self
     }
+
+    /// A file's menu item was chosen from the menu a right press on its row opens, which first
+    /// makes it the current file without opening or closing it, by the file's index in the
+    /// change set.
+    pub fn on_file_menu(
+        mut self,
+        on_file_menu: impl Into<EventHandler<(usize, FileChoice)>>,
+    ) -> Self {
+        self.on_file_menu = on_file_menu.into();
+        self
+    }
 }
 
 // Hand-written: `EventHandler` never compares equal, and its identity is stable.
@@ -350,6 +463,7 @@ impl PartialEq for CommitTab {
     fn eq(&self, other: &Self) -> bool {
         self.changes == other.changes
             && self.refs == other.refs
+            && self.zone == other.zone
             && self.expansion == other.expansion
             && self.side_by_side == other.side_by_side
             && self.key == other.key
@@ -384,6 +498,7 @@ struct TabContent {
     on_file_pressed: EventHandler<usize>,
     on_expand_all: EventHandler<bool>,
     on_load: EventHandler<usize>,
+    on_file_menu: EventHandler<(usize, FileChoice)>,
     /// The tab's focus target, which a pressed row takes.
     tab_id: AccessibilityId,
 }
@@ -417,6 +532,8 @@ struct TabData {
     view_width: f32,
     /// Read as a side-by-side row is built, for the sideways scroll its text slides by.
     scroll: ScrollController,
+    /// Whether the tab has focus, which the current file's tone says.
+    focused: bool,
 }
 
 /// One commit's list. Keyed by the commit, so another commit is a list of its own: it opens
@@ -452,11 +569,10 @@ impl Component for TabBody {
             cursor,
             view_width: *width.read(),
             scroll: controller,
+            focused: focus().is_focused(),
         };
         // The rows after the last are room for the horizontal scrollbar (`end_room`).
-        let length = crate::end_room::with_end_room(data.content.length(), DETAIL_ROW_HEIGHT);
-        let border = colours().border_focus;
-
+        let length = crate::end_room::with_end_room(data.content.length(), COMMIT_TAB_ROW_HEIGHT);
         rect()
             .expanded()
             .a11y_id(tab_id)
@@ -464,13 +580,11 @@ impl Component for TabBody {
             .a11y_role(AccessibilityRole::List)
             .on_key_down(keyboard(&data, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(border).width(1.))
-            })
+            .border(focus::ring_when(focus()))
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                     .length(length)
-                    .item_size(DETAIL_ROW_HEIGHT)
+                    .item_size(COMMIT_TAB_ROW_HEIGHT)
                     // The arrows move the current file, not the viewport.
                     .scroll_with_arrows(false)
                     .expanded(),
@@ -482,7 +596,8 @@ impl Component for TabBody {
     }
 }
 
-/// ↑ and ↓ over the files; every other key, and every chord, is left unhandled.
+/// ↑ and ↓ over the files; every other key, and every chord, is left unhandled — the copy
+/// chords too, which Fork's Commit tab menu shows none of.
 fn keyboard(
     data: &TabData,
     mut controller: ScrollController,
@@ -511,8 +626,8 @@ fn keyboard(
         // Past the rows the files opened above it add.
         let row = header + expansion.peek().position(next, side_by_side);
         controller.scroll_to_offset(
-            row as f32 * DETAIL_ROW_HEIGHT,
-            DETAIL_ROW_HEIGHT,
+            row as f32 * COMMIT_TAB_ROW_HEIGHT,
+            COMMIT_TAB_ROW_HEIGHT,
             Direction::Vertical,
         );
     }
@@ -528,7 +643,7 @@ impl Component for CommitTab {
             let changes = self.changes.read();
             let identity = changes.details.as_ref().map(|details| details.id);
             (
-                cached_header(&cache, &changes, &self.refs),
+                cached_header(&cache, &changes, &self.refs, &self.zone),
                 changes.files.len(),
                 identity,
             )
@@ -546,6 +661,7 @@ impl Component for CommitTab {
             on_file_pressed: self.on_file_pressed.clone(),
             on_expand_all: self.on_expand_all.clone(),
             on_load: self.on_load.clone(),
+            on_file_menu: self.on_file_menu.clone(),
             tab_id,
         };
 
@@ -594,13 +710,22 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
 fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     let content = &data.content;
     // Read, not peeked: the list redraws when the answer it shows is replaced.
-    let Some(drawn) = content.changes.read().files.get(index).map(file_row) else {
+    let current = data.current == Some(index);
+    let chosen = tones::selected(data.focused);
+    let Some(drawn) = content
+        .changes
+        .read()
+        .files
+        .get(index)
+        .map(|file| file_row(file, current.then_some(chosen.text)))
+    else {
         // The count and the files can disagree for one frame; an empty row of the right
         // height stands in.
         return row.into();
     };
     let open = content.expansion.read().is_open(index);
     let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
+    let mut right_cursor = data.cursor;
     let on_file_pressed = content.on_file_pressed.clone();
     // Turned horizontal, the row's main axis is its width, where the centring `build_row`
     // gives a vertical row would put the file in the middle of the pane: it starts at its
@@ -608,16 +733,44 @@ fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     row.horizontal()
         .main_align(Alignment::Start)
         .cross_align(Alignment::Center)
-        .maybe(data.current == Some(index), |el| {
-            el.background(colours().surface_secondary)
-        })
+        .spacing(VALUE_GAP)
+        // The chevron stands in under the captions, so the path starts at the values' column
+        // as Fork's does (uv7b).
+        .padding(Gaps::new(0., PADDING, 0., FILE_INSET))
+        .maybe(current, |el| el.background(chosen.band))
         .on_press(move |_| {
             tab_id.request_focus();
             cursor.set(Some(index));
             on_file.call(index);
             on_file_pressed.call(index);
         })
-        .child(if open { Glyph::Open } else { Glyph::Closed }.draw(colours().text_secondary))
+        // A right press makes the file current, opening or closing nothing, and opens its menu.
+        .on_pointer_down({
+            let (on_file, on_file_menu) = (content.on_file.clone(), content.on_file_menu.clone());
+            move |e: Event<PointerEventData>| {
+                if e.button() != Some(MouseButton::Right) {
+                    return;
+                }
+                tab_id.request_focus();
+                if !current {
+                    right_cursor.set(Some(index));
+                    on_file.call(index);
+                }
+                open_file_menu(FileMenuIn::CommitTab, tab_id, index, on_file_menu.clone());
+            }
+        })
+        .child(if open {
+            icons::chevron_down
+        } else {
+            icons::chevron_right
+        }(
+            metrics::SIDEBAR_CHEVRON,
+            if current {
+                chosen.text
+            } else {
+                tones::DETAIL_LABEL
+            },
+        ))
         .child(drawn)
         .into()
 }
@@ -641,8 +794,8 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
         return plain(label());
     };
     match opened {
-        Opened::Reading => plain(text(READING_DIFF, FONT_SIZE, colours().text_placeholder)),
-        Opened::Failed(message) => plain(text(message.clone(), FONT_SIZE, colours().error)),
+        Opened::Reading => plain(text(READING_DIFF, metrics::BODY, tones::PLACEHOLDER)),
+        Opened::Failed(message) => plain(text(message.clone(), metrics::BODY, colours().error)),
         Opened::Shown(shown) => {
             if let Some(notice) = DiffNotice::of(shown) {
                 let rows = notice_rows(&notice);
@@ -655,10 +808,11 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
                             .main_align(Alignment::Center)
                             .padding(Gaps::new(0., PADDING, 0., PADDING))
                             .child(
-                                Button::new()
-                                    .compact()
-                                    .on_press(move |_| on_load.call(file))
-                                    .child(crate::diff::notice::LOAD_DIFF_CAPTION),
+                                PushButton::caption(
+                                    crate::diff::notice::LOAD_DIFF_CAPTION,
+                                    ButtonSize::Compact,
+                                )
+                                .on_press(move || on_load.call(file)),
                             )
                             .into()
                     }
@@ -668,7 +822,7 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
             }
             let hides = shown.hides_changes();
             if hides && under == 0 {
-                return plain(text(HIDDEN_CHANGES_NOTICE, FONT_SIZE, DIFF_MUTED));
+                return plain(text(HIDDEN_CHANGES_NOTICE, metrics::BODY, DIFF_MUTED));
             }
             let geometry = RowGeometry::of(
                 shown,
@@ -697,15 +851,15 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
         NoticeTone::Plain => DIFF_TEXT,
     };
     match row {
-        NoticeRow::Title(words) => text(words.clone(), FONT_SIZE, DIFF_TEXT),
-        NoticeRow::Muted(words) => text(words.clone(), CAPTION_FONT_SIZE + 1., DIFF_MUTED),
+        NoticeRow::Title(words) => text(words.clone(), metrics::BODY, DIFF_TEXT),
+        NoticeRow::Muted(words) => text(words.clone(), metrics::BODY, DIFF_MUTED),
         NoticeRow::Side {
             caption,
             tone: side,
             text: words,
         } => label()
             .max_lines(1)
-            .font_size(CAPTION_FONT_SIZE + 1.)
+            .font_size(metrics::BODY)
             .color(tone(side))
             .text(match words {
                 Some(words) => format!("{caption}  {words}"),
@@ -715,7 +869,11 @@ pub(crate) fn notice_line(row: &NoticeRow) -> Label {
             text: words,
             tone: line,
         } => text(words.clone(), DIFF_FONT_SIZE, tone(line)).font_family(DIFF_FONT_FAMILY),
-        NoticeRow::LoadDiff => text(crate::diff::notice::LOAD_DIFF_CAPTION, FONT_SIZE, DIFF_TEXT),
+        NoticeRow::LoadDiff => text(
+            crate::diff::notice::LOAD_DIFF_CAPTION,
+            metrics::BODY,
+            DIFF_TEXT,
+        ),
     }
 }
 
@@ -738,26 +896,55 @@ fn files_bar(content: &TabContent) -> Element {
         .width(Size::fill())
         .cross_align(Alignment::Center)
         .spacing(GAP)
-        .child(rect().width(Size::flex(1.)).maybe_child(stopped.then(|| {
-            text(
-                budget_notice(collapsed),
-                FONT_SIZE,
-                colours().text_secondary,
-            )
-        })))
-        .child(
-            Button::new()
-                .compact()
-                .on_press(move |_| on_expand_all.call(!any_open))
-                .child(if any_open {
-                    COLLAPSE_ALL_CAPTION
-                } else {
-                    EXPAND_ALL_CAPTION
-                }),
-        )
+        .child(rect().width(Size::flex(1.)).maybe_child(
+            stopped.then(|| text(budget_notice(collapsed), metrics::BODY, tones::DETAIL_LABEL)),
+        ))
+        .child(ExpandAll {
+            any_open,
+            on_expand_all,
+        })
         .into()
 }
 
+/// Fork's Expand All — Collapse All while any file is open — its caption alone, no button drawn
+/// round it (uv9); a Tab stop, Space or Enter pressing it, with a ring while focus came by key.
+#[derive(Clone)]
+struct ExpandAll {
+    any_open: bool,
+    on_expand_all: EventHandler<bool>,
+}
+
+impl PartialEq for ExpandAll {
+    fn eq(&self, other: &Self) -> bool {
+        self.any_open == other.any_open
+    }
+}
+
+impl Component for ExpandAll {
+    fn render(&self) -> impl IntoElement {
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
+        let (any_open, on_expand_all) = (self.any_open, self.on_expand_all.clone());
+        rect()
+            .a11y_id(a11y_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::Button)
+            .cursor(CursorIcon::Pointer)
+            .border(focus::ring_when(focus()))
+            .on_press(move |_| on_expand_all.call(!any_open))
+            .child(text(
+                if any_open {
+                    COLLAPSE_ALL_CAPTION
+                } else {
+                    EXPAND_ALL_CAPTION
+                },
+                metrics::BODY,
+                tones::TEXT,
+            ))
+    }
+}
+
+/// The theme's status tones (error, warning and the badges Fork Dark's table does not name).
 fn colours() -> ColorsSheet {
     get_theme_or_default().read().colors().clone()
 }
@@ -771,24 +958,19 @@ fn text(content: impl Into<String>, size: f32, colour: Color) -> Label {
 }
 
 fn caption(content: &'static str) -> Label {
-    text(content, CAPTION_FONT_SIZE, colours().text_placeholder)
+    text(content, metrics::CAPTION, tones::DETAIL_LABEL)
 }
 
 fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
     let colours = colours();
     match line {
-        Line::Captions => columns(caption(AUTHOR_CAPTION), caption(COMMITTER_CAPTION)),
-        Line::People { author, committer } => columns(person(author), person(committer)),
-        Line::Dates { author, committer } => columns(
-            text(author.clone(), FONT_SIZE, colours.text_secondary),
-            text(committer.clone(), FONT_SIZE, colours.text_secondary),
-        ),
+        Line::People(people) => people_row(people),
         // Cut at the pane's edge, never wrapped and never counted (Fork's Mac pane).
         Line::Refs(refs) => rect()
             .horizontal()
             .content(Content::Flex)
             .width(Size::fill())
-            .height(Size::px(DETAIL_ROW_HEIGHT))
+            .height(Size::px(COMMIT_TAB_ROW_HEIGHT))
             .cross_align(Alignment::Center)
             .spacing(GAP)
             .child(
@@ -799,13 +981,13 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
             .child(
                 chips_row(&refs.chips, refs.lane)
                     .width(Size::flex(1.))
-                    .height(Size::px(DETAIL_ROW_HEIGHT))
+                    .height(Size::px(COMMIT_TAB_ROW_HEIGHT))
                     .overflow(Overflow::Clip),
             )
             .into(),
         Line::Id(id) => labelled(
             ID_CAPTION,
-            text(id.clone(), FONT_SIZE, colours.text_primary)
+            text(id.clone(), metrics::BODY, tones::TEXT)
                 .font_family(DIFF_FONT_FAMILY)
                 .into(),
         ),
@@ -813,7 +995,7 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
             PARENTS_CAPTION,
             rect()
                 .horizontal()
-                .spacing(GAP)
+                .spacing(VALUE_GAP)
                 .children(parents.iter().map(|parent| -> Element {
                     let parent = *parent;
                     let on_parent = on_parent.clone();
@@ -825,11 +1007,10 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
                         .child(
                             text(
                                 parent.short().as_str().to_owned(),
-                                FONT_SIZE,
-                                colours.text_highlight,
+                                metrics::BODY,
+                                tones::LINK,
                             )
-                            .font_family(DIFF_FONT_FAMILY)
-                            .text_decoration(TextDecoration::Underline),
+                            .font_family(DIFF_FONT_FAMILY),
                         )
                         .into()
                 }))
@@ -838,52 +1019,103 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
         Line::Rule => rect()
             .width(Size::fill())
             .height(Size::px(1.))
-            .background(colours.border)
+            .background(tones::RULE)
             .into(),
-        Line::Subject(subject) => text(subject.clone(), SUBJECT_FONT_SIZE, colours.text_primary)
-            .font_weight(FontWeight::BOLD)
-            .into(),
-        Line::Body(body) => text(body.clone(), FONT_SIZE, colours.text_primary).into(),
+        Line::Subject(subject) => in_values(
+            text(subject.clone(), metrics::DETAIL_SUBJECT, tones::TEXT)
+                .font_weight(FontWeight::BOLD)
+                .into(),
+        ),
+        Line::Body(body) => in_values(text(body.clone(), metrics::BODY, tones::TEXT).into()),
         Line::CutShort(needed) => {
-            text(cut_short_notice(*needed), FONT_SIZE, colours.warning).into()
+            text(cut_short_notice(*needed), metrics::BODY, colours.warning).into()
         }
-        Line::NoFiles => text(NO_FILES, FONT_SIZE, colours.text_placeholder).into(),
+        Line::NoFiles => text(NO_FILES, metrics::BODY, tones::PLACEHOLDER).into(),
         // Drawn by the list, which holds what it reads (`files_bar`).
         Line::FilesBar => rect().into(),
     }
 }
 
-/// Fork's two columns: the author's on the left, the committer's on the right.
-fn columns(left: Label, right: Label) -> Element {
+/// One row of the people's block: the author's part, and the committer's beside it where it
+/// is drawn.
+fn people_row(people: &PeopleRow) -> Element {
     rect()
         .horizontal()
         .content(Content::Flex)
         .width(Size::fill())
-        .spacing(GAP)
-        .child(
-            rect().width(Size::flex(1.)).child(
-                left.width(Size::fill())
-                    .text_overflow(TextOverflow::Ellipsis),
-            ),
-        )
-        .child(
-            rect().width(Size::flex(1.)).child(
-                right
-                    .width(Size::fill())
-                    .text_overflow(TextOverflow::Ellipsis),
-            ),
+        .cross_align(Alignment::Center)
+        .child(person_part(&people.author, people.row))
+        .maybe_child(
+            people
+                .committer
+                .as_ref()
+                .map(|committer| person_part(committer, people.row)),
         )
         .into()
 }
 
-/// A name and, in a lighter tone, the address beside it, as git prints `Name <email>`.
-fn person(signature: &Signature) -> Label {
-    let colours = colours();
-    label()
-        .max_lines(1)
-        .font_size(FONT_SIZE)
-        .color(colours.text_primary)
-        .text(format!("{} <{}>", signature.name, signature.email))
+/// A person's part of one row of the block: under the caption column, the slice of the avatar
+/// this row draws; beside it, the caption, the name with its address, or the date.
+fn person_part(person: &Person, row: BlockRow) -> Element {
+    let value: Element = match row {
+        BlockRow::Caption => caption(person.caption).into(),
+        BlockRow::Name => paragraph()
+            .max_lines(1)
+            .font_size(metrics::BODY)
+            .text_overflow(TextOverflow::Ellipsis)
+            .span(
+                Span::new(person.name.clone())
+                    .color(tones::TEXT)
+                    .font_weight(FontWeight::BOLD),
+            )
+            .span(Span::new(format!("  {}", person.email)).color(tones::DETAIL_LABEL))
+            .into(),
+        BlockRow::Date => text(person.date.clone(), metrics::BODY, tones::DETAIL_LABEL).into(),
+        BlockRow::Tail => rect().into(),
+    };
+    rect()
+        .horizontal()
+        .width(Size::flex(1.))
+        .height(Size::px(COMMIT_TAB_ROW_HEIGHT))
+        .cross_align(Alignment::Center)
+        .spacing(GAP)
+        .child(
+            rect()
+                .width(Size::px(CAPTION_WIDTH))
+                .height(Size::px(COMMIT_TAB_ROW_HEIGHT))
+                .main_align(Alignment::End)
+                .horizontal()
+                .maybe_child(
+                    row.avatar_slice()
+                        .map(|slice| avatar_slice(&person.name, slice)),
+                ),
+        )
+        .child(value)
+        .into()
+}
+
+/// The `slice`th row-high band of `name`'s avatar, counted from its top: the avatar spans the
+/// rows under its caption, each row drawing its band, so it is whole however the list is
+/// scrolled and each row stays one pitch tall.
+fn avatar_slice(name: &str, slice: usize) -> Element {
+    // Each band reaches a pixel into the next row, which draws over it: at a fractional offset
+    // the bands' smoothed edges would otherwise show as seams.
+    rect()
+        .width(Size::px(metrics::DETAIL_AVATAR))
+        .height(Size::px(COMMIT_TAB_ROW_HEIGHT + 1.))
+        .overflow(Overflow::Clip)
+        // A rect's offset moves what it holds, not itself.
+        .offset_y(-(slice as f32) * COMMIT_TAB_ROW_HEIGHT)
+        .child(avatar_of(name, AvatarSize::Detail))
+        .into()
+}
+
+/// `value` in the values' column, where Fork starts the message (uv9).
+fn in_values(value: Element) -> Element {
+    rect()
+        .padding(Gaps::new(0., 0., 0., CAPTION_WIDTH + GAP))
+        .child(value)
+        .into()
 }
 
 /// A grey caption right-aligned against its value, as Fork's `SHA` and `PARENTS` rows.
@@ -901,24 +1133,36 @@ fn labelled(name: &'static str, value: Element) -> Element {
         .into()
 }
 
-pub(crate) fn file_row(file: &ChangedFile) -> Element {
+/// A changed file's badge and path, the path bold in `selected`'s tone when the row is the
+/// list's chosen one. Fork Dark's badges where it gives one (an added file's green, a modified
+/// one's yellow), the theme's status tones for the rest.
+pub(crate) fn file_row(file: &ChangedFile, selected: Option<Color>) -> Element {
     let colours = colours();
     let badge = match file.status {
-        ChangeStatus::Added => colours.success,
+        ChangeStatus::Added => tones::ADDED_BADGE,
         ChangeStatus::Deleted => colours.error,
-        ChangeStatus::Modified | ChangeStatus::TypeChanged => colours.warning,
+        ChangeStatus::Modified | ChangeStatus::TypeChanged => tones::MODIFIED_BADGE,
         ChangeStatus::Renamed(_) | ChangeStatus::Copied(_) => colours.info,
     };
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(GAP)
+        .spacing(VALUE_GAP)
         .child(
-            text(status_letter(file.status), FONT_SIZE, badge)
+            text(status_letter(file.status), metrics::BODY, badge)
                 .width(Size::px(BADGE_WIDTH))
                 .font_weight(FontWeight::BOLD),
         )
-        .child(text(file_text(file), FONT_SIZE, colours.text_primary).font_family(DIFF_FONT_FAMILY))
+        .child(icons::file(FILE_GLYPH, tones::DETAIL_LABEL))
+        .child(
+            text(
+                file_text(file),
+                metrics::BODY,
+                selected.unwrap_or(tones::TEXT),
+            )
+            .maybe(selected.is_some(), |el| el.font_weight(FontWeight::BOLD))
+            .font_family(DIFF_FONT_FAMILY),
+        )
         .into()
 }
 
@@ -986,6 +1230,7 @@ mod tests {
                 None,
             ),
             &Refs::default(),
+            &LocalZone::default(),
         );
         let message: Vec<&Line> = lines
             .iter()
@@ -1003,16 +1248,25 @@ mod tests {
         assert!(lines.len() < 20, "{} header rows", lines.len());
     }
 
-    /// A root commit has no parents row; a cut-short search says so; an empty commit says it
-    /// changed nothing.
+    /// A root commit's parents row stands empty; a cut-short search says so; an empty commit
+    /// says it changed nothing.
     #[test]
     fn the_header_says_what_is_missing_and_what_was_cut_short() {
-        let root = header_lines(&set(Some(details("x", 0)), 0, Some(2774)), &Refs::default());
-        assert!(!root.iter().any(|line| matches!(line, Line::Parents(_))));
+        let root = header_lines(
+            &set(Some(details("x", 0)), 0, Some(2774)),
+            &Refs::default(),
+            &LocalZone::default(),
+        );
+        // Fork draws PARENTS with nothing beside it for a root commit (cm13).
+        assert!(root.contains(&Line::Parents(Vec::new())));
         assert!(root.contains(&Line::CutShort(2774)));
         assert!(root.contains(&Line::NoFiles));
 
-        let merge = header_lines(&set(Some(details("x", 2)), 1, None), &Refs::default());
+        let merge = header_lines(
+            &set(Some(details("x", 2)), 1, None),
+            &Refs::default(),
+            &LocalZone::default(),
+        );
         assert!(
             merge
                 .iter()
@@ -1040,18 +1294,20 @@ mod tests {
     #[test]
     fn the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit() {
         let changes = set(Some(details("x", 1)), 1, None);
-        let none = header_lines(&changes, &Refs::default());
+        let none = header_lines(&changes, &Refs::default(), &LocalZone::default());
         assert!(!none.iter().any(|line| matches!(line, Line::Refs(_))));
 
         let two = refs_of(&["v1.0", "v1.1"]);
-        let lines = header_lines(&changes, &two);
+        let lines = header_lines(&changes, &two, &LocalZone::default());
         let at = |wanted: fn(&Line) -> bool| lines.iter().position(wanted);
         let refs = at(|line| matches!(line, Line::Refs(_)));
         let id = at(|line| matches!(line, Line::Id(_)));
-        let dates = at(|line| matches!(line, Line::Dates { .. }));
+        let people = lines
+            .iter()
+            .rposition(|line| matches!(line, Line::People(_)));
         assert!(
-            dates < refs && refs < id && refs.is_some(),
-            "REFS at {refs:?}, the dates at {dates:?}, the id at {id:?}"
+            people < refs && refs < id && refs.is_some(),
+            "REFS at {refs:?}, the people's block ending at {people:?}, the id at {id:?}"
         );
         assert_eq!(lines.get(refs.unwrap_or_default()), Some(&Line::Refs(two)));
     }

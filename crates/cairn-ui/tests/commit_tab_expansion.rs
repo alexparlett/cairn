@@ -10,9 +10,9 @@ use cairn_model::{
     ShownDiff, Signature, SizeLimit, TextDiff, Timestamp,
 };
 use cairn_ui::{
-    COLLAPSE_ALL_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, EXPAND_ALL_CAPTION, Expansion,
+    COLLAPSE_ALL_CAPTION, COMMIT_TAB_ROW_HEIGHT, CommitTab, EXPAND_ALL_CAPTION, Expansion,
     LOAD_DIFF_CAPTION, Opened, READING_DIFF, SCROLLBAR_THICKNESS, TOO_LARGE_TO_DISPLAY,
-    budget_notice,
+    budget_notice, with_end_room,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -176,12 +176,20 @@ fn built(test: &TestingRunner) -> Vec<(String, f32, bool)> {
     })
 }
 
-/// How many rows of the list were built: the distinct row slots any text was drawn in.
+/// How many rows of the list were built: the distinct row slots holding a row — a rect one
+/// pitch tall across the list from its left edge, which every row the list builds is, a header
+/// row with no text in it (a rule, the room under an avatar) among them.
 fn rows_built(test: &TestingRunner) -> usize {
-    let mut slots: Vec<i64> = built(test)
-        .iter()
-        .map(|(_, top, _)| (top / DETAIL_ROW_HEIGHT).floor() as i64)
-        .collect();
+    let mut slots: Vec<i64> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| {
+                area.min_x() == 0.
+                    && area.width() >= WIDTH / 2.
+                    && area.height() == COMMIT_TAB_ROW_HEIGHT
+            })
+            .map(|_| (area.min_y() / COMMIT_TAB_ROW_HEIGHT).floor() as i64)
+    });
     slots.sort_unstable();
     slots.dedup();
     slots.len()
@@ -237,7 +245,7 @@ fn a_pressed_file_is_reported_and_its_diff_opens_under_its_row() {
         "file 2 at {own}, its diff from {first} to {last}, file 3 at {next}"
     );
     // A header row, five lines and the changed one's two: eight rows between file 2 and 3.
-    assert_eq!(next - next_before, 8. * DETAIL_ROW_HEIGHT);
+    assert_eq!(next - next_before, 8. * COMMIT_TAB_ROW_HEIGHT);
 }
 
 /// The states of an opened file, each a row of the list: being read, failed — that file's
@@ -332,7 +340,7 @@ fn expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed() 
 fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
     const FILES: usize = 55_184;
     const LINES: u32 = 10_000;
-    let viewport_rows = (HEIGHT / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let viewport_rows = (HEIGHT / COMMIT_TAB_ROW_HEIGHT).ceil() as usize;
     let opened = [10usize, 27_592, 55_000];
     let mut built_counts = Vec::new();
     for side_by_side in [false, true] {
@@ -360,9 +368,9 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
         // rows the file opened above it adds, its own row, then its rows: a hunk header, and
         // each line — a changed one twice unified, once side by side.
         let first_top = top_of(&test, &path(0)).unwrap_or_else(|| panic!("no first file"));
-        let header = (first_top / DETAIL_ROW_HEIGHT).floor();
+        let header = (first_top / COMMIT_TAB_ROW_HEIGHT).floor();
         // Where a file's label sits inside its row, centred.
-        let inset = first_top - header * DETAIL_ROW_HEIGHT;
+        let inset = first_top - header * COMMIT_TAB_ROW_HEIGHT;
         // Counted by hand, not by the function under test (a row too many per opened file,
         // there or in the table, would pass were this read from it): one hunk header and
         // 10,000 lines, and unified the 200 changed lines a second row each.
@@ -374,14 +382,17 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
         assert_eq!(changed_before, 120.);
         let under = 1. + f64::from(target_line) + if side_by_side { 0. } else { changed_before };
         let row = f64::from(header) + 27_592. + opened_above + 1. + under;
-        test.scroll((100., 100.), (0., -(row * f64::from(DETAIL_ROW_HEIGHT))));
+        test.scroll(
+            (100., 100.),
+            (0., -(row * f64::from(COMMIT_TAB_ROW_HEIGHT))),
+        );
         built_counts.push(within(&test, "deep in the middle file"));
         let line = format!("27592:{target_line}");
         // Placed exactly: scrolled `row` rows down, the line is the row at the top of the view.
         let slot = built(&test)
             .into_iter()
             .find(|(text, _, visible)| *visible && *text == line)
-            .map(|(_, top, _)| (top / DETAIL_ROW_HEIGHT).floor())
+            .map(|(_, top, _)| (top / COMMIT_TAB_ROW_HEIGHT).floor())
             .unwrap_or_else(|| {
                 panic!(
                     "scrolling to line {target_line} of file 27,592 did not draw it (side by \
@@ -401,14 +412,15 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
         let bottom = built(&test)
             .into_iter()
             .find(|(text, _, visible)| *visible && *text == last)
-            .map(|(_, top, _)| top - inset + DETAIL_ROW_HEIGHT)
+            .map(|(_, top, _)| top - inset + COMMIT_TAB_ROW_HEIGHT)
             .unwrap_or_else(|| panic!("the last file is not at the end"));
-        // One empty row after it is the room the horizontal scrollbar needs (`end_room`).
+        // The empty rows after it are the room the horizontal scrollbar needs (`end_room`).
+        let room = (with_end_room(1, COMMIT_TAB_ROW_HEIGHT) - 1) as f32 * COMMIT_TAB_ROW_HEIGHT;
         assert!(
-            (bottom - (HEIGHT - DETAIL_ROW_HEIGHT)).abs() < 1.,
-            "the last file's row ends at {bottom}, not one row above the bottom of the {HEIGHT} \
-             px view: the list is not exactly as long as its rows and its end room (side by \
-             side: {side_by_side})"
+            (bottom - (HEIGHT - room)).abs() < 1.,
+            "the last file's row ends at {bottom}, not the end room above the bottom of the \
+             {HEIGHT} px view: the list is not exactly as long as its rows and its end room \
+             (side by side: {side_by_side})"
         );
         assert!(bottom <= HEIGHT - SCROLLBAR_THICKNESS);
     }

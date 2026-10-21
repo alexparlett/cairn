@@ -58,7 +58,6 @@ fn rows(range: impl IntoIterator<Item = usize>) -> History {
 struct Reports {
     selected: Rc<RefCell<Vec<RowId>>>,
     reached_end: Rc<RefCell<usize>>,
-    actions: Rc<RefCell<Vec<Action>>>,
     new_branch: Rc<RefCell<Vec<(Oid, String)>>>,
 }
 
@@ -78,7 +77,6 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         let mut selected = fixture.selected;
         let on_select = reports.selected.clone();
         let reached_end = reports.reached_end.clone();
-        let actions = reports.actions.clone();
         let new_branch = reports.new_branch.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
@@ -93,7 +91,6 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
                 .text(format!("{marker}{lost}{subject}"))
                 .into()
         })
-        .on_action(move |action| actions.borrow_mut().push(action))
         .on_new_branch(move |at: (Oid, String)| new_branch.borrow_mut().push(at))
         .selected(*selected.read())
         .also_selected(*fixture.also.read())
@@ -324,12 +321,11 @@ fn an_accelerators_chord_does_not_move_the_selection() {
     );
 }
 
-/// The history's own chord, Show Lost Commits, is reported to the list's caller as its
-/// action, and moves no selection; a chord of the detail pane's scope is left alone and
-/// reported as nothing. Caught by: the chord left unheard, heard as an arrow, or another
-/// scope's chord reported as the history's.
+/// A chord pressed while the list has focus — the window's Show Lost Commits, the detail pane's
+/// next change — is left alone for whoever hears it and moves no selection. Caught by: a chord
+/// read as an arrow.
 #[test]
-fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
+fn a_chord_pressed_in_the_list_moves_nothing() {
     let reports = Reports::default();
     let (mut test, _) = launch(rows(0..100), &reports);
     press(&mut test, NamedKey::ArrowDown);
@@ -348,10 +344,6 @@ fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
         });
         test.sync_and_update();
     }
-    assert_eq!(
-        reports.actions.borrow().as_slice(),
-        &[Action::ShowLostCommits, Action::ShowLostCommits]
-    );
     assert_eq!(
         reports.selected.borrow().as_slice(),
         &[RowId::Commit(oid(0))],

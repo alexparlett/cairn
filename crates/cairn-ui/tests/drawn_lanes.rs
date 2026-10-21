@@ -1,15 +1,20 @@
-//! What drawing a viewport of history rows costs when thousands of lines are open across it —
-//! the widest the graph gets, every unmerged ref one line — and what laying out a row's chips
-//! costs when its commit carries thousands of refs. A measurement, `#[ignore]`d: timings in
-//! CI are flaky and bound to a machine. Run in release:
+//! Where a stash's row is drawn — on its base's lane, as Fork for Windows draws it — read
+//! back from the painted list; and what drawing a viewport of history rows costs when
+//! thousands of lines are open across it — the widest the graph gets, every unmerged ref one
+//! line — and what laying out a row's chips costs when its commit carries thousands of refs.
+//! The costs are a measurement, `#[ignore]`d: timings in CI are flaky and bound to a machine.
+//! Run in release:
 //! `cargo test --release -p cairn-ui --test drawn_lanes -- --ignored --nocapture`.
 
 use std::time::{Duration, Instant};
 
 use cairn_model::{
-    GraphRow, History, Label, LaneAssigner, Oid, PagedCommit, RefKind, RowContent, RowsPage,
+    GraphRow, History, Label, Lane, LaneAssigner, Oid, PagedCommit, PagedStash, RefKind,
+    RowContent, RowsPage,
 };
-use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, RowRender, row_chips};
+use cairn_ui::graph_geometry::{lane_x, row_middle};
+use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender, row_chips};
+use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
@@ -195,4 +200,137 @@ fn measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips() {
         "\nA row of 10,000 refs: {built} chips laid out for 600 px in {:.4} ms (median of 101)",
         median(samples)
     );
+}
+
+/// One step of a walk: a commit with its parents, or a stash on its base.
+enum Step {
+    Commit(Oid, Vec<Oid>),
+    Stash(Oid, Oid),
+}
+
+/// `walk` laid out as the engine lays it out, and held as one history.
+fn laid_out(walk: &[Step]) -> History {
+    let mut assigner = LaneAssigner::new();
+    let mut graphs = Vec::new();
+    for step in walk {
+        let row = match step {
+            Step::Commit(id, parents) => assigner.push(*id, parents.clone()),
+            Step::Stash(id, base) => assigner.push_stash(*id, *base),
+        };
+        graphs.extend(row);
+    }
+    graphs.extend(assigner.into_rows());
+    let mut page = RowsPage::new();
+    for (graph, step) in graphs.into_iter().zip(walk) {
+        match step {
+            Step::Commit(_, parents) => page.push(
+                graph,
+                PagedCommit {
+                    parents: parents.len(),
+                    subject: "a commit",
+                    author: "Ada",
+                    author_time: 0,
+                },
+            ),
+            Step::Stash(_, base) => page.push_stash(
+                graph,
+                PagedStash {
+                    index: 0,
+                    base: *base,
+                    message: "On main: WIP",
+                    author: "Ada",
+                    author_time: 0,
+                },
+            ),
+        }
+    }
+    let mut history = History::new();
+    history.append(page).unwrap_or_else(|full| panic!("{full}"));
+    history
+}
+
+/// Whether the pixel at the node of lane `lane` on row `row` of the drawn list is painted —
+/// anything but the history's ground.
+fn painted_at_node(
+    test: &mut TestingRunner,
+    width: f32,
+    height: f32,
+    row: usize,
+    lane: usize,
+) -> bool {
+    let png = test.render();
+    let image = Image::from_encoded(png).unwrap_or_else(|| panic!("the frame did not decode"));
+    let (w, h) = (width as i32, height as i32);
+    let mut surface = raster_n32_premul((w, h)).unwrap_or_else(|| panic!("no raster surface"));
+    surface.canvas().draw_image(&image, (0, 0), None);
+    let info = ImageInfo::new_n32_premul((w, h), None);
+    let stride = info.min_row_bytes();
+    let mut pixels = vec![0u8; stride * h as usize];
+    assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+    let ground = cairn_ui::style::tones::HISTORY;
+    let x = ROW_PADDING + lane_x(Lane::new(lane));
+    let y = row as f32 * ROW_HEIGHT + row_middle();
+    let at = y.round() as usize * stride + x.round() as usize * 4;
+    pixels
+        .get(at..at + 3)
+        .is_some_and(|bgr| [bgr[2], bgr[1], bgr[0]] != [ground.r(), ground.g(), ground.b()])
+}
+
+/// A stash whose base a line already awaits sits on that line — its node in the base's lane,
+/// no lane of its own beside it — and a stash whose base no line awaits takes the next free
+/// lane, which its base then takes; drawn by the window's own row, read back from the paint.
+/// Caught by: a stash given a lane of its own beside its base's line (its node painted one
+/// lane to the right), or one put on a line awaiting another commit.
+#[test]
+fn a_stash_is_drawn_on_its_base_commits_lane() {
+    let id = |n: u8| {
+        let mut bytes = [0x5au8; 20];
+        bytes[0] = n;
+        Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
+    };
+    let (other, child, stash, base, root) = (id(1), id(2), id(3), id(4), id(5));
+    // `child` waits for `base` in lane 1, beside `other`'s line in lane 0.
+    let awaited = laid_out(&[
+        Step::Commit(other, vec![root]),
+        Step::Commit(child, vec![base]),
+        Step::Stash(stash, base),
+        Step::Commit(base, vec![root]),
+        Step::Commit(root, Vec::new()),
+    ]);
+    // Nothing waits for `base`: the stash takes lane 1, beside `other`'s line.
+    let alone = laid_out(&[
+        Step::Commit(other, vec![root]),
+        Step::Stash(stash, base),
+        Step::Commit(base, vec![root]),
+        Step::Commit(root, Vec::new()),
+    ]);
+    for (history, stash_row, base_row) in [(awaited, 2, 3), (alone, 1, 2)] {
+        let lanes: Vec<usize> = history.rows().map(|row| row.lane().index()).collect();
+        assert_eq!(
+            lanes.get(stash_row),
+            lanes.get(base_row),
+            "the stash on its base's lane: {lanes:?}"
+        );
+        assert_eq!(lanes.get(stash_row), Some(&1), "{lanes:?}");
+        let (width, height) = (700., 200.);
+        let (mut test, ()) = TestingRunner::new(
+            app,
+            (width, height).into(),
+            move |runner| {
+                runner.provide_root_context(move || State::create(history));
+                runner.provide_root_context(|| 3usize);
+            },
+            1.,
+        );
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            painted_at_node(&mut test, width, height, stash_row, 1),
+            "the stash's node is not drawn in its base's lane"
+        );
+        assert!(
+            !painted_at_node(&mut test, width, height, stash_row, 2),
+            "the stash drew a lane of its own"
+        );
+    }
 }

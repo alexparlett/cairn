@@ -2,51 +2,102 @@
 
 How the window's sidebar is built: what it draws, where its rows are laid out, and
 what pressing an entry does — including finding a ref whose row is not loaded yet by paging
-the history's walk. Spec: `docs/prd/refs-and-status.md` R8 (criterion C8). Fork is the
-standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`, section 5); every place
-Cairn's sidebar is not Fork's is named under "Where it is not Fork's".
+the history's walk. Spec: `docs/prd/refs-and-status.md` R8 (criterion C8) and
+`docs/prd/fork-alignment.md` R6, R9.2-R9.3, R10.3. Fork is the standard
+(`docs/research/refs-and-status/fork-refs-and-status-ui.md`, section 5, and
+`docs/research/ui-review/`); every place Cairn's sidebar is not Fork's is named under "Where it is
+not Fork's".
 
 ## What it draws
 
 Left of the main region, behind a draggable splitter (`window::beside`, Freya's
-`ResizableContainer`; its width kept for the session in `SidebarView::width`), top to bottom:
+`ResizableContainer`; Fork's 300 px as it opens, `metrics::SIDEBAR_WIDTH`, its width kept for the
+session in `SidebarView::width`), top to bottom, as Fork for Windows draws it
+(`docs/research/ui-review/fork-window-survey-2026-10-16.md` §3, `fork-window-survey-2-2026-10-16.md`
+§2, `fork-sidebar-2026-10-20.md`):
 
-- **Local Changes**, with the count of distinct paths the last status listed — `Local
-  Changes (N)`, the count left out when there is none or no status has been read
+- **A header row**: the repository's name, bold (`Update::Opened`'s `name`), and a gear at its
+  right whose menu holds **Copy Repository Path** (`cairn_ui::GearChoice`), which puts the
+  repository's root, made absolute by the worker (`Update::Opened`'s `path`, `View::repository_path`),
+  on the clipboard (`sidebar::menu::gear`). Fork's Rename Repository and its settings are not drawn.
+- **Local Changes**, with its icon and the count of distinct paths the last status listed —
+  `Local Changes (N)`, the count left out when there is none or no status has been read
   (`sidebar::pane::local_changes_count`, `LocalChanges::paths`, `cairn_ui::local_changes_text`)
-  — and **All Commits**. They choose what the main region shows (`cairn_ui::MainView`,
-  `SidebarView::main`): the history with its detail pane, or the Local Changes view
-  (`local-changes.md`). Pressing a ref returns the main region to the history.
-- **A filter box** (`cairn_ui::SIDEBAR_FILTER_PLACEHOLDER`), and under it one line saying
-  what a press is doing — "Finding <ref>…" — or why it found nothing, or, when the last
-  refresh could not read the refs, why (`RefreshState::failure`).
+  — and **All Commits**, with its icon. The one the main region shows is Fork's rounded grey band
+  (`tones::SIDEBAR_CHOSEN`), standing in 5 px from either edge with ~3 px corners
+  (`metrics::SIDEBAR_BAND_INSET`, `SIDEBAR_BAND_RADIUS`), and stays drawn while a ref is chosen
+  below. They choose what the main region shows (`cairn_ui::MainView`, `SidebarView::main`): the
+  history with its detail pane, or the Local Changes view (`local-changes.md`). Pressing a ref
+  returns the main region to the history. Fork's refs/search switch is not drawn.
+- **A filter field** with its magnifier (`cairn_ui::SIDEBAR_FILTER_PLACEHOLDER`,
+  `tones::FILTER_FIELD`), and under it one line saying what a press is doing — "Finding <ref>…" —
+  or why it found nothing, or, when the last refresh could not read the refs, why
+  (`RefreshState::failure`).
 - **One virtualized list** of the refs (`cairn_ui::Sidebar`, `crates/cairn-ui/src/sidebar.rs`):
-  the sections **Branches**, **Remotes**, **Tags** and **Stashes**, in that order, each a
-  caption that opens and closes it. Branches and remote-tracking refs are grouped into
-  folders split at `/` — a remote's refs under a folder named for the remote, its symbolic
-  `HEAD` listed as `origin/HEAD` rather than a bare `HEAD` — each folder a row that opens
-  and closes; tags are listed whole (`release/2.0`); every stash entry is listed by its
-  message, a stash commit filed twice included. A detached `HEAD` is the first row under
-  Branches, as Fork draws it. At each level folders come first and then the refs, each in
-  Fork's natural order — case ignored, a run of digits read as its number, so `b2` before
-  `b10` (`cairn_model::natural_order`) — and tags in the same order; stashes keep the stash
-  list's. (Among Fork's sorting changes its release notes list `main` "treated as
-  `master`"; the research record does not say what Fork does with `master`, so nothing is
-  done for it.)
+  the sections **Branches**, **Remotes**, **Tags** and **Stashes**, in that order, each a bold
+  heading with its chevron and no count, Tags closed as the sidebar opens and the rest open
+  (`SidebarSection::opens_closed`, `Disclosure`'s default). Branches and remote-tracking refs are
+  grouped into folders split at `/` — a remote's refs under a folder named for the remote, its
+  symbolic `HEAD` listed as `origin/HEAD` rather than a bare `HEAD` — each folder a row that opens
+  and closes, every folder closed until opened, a remote's own among them; each row draws its
+  leaf name (`crash` under `bugfix`). Tags are listed whole (`release/2.0`), **newest first by the
+  date of the commit each identifies** (`Ref::commit_time`, read by the refs query; two tags of one
+  date by name, last first — the one tie observed, not a rule observed — and a tag naming no commit
+  last), never by name or by a tag's own date, as Fork lists them (sb14). Every stash entry is
+  listed by its message after git's `On <branch>: ` ("WIP on parser"), a message of any other form
+  — git's default `WIP on main: <id> <subject>` — whole (`cairn_ui::stash_text`), a stash commit
+  filed twice included. A detached `HEAD` is the first row under Branches, as Fork draws it. At each
+  level of Branches and Remotes folders come first and then the refs, each in Fork's natural order
+  — case ignored, a run of digits read as its number, so `b2` before `b10`
+  (`cairn_model::natural_order`); stashes keep the stash list's. (Among Fork's sorting changes its
+  release notes list `main` "treated as `master`"; the research record does not say what Fork does
+  with `master`, so nothing is done for it.)
 
-Each entry's glyph is its kind's shape, painted (`cairn_ui::RefGlyph`; the shapes differ
-pixel for pixel, `every_glyph_paints_a_shape_no_other_glyph_paints`): a branch, a remote,
-a tag, a stash's box, a folder; the current branch a check mark with its name bold. A
-local branch draws Fork's three upstream states, each its own shape: with an upstream, the
-branch glyph; with none, a single line of commits, its newest hollow (`RefGlyph::LocalOnly`,
-Fork's local-only icon, told by shape rather than Fork's grey); with its upstream configured
-but gone, Fork's warning triangle in place of its glyph — the current branch's at its right,
-beside the check mark, as Fork marks an active branch with an invalid upstream. A branch
-with an upstream draws its behind and ahead counts at its right, unspaced as Fork prints
-them and as the title bar prints them (`counts_text`: `18↓1↑`, a zero left out).
+Each row is a chevron's slot — a heading's or a folder's chevron, open or closed, a leaf's slot
+left empty so its icon stands where its folders' do — then its icon and its name, each level
+12 px further in (`metrics::SIDEBAR_INDENT`, `cairn_ui::row_indent`). The icons are Lucide's
+(`style::icons`, `cairn_ui::SidebarGlyph`): an open folder; a remote's own folder its cloud; a
+branch, and a remote-tracking ref, the branch glyph; the current branch a check mark in place of
+it, its name bold; a tag's outline; a stash's archive box. A local branch draws Fork's upstream
+states: with an upstream, the branch glyph and, at the row's right, its ahead then behind counts
+as Fork for Windows draws them — each count with its arrow after it, a space between, a zero left
+out (`counts_text`: `1↑`, `1↓`, `1↑ 2↓`), in the body's tone; with its upstream configured but
+gone, the branch glyph with Fork's yellow warning on its bottom right (`tones::UPSTREAM_GONE`) and
+no counts — the current branch's warning at its right, beside the check mark; with none, a glyph
+of its own shape in a quieter tone (`SidebarGlyph::LocalOnly`), where Fork greys its branch glyph.
 What one row draws is `cairn_ui::drawn_row`, read out of the snapshot for that row alone.
-The entry last pressed is drawn chosen, by identity (a ref by its name, a stash by its
-place and commit), and is let go of when a row is chosen in the history.
+
+The entry last pressed is drawn chosen, by identity (a ref by its name, a stash by its place and
+commit), and is let go of when a row is chosen in the history. A press on a row gives the sidebar
+focus, so the chosen row is drawn as a selection says its list's focus (`docs/systems/style.md`,
+"The selection"): Fork's blue while the sidebar has focus, its grey once focus is elsewhere, in
+Fork's rounded band (sb22).
+
+**Its keys** (`crates/cairn-ui/src/sidebar/keys.rs`), Fork's (sb22-sb72), heard while the sidebar
+has focus: ↑ and ↓ walk every row of the list — each heading, folder, ref and stash — one step,
+stopping at either end and never reaching the filter, All Commits or Local Changes; a ref, a
+stash or a detached `HEAD` walked to is chosen at once, as a press chooses it, so the history
+selects its commit while the sidebar keeps focus, and a heading or folder walked to only holds
+the walk, drawn as the selection. ← closes an open heading or folder and from any other row goes
+to the row it stands in; → opens a closed one and from an open one goes to its first row. Return
+does nothing, as in Fork (`fork-sidebar-2026-10-20.md` §4). Where the walk stands is the
+sidebar's own state (`keys::Walk`): it holds while the entry chosen is the one it chose — a row
+chosen in the history lets it go — and while the rows are the ones it stood among, but for the
+rows laid out again for a heading or folder it or a press opened or closed. With no walk standing, a key first looks for the chosen entry's row
+among the rows, once per press.
+
+**A right press** on a ref selects its commit as a press does
+(`fork-window-survey-2026-10-16.md` §8) and opens its menu through the one menu component
+(`cairn_ui::ref_menu`): a branch's or a remote-tracking ref's **New Branch…** then **Copy Branch
+Name**, a tag's **New Branch…** then **Copy Tag Name** — the items of Fork's that work, each
+beside its chord, New Branch… greyed on a tag that names no commit. New Branch… opens Create
+Branch at the ref's commit, its subject the loaded row's (`sidebar::menu::chosen`); Copy puts the ref's name past
+its namespace on the clipboard — `feature/login`, `origin/main`, `v0.2` — as Fork's copies
+(`sidebar::menu::ref_name_text`, sb84-sb86). Copy Branch Name and Copy Tag Name show Copy's
+chord, and with the sidebar focused on a ref the chord copies its name, as Fork's Ctrl+C does;
+Copy Full's chord, which no ref's menu shows, copies nothing
+(`fork-copy-and-dialogs-2026-10-20.md` §3, `the_copy_chord_copies_the_walked_refs_name`). A right press on a stash or a detached `HEAD`
+chooses it and opens nothing; on a heading or folder it does nothing.
 
 ## Where its rows are laid out
 
@@ -73,8 +124,8 @@ to the repository thread to free (`Retired::sidebar`), and so does a superseded 
 (`Update::into_retired`). The UI thread lays nothing out and searches no ref: it keeps the
 rows answered and reads a row's ref by index as the list builds that row.
 
-What is open lives in `SidebarState`'s `Disclosure`: a section is open until closed, a
-folder closed until opened, and the current branch's folders are opened when it becomes
+What is open lives in `SidebarState`'s `Disclosure`: Tags starts closed and the other sections
+open, a folder closed until opened, and the current branch's folders are opened when it becomes
 current — the first snapshot, and a checkout — as Fork reveals the current branch; a folder
 the user closed stays closed while the current branch is the same.
 
@@ -164,12 +215,22 @@ page asked.
   `a_folder_is_named_by_its_path_and_a_branch_reveals_its_folders`, `a_stop_is_honoured_mid_pass`
   (`crates/cairn-model/src/sidebar_rows.rs`);
   `a_labelled_row_is_found_among_the_labelled_rows_alone` (`crates/cairn-model/src/history.rs`).
-- Drawing (`crates/cairn-ui/tests/sidebar.rs`): `the_sidebar_draws_its_sections_in_forks_order_with_forks_marks`,
+- Drawing (`crates/cairn-ui/tests/sidebar.rs`): `the_sidebar_is_forks`,
   `each_entry_draws_its_kinds_glyph`, `the_entry_chosen_is_drawn_chosen_by_its_name`,
-  `a_press_is_reported_for_what_it_pressed`, and the viewport twins
-  `a_sidebar_of_50000_refs_builds_one_viewport` and
-  `a_folder_of_10000_branches_open_builds_one_viewport`, named in the root `CLAUDE.md`'s
-  virtualization invariant.
+  `a_press_is_reported_for_what_it_pressed`, `a_right_press_on_a_ref_selects_its_commit`,
+  `the_gear_copies_the_repository_path`, `the_sidebar_walks_by_key_as_forks_tree`,
+  `the_copy_chord_copies_the_walked_refs_name`, and the
+  viewport twins `a_sidebar_of_50000_refs_builds_one_viewport` and
+  `a_folder_of_10000_branches_open_builds_one_viewport` (each requiring Fork's 22 px rows), named
+  in the root `CLAUDE.md`'s virtualization invariant; the walk's rule
+  (`the_arrows_walk_every_row_and_stop_at_the_ends`, `left_and_right_open_close_and_climb_as_a_tree`,
+  `sidebar/keys.rs`); the words (`counts_are_ahead_then_behind_and_a_zero_is_left_out`,
+  `a_stash_reads_its_message_after_on_branch`, `sidebar.rs`).
+- The layout's order and disclosure (`crates/cairn-model/src/sidebar_rows.rs`):
+  `tags_and_every_folder_start_closed_and_the_other_sections_open`,
+  `tags_are_listed_newest_first_by_their_commits_date`; a tag's date
+  (`a_tag_is_dated_by_its_commit_never_by_its_tagger` and the refs oracle, which compares each
+  tag's date with `git log --no-walk`'s, `crates/cairn-git/tests/refs.rs`).
 - The worker (`crates/cairn-app/src/worker/history/tests.rs`, through the real boundary):
   `a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further`,
   `a_second_find_supersedes_the_first_and_no_page_is_lost`,
@@ -195,14 +256,17 @@ page asked.
   `a_tag_on_a_tree_says_it_is_not_in_the_graph`,
   `a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph`,
   `typing_in_the_sidebars_filter_asks_a_worker_and_draws_its_answer`,
-  `local_changes_and_all_commits_switch_the_main_region`; and
+  `local_changes_and_all_commits_switch_the_main_region`,
+  `a_right_press_on_a_ref_selects_its_commit_in_the_history`,
+  `the_arrows_walk_the_sidebar_and_select_each_refs_commit`; `sidebar::menu`'s
+  `a_refs_name_is_copied_past_its_namespace`; and
   `SidebarState`'s `the_current_branchs_folders_open_when_it_becomes_current` and
   `a_filter_or_a_toggle_asks_the_rows_again`.
 - Measured: `measures_a_find_through_the_boundary` (`#[ignore]`d, driven by
   `CAIRN_BENCH_REPO`, with `CAIRN_FIND_TARGET` or `CAIRN_FIND_REF`) times a find of the
   repository's oldest commit, or of a named ref, through the real boundary (median of
-  seven), reads what it retains against C16's ceiling, stops one halfway as a scroll does
-  and checks the next page takes the walk up where it stopped.
+  seven), holds what it retains under a ceiling of 64 MiB (or a lower `CAIRN_C16_MIB`), stops
+  one halfway as a scroll does and checks the next page takes the walk up where it stopped.
 
 ## Where it is not Fork's, and other limits
 
@@ -213,10 +277,14 @@ page asked.
   research records only that Fork for Windows 2.23 stores "collapse state" per worktree
   (`fork-refs-and-status-ui.md`, section 2), which may mean the sidebar's folders or
   something else; finding out is #72.
-- Fork's local-only icon is drawn as a shape of its own rather than Fork's grey, since a
-  colour alone may not tell two kinds apart.
-- Pinned, Worktrees and Submodules, the tab strip of refs and search, double-click checkout,
-  ⌘-click compare from the sidebar, and keyboard navigation of the sidebar are not built.
+- A branch with no upstream is drawn with a glyph of its own shape rather than Fork's greyed
+  branch glyph, since a colour alone may not tell two kinds apart (a `ui.md` row).
+- Pinned, Worktrees and Submodules (#69), the tab strip of refs and search, the hover icons
+  (pin, show only, hide: #2), a branch name's tooltip ("Local branch / Tracked branch"),
+  double-click checkout and ⌘-click compare from the sidebar are not built.
+- New Branch… from a ref opens Create Branch at the ref's commit, its short id and subject in
+  "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82).
+- Pressing All Commits does not move focus to the history, where Fork's does (sb73).
 - A find's page is `FIND_PAGE_ROWS` rows, so the page holding the row may carry up to that
   many rows past it — a few dozen kilobytes kept beyond what a scroll's page would.
 - A stash whose base no ref reaches is known to have no row only when the walk ends: its

@@ -6,7 +6,7 @@ and the repositories refused at open because their refs are not files. Nothing h
 writes, and nothing here starts a process: every answer is gix's, read in process.
 What draws it: the history's chips and the Commit tab's REFS row
 (`docs/systems/history-graph.md`, "Chips on a row"; `docs/systems/diff.md`, "REFS"), the
-title bar's current branch and its counts (`history-graph.md`, "The title bar"), and the
+status box's current branch and Push's and Pull's badges (`history-graph.md`, "The status box"), and the
 sidebar's Branches, Remotes, Tags and Stashes (`docs/systems/sidebar.md`); a refresh reads
 it on the repository thread and ahead/behind on the refresh thread (`history-graph.md`,
 "Refresh").
@@ -23,8 +23,12 @@ Spec: `docs/prd/refs-and-status.md` (R1, R2). Evidence:
 - `refs` — every local branch, remote-tracking ref and tag, as `Ref`s, in
   `git for-each-ref`'s order (bytewise by full name, which puts `refs/heads/` before
   `refs/remotes/` before `refs/tags/`). A `Ref` carries its full name, its `RefKind`, its
-  `RefTarget`, the ref at the end of its chain when it is symbolic (`%(symref)`), and —
-  for a local branch — its `Upstream`. `RefsSnapshot::find` is a binary search on that order.
+  `RefTarget`, the ref at the end of its chain when it is symbolic (`%(symref)`), — for a
+  local branch — its `Upstream`, and — for a tag — the committer date of the commit it
+  identifies (`Ref::commit_time`, what `git log --no-walk` prints as `%ct`, read through
+  git's substitutions; `None` for every other kind and for a tag naming no commit), which the
+  sidebar lists tags newest first by, as Fork does (`sidebar.md`). `RefsSnapshot::find` is a
+  binary search on that order.
 - `RefTarget` is what the ref names, as `%(objectname)` and `%(objecttype)` print it:
   `Commit(id)`; `Tag { object, commit }`, the outermost tag object of a chain and the
   commit the chain ends at (`None` when it ends at a tree or a blob); or `Other(id)`, a
@@ -45,7 +49,8 @@ itself included, so four symbolic hops — and the ref at its end is named; the 
 the end is told apart by its header, and a tag is peeled through a packed ref's `^` line where it
 has one, as git reads it, or object by object to the end of its chain. `cancel` is
 polled once per ref the store yields, once per local branch before its upstream is
-resolved, and once per stash reflog line and stash entry; a cancelled query is
+resolved, once per tag before its commit's date is read, and once per stash reflog line and
+stash entry; a cancelled query is
 `Error::RefsCancelled`, and polls nothing after.
 `RefsCost` counts the ref entries read, the objects looked up, the reflog lines read and
 the time taken. The query fails as a whole (`Error::Refs`) only when the store cannot be
@@ -229,6 +234,11 @@ The window draws either reason as it draws every failed open.
   `git_namespace_in_cairns_environment_is_not_honoured`,
   `a_ref_naming_a_missing_object_is_skipped_and_counted`,
   `a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced`,
+  `a_tag_is_dated_by_its_commit_never_by_its_tagger`,
+  `a_tags_date_is_read_through_a_replacement_as_git_reads_it` (and every oracle above compares
+  each tag's date with `git log --no-walk`'s; the dates' cost, about 1.6 µs a tag, is
+  `measures_the_refs_snapshot_over_tags_on_commits_of_their_own`,
+  `docs/research/refs-and-status/measured.md`),
   `a_refs_query_stops_at_whichever_poll_is_cancelled`,
   `a_refs_query_reports_the_cost_it_paid`,
   `the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical` (the whole git

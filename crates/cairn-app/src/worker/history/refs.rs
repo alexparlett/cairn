@@ -158,6 +158,7 @@ mod tests {
                 ),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             }],
             head: HeadState::Branch(RefName::new("refs/heads/main")),
             stashes: Vec::new(),

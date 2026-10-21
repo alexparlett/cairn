@@ -8,7 +8,8 @@ test — `measures_layout_over_every_ref_of_a_named_repository` and
 "Known limits" is description rather than anything pinned. Intent for this
 surface lives in `docs/design/history-graph.md` (D4) and
 `docs/design/concurrency.md` (D3), and the commitment it was built against in
-`docs/prd/history-graph.md` (shipped, frozen).
+`docs/prd/history-graph.md` (shipped, frozen), its Fork-aligned row, chips and graph in
+`docs/prd/fork-alignment.md` (shipped, frozen).
 
 What the application does today, end to end: it opens the repository containing
 the path named on its command line (or the working directory), walks that
@@ -28,8 +29,9 @@ focus, after a fetch, on the Refresh action — finds what the graph draws chang
 drawn and usable until the new walk's first page replaces them ("Refresh" and "The opening
 pass in the window", under the worker boundary below). Each row draws its refs as Fork's chips between the graph and the
 subject, a stash's row its `stash@{n}` chip, and `HEAD`'s subject bold ("Chips on a
-row", under the view below); the title bar names the repository, its branch and how
-far that branch is from its upstream ("The title bar", there too).
+row", under the view below); the toolbar's status box names the repository over its branch,
+and Push's and Pull's badges how far that branch is from its upstream ("The status box", there
+too).
 
 ## The path a commit takes
 
@@ -137,23 +139,30 @@ rows (14.4%, 64,698 segments); in `GraphOrder` it is most rows, by construction.
 bounds the blind spot from above without measuring it, since a parent must arrive late at
 all before it can arrive too late.
 
-**A stash's row is laid out with one line, in a lane of its own**
-(`LaneAssigner::push_stash`). The stash commit is pushed as the row's id with its
-base — the commit it was made on, its first parent — as its only parent: its index
-and untracked commits are never awaited. Its line leaves its node down a lane of its
-own to the base, even where another line already awaits that base, so several
-stashes on one commit each keep a lane down to it and every such line ends there
-(`Ends` for each); a commit's line instead joins a line already descending to its
-parent. The assigner is still keyed by `Oid` — the stash commit, which no commit the
-walk reaches names as a parent. A base already laid out above is joined by a late
-line, as any parent is, though the stream never places a stash below its base.
-Pinned by `a_stash_draws_one_line_down_to_the_commit_it_was_made_on`,
-`two_stashes_on_one_commit_each_keep_a_lane_down_to_it` (whose control lays the
-same walk out with `push` and gets one lane for both) and
+**A stash's row is drawn on its base's lane** (`LaneAssigner::push_stash`), as Fork for
+Windows draws it (`docs/research/ui-review/fork-window-survey-2026-10-16.md`, §4, uv7: the
+stash's dot on `main`'s lane with the line running down to `main`, no lane of its own). The
+stash commit is pushed as the row's id with its base — the commit it was made on, its first
+parent — as its only parent: its index and untracked commits are never awaited. Where a line
+already descends to the base, the stash's node is put on that line, in its lane — the lowest
+such lane — which ends at the node and starts again below it (`Ends` and `Starts` in one lane),
+still waiting for the base, so several stashes on one commit sit on one line and only that line
+ends at the base. Where no line awaits the base, the stash takes the lowest free lane, as a
+commit whose one parent is the base would, and its line descends in that lane to the base,
+which takes it. A commit's line instead joins a line already descending to its parent, from a
+lane of its own. The assigner is still keyed by `Oid` — the stash commit, which no commit the
+walk reaches names as a parent. A base already laid out above is joined by a late line, as any
+parent is, though the stream never places a stash below its base. Pinned by
+`a_stash_draws_one_line_down_to_the_commit_it_was_made_on`,
+`a_stash_is_drawn_on_its_base_commits_lane` (two stashes on one line, beside a commit that
+takes the next lane), `a_stash_whose_base_no_line_awaits_takes_a_new_lane` and
 `rows_with_stashes_derive_the_edges_the_assigner_kept`
-(`crates/cairn-model/src/lane_assignment.rs`), each deriving every row's edges and
-requiring them equal to the edges the assigner kept in its window. C15's oracle
-knows commits alone, so its comparisons run over walks with no stash.
+(`crates/cairn-model/src/lane_assignment.rs`), each deriving every row's edges and requiring
+them equal to the edges the assigner kept in its window, and by the drawn list's
+`a_stash_is_drawn_on_its_base_commits_lane` (`crates/cairn-ui/tests/drawn_lanes.rs`), which
+reads the stash's node back from the paint in its base's lane and nothing in the lane beside
+it. The compact-rows oracle below knows commits alone, so its comparisons run over walks with no
+stash, and the stash's lane leaves what it compares unchanged.
 
 **What a row keeps.** A `GraphRow` holds its commit's id, its lane and only the
 lane changes at it — never the lines passing through it. A `LaneChange` is a
@@ -285,9 +294,9 @@ history's lane changes and snapshots came to 18.6 MiB, about 56 B a row, and a w
 retained row to about 509 B; with slim rows a whole retained row, with the text and
 lane changes it reads, is about 159 B (Known limits).
 Evidence and method for the seven:
-`docs/research/history-graph/scroll-memory-model.md` Part D. Earlier, much
-larger figures in this packet's history described a synthetic fixture and not
-any repository; they are retracted there.
+`docs/research/history-graph/scroll-memory-model.md` Part D. The much larger
+figures in that file's earlier parts describe a synthetic fixture and not any
+repository; they are retracted there.
 
 ## The query (`cairn-git`)
 
@@ -533,9 +542,9 @@ and without `--include-untracked` whose internal commits are no rows unless a br
 reaches one; `every_rows_labels_are_what_git_log_decorates_it_with` — each row's
 labels against `git log --decorate=full`, `refs/stash` aside, `origin/HEAD` and a
 nested tag among them; `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
-— each stash's index, base, message, author and date against `git stash list`, one
-line out of its node down its own lane into its base, two stashes on one commit in
-two lanes, a stash dated older than its base still above it, and every row where git's date
+— each stash's index, base, message, author and date against `git stash list`, on its
+base's lane — one line out of its node down that lane into its base, the line already
+awaiting the base running through it — two stashes on one commit on one line, a stash dated older than its base still above it, and every row where git's date
 order puts it; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
 one, two and five); `a_stash_on_a_deep_base_is_where_git_puts_it` (held and cold);
 `a_detached_head_no_ref_reaches_is_walked_and_labelled`;
@@ -571,6 +580,34 @@ takes 103 ms with the snapshot already read (91 ms when gitoxide read the tips i
 uncancellably), 123 ms with the snapshot's read from packed refs and 235 ms from 50,000
 loose refs, against 2.6 ms from `HEAD`; a first page whose cancel is already set
 answers cancelled in 6.3 ms.
+
+### Rows `HEAD` cannot reach
+
+Fork greys a commit `HEAD` cannot reach (`docs/research/ui-review/fork-window-survey-2026-10-16.md`,
+§4: `stash@{0}` and `bugfix/crash`'s commit),
+and `git rev-list HEAD` is git's answer to which those are. A walk from refs in date order
+decides it as each row comes off (`crates/cairn-git/src/history/head_reach.rs`): `HEAD`'s
+commit is reached, and so is each parent — as the walk read it, through a graft, a replace
+ref and a shallow boundary — of a commit that came off reached. Date order yields no commit
+before every child it walks, so the verdict is final when the row is laid out, whatever the
+dates say; what is kept is the frontier of `HEAD`'s own history, a lookup and an insert per
+parent per row, never a walk of its own. A stash's row is never reached (`git rev-list HEAD`
+lists no stash commit), nor is a row of an unborn `HEAD`. The verdict rides on the row as
+`cairn-model` vocabulary — `RowsPage::mark_beyond_head`, a flag of the kept row,
+`HistoryRow::head_reaches` (`a_row_beyond_heads_reach_reads_back_so_and_no_other_does`) — a
+row never marked reading reached: a walk from `HEAD` reaches every row, and a walk from given
+commits or in an order that is not date order decides nothing. Show Lost Commits' lost rows
+are beyond it too. The list draws such a row's subject, author, id and date in
+`style::tones::UNREACHABLE_TEXT`, its lanes, chips and avatar in their own colours
+(`CommitRow::head_reaches`; `a_row_head_cannot_reach_is_greyed_and_one_it_reaches_is_not`,
+and through the window `rows_head_cannot_reach_are_grey_and_a_selected_stash_is_drawn_focused`).
+Pinned against `git rev-list HEAD` by `the_walk_marks_what_head_reaches_as_git_rev_list_does`
+(`crates/cairn-git/tests/lost_commits.rs`, run by `git-floor` too): a merge, a side branch
+with a tag, a remote-only commit, a reset-away commit, a stash, a parent dated after its child
+and every commit dated alike, `HEAD` on a branch and detached, Show Lost Commits off and on,
+every route, page size and window; and by `the_head_reach_counts_what_git_substitutes_and_a_head_no_ref_names`
+— a replace ref grafting the merge onto its first parent, a shallow clone and a detached `HEAD`
+at a commit no ref names.
 
 ## The worker boundary (`cairn-app`)
 
@@ -614,7 +651,8 @@ FILE, and it is a guard, not a convention — see below.
   `worker/wake.rs`, a one-slot latch a worker sets. There is no timer and no
   async-runtime dependency.
 - **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1, refs-and-status
-  R11.1): `QueryLane` is history, walk, changes, file diff, file filter, refs,
+  R11.1): `QueryLane` is history, walk,
+  changes, file diff, file filter, refs,
   ahead/behind, status, ref filter or Local Changes' filter, and a new query supersedes the older ones in
   its own lane only — except that a changes query also supersedes the file-diff
   lane (`QueryLane::supersedes`), since a file of the commit that was selected is
@@ -669,13 +707,12 @@ FILE, and it is a guard, not a convention — see below.
   and then wakes when it is DROPPED, from whatever thread and with or without a
   `WorkerExit` around it (`an_outbox_dropped_anywhere_ends_the_stream`): that
   is what makes "the last sender closing wakes the task" hold by construction
-  rather than by each path remembering to. It did not always — the two extra
-  outboxes `open` makes for the network-lane and acceptor threads were
-  captured by the repository thread's closure, and on an early exit (no usable
-  `git`, no repository at the path) were dropped after the `WorkerExit` had
-  signalled, with no wake of their own; a task parked between the two never
-  woke, which is issue #21's intermittent hang of
-  `a_missing_git_is_refused_naming_the_version_and_nothing_is_served`. What the
+  rather than by each path remembering to. It covers the two extra outboxes
+  `open` makes for the network-lane and acceptor threads, which the repository
+  thread's closure captures: on an early exit (no usable `git`, no repository at
+  the path) they are dropped after the `WorkerExit` has signalled, and their own
+  drop wakes a task parked between the two (issue #21, an intermittent hang of
+  `a_missing_git_is_refused_naming_the_version_and_nothing_is_served` without it). What the
   type still cannot decide, and stays a review obligation: `Sender<Envelope>`
   is `Clone` and `Outbox`'s fields are visible throughout `pool.rs`, so a bare
   sender copied out by hand compiles, and one held past every `Outbox` keeps
@@ -716,8 +753,8 @@ FILE, and it is a guard, not a convention — see below.
   runs ordinary blocking code, so a job that must wait on a UI answer makes its
   own reply channel and blocks on it; and workers are pinned to a purpose rather
   than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
-  R4) is the second consumer, and landed as exactly that: its own thread, now
-  the network lane (`worker/network/lane.rs`, `cairn-network`), its own
+  R4) is the second consumer, shaped exactly so: its own thread, the network lane
+  (`worker/network/lane.rs`, `cairn-network`), its own
   `Update` variants, and requests that carry no epoch so a scroll and a fetch
   cannot supersede each other; the credential
   dialog is a third thread (`worker/askpass.rs`) blocking on the window's
@@ -729,8 +766,8 @@ FILE, and it is a guard, not a convention — see below.
 
 ### Refresh
 
-As-built for refs-and-status R10 and R11. `Request::Refresh` is three
-reads. Its refs and ahead/behind are numbered as it is submitted, in the refs and
+As-built for refs-and-status R10 and R11. `Request::Refresh` is three reads. Its refs and ahead/behind are numbered as it is
+submitted, in the refs and
 ahead/behind lanes and in no other, so it supersedes the refresh before it lane by lane
 and never a page, a diff or a filter (`Request::lanes`;
 `a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read`). Its refs go to
@@ -755,7 +792,8 @@ ending every `git` in the repository's registry, either of which ends it
 thread.
 
 **What a refresh costs, as built.** The refs are read on the repository thread (R11.2,
-kept by the user's decision of 2026-10-07), so a filter or a free asked while a refresh reads
+kept by the user's decision of 2026-10-07), so a
+filter or a free asked while a refresh reads
 them waits behind one refs read — about 28 ms for the snapshot of a 10,001-ref
 fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most
 once per trigger. A page never waits on it, being the history thread's, and a refresh never
@@ -794,7 +832,7 @@ commit's changes again, since its details and what it changed may be other now
 (`history::selection::ask_again`). The history thread names a snapshot the one the walk began from as it takes it to open,
 so a refresh while that walk is still opening compares with what it will draw and reopens
 nothing when nothing moved (`a_refresh_during_an_open_compares_with_the_refs_the_open_took`).
-The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the title bar,
+The window keeps the snapshot (`refresh/state.rs`, which the history's chips, the status box,
 the sidebar and the Commit tab's REFS row read) and, on `reopen`, asks the history thread for
 the new walk (`session::reopen_history`), whose number supersedes a walk still opening there,
 its pass ending at its next commit. The old rows stay drawn and usable — selected, scrolled,
@@ -815,8 +853,7 @@ replace ref added and moved, `core.useReplaceRefs` off and on, the graft and sha
 reopened history drawing the replaced commit's row as git reads it then;
 `focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`, headless
 with focus set; `a_reopen_keeps_the_old_rows_until_the_new_page`).
-The fetch's own before-and-after comparison of the refs, and `session::reload_if`
-that acted on it, are gone.
+A fetch compares no refs of its own: its ending asks for a refresh, which decides.
 
 **What an open walks from.** `OpenHistory` walks from the snapshot the last refresh
 read, so a reopen reads the refs once. With none read — a test that opens without a
@@ -906,14 +943,16 @@ to the history is its `len()`. The list is keyed by `RowId`, so a row arriving
 above another neither moves the selection nor rebuilds the rows below it. Each
 row it builds is read through the history there (`render_of` in `build_row`): its
 content, copied out of the stores, and its edges, derived from at most a snapshot
-interval of rows above it. The builder is handed those two and nothing else of the
-row — `RowRender::content` and `RowRender::graph`, which `CommitRow` draws; a row
-with no snapshot within reach, which the assigner never produces, would draw its
-node alone. Reading a row is constant work per drawn row, bounded by the snapshot
+interval of rows above it. The builder is handed those two — `RowRender::content`
+and `RowRender::graph` — with the chips laid out for the row and whether it is
+`HEAD`'s, lost or beyond `HEAD`'s reach, read from its flags, which `CommitRow` draws;
+a row with no snapshot within reach, which the assigner never produces, would draw
+its node alone. Reading a row is constant work per drawn row, bounded by the snapshot
 interval and the row's own text, never by the history.
 
-`RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/window.rs`
-is the consumer, and because the enum is not `#[non_exhaustive]` the next kind
+`RowContent` is read by matching, with no wildcard arm, wherever it is read —
+`crates/cairn-app/src/window.rs`, which draws each row, among them — and because the
+enum is not `#[non_exhaustive]` the next kind
 of row is a compile error there rather than a row silently not drawn. The
 spellings that would compile anyway once a second variant exists — a `_ =>` or
 catch-all binding arm, `if let`, `while let`, `let .. else`, `matches!`, a glob
@@ -922,13 +961,40 @@ import — are rejected outside `cairn-model` by
 (`crates/cairn-guards/tests/invariants.rs`), whose matcher
 `cairn_guards::reads_row_content_partially` carries its own self-test.
 
-- **Columns** (Fork's four): graph and subject share the first, then author,
-  abbreviated id, and `Date (UTC)`. The date column is labelled UTC because
-  a kept row holds the author time's seconds and not its offset, and
-  converting to the reader's local time needs a timezone database, which is a
-  dependency decision nobody has taken. `utc_minutes`
-  (`crates/cairn-ui/src/history/date_text.rs`, a private module) is Hinnant's
-  `civil_from_days`, total over every `i64`.
+- **The row is Fork's** (`crates/cairn-ui/src/history/commit_row.rs`; evidence
+  `docs/research/ui-review/fork-window-survey-2026-10-16.md`, §4): no heading over the list,
+  which starts at its first row; rows `style::metrics::HISTORY_ROW`, 23 px; and the columns
+  in Fork's order — the graph, the chips then the subject, the author after an avatar of
+  their initials, the 7-character id, and the date. The subject gives way as the window
+  narrows; the author column (`AUTHOR_WIDTH`, its avatar included), the id's (`ID_WIDTH`)
+  and the date's (`DATE_WIDTH`, sized for the widest date the format draws) keep their
+  widths. `HEAD`'s row is bold throughout — subject, author, id and date — as Fork's is, a
+  selected row too, in the selection's tone (`a_history_row_is_forks`,
+  `the_date_and_the_short_id_fit_their_columns`, `the_graph_column_widens_with_the_lanes_it_is_given`).
+- **Avatars are initials** (`crates/cairn-ui/src/avatar.rs`): a rounded square
+  `metrics::AVATAR` across, the first letter of the name's first and last words in white
+  bold, on a colour chosen from the name (FNV-1a over its bytes, the same on every machine)
+  out of a fixed set, `style::tones::AVATARS`, whose first is Fork's sampled lavender. No
+  network is asked (`initials_are_the_first_and_last_words_letters`,
+  `a_name_always_takes_the_same_colour_of_the_set`). The row builds one per row built, from
+  the name it already copied out. The same avatar, larger and its initials regular, opens the
+  Changes tab's summary and stands beside the Commit tab's author and committer
+  (`cairn_ui::AvatarSize`; `docs/systems/diff.md`, "The detail pane").
+- **Dates are local** (`crates/cairn-ui/src/history/date_text.rs`, `crates/cairn-ui/src/local_time.rs`):
+  Fork's `d Mon yyyy HH:mm`, `16 Oct 2026 12:12`, at the offset the window's zone gives
+  that instant — its own daylight-saving time, not today's — in English, which needs no
+  locale data (`history_date`, `the_history_date_is_forks_at_the_zones_offset`,
+  `each_date_takes_its_own_instants_offset`). The zone is a `cairn_ui::LocalZone`, read
+  once on the worker as the repository opens (`crates/cairn-app/src/worker/zone.rs`,
+  jiff's `TimeZone::try_system`) and sent with the `git` found (`Update::Started`), kept as
+  `View::zone` and handed to the list (`HistoryList::zone`), each row (`RowRender::zone`),
+  the Commit tab, the Changes summary and the activity popover; no render file reads it
+  (`the_render_layer_is_handed_its_time_zone`). Until it arrives dates are drawn in UTC
+  and nothing says so; a zone that cannot be read is UTC, which the Commit tab says once
+  ("(UTC)" after the author's date). A `LocalZone` compares by which read it came from, never the zone
+  file's contents, so the rows holding it compare cheaply on every render
+  (`a_zone_compares_by_the_read_it_came_from`). A kept row holds the author time's seconds, which the
+  zone places; `civil_from_days` is Hinnant's, total over every `i64`.
 
   The column is also **not monotonic**, and that is not a defect: the walk is
   ordered by COMMITTER time and the column shows AUTHOR time, which is the same
@@ -936,8 +1002,12 @@ import — are rejected outside `cairn-model` by
   rebased or cherry-picked commit therefore sits below a row with an earlier
   date. Recorded because nothing else records it.
 - **Lanes are columns; colour is an aid.** `graph_geometry` is pure arithmetic —
-  `ROW_HEIGHT` 26 (uniform), `LANE_WIDTH` 14, `MAX_DRAWN_LANES` 24, beyond which
-  lanes share the last column. Lane separation is tested against the INK
+  Fork's sizes, measured from its graph (`style::metrics`;
+  `docs/research/ui-review/fork-window-survey-2026-10-16.md`, §4, uv2 and uv7 at 4×) — `ROW_HEIGHT`
+  23 (uniform), `LANE_WIDTH` 12, a 5 px dot, a merge's larger hollow circle 13 px across
+  its outer edge (`RING_RADIUS`), every line 2 px, joins between lanes drawn as cubic curves
+  (`the_graph_is_drawn_at_forks_measured_sizes`, `a_merges_node_is_the_larger_hollow_circle`)
+  — and `MAX_DRAWN_LANES` 24, beyond which lanes share the last column. Lane separation is tested against the INK
   (`2 * NODE_RADIUS`, `STROKE_WIDTH`), not against a fraction of `LANE_WIDTH`,
   so the constant cannot decide its own test. `lane_palette` cycles eight hues —
   the seven non-black Okabe-Ito colours plus a neutral grey to bring it back to
@@ -969,31 +1039,43 @@ import — are rejected outside `cairn-model` by
   mouse can select at all. `PREFETCH_ROWS` is 24: every row within that many of
   the end asks for the next page when it becomes visible — every one of them,
   because a single trigger row is a list that quietly stops loading on a tall
-  window.
+  window. The copy chords choose the selection's menu items (`history::row_menu`):
+  Ctrl+C (⌘C) Copy Commit SHA, the full id, and Ctrl+Shift+C (⇧⌘C) Copy Commit Info,
+  `<short id> - <subject>` as Fork copies it, one line per selected commit, both rows
+  of a comparison upper first, a stash's row nothing (`the_copy_texts_are_forks`,
+  `every_context_menu_holds_its_rows_working_items`).
 
 ### Chips on a row
 
 A row draws the refs pointing at its commit as Fork's chips between the graph and the
-subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): outlined, filled with a
-tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
-glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
+subject (refs-and-status R5; `crates/cairn-ui/src/history/ref_chips.rs`): a branch's and a
+remote's outlined in the row's lane colour and filled with a dark shade of it
+(`style::tones::chip_fill`), as Fork tints them by lane; a tag's and a stash's in Fork Dark's
+tones for their kind (`style::tones::TAG_CHIP`, `STASH_CHIP` and their borders), the glyph's
+cap unfilled and the text Fork's chip text; each kind told by its glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
 before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud
 (whatever the forge) and a tag — in a cap of their own at the chip's left; a
 stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
 (`crates/cairn-ui/src/history/ref_glyphs.rs`), no font involved, every one in the chip's text
 colour, so what tells two kinds apart is the shape alone
 (`every_glyph_paints_a_shape_no_other_glyph_paints`, over the pixels); a chip is keyed by
-its kind and name, since a canvas is repainted only when its layout changes. `HEAD`'s
-row's subject is bold.
+its kind and name, since a canvas is repainted only when its layout changes. A chip is
+Fork's 17 px rounded rectangle (`metrics::CHIP`); the current branch's name is bold after
+its check mark; a remote's cap draws its cloud in Fork Dark's grey (`tones::REMOTE_GLYPH`), a
+tag's and a stash's in the chip's text tone; `HEAD` has no chip of its own; a stash's row
+carries git's own message as its subject, `On main: WIP on parser`
+(`a_rows_chips_are_forks`).
 
 - **Order**: the current branch first — git's `HEAD -> main` leads too — then the row's
   refs in the snapshot's order, local branches, remote-tracking refs, tags, each by name:
-  Fork's local before remote; where Fork puts tags is not recorded
-  (`fork-refs-and-status-ui.md`, OPEN 3), and git puts them before the remote-tracking
-  refs.
+  Fork's local before remote, and its remote before a tag
+  (`docs/research/ui-review/fork-window-survey-2026-10-16.md`, §4: `origin/main`, then
+  `v0.2`), where git puts tags before the remote-tracking refs.
 - **Compact labels** (R5.2, Fork's default): a local branch whose upstream is a
-  remote-tracking ref labelling the same row draws that upstream as the remote glyph in a
-  cap of its own chip, and the upstream draws no chip; any other remote's ref at that
+  remote-tracking ref labelling the same row draws that upstream as a cloud-only chip of
+  its own just before the branch's — unfilled, bordered in a darker shade of the lane's
+  colour (`tones::upstream_chip_border`), the remote's name unwritten, as Fork draws it —
+  and the upstream draws no named chip; any other remote's ref at that
   commit keeps its chip; an upstream that is a local branch (`remote = .`) is never
   folded; with no snapshot yet nothing is. Which ref is a branch's upstream is read from
   the refresh's snapshot (`HistoryList::refs`); that both label the row is read from the
@@ -1024,7 +1106,7 @@ Pinned by `crates/cairn-ui/tests/ref_chips.rs` —
 `the_current_branch_leads_then_branches_remotes_and_tags_in_order`,
 `chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has`,
 `each_kind_of_chip_draws_its_glyph_before_its_name_and_a_plain_branch_none`,
-`the_head_rows_subject_is_bold_and_no_other`,
+`the_head_rows_subject_is_bold_and_no_other`, `a_rows_chips_are_forks`,
 `twenty_refs_are_clipped_at_the_columns_edge_and_the_row_keeps_its_height`,
 `the_room_a_chip_is_counted_by_never_exceeds_what_it_is_drawn_at`,
 `the_room_is_the_subject_columns_width` — by the viewport twin with labelled rows,
@@ -1036,29 +1118,30 @@ refs), and, through the window, by
 (`crates/cairn-app/src/window.rs`). The Commit tab's REFS row draws the same chips
 (`docs/systems/diff.md`, "REFS").
 
-### The title bar
+### The status box
 
-The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/title_bar/status_box.rs`;
-R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
-component of its working tree (of its git directory when it is bare), which the worker
-sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a
-launch at `.`, `..`, a subdirectory or its `.git` names the repository and not the path
-given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`); nothing
-until it is open — `*` after it while the last status read listed a change — then a branch glyph
-and the current branch, and its distance from its upstream as Fork prints it, behind then
-ahead, `18↓1↑` (no space, as Fork prints it), a zero count left out and nothing for a branch level with its upstream;
-or `upstream gone` for a configured upstream no ref is (git's `[gone]`); a detached `HEAD`
-as `HEAD detached at <short id>` and an unborn branch as `<name> (no commits yet)`, in
-git's words. The arrows are IBM Plex Mono's, which the application embeds. The window
-builds it from what the last refresh answered (`window::status_box`): the snapshot's
-`HEAD` and the branch's upstream, the branch's counts found by name
-(`RefreshState::ahead_behind_of`, a binary search, the counts coming in the snapshot's
-order) and whether status listed anything — each as old as its answer, a status up to
-one refresh behind (R10.3 as amended). An unreadable index or no working tree draws no
-`*`. Pinned by `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream`
-(`crates/cairn-app/src/window.rs`: a dirty branch with counts, a gone upstream, a detached
-and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
-(`crates/cairn-app/src/refresh/state.rs`) and the status box's own tests.
+The toolbar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/toolbar/status_box.rs`;
+drawn in the toolbar, `docs/systems/window-frame.md`, "The toolbar") names the repository, bold —
+its folder, as Fork names it: the last component of its working tree (of its git directory when
+it is bare), which the worker sends once the repository is open (`Update::Opened`, kept in
+`View::repository`), so a launch at `.`, `..`, a subdirectory or its `.git` names the repository
+and not the path given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`);
+nothing until it is open — over a branch glyph and the current branch, and `upstream gone` after
+it for a configured upstream no ref is (git's `[gone]`); a detached `HEAD` as `HEAD detached at
+<short id>` and an unborn branch as `<name> (no commits yet)`, in git's words. No star and no
+counts, as in Fork: the sidebar's "Local Changes (N)" carries the change count, and the branch's
+distance from its upstream is two badges, the commits ahead on Push and those behind on Pull,
+each absent at zero. The window builds it from what the last refresh answered
+(`crate::toolbar::toolbar`): the snapshot's `HEAD` and the branch's upstream, the branch's counts
+found by name (`RefreshState::ahead_behind_of`, a binary search, the counts coming in the
+snapshot's order) — each as old as its answer. Pinned by
+`the_status_box_names_the_repository_over_the_branch` and
+`each_refresh_redraws_the_badges_on_push_and_pull` (`crates/cairn-app/src/window.rs`: a branch
+with counts, a gone upstream drawing no badge, a detached and an unborn `HEAD`, badges redrawn
+and gone at zero), `a_branchs_counts_are_found_by_its_name`
+(`crates/cairn-app/src/refresh/state.rs`), `ahead_and_behind_are_badges_on_push_and_pull`
+(`crates/cairn-ui/tests/toolbar.rs`) and the status box's own tests
+(`crates/cairn-ui/tests/status_box.rs`).
 
 ### Show Lost Commits
 
@@ -1137,16 +1220,19 @@ the history lane opens the walk as the open asked, and a later reopen — a refr
 refs moved — asks as the toggle stands
 (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
 `the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). It is turned by its
-chord, heard in the history list's scope alone (`HistoryList::on_action`,
-`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and by a check box, "Show Lost
-Commits", at the right end of the "Graph and subject" heading's cell — laid over the cell, so
-every heading stays over its column and no row loses width — ticked while on, its tooltip the
-chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
-`accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
-`the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The list
+chord, heard wherever focus is in the window as Fork's View menu hears it (`Scope::Window`;
+the history list leaves it alone, `a_chord_pressed_in_the_list_moves_nothing`), by the View
+menu's "Show Lost Commits (Reflog)", ticked while on (`docs/systems/window-frame.md`). While
+it is on, Fork's strip stands across the top of the history, above its rows: "Reflog mode
+enabled" on the banner's tone between two rules, and an "Exit" link that turns it off as the
+chord does (`cairn_ui::ReflogStrip`; Fork's words and place observed in
+`docs/research/ui-review/fork-menu-toggles-2026-10-19.md`, §2). No check box or heading names
+it (`show_lost_commits_is_the_view_menus_and_names_itself_while_on`). The list
 keeps the keyboard through the reopen: its old rows stay drawn until the reopened walk's first
-page replaces them, so the chord is heard again with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
-author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
+page replaces them, so the chord is heard again with no click. A lost row is drawn as Fork draws one (Tracker #351's captures,
+`docs/research/staging-and-commit/fork-create-branch-evidence.md`): its subject,
+author, short id and date in Fork Dark's grey for a row `HEAD` cannot reach
+(`style::tones::UNREACHABLE_TEXT`), and nothing else dimmed —
 its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
 `a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
 that gains a ref is reached at the reopen that follows and drawn as any other.
@@ -1157,7 +1243,9 @@ The way back to a lost commit — or to any — is Fork's Create Branch dialog
 (`crates/cairn-ui/src/dialogs/create_branch.rs`, `crates/cairn-app/src/operations/create_branch.rs`; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md` and
 `fork-observed-2026-10-10.md`), opened by `New Branch…` in
-any commit row's context menu, a lost row's too, a stash's row offering none
+any commit row's context menu (`history::row_menu`: Fork's New Branch… beside its chord, then
+Copy Commit SHA and Copy Commit Info beside the copy chords; with two rows compared, the copies
+alone, copying both), a lost row's too, a stash's row offering none
 (`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
 right-click selecting its row first unless it lands in the selection already made, either of a
 compared pair
@@ -1246,6 +1334,7 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 | What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
 | Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_and_no_later_page_changes_it` (`crates/cairn-model/src/history.rs`), `lost_commits_are_in_git_date_order` (`crates/cairn-git/tests/date_order.rs`) |
+| A row is greyed exactly where `git rev-list HEAD` does not list its commit | `the_walk_marks_what_head_reaches_as_git_rev_list_does`, `the_head_reach_counts_what_git_substitutes_and_a_head_no_ref_names` (`crates/cairn-git/tests/lost_commits.rs`), `a_row_beyond_heads_reach_reads_back_so_and_no_other_does` (`crates/cairn-model/src/history.rs`), `a_row_head_cannot_reach_is_greyed_and_one_it_reaches_is_not` (`crates/cairn-ui/tests/commit_row.rs`) |
 | The history from a refs snapshot, a resumed walk and its stash rows are in git's date order | `the_history_is_in_git_date_order`, `stash_rows_are_where_git_puts_them`, `a_resumed_session_continues_git_date_order` (`crates/cairn-git/tests/date_order.rs`), `stash_rows_are_in_gits_date_order`, `a_stash_on_a_deep_base_is_where_git_puts_it` (`crates/cairn-git/tests/every_ref.rs`) |
 | A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history/state.rs`) |
 
@@ -1299,8 +1388,9 @@ keyboard-focus outline, the selection following its `RowId` when rows arrive
 below and above it, a selection moved off screen being revealed in either
 direction, and `on_reach_end` firing once the last screen of rows comes into
 view but not when visible rows re-render. `crates/cairn-ui/tests/commit_row.rs`
-pins each column's width and order, every heading lining up with its column,
-the graph column widening with the lane count, the selected row's highlight,
+pins Fork's row — its height, each column's width and order, the avatar, the local date and
+`HEAD`'s bold — the graph column widening with the lane count, a row `HEAD` cannot reach
+greyed, the selected row's highlight,
 and that the date and short id fit their columns at the rows' font size (a
 measured width, so it needs a system font). `crates/cairn-app/src/window.rs`
 renders the window from each `Progress` state — the placeholder sentence in the
@@ -1363,8 +1453,8 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   row_geometry` paints each place once, the lines past `MAX_DRAWN_LANES` sharing the last
   column): a 35-row viewport under 5,000 open lines builds and lays out in 0.76 ms and
   paints no slower than one under 100 (`measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips`,
-  `crates/cairn-ui/tests/drawn_lanes.rs`; before, 175,000 strokes added 119 ms a frame to
-  the CPU raster).
+  `crates/cairn-ui/tests/drawn_lanes.rs`; a stroke for every line crossing, 175,000 strokes
+  there, would add 119 ms a frame to the CPU raster).
 - **Chips read two snapshots.** A row's labels are the snapshot its walk began from; which
   ref is a branch's upstream, and which branch `HEAD` is on, are read from the refresh's
   latest. A refresh that changed only an upstream's configuration reopens nothing, so the

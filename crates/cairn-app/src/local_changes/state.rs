@@ -51,6 +51,12 @@ pub struct LocalChangesView {
     /// Unstaged's share of the two lists' height, as the splitter between them was last
     /// dragged: the session's, never kept beyond it.
     pub lists_split: State<f32>,
+    /// A request for the Unstaged list to take focus, each new number taken once: set by the
+    /// Show Local Changes chord (Fork's Ctrl+1 leaves focus there), cleared whenever the main
+    /// region is switched otherwise, so a press on the sidebar's row leaves focus where it is.
+    pub focus_unstaged: State<Option<u64>>,
+    /// The number the last focus request was given.
+    pub focus_serial: State<u64>,
     /// The diff's scroll: the view's own, so the Changes tab's is where it was when it is
     /// shown again.
     pub scroll: ScrollController,
@@ -74,6 +80,8 @@ impl LocalChangesView {
             filter_text: use_state(String::new),
             list_width: use_state(|| LIST_WIDTH),
             lists_split: use_state(|| cairn_ui::LISTS_SPLIT),
+            focus_unstaged: use_state(|| None),
+            focus_serial: use_state(|| 0),
             scroll: use_scroll_controller(ScrollConfig::default),
             cursor: use_state(|| None),
             acting: use_state(crate::local_changes::actions::Acting::default),
@@ -90,6 +98,8 @@ impl LocalChangesView {
             filter_text: State::create(String::new()),
             list_width: State::create(LIST_WIDTH),
             lists_split: State::create(cairn_ui::LISTS_SPLIT),
+            focus_unstaged: State::create(None),
+            focus_serial: State::create(0),
             scroll: ScrollController::new(0, 0, Vec::new()),
             cursor: State::create(None),
             acting: State::create(crate::local_changes::actions::Acting::default()),

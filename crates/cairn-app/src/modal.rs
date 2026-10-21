@@ -6,7 +6,8 @@
 //!
 //! The order is what must be answered first: a credential prompt (a git waits on it), then a
 //! confirmation (the person's own question), then a Git Error or "Couldn't <name>" — the commit
-//! box's first, then the others, oldest first — then Create Branch, then the popover. So a
+//! box's first, then the others, oldest first — then Create Branch, then the popover, then About
+//! Cairn. So a
 //! commit's Git Error that arrives while Create Branch is up is drawn over it, and alone: its
 //! Escape closes it, and Create Branch is drawn again as it was left. A dialog under another is
 //! kept, not drawn, so no key reaches it.
@@ -28,6 +29,8 @@ pub enum Modal {
     CreateBranch,
     /// The activity popover.
     Popover,
+    /// About Cairn.
+    About,
 }
 
 /// The one on top now, read without subscribing: what a key handler asks.
@@ -44,6 +47,8 @@ pub fn modal(view: View) -> Option<Modal> {
         Some(Modal::CreateBranch)
     } else if view.activity.is_open() {
         Some(Modal::Popover)
+    } else if *view.frame.about.peek() {
+        Some(Modal::About)
     } else {
         None
     }
@@ -64,6 +69,8 @@ pub fn drawn(view: View) -> Option<Modal> {
         Some(Modal::CreateBranch)
     } else if *view.activity.open.read() {
         Some(Modal::Popover)
+    } else if *view.frame.about.read() {
+        Some(Modal::About)
     } else {
         None
     }

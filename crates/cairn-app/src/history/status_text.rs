@@ -36,19 +36,6 @@ fn reading_text(reading: Option<usize>) -> String {
     }
 }
 
-/// How much of the history is loaded, as the title bar says it.
-pub fn loaded_count(progress: &Progress) -> String {
-    let loaded = progress.loaded();
-    let noun = if loaded == 1 { "commit" } else { "commits" };
-    let more_coming = !progress.complete() && !matches!(progress.status(), Status::Failed(_));
-
-    if more_coming {
-        format!("{loaded} {noun}…")
-    } else {
-        format!("{loaded} {noun}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,41 +138,5 @@ mod tests {
             Some("Reading history… 300 commits".to_owned())
         );
         assert_eq!(reading_strip(&over_nothing), None);
-    }
-
-    #[test]
-    fn the_count_says_more_is_coming_only_while_it_is() {
-        let mut mid_scroll = Progress::opening();
-        mid_scroll.received(1, false, 64);
-        assert_eq!(loaded_count(&mid_scroll), "64 commits…");
-
-        let mut finished = Progress::opening();
-        finished.received(1, true, 2_540);
-        assert_eq!(
-            loaded_count(&finished),
-            "2540 commits",
-            "a complete history claimed more was coming"
-        );
-
-        let mut broken = Progress::opening();
-        broken.received(1, false, 64);
-        broken.failed("failed to walk the history".to_owned());
-        assert_eq!(
-            loaded_count(&broken),
-            "64 commits",
-            "a history that stopped because of a failure claimed more was coming"
-        );
-    }
-
-    /// Caught by: "1 commits".
-    #[test]
-    fn the_count_agrees_with_itself_about_number() {
-        let mut one = Progress::opening();
-        one.received(1, true, 1);
-        assert_eq!(loaded_count(&one), "1 commit");
-
-        let mut none = Progress::opening();
-        none.received(1, true, 0);
-        assert_eq!(loaded_count(&none), "0 commits");
     }
 }

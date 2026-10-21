@@ -48,7 +48,7 @@ use crate::diff::state::{AllState, Answer, DiffState, answered_expansion};
 use crate::history::selection;
 use crate::history::state::Progress;
 use crate::operations::fetch::FetchStatus;
-use crate::window::{PANE_HEIGHT, View, window};
+use crate::window::{View, window};
 use crate::worker::{
     Comparison, Discovery, EXPAND_ALL_LINES, RepositoryHandle, Request, Update, Updates, open,
     update_within,
@@ -93,6 +93,7 @@ fn kind(update: &Update) -> &'static str {
         Update::DiffFailed { .. } => "diff failed",
         Update::ConfiguredContext { .. } => "configured context",
         Update::Remotes { .. } => "remotes",
+        Update::Started { .. } => "started",
         Update::Opened { .. } => "opened",
         Update::Refs { .. } => "refs",
         Update::AheadBehind { .. } => "ahead/behind",
@@ -338,7 +339,16 @@ impl Harness {
 
 /// The first `count` texts drawn below the history: what the pane shows, to see it is drawn.
 fn shown(test: &TestingRunner, count: usize) -> Vec<String> {
-    let top = f64::from(HEIGHT) - f64::from(PANE_HEIGHT);
+    // The pane's tab strip, whose icon is the one named for hiding the details.
+    let top = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| {
+                    rect.accessibility.builder.value() == Some(cairn_ui::HIDE_DETAILS_TOOLTIP)
+                })
+                .map(|_| f64::from(node.layout().area.min_y()) - 8.)
+        })
+        .unwrap_or(f64::from(HEIGHT) / 2.);
     let mut texts: Vec<(f32, f32, String)> = test.find_many(|node, element| {
         let area = node.layout().area;
         let visible = f64::from(area.min_y()) >= top && area.min_y() < HEIGHT;
@@ -414,7 +424,7 @@ fn launch(path: &str) -> Harness {
                 history_cursor: State::create(0),
                 detail_tab: State::create(DetailTab::default()),
                 pane_collapsed: State::create(false),
-                pane_height: State::create(PANE_HEIGHT),
+                pane_split: State::create(crate::detail::split::PaneSplit::default()),
                 diff_settings: State::create(DiffSettings::default()),
                 diff_scroll: ScrollController::new(0, 0, Vec::new()),
                 change_cursor: State::create(None),
@@ -424,13 +434,16 @@ fn launch(path: &str) -> Harness {
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                 refreshed: State::create(crate::refresh::state::RefreshState::default()),
                 repository: State::create(None),
+                repository_path: State::create(None),
                 sidebar: crate::sidebar::state::SidebarView::created(),
                 local: crate::local_changes::state::LocalChangesView::created(),
                 writes: State::create(crate::operations::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
+                zone: State::create(cairn_ui::LocalZone::default()),
                 activity: crate::operations::activity::ActivityView::created(),
                 branch: crate::operations::create_branch::CreateBranchView::created(),
+                frame: crate::frame::FrameView::created(),
             })
         },
         1.,

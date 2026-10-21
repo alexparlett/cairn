@@ -583,11 +583,24 @@ pub enum Update {
     Failed { message: String },
     /// A worker died. Tied to no request, so never filtered out by epoch.
     WorkerLost { message: String },
-    /// The repository is open: `name` is what the title bar calls it — the last component of
-    /// its working tree, or of its git directory when it is bare, as Fork names a
-    /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
-    /// Sent once, first, tied to no request.
-    Opened { name: String },
+    /// What the application found as it started: the `git`, described for About Cairn — its
+    /// version and where it was found — and the system's time zone, read here on the worker
+    /// (`zone::read`), `None` when it could not be read, so dates are drawn in UTC and the
+    /// Commit tab says so. Sent once, first, tied to no request.
+    Started {
+        git: String,
+        zone: Option<jiff::tz::TimeZone>,
+    },
+    /// The repository is open: `name` is what the toolbar's status box, the sidebar's header
+    /// and the window's title call it — the last component of its working tree, or of its git
+    /// directory when it is bare, as Fork names a repository's folder — whatever path it was
+    /// opened at (`.`, a subdirectory, its `.git`).
+    /// `path` is that working tree's root, or the git directory of a bare one, made absolute:
+    /// what Copy Repository Path copies. Sent once, after `Started`, tied to no request.
+    Opened {
+        name: String,
+        path: std::path::PathBuf,
+    },
     /// The default remote first, when there is one.
     Remotes { remotes: Vec<RemoteSummary> },
     /// `diff.context` as the user's `git diff` reads it, raised to one: once asked, and again
@@ -802,6 +815,7 @@ impl Update {
             | Self::Failed { .. }
             | Self::WorkerLost { .. }
             | Self::Remotes { .. }
+            | Self::Started { .. }
             | Self::Opened { .. }
             | Self::ConfiguredContext { .. }
             | Self::FetchStarted { .. }

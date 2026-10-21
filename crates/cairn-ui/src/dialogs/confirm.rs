@@ -33,9 +33,11 @@ use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::dialogs::answer_button::{AnswerColours, answer, greyed_answer};
+use crate::dialogs::answer_button::{Answer, answer, greyed_answer};
 use crate::dialogs::button_order::ordered;
+use crate::dialogs::frame;
 use crate::dialogs::git_error::CLOSE_CAPTION;
+use crate::style::{focus, metrics};
 
 /// Width of the dialog: room for a prompt naming a long path.
 const DIALOG_WIDTH: f32 = 520.;
@@ -201,8 +203,8 @@ fn shown_file(item: VirtualItem, files: &ShownFiles) -> Element {
         .horizontal()
         .padding(Gaps::new(0., 6., 0., 6.))
         .spacing(12.)
-        .child(label().text(path).max_lines(1).font_size(13.))
-        .child(label().text(what).max_lines(1).font_size(13.))
+        .child(label().text(path).max_lines(1).font_size(metrics::BODY))
+        .child(label().text(what).max_lines(1).font_size(metrics::BODY))
         .into()
 }
 
@@ -218,7 +220,9 @@ impl Component for ConfirmDialog {
         // token however fast the button is pressed again.
         let answered = use_state(|| false);
         let mut showing_files = use_state(|| false);
-        let colours = AnswerColours::of_theme();
+        // Show files' focus, shown by the style's ring.
+        let files_id = use_a11y();
+        let files_focus = use_focus(files_id);
 
         let cancel = {
             let on_cancel = self.on_cancel.clone();
@@ -234,14 +238,13 @@ impl Component for ConfirmDialog {
         let (title, body, buttons, files) = match &self.answer {
             DialogAnswer::Refused(why) => {
                 // The refusal, in this dialog, Close alone.
-                let buttons = PopupButtons::new().child(answer(
-                    self.serial,
+                let buttons = frame::buttons(vec![answer(
                     close_id,
                     CLOSE_CAPTION.to_owned(),
                     true,
-                    &colours,
+                    Answer::Other,
                     cancel.clone(),
-                ));
+                )]);
                 (
                     format!("Couldn't {}", self.title),
                     format!("{why} {NOTHING_CHANGED}"),
@@ -250,20 +253,13 @@ impl Component for ConfirmDialog {
                 )
             }
             DialogAnswer::Counting => {
-                let buttons = PopupButtons::new().children(ordered(
+                let buttons = frame::buttons(ordered(
                     self.platform,
-                    vec![greyed_answer(self.title.clone(), &colours)],
-                    answer(
-                        self.serial,
-                        cancel_id,
-                        CANCEL_CAPTION.to_owned(),
-                        true,
-                        &colours,
-                        {
-                            let cancel = cancel.clone();
-                            move || cancel()
-                        },
-                    ),
+                    vec![greyed_answer(self.title.clone())],
+                    answer(cancel_id, CANCEL_CAPTION.to_owned(), true, Answer::Other, {
+                        let cancel = cancel.clone();
+                        move || cancel()
+                    }),
                 ));
                 (self.title.clone(), COUNTING_TEXT.to_owned(), buttons, None)
             }
@@ -285,27 +281,13 @@ impl Component for ConfirmDialog {
                 };
                 // In the platform's order; focus starts on Cancel either way, and stays there
                 // as the count arrives.
-                let buttons = PopupButtons::new().children(ordered(
+                let buttons = frame::buttons(ordered(
                     self.platform,
-                    vec![answer(
-                        self.serial,
-                        confirm_id,
-                        action,
-                        false,
-                        &colours,
-                        confirm,
-                    )],
-                    answer(
-                        self.serial,
-                        cancel_id,
-                        CANCEL_CAPTION.to_owned(),
-                        true,
-                        &colours,
-                        {
-                            let cancel = cancel.clone();
-                            move || cancel()
-                        },
-                    ),
+                    vec![answer(confirm_id, action, false, Answer::Primary, confirm)],
+                    answer(cancel_id, CANCEL_CAPTION.to_owned(), true, Answer::Other, {
+                        let cancel = cancel.clone();
+                        move || cancel()
+                    }),
                 ));
                 let listed = consequence.listed();
                 let files = (listed > 0).then(|| (consequence.clone(), listed));
@@ -318,9 +300,12 @@ impl Component for ConfirmDialog {
             let glyph = if open { "▾" } else { "▸" };
             let mut column = rect().width(Size::fill()).spacing(6.).child(
                 rect()
+                    .a11y_id(files_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::Button)
                     .a11y_alt(SHOW_FILES_CAPTION)
+                    .padding(Gaps::new(1., 3., 1., 3.))
+                    .border(focus::ring_when(files_focus()))
                     .a11y_builder(move |node| node.set_expanded(open))
                     .horizontal()
                     .spacing(4.)
@@ -329,8 +314,8 @@ impl Component for ConfirmDialog {
                         let open = *showing_files.peek();
                         showing_files.set(!open);
                     })
-                    .child(label().text(glyph).font_size(13.))
-                    .child(label().text(SHOW_FILES_CAPTION).font_size(13.)),
+                    .child(label().text(glyph).font_size(metrics::BODY))
+                    .child(label().text(SHOW_FILES_CAPTION).font_size(metrics::BODY)),
             );
             if open {
                 // Room for the horizontal scrollbar after the last row (`end_room`).
@@ -352,27 +337,21 @@ impl Component for ConfirmDialog {
             DialogAnswer::Refused(_) => None,
         };
 
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(move |()| cancel())
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .a11y_modal(true)
-                    .a11y_role(AccessibilityRole::AlertDialog)
-                    .child(PopupTitle::new(title))
-                    .child(
-                        PopupContent::new()
-                            .child(label().text(body).width(Size::fill()).font_size(14.))
-                            .maybe_child(
-                                left.map(|left| {
-                                    label().text(left).width(Size::fill()).font_size(14.)
-                                }),
-                            )
-                            .maybe_child(disclosure),
-                    )
-                    .child(buttons),
-            )
+        frame::framed(
+            DIALOG_WIDTH,
+            EventHandler::new(move |()| cancel()),
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::AlertDialog)
+                .child(frame::title(title))
+                .child(
+                    frame::content()
+                        .child(label().text(body).width(Size::fill()))
+                        .maybe_child(left.map(|left| label().text(left).width(Size::fill())))
+                        .maybe_child(disclosure),
+                )
+                .child(buttons),
+        )
     }
 
     fn render_key(&self) -> DiffKey {

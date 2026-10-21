@@ -1,5 +1,6 @@
 //! Local Changes: in the main region in place of the history when Local Changes is pressed in
-//! the sidebar — the filter and the two lists on the left, Unstaged above Staged, and the
+//! the sidebar — Fork's bar over the two lists on the left (the filter, Stage All, the eye and
+//! View Mode), Unstaged above Staged, and the
 //! selection's primary's diff on the right under the diff view's bar, as Fork lays the view
 //! out. A component of its own, mounted only while it is shown, so the work it watches for — a
 //! filter's text, a path to choose, a diff to ask again — is done only for a view someone is
@@ -45,6 +46,7 @@ use cairn_model::{
     WorkingTreeStatus,
 };
 use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
     DiffHeader, DiffNotice, DiffNoticeView, DiffView, Gesture, GestureAct, GestureSide, LineDrag,
     ListIntent, LocalChangesList, ModeRow, SELECTION_CLEARED,
@@ -214,6 +216,7 @@ impl Component for LocalChangesPane {
         )
         .shown_paths(shown_paths)
         .split(view.local.lists_split)
+        .focus_unstaged(*view.local.focus_unstaged.read())
         .selection(readable.map(selection_of, |_| true))
         .held(view.held_keys)
         .on_choose(move |(list, row): (ChangeList, usize)| {
@@ -306,18 +309,19 @@ fn quieten(view: View) {
 
 /// One line over the lists: why the last status read failed, the lists before it still drawn.
 fn banner(message: String) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
+    // Its text keeps the theme's error tone, which Fork Dark's table does not name.
+    let error = get_theme_or_default().read().colors().error;
     rect()
         .width(Size::fill())
         .padding(Gaps::new(4., 8., 4., 8.))
-        .background(colours.surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
-                .font_size(12.)
-                .color(colours.error),
+                .font_size(metrics::BODY)
+                .color(error),
         )
         .into()
 }

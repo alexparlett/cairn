@@ -7,8 +7,10 @@ view stages, unstages and discards files, the diff's staging gesture over lines,
 box under the diff. Spec: `docs/prd/refs-and-status.md` R9 (criterion C9) for the view, and
 `docs/prd/staging-and-commit.md` R8 (criteria C8's view half, C18 and C24's conflicted rows)
 for its actions, R9 (criterion C19) for the gesture and R10 (C13, C14 and C24's view halves)
-for the commit box. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
-section 6, and `docs/research/staging-and-commit/fork-staging-and-commit.md`, sections 1-2);
+for the commit box; `docs/prd/fork-alignment.md` R8-R10 for its bar, headings, commit box,
+menus and keys. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
+section 6, `docs/research/staging-and-commit/fork-staging-and-commit.md`, sections 1-2, and
+`docs/research/ui-review/`);
 every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
 itself — what `git status` lists and how it is read — is `status.md`; the working-tree query
 that answers a path's diff is `diff.md`, "The working-tree query"; the verbs the actions run
@@ -19,13 +21,27 @@ which the commit box asks.
 
 Pressing **Local Changes** in the sidebar (`sidebar.md`) puts the view in the main region in
 place of the history and its detail pane (`window::window`, `MainView::LocalChanges`,
-`crates/cairn-app/src/local_changes/pane.rs`), as Fork lays it out:
+`crates/cairn-app/src/local_changes/pane.rs`), as Fork lays it out. The Show Local Changes chord
+(Ctrl+1, ⌘1) shows it too, with focus in Unstaged, as Fork's Ctrl+1 leaves it
+(`history::selection::focus_local_changes`); a press on the sidebar's entry leaves focus where it
+was:
 
 - **Left**, behind a draggable splitter (its share kept for the session,
-  `LocalChangesView::list_width`): a filter field — the only control above the lists — then
-  **Unstaged** above **Staged**, each under its heading — its name, its Stage or Unstage
-  button, and a small double chevron, ⇊ Stage All over Unstaged (Fork's) and ⇈ Unstage All over
-  Staged — and each one flat, virtualised list
+  `LocalChangesView::list_width`): Fork for Windows' bar across both lists
+  (`crates/cairn-ui/src/local_changes/bar.rs`; `fork-window-survey-2026-10-16.md` §7, uv12a;
+  `fork-window-survey-2-2026-10-16.md` §1c, uw6) — 17 px and its rule (`metrics::LISTS_BAR`), the
+  filter at its left, a magnifier and a field with no placeholder, and at its right Stage All's
+  double chevron ⇊ (greyed while Unstaged shows no row), the eye — greyed, its tooltip "Comes
+  with Quick Look." (`cairn_ui::COMES_WITH_QUICK_LOOK`), since Fork's opens Quick Look, a window
+  over Fork's drawing the selected file's diff side by side, its footer "Space bar: close,
+  Up/Down: move file selection", and leaves the main diff as it was
+  (`fork-local-changes-2026-10-20.md`, lc9; Quick Look is #35) — and View Mode, whose menu holds "View as List" alone, ticked, since Cairn draws
+  only the list (`cairn_ui::VIEW_AS_LIST_CAPTION`; the tree is #36) — then **Unstaged** above
+  **Staged**, each under its heading — its name, bold at Fork's 14 px, on Fork's 32 px band and
+  its rule (`metrics::LIST_HEADING`), its bordered Stage or Unstage button, 22 px tall
+  (`metrics::LIST_HEADING_BUTTON`), and on Staged's alone a small double chevron, ⇈ Unstage
+  All — and each one flat, virtualised list of rows 20 px apart
+  (`cairn_ui::LOCAL_CHANGES_ROW_HEIGHT`, `metrics::LOCAL_CHANGES_ROW`)
   (`cairn_ui::LocalChangesList`, `crates/cairn-ui/src/local_changes/list.rs`), with a draggable
   splitter between the two (the user's decision, 2026-10-07; its share kept for the session and
   never beyond it, `LocalChangesView::lists_split`, `LocalChangesList::split`). A row is a badge
@@ -37,7 +53,7 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   and Fork's warning triangle for a conflicted path (`RefGlyph::Gone`). Colour only reinforces
   the shape. The Commit tab keeps its own letters.
 - **Nothing under the lists** (staging-and-commit R14.6): a write running or queued shows in
-  the title bar's status box, and its ending, when it is not a success or a cancel, in its Git
+  the toolbar's status box, and its ending, when it is not a success or a cancel, in its Git
   Error or "Couldn't <name>" dialog — a stale patch naming its path once
   (`docs/systems/git-processes.md`, "Where an ending goes";
   `a_write_is_said_nowhere_under_the_lists_and_a_stale_one_in_its_dialog`).
@@ -217,7 +233,7 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
 - a double press on a row — the first press makes the row the selection, and the double press
   acts on the selection, so it stages that row;
 - the table's chords on either focused list: Enter, Ctrl+S or Ctrl+Shift+S (Return or ⌘S) on
-  the selection, wherever it is, and, for the list heard, Ctrl+Alt+Shift+S (⌥⇧⌘S) — heard by
+  the selection, wherever it is, and, for the list heard, Ctrl+Shift+Alt+S (⌥⇧⌘S) — heard by
   the lists' own key handler (`Scope::LocalChanges`, and the bare Enter from
   `Scope::LocalChangesLists`, the lists' alone) and, but for Enter, the diff's, so nowhere else,
   and never from a text field, which keeps Enter and Backspace;
@@ -237,13 +253,19 @@ under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
   Fork for Windows, TrackerWin #2429 and #2466, and ⌥ on macOS; the redesign's L2, superseding
   Alt, which xfwm, openbox and Plasma 5 take with a click), reads Stage All in Unstaged and
   Unstage All in Staged, both enabled whatever is selected while the list shows a row; and the
-  small double chevrons always drawn, ⇊ Stage All in Unstaged's heading and ⇈ Unstage All in
-  Staged's (a deviation: Fork for Windows shows Unstage All only while Shift is held). The
+  small double chevrons always drawn, ⇊ Stage All in the bar over both lists, as Fork for
+  Windows draws it, and ⇈ Unstage All on Staged's heading (a deviation: Fork for Windows shows
+  Unstage All only while Shift is held). The
   heading press is told apart from a row's: Shift on a row is still the range press, and a held
   Alt does nothing on Linux;
-- the context menu (`local_changes::menu`): Stage or Unstage, Discard Changes… (greyed on the
-  staged side, its reason beneath it), Stage All or Unstage All, Copy Path; a right-press on a
-  row outside the selection chooses it first; each item closes the menu as it is chosen.
+- the context menu (`local_changes::menu_groups`, drawn by the one menu component,
+  `cairn_ui::menu`), in Fork's groups and beside Fork's chords (`fork-window-survey-2026-10-16.md` §8, uv14 and uv15): on the
+  unstaged side Stage and Discard Changes… (greyed with its reason, drawn under it while the
+  pointer is on it, where nothing selected can be discarded), then Stage All, then Copy Path and
+  Copy Full Path; on the staged side Unstage, then Unstage All, then the two copies, and no
+  discard, as Fork's staged menu has none. A right-press on a row outside the selection chooses
+  it first; each item closes the menu as it is chosen and gives focus back to the list. With a
+  list focused, Copy's and Copy Full's chords choose its copies for the selection in it.
 
 Stage All and Unstage All ask `LocalWrite::StageAll` or `LocalWrite::UnstageAll` with the
 lists drawn, shared, and — with a filter on — the rows it shows (the user's decision,
@@ -264,10 +286,10 @@ with a trailing `/` (`LocalChange::is_nested_repository`; the user's decision of
 where Fork deletes one and its history, `fork-observed-nested-repo-2026-10-10.md`). A
 selection with nothing that can be discarded — any on the Staged list or a staged diff, or
 every row one of those three — asks nothing, and the discard chord over it does nothing, as
-Fork's does, with no line under the lists (the redesign's rule 4); the menu draws its Discard
-Changes… greyed with the reason wrapped beneath it, never cut (`cairn_ui::NoDiscard`): "Staged
-changes can't be discarded. Unstage them first.", or one sentence per kind the selection holds,
-submodules first — "Submodule changes can't be discarded.", "Conflicted files can't be
+Fork's does, with no line under the lists (the redesign's rule 4); the staged menu offers no
+discard, as Fork's has none, and the unstaged menu draws its Discard Changes… greyed, its reason
+drawn beneath it while the pointer is on it, wrapped and never cut (`cairn_ui::NoDiscard`): one
+sentence per kind the selection holds, submodules first — "Submodule changes can't be discarded.", "Conflicted files can't be
 discarded. Resolve or stage them first.", "Nested repositories can't be discarded." A
 selection mixing them with paths that can be discarded asks for those paths alone, and the
 confirmation says in one line under its prompt what is left — "1 submodule and 1 conflicted
@@ -275,8 +297,8 @@ file are left as they are.", "1 nested repository is left as it is." (`cairn_ui:
 `cairn_ui::Left`, `Confirming::leaving`; the redesign's D1, where Fork asks twice) — the button
 counting only what it discards.
 
-**The dialog opens at the press** (R7.4, the redesign's rule 3): the discard chord (Backspace,
-Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D), the menu or a chunk's or a selection's Discard… opens the
+**The dialog opens at the press** (R7.4, the redesign's rule 3): the discard chord (Delete
+or Backspace; ⌫ or ⇧⌘D), the menu or a chunk's or a selection's Discard… opens the
 confirmation at once, counting (`Confirming::counting`, `cairn_ui::DialogAnswer::Counting`):
 "Counting…", its button greyed and reading "Discard Changes", Cancel focused — and asks the
 engine what it would lose: `Request::DiscardConsequence`, computed by
@@ -405,12 +427,20 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
 Under the diff, the width of the diff's side (R10.1), Fork's box (`fork-staging-and-commit.md`
 §5), drawn by `cairn_ui::CommitBox` (`crates/cairn-ui/src/commit_box.rs`) from the window's
 state (`crates/cairn-app/src/commit_box/state.rs`) by `commit_box::pane::CommitBoxPane`, which
-also holds what each press does: a one-line subject with Fork's counter — the characters left
-before 50, negative past it, red past 70 (`subject_count`) — and the `≡` that opens Recent
-Commit Messages; a description in IBM Plex Mono with a ruler at column 72; `Amend` at the left;
-and one button at the right — `Commit N Files` (`commit_caption`: plain `Commit` with none), or
-Fork's "Amend Last Commit" while Amend is ticked (`AMEND_BUTTON_CAPTION`, the user's answer of
-2026-10-10) — with nothing under it (R10.6, the redesign's C6); the commit chord presses it, in every state. At
+also holds what each press does. One bordered field of two parts (`fork-window-survey-2026-10-16.md`
+§7, uv12c; `fork-window-survey-2-2026-10-16.md` §2, uw36; `cairn_ui::COMMIT_FIELD_NAME`), each
+part a flat text field on the field's fill (`text_field::field_part`): a one-line subject, 22 px
+(`metrics::COMMIT_SUBJECT`), bold once it has text, with Fork's counter shown only then — the
+characters left before 50, negative past it, red past 70 (`subject_count`) — and at its right end
+the glyph that opens Recent Commit Messages; a rule; and a description in IBM Plex Mono with a
+ruler at column 72, one line while empty and a line taller for each line typed, as Fork's grows
+(`fork-local-changes-2026-10-20.md`, lc28-lc33), to 200 px. Under it, `Amend` at the left and at the right Fork's split button
+(`metrics::COMMIT_BUTTON`): the caption — `Commit N Files` (`commit_caption`: plain `Commit` with
+none), or Fork's "Amend Last Commit" while Amend is ticked (`AMEND_BUTTON_CAPTION`, the user's
+answer of 2026-10-10) — and behind a rule its ⌄, a segment of its own, always greyed with the
+tooltip "Comes with pull and push." (`COMMIT_OPTIONS_TOOLTIP`): Fork's holds Commit Options and
+Commit and Push (uw35), and a menu lists only what works, so it opens nothing. Nothing stands
+under it (R10.6, the redesign's C6); the commit chord presses it, in every state. At
 most one line is drawn, over the fields, wrapped and never cut (`operation_line`, R10.8, the redesign's C8
 and rule 6).
 
@@ -533,7 +563,7 @@ is in progress. Continue or abort it with git rebase --continue or --abort.". Wi
 detached `HEAD` one line reads "HEAD is detached: this commit will be on no branch.", asking
 nothing (rule 2: the commit is recoverable).
 
-**Recent Commit Messages** (R10.2): the `≡` opens a menu of the last ten messages' subjects,
+**Recent Commit Messages** (R10.2): the glyph at the subject's right end opens a menu of the last ten messages' subjects,
 newest first; choosing one fills both fields (`split_message`: the first line, and the rest after
 its blank line). In an empty subject, or one holding the message last recalled, a bare ↑ recalls
 the next older and ↓ the next newer, ↓ from the newest emptying the draft
@@ -546,6 +576,8 @@ typed, the arrows are the editor's.
   `the_amend_toggle_reports_its_toggled_state_to_assistive_technology`,
   `amend_last_commit_reports_its_press_and_draws_no_line`,
   `the_counter_is_drawn_and_a_stopped_box_asks_nothing` (the line uncapped),
+  `the_commit_box_is_one_field_and_a_split_button`,
+  `the_counter_and_the_bold_subject_appear_once_the_subject_has_text`,
   `a_commit_asked_stands_in_the_buttons_place`, `an_edit_in_a_field_is_reported`,
   `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered`,
   `the_skip_sits_in_the_footer_beside_close_and_focus_starts_on_close`, and in
@@ -603,7 +635,10 @@ typed, the arrows are the editor's.
   `a_drag_drops_on_the_other_list_only_and_survives_its_row`,
   `a_drag_between_the_lists_scrolls_the_one_it_would_drop_on`,
   `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed`,
-  `a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop`, and with every one of
+  `a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop`; the bar and the headings
+  (`tests/local_changes_bar.rs`): `local_changes_bar_and_headings_are_forks`,
+  `the_bars_controls_report_their_presses_and_say_what_they_are`,
+  `stage_all_is_greyed_while_unstaged_shows_no_row`; and with every one of
   50,000 paths selected `a_status_of_50000_paths_all_selected_builds_one_viewport`
   (`tests/local_changes.rs`); the pure parts
   (`a_toggle_adds_a_path_and_the_file_clicked_first_stays_primary`,
@@ -736,7 +771,8 @@ typed, the arrows are the editor's.
   `the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once`,
   `next_change_moves_local_changes_own_diff`, `a_status_that_could_not_be_read_is_said`,
   `a_filter_hiding_the_primary_selects_the_row_shown_in_its_place`,
-  `a_refresh_moves_the_selection_and_asks_its_diff_without_a_render`; and
+  `a_refresh_moves_the_selection_and_asks_its_diff_without_a_render`,
+  `ctrl_1_opens_local_changes_with_unstaged_focused`; and
   `local_changes_and_all_commits_switch_the_main_region` (`sidebar/tests.rs`).
 - The worker, through the real boundary (`crates/cairn-app/src/worker/refresh/tests.rs`):
   `untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted`,
@@ -759,10 +795,10 @@ typed, the arrows are the editor's.
 - Fork draws each list as a tree by default, with a layout menu offering a tree, a list and a
   combined list, Hide Untracked Files and Show Ignored Files; Cairn draws flat lists only (the
   tree view is #36), lists untracked files unless the user's `status.showUntrackedFiles` says
-  no, and never lists ignored files (R3.4, R3.5). The filter field is the only control above
-  the lists (the user's decision, 2026-10-07): the layout menu and its
-  collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
-  (Fork's side-by-side quick look, #35) are not drawn.
+  no, and never lists ignored files (R3.4, R3.5). The bar over the lists is Fork's, but View
+  Mode's menu holds "View as List" alone: the tree and the combined list (#36) and its
+  collapse-all chevron (#71), Hide Untracked Files (#70) and Show Ignored Files (#62) are not
+  drawn.
 - The commit box: the subject is required, as Fork's is, a merge in progress commits with nothing
   staged, concluding the merge, as Fork's does, the cleaned `MERGE_MSG` fills an empty draft once
   per merge so a message cleared stays empty, and an amend whose staged list cannot be read is still offered (each
@@ -791,18 +827,16 @@ typed, the arrows are the editor's.
   31 files? 2 untracked files will be deleted. You can't undo this.", a chunk's "Discard this
   chunk (6 lines) in src/main.rs?" — where Fork asks "Do you want to discard all your changes
   in the selected files?" with no count but the button's (the redesign's D2; observed `dc1`).
-- Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
-  follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
-  All once nothing is left to stage. Unstage All has its own small chevron, ⇈, always drawn in
+- Stage All's double chevron sits in the bar over both lists, as Fork for Windows draws it
+  (Linux follows Fork's Windows rows), greyed while Unstaged shows no row, where Fork's turns
+  into ⌃⌃ Unstage All once nothing is left to stage (`fork-local-changes-2026-10-20.md`, lc21).
+  Unstage All has its own small chevron, ⇈, always drawn in
   Staged's heading, where Fork for Windows shows Unstage All only while Shift is held (the
   redesign's L2), beside the Staged button with the key held, the menu's item and the chord.
 - The key held over the headings for Stage All and Unstage All is Fork for Windows' Shift on
   Linux (TrackerWin #2429, #2466) and Fork for Mac's ⌥ on macOS (the redesign's L2, superseding
   the Alt of 2026-10-09, which rested on a false Fork claim and which xfwm, openbox and Plasma 5
   take with a click to move a window); a held Alt does nothing.
-- A discard asked on the staged side by the chord does nothing, as Fork's does; the menu
-  offers its Discard Changes… greyed with "Staged changes can't be discarded. Unstage them
-  first." beneath it (the redesign, rule 4).
 - A selection mixing a submodule or a conflicted path with paths that can be discarded
   discards those, its confirmation saying in one line what is left, where Fork asks twice
   (the redesign's D1).
@@ -810,10 +844,8 @@ typed, the arrows are the editor's.
   next press — but a press on another view's text field (the sidebar's filter) is not heard,
   since the field cancels the global pointer-down as it takes it, so a release over the other
   list after it still drops.
-- The menu offers Stage or Unstage, Discard Changes…, Stage All or Unstage All and Copy Path:
-  Fork's Open, External Diff, Show in Files, Blame, History, Ignore, LFS, Stash and Save as
-  Patch are not built; its items name no chord, since a chord spelled in a label is a modifier
-  named in a component; nothing opens the menu from the keyboard.
+- The menu offers Fork's working items: its Open, External Diff, Show in Files, Blame, History,
+  Ignore, LFS, Stash and Save as Patch are not built; nothing opens the menu from the keyboard.
 - A submodule's row offers no discard (Fork's Discard Submodule Changes) and says why; a
   nested repository among untracked rows is left as it is, where Fork deletes it and its
   history (the user's decision of 2026-10-10); the confirmation's default is Cancel

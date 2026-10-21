@@ -81,6 +81,7 @@ impl Progress {
     }
 
     /// How many rows have arrived, without reading (and subscribing to) the row vector.
+    #[cfg(test)]
     pub fn loaded(&self) -> usize {
         self.loaded
     }

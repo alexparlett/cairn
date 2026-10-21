@@ -1,0 +1,136 @@
+# The window's look
+
+How Cairn's window gets its sizes, tones and icons today: one module, `cairn_ui::style`
+(`crates/cairn-ui/src/style.rs` beside `style/`), from which every render file takes its font
+sizes, tones and icons, and each region its row heights, bars, strips and widths — the
+history's, the sidebar's, Local Changes' and the diff's row pitch, the caption row, the toolbar,
+the detail pane's strip, Local Changes' bar and headings, the sidebar's width. The layout sizes
+Fork's survey does not give — paddings, gaps, a dialog's width — are written in the views,
+beside what they size, and no guard reads a layout size ("Held by", below). Intent:
+`docs/design/ui.md`, "Palette and type". Spec: `docs/prd/fork-alignment.md` R1.
+
+## One module
+
+- **`style::metrics`** — sizes in logical pixels: Fork's, measured on Fork for Windows at
+  1024×768 (`docs/research/ui-review/fork-window-survey-2026-10-16.md`) — the body's 12 px,
+  the toolbar labels' 11 px, the caption row's 26 px and the toolbar's 41 px, the rows of the
+  history (23), the sidebar (22), Local Changes (20) and a menu (23), the history's graph —
+  its 12 px lane pitch, 5 px dot, 13 px merge circle and 2 px line — its 17 px chips, its
+  14 px avatars and the 22 px strip over it while Show Lost Commits is on, the sidebar's 300 px and
+  its 12 px indent, the diff's 17 px row (the Commit tab's one pitch too), the detail pane's
+  strip (31 px between two rules, its tabs 96 px), the Changes tab's 23 px summary and the
+  diff's 17 px bar with their rules, the bar's 16 px buttons 20 px apart, the Commit tab's 42 px
+  avatar and its 20 px inset, 62 px captions' column and 16 px gap, and the summary's 18 px
+  avatar (`fork-window-survey-2-2026-10-16.md` §1b, `fork-committer-2026-10-20.md`), Local
+  Changes' 17 px bar over its lists and its 32 px headings, each with its rule, their 22 px
+  buttons, and the commit box's 15 px margin, 22 px subject, 22 px button and its 16 px ⌄
+  (`fork-window-survey-2-2026-10-16.md` §1c, uw6) — and the sizes Fork's survey does not give, each
+  saying where it comes from (the diff's text and line numbers, measured from Fork's Mac and
+  Windows captures; a heading's 14 px; the Commit tab's subject and captions and an avatar's
+  initials, Cairn's).
+- **`style::tones`** — Fork Dark's tones, sampled from Fork's dark theme
+  (`docs/research/ui-review/fork-window-survey-2-2026-10-16.md`, section 1): every surface,
+  text, selection, menu, dialog, button, diff band and chip tone of the PRD's table, then the
+  few more the same survey sampled that the table does not name (a field's fill and
+  placeholder, a check box's border, a banner, a link, the badges of an added and a modified
+  file, a menu's shadow, a disabled button's border, the sidebar's chosen entry, a remote chip's
+  grey cloud, the status box's fill and the count badges on Push and Pull, a dialog's title and
+  body text), the sidebar's sampled in uw27 and the sidebar survey
+  (`docs/research/ui-review/fork-sidebar-2026-10-20.md`: its icons, its quieter chevrons, its
+  filter's fill and a gone upstream's warning), the diff bar's glyph, its toggled-on blue and
+  the square under the pointer (`docs/research/ui-review/fork-committer-2026-10-20.md`), `UNSEEN` for text laid out only to hold its room
+  (a menu's copy of a chord), and Cairn's eight avatar colours, the first Fork's sampled lavender
+  (`AVATARS`). The lanes keep Cairn's eight
+  (`history::lane_palette`); a branch's and a remote's chip is filled with a dark shade of its
+  lane (`chip_fill`), and the cloud-only chip of a branch level with its upstream bordered in a
+  darker one (`upstream_chip_border`).
+- **`style::icons`** — the Lucide icons, compiled in by Freya's `icons-lucide` feature
+  (the crate `freya-icons`, from the pinned Freya source; the feature pinned and Lucide's ISC
+  licence recorded in `deny.toml`), one function per icon by what it means, drawn at a size
+  and in a tone.
+
+`the_style_module_holds_forks_metrics_and_fork_darks_tones` holds every row of the PRD's two
+tables to the module's value.
+
+## What reads it
+
+- **Components** name the tone they mean (`tones::TEXT`, `tones::RULE`) and the size
+  (`metrics::BODY`). The status tones the table does not name — an error, a warning, a
+  renamed file's badge — stay the launch theme's, read from its sheet.
+- **The launch theme** (`tones::theme`, installed by `crates/cairn-app/src/main.rs`) is Freya's
+  `dark_theme` over a sheet with Fork Dark's tones in every slot Fork gives one (`tones::sheet`:
+  the body text, the history's ground, the rules, Fork's blue (`tones::ACCENT`) as the focus
+  border and the text highlight, the selection blue as the primary), with the buttons', menus',
+  fields', tooltips', splitters' and dialogs' component themes set where the sheet cannot say
+  Fork's tone; a tooltip at the body's size. So Freya's own components draw no stock tone for
+  anything the table names (`the_launch_theme_carries_fork_darks_tones_into_freyas_components`).
+- **The body size** is set once at the window's root (`crates/cairn-app/src/window.rs`), so a
+  text given no size of its own — a menu's, a button's — is 12 px, never Freya's 16 px
+  default. No dialog draws Freya's `PopupTitle` or `PopupContent`, which set 18 px and 15 px:
+  each is framed by `dialogs::frame` (below).
+- **The diff's palette** (`diff::palette`) reads its ground, bands, changed word, hunk header
+  and bar from the tones (`docs/systems/diff.md`, "Colours and typeface").
+
+## The selection
+
+A selected row says whether its list has focus, as Fork's lists do: Fork's blue `#236BD2`
+with white bold text while its list has focus, Fork's grey `#525252` with the body's text,
+still bold, when not (`tones::selected`). Each list reads its focus from the toolkit
+(`use_focus` on its accessibility id) as it renders, hands it to the rows it builds through
+the data its virtualizing view compares, so a change of focus draws the visible rows again
+and nothing else: the history (`HistoryList`, through `RowRender::focused` to
+`CommitRow::focused`), the sidebar (which takes focus when one of its rows is pressed), both of
+Local Changes' lists, the Changes tab's files and the Commit tab's file rows. A list takes focus
+from a press on one of its rows; the history also as the window opens.
+`a_selection_is_blue_while_its_list_has_focus_and_grey_when_not` holds the history, the sidebar,
+both of Local Changes' lists and the Changes tab's files to it.
+
+## Focus at every stop
+
+Every focusable control shows keyboard focus by one treatment, `style::focus`: a 1 px ring in
+Fork's blue (`focus::ring`), drawn while focus came by the keyboard (`focus::shown`), so a press
+focuses a control without a ring, as Fork's do. A list draws it round itself and shows focus by
+its selection's tone as well; a bordered button draws it inset, `focus::RING_INSET` inside its
+own border, as Fork draws its focus rectangle, so a dialog's default button — bordered in the
+same blue — still shows focus apart; a control drawn by a plain function (a check box, a radio,
+the Commit button's caption) takes it through `focus::ringed`. A text field shows focus as the
+toolkit's `Input` does, its border and an outer ring in the same blue (the theme's `input` and
+`flat_input`), two pixels each, which `Input` does not let a theme narrow. Fork draws no ring on a
+list and a dashed one on a dialog's button (`fork-copy-and-dialogs-2026-10-20.md` §6-7); the ring
+at every stop is a `ui.md` row. Pinned by `every_tab_stop_shows_focus` (the window, All Commits and
+Local Changes) and `every_dialogs_tab_stop_shows_focus`, each walking Tab until it comes round and
+requiring a mark to appear inside each stop as focus reaches it
+(`crates/cairn-ui/tests/support/focus_marks.rs` for the dialogs, its twin
+`crates/cairn-app/src/local_changes/tests/focus_marks.rs` for the window).
+
+## Buttons and dialogs
+
+Every push button of a dialog, a banner or a notice is one component, `PushButton`
+(`crates/cairn-ui/src/push_button.rs`): Fork Dark's `#373737` in a 1 px `#525252` border, greyed
+in the disabled tones, and a dialog's default answer — its primary — bordered in Fork's blue
+`#0078D7` rather than filled, as Fork's default button is (`fork-copy-and-dialogs-2026-10-20.md`
+§6, cp60-cp76). Every dialog is framed by `dialogs::frame`: a square `#2B2B2B` ground in a 1 px
+`#3BACED` border over the toolkit's shade, the title white and bold at the heading's size
+(`tones::DIALOG_TITLE`), the body Fork's `#CAC6C6` at the body's (`tones::DIALOG_TEXT`); the launch
+theme's popup is a bare holder, its ground, padding and rounding drawn over by the frame. Fork's
+logo and ✕ are not drawn. Pinned by `every_dialogs_primary_button_is_forks_default_in_forks_frame`
+(`crates/cairn-ui/tests/dialog_buttons.rs`): the confirmation, Create Branch, the credential
+prompt and About Cairn each with its primary bordered in blue and its other answers in grey, the
+Git Error dialog with no default, as Fork's has none.
+
+## Held by
+
+- `chrome_sizes_and_tones_come_from_the_style_module` (`crates/cairn-guards/tests/invariants.rs`,
+  matcher `style_literals`, self-test `the_style_literal_matcher_catches_the_shapes_it_claims`):
+  no render file outside the module passes a numeric literal to `font_size` or a constant it
+  declares from one, declares a `FONT` constant from one, or builds a colour from a literal —
+  a constructor, a named `Color`, a tuple of three integers and an optional alpha, or a `"#…"`
+  string — beyond `STYLE_EXCEPTIONS`: `diff/palette.rs` and `history/lane_palette.rs`, which
+  excuse a file's tones and never a size, each row failing once its file builds no tone. It
+  does not read layout sizes, and the routes a spelling-reader misses (a size through a local
+  binding or a parameter, a colour from a `u32` or a variable, a literal alpha) are stated in
+  the root `CLAUDE.md`.
+- `every_icon_is_named_through_the_icon_module` (matcher `names_an_icon_set`, self-test
+  `the_icon_set_matcher_catches_the_shapes_it_claims`): only `style/icons.rs` names the icon
+  set, `freya::icons`, `SvgViewer` or Freya's drawn icons.
+- `deny.toml`'s `[[bans.features]]` row for `freya`, `exact`: another feature is a decision.

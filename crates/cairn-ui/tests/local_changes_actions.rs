@@ -3,6 +3,9 @@
 //! component's boundary: every press, chord, button, drag and menu item is a `ListIntent` or a
 //! choice, and the component decides nothing about what it stages.
 
+#[path = "support/named.rs"]
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -13,13 +16,15 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Action, HeldKeys, Os};
 use cairn_ui::{
-    COPY_PATH_CAPTION, DETAIL_ROW_HEIGHT, DISCARD_CAPTION, ListIntent, LocalChangesList,
-    LocalSelection, STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION, ShownFiles,
-    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, UNSTAGED_CAPTION,
+    COPY_FULL_PATH_CAPTION, COPY_PATH_CAPTION, DISCARD_CAPTION, LIST_HEADER_HEIGHT,
+    LOCAL_CHANGES_ROW_HEIGHT, ListIntent, LocalChangesList, LocalSelection, STAGE_ALL_CAPTION,
+    STAGE_CAPTION, STAGED_CAPTION, ShownFiles, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION,
+    UNSTAGED_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
+use support::one_named;
 
 const WIDTH: f32 = 400.;
 const HEIGHT: f32 = 600.;
@@ -153,6 +158,12 @@ fn at(test: &TestingRunner, text: &str) -> (f64, f64) {
         .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", labels(test)))
 }
 
+/// The centre of the one control assistive technology reads as `name`.
+fn named(test: &TestingRunner, name: &str) -> (f64, f64) {
+    let centre = one_named(test, name).1.center();
+    (f64::from(centre.x), f64::from(centre.y))
+}
+
 fn texts(test: &TestingRunner) -> Vec<String> {
     labels(test).into_iter().map(|(text, ..)| text).collect()
 }
@@ -200,6 +211,24 @@ fn press_each_chord(test: &mut TestingRunner, action: Action) -> usize {
         }
     }
     pressed
+}
+
+/// Every text drawn once the pointer has rested on the open menu's Discard Changes… long enough
+/// for its tooltip.
+fn said_over_discard(test: &mut TestingRunner) -> Vec<String> {
+    let discard = labels(test)
+        .into_iter()
+        .rfind(|(text, ..)| text == DISCARD_CAPTION)
+        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y) + 2.))
+        .unwrap_or_else(|| panic!("no Discard Changes… in the menu"));
+    let before = texts(test);
+    assert!(
+        !before.iter().any(|t| t.contains("can't be discarded")),
+        "a reason drawn before the pointer reached the item: {before:?}"
+    );
+    test.move_cursor(discard);
+    test.poll(Duration::from_millis(50), Duration::from_millis(900));
+    texts(test)
 }
 
 fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
@@ -304,10 +333,10 @@ fn a_double_press_stages_or_unstages_its_row() {
 /// Each list's button acts on the selection only while it is in that list — greyed with nothing
 /// selected and while the selection is in the other list — and, with the table's heading press
 /// held (Shift on Linux, ⌥ on macOS), both read Stage All and Unstage All, enabled whatever is
-/// selected, and act on the whole list; the double chevron is drawn in each heading, ⇊ Stage
-/// All in Unstaged and ⇈ Unstage All in Staged, with no key held. Caught by: a button that acts
-/// with nothing selected or on the other list's selection, a held press not heard, Unstage All
-/// reachable only with a key held, or a chevron missing.
+/// selected, and act on the whole list; with no key held, Stage All's double chevron is the
+/// bar's over both lists, as Fork's (uv12a), and ⇈ Unstage All the Staged heading's. Caught by:
+/// a button that acts with nothing selected or on the other list's selection, a held press not
+/// heard, Unstage All reachable only with a key held, or a chevron missing.
 #[test]
 fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything() {
     let (mut test, fixture, log) = launch(lists());
@@ -340,12 +369,12 @@ fn the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything
     test.click_cursor(at(&test, UNSTAGE_ALL_CAPTION));
     test.sync_and_update();
     let_go(&mut test, fixture);
-    // The double chevrons, beside each list's button, with no key held.
-    for caption in [STAGE_CAPTION, UNSTAGE_CAPTION] {
-        let (x, y) = at(&test, caption);
-        test.click_cursor((x - 20., y));
-        test.sync_and_update();
-    }
+    // Stage All in the bar over both lists, and Unstage All beside Staged's button, with no
+    // key held.
+    test.click_cursor(named(&test, STAGE_ALL_CAPTION));
+    test.sync_and_update();
+    test.click_cursor(named(&test, UNSTAGE_ALL_CAPTION));
+    test.sync_and_update();
     use ChangeList::{Staged as S, Unstaged as U};
     assert_eq!(
         heard(&log),
@@ -406,7 +435,7 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     let staged_heading = at(&test, STAGED_CAPTION);
     let into_staged = (
         staged_heading.0 + 40.,
-        staged_heading.1 + DETAIL_ROW_HEIGHT as f64 * 2.,
+        staged_heading.1 + LOCAL_CHANGES_ROW_HEIGHT as f64 * 2.,
     );
     let drag = |test: &mut TestingRunner, from: (f64, f64), to: (f64, f64)| {
         test.press_cursor(from);
@@ -440,8 +469,12 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
 
     // Released over its own list, outside both lists, or after Escape: nothing.
     let a = at(&test, "a.rs");
-    drag(&mut test, a, (a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
-    test.release_cursor((a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
+    drag(
+        &mut test,
+        a,
+        (a.0, a.1 + 2. * LOCAL_CHANGES_ROW_HEIGHT as f64),
+    );
+    test.release_cursor((a.0, a.1 + 2. * LOCAL_CHANGES_ROW_HEIGHT as f64));
     test.sync_and_update();
     // Over Staged first, then released outside both lists, over the filter.
     let filter = (100., 15.);
@@ -477,8 +510,11 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     let (mut test, _, log) = launch(LocalChanges::new(WorkingTreeStatus::Listed(entries)));
     let staged_heading = at(&test, STAGED_CAPTION);
     let from = at(&test, "s.rs");
-    // Unstaged's bottom band: just above Staged's heading.
-    let edge = (from.0, staged_heading.1 - DETAIL_ROW_HEIGHT as f64);
+    // Unstaged's bottom band: a row above the top of Staged's heading, clear of the splitter.
+    let edge = (
+        from.0,
+        staged_heading.1 - f64::from(LIST_HEADER_HEIGHT / 2. + LOCAL_CHANGES_ROW_HEIGHT),
+    );
     test.press_cursor(from);
     test.move_cursor((from.0, from.1 - 10.));
     test.sync_and_update();
@@ -500,13 +536,12 @@ fn a_drag_between_the_lists_scrolls_the_one_it_would_drop_on() {
     );
 }
 
-/// An unstaged row's menu offers Stage, Discard Changes…, Stage All and Copy Path, each closing
-/// the menu as it is chosen; a submodule's and a conflicted row's offer Stage and their Discard
-/// greyed, saying why; a staged row's offers Unstage, Unstage All and Copy Path, and its
-/// Discard greyed with "Staged changes can't be discarded. Unstage them first." beneath it. A
-/// right-press on an unselected row chooses it first. Caught by: a discard offered on Staged,
-/// for a submodule or a conflict, a reason missing, or a menu left open after its item was
-/// chosen.
+/// An unstaged row's menu offers Stage, Discard Changes…, Stage All, Copy Path and Copy Full
+/// Path, each closing the menu as it is chosen; a submodule's and a conflicted row's offer Stage
+/// and their Discard greyed, saying why in its tooltip; a staged row's offers Unstage, Unstage
+/// All and the two copies, and no discard at all, as Fork's staged menu has none. A right-press
+/// on an unselected row chooses it first. Caught by: a discard offered on Staged, for a submodule
+/// or a conflict, a reason missing, or a menu left open after its item was chosen.
 #[test]
 fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let (mut test, _, log) = launch(lists());
@@ -553,7 +588,7 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
         log.borrow_mut().clear();
         let pressed = at(&test, row);
         right_click(&mut test, pressed);
-        let drawn = texts(&test);
+        let drawn = said_over_discard(&mut test);
         assert!(
             drawn.iter().any(|t| t == why),
             "{row}'s menu does not say why it offers no discard: {drawn:?}"
@@ -582,24 +617,14 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     let drawn = texts(&test);
     assert!(drawn.iter().any(|t| t == UNSTAGE_CAPTION));
     assert!(drawn.iter().any(|t| t == UNSTAGE_ALL_CAPTION));
+    // Fork's staged menu has no discard at all (FS1 §8, uv15), and both copies.
     assert!(
-        drawn
-            .iter()
-            .any(|t| t == "Staged changes can't be discarded. Unstage them first."),
-        "a staged row's menu does not say why: {drawn:?}"
+        !drawn.iter().any(|t| t == DISCARD_CAPTION),
+        "a staged row's menu offers a discard: {drawn:?}"
     );
-    let disabled = labels(&test)
-        .into_iter()
-        .rfind(|(text, ..)| text == DISCARD_CAPTION)
-        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y)))
-        .expect("the staged row's greyed Discard Changes…");
-    test.click_cursor(disabled);
-    test.sync_and_update();
     assert!(
-        heard(&log)
-            .iter()
-            .all(|heard| !matches!(heard, Heard::Intent(ListIntent::Act(_, Action::Discard)))),
-        "a staged row's greyed discard acted"
+        drawn.iter().any(|t| t == COPY_FULL_PATH_CAPTION),
+        "{drawn:?}"
     );
     let copy = at(&test, COPY_PATH_CAPTION);
     test.click_cursor(copy);
@@ -625,7 +650,7 @@ fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
     let staged_heading = at(&test, STAGED_CAPTION);
     let into_staged = (
         staged_heading.0 + 40.,
-        staged_heading.1 + DETAIL_ROW_HEIGHT as f64 * 2.,
+        staged_heading.1 + LOCAL_CHANGES_ROW_HEIGHT as f64 * 2.,
     );
     let start = |test: &mut TestingRunner| {
         let from = at(test, "a.rs");

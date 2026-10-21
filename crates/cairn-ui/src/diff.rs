@@ -12,6 +12,5 @@ pub(crate) mod row_parts;
 pub(crate) mod settings;
 pub(crate) mod side_by_side_rows;
 pub(crate) mod staging_gesture;
-pub(crate) mod toggle_glyphs;
 pub(crate) mod unified_rows;
 pub(crate) mod view;

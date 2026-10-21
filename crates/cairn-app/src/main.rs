@@ -1,11 +1,14 @@
 //! The Cairn binary.
 
+mod clipboard;
 mod closing;
 mod commit_box;
 mod detail;
 mod diff;
+mod frame;
 mod history;
 mod local_changes;
+mod menu_bar;
 mod modal;
 mod operations;
 mod refresh;
@@ -13,6 +16,7 @@ mod repository_path;
 mod session;
 mod shortcuts;
 mod sidebar;
+mod toolbar;
 mod window;
 #[cfg(test)]
 mod window_check;
@@ -47,18 +51,28 @@ fn main() {
         let closing = closing.clone();
         move || app(git.clone(), closing.clone())
     })
-    .with_title("Cairn")
+    .with_title(cairn_ui::CAPTION_TITLE)
+    .with_size(frame::OPENING_SIZE.0, frame::OPENING_SIZE.1)
+    .with_min_size(frame::MIN_SIZE.0, frame::MIN_SIZE.1)
+    // The Wayland app id, the same name as the X11 class winit already gives the window.
+    .with_app_id("cairn")
+    // Cairn draws Fork's caption row where the frame is its own (`cairn_ui::Frame`); macOS
+    // keeps the desktop's frame.
+    .with_decorations(cairn_ui::Frame::current() == cairn_ui::Frame::Native)
     // Closing the window closes its repository first: see `closing`.
     .with_on_close(move |_, _| closing.requested());
     launch(
         LaunchConfig::new()
             .with_font(DIFF_FONT_FAMILY, DIFF_FONT)
+            // The edges and corners of a window with no frame of the desktop's resize it.
+            .with_plugin(freya::borderless::BorderlessPlugin::new())
             .with_window(window),
     );
 }
 
 fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
-    use_init_theme(dark_theme);
+    // Fork Dark's tones, carried into Freya's own components (`cairn_ui::style::tones`).
+    use_init_theme(cairn_ui::style::tones::theme);
 
     // The one copy of the history; this scope must not read it, only `progress`.
     let rows = use_state(History::new);
@@ -75,7 +89,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // Session state: the tab and the pane's shape outlive every selection.
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
-    let pane_height = use_state(|| window::PANE_HEIGHT);
+    let pane_split = use_state(detail::split::PaneSplit::default);
     // Session state of every diff view: its settings, its scroll, the change moved to.
     let diff_settings = use_state(DiffSettings::default);
     let diff_scroll = use_scroll_controller(ScrollConfig::default);
@@ -88,8 +102,10 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     // What the last refresh answered.
     let refreshed = use_state(refresh::state::RefreshState::default);
-    // What the title bar calls the repository, once the worker has opened it.
+    // What the status box, the sidebar's header and the window's title call the repository, once
+    // the worker has opened it.
     let repository = use_state(|| None::<String>);
+    let repository_path = use_state(|| None::<std::path::PathBuf>);
     // The sidebar's state, for the session.
     let sidebar = sidebar::state::SidebarView::used();
     // Local Changes' lists, filter and diff, for the session.
@@ -100,10 +116,14 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let confirming = use_state(|| None::<operations::confirming::Confirming>);
     // Show Lost Commits, off as the window opens.
     let show_lost = use_state(|| false);
+    // The zone dates are drawn in: UTC, said nowhere, until the worker reads the system's.
+    let zone = use_state(cairn_ui::LocalZone::default);
     // Create Branch, for the session.
     let branch = operations::create_branch::CreateBranchView::used();
     // The activity popover's operations, for the session.
     let activity = operations::activity::ActivityView::used();
+    // The window's frame: its zoom and About Cairn, for the session.
+    let frame = frame::FrameView::used();
     let view = View {
         rows,
         progress,
@@ -118,7 +138,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         history_cursor,
         detail_tab,
         pane_collapsed,
-        pane_height,
+        pane_split,
         diff_settings,
         diff_scroll,
         change_cursor,
@@ -128,13 +148,16 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         held_keys,
         refreshed,
         repository,
+        repository_path,
         sidebar,
         local,
         writes,
         confirming,
         show_lost,
+        zone,
         branch,
         activity,
+        frame,
     };
 
     let opened = use_hook(|| {

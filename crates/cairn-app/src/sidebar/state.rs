@@ -20,19 +20,21 @@ use freya::prelude::*;
 use crate::history::ref_find::Find;
 use crate::worker::{Request, Retired};
 
-/// The sidebar's share of the window, in pixels, until it is dragged.
-pub const SIDEBAR_WIDTH: f32 = 240.0;
+/// The sidebar's share of the window, in pixels, until it is dragged: Fork's 300.
+pub const SIDEBAR_WIDTH: f32 = cairn_ui::style::metrics::SIDEBAR_WIDTH;
 /// The narrowest the sidebar is dragged or squeezed to.
 pub const SIDEBAR_MIN_WIDTH: f32 = 140.0;
 
 /// The sidebar's state handles, each a session's: what it keeps, the filter as typed, what the
-/// main region shows, its width as last dragged, and the find a press began.
+/// main region shows, its width as last dragged, whether the toolbar's toggle left it shown,
+/// and the find a press began.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SidebarView {
     pub state: State<SidebarState>,
     pub filter_text: State<String>,
     pub main: State<MainView>,
     pub width: State<f32>,
+    pub shown: State<bool>,
     pub finding: State<Option<Find>>,
 }
 
@@ -44,6 +46,7 @@ impl SidebarView {
             filter_text: use_state(String::new),
             main: use_state(MainView::default),
             width: use_state(|| SIDEBAR_WIDTH),
+            shown: use_state(|| true),
             finding: use_state(|| None),
         }
     }
@@ -56,6 +59,7 @@ impl SidebarView {
             filter_text: State::create(String::new()),
             main: State::create(MainView::default()),
             width: State::create(SIDEBAR_WIDTH),
+            shown: State::create(true),
             finding: State::create(None),
         }
     }
@@ -196,6 +200,7 @@ mod tests {
                     target: RefTarget::Commit(id),
                     symbolic: None,
                     upstream: None,
+                    commit_time: None,
                 })
                 .collect(),
             head: HeadState::Branch(RefName::new(head)),

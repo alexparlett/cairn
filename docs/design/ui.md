@@ -67,7 +67,7 @@ Kept, and why:
 | **No text a person needs is cut.** A sentence that could run long is made short instead — it names only the exception and never repeats what is on screen — and per-file detail goes behind Show files. | `cairn.md`, what Cairn is |
 | The **activity popover**, Fork's Activity Manager, also quotes the prompt an operation confirmed, whole, gives each entry its duration, and offers "Show in Lost Commits" for an amend's old commit. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | **Ignore Whitespace is disabled in Local Changes**, so every change drawn there is one a gesture can stage. Fork offers it there. | `diff.md`, "Selections and patches" |
-| A **visible Unstage All** — a double chevron on the Staged heading — beside Fork's Stage All in the bar over both lists; Fork for Windows offers Unstage All only in the menu and while Shift is held. | `platform.md` — keyboard-first, every action reachable |
+| A **visible Unstage All** — a double chevron on the Staged heading — beside Fork's Stage All in the bar over both lists; Fork for Windows offers Unstage All only in the menu, while Shift is held and in the bar's chevron once nothing is left to stage, where Cairn's Stage All greys instead, so one control never changes what it does. | `platform.md` — keyboard-first, every action reachable |
 | A finished **line selection survives a refresh** whose re-read draws the same text — switching to the editor and back — and is cleared, with one notice, when the text changed; Fork drops it silently. | `concurrency.md` — a refresh is frequent and must cost the person nothing |
 | The floating actions **stay at the list's top** while the chunk's top is scrolled above it, so a tall chunk's actions stay in reach; Fork's sit at the chunk's top right. | `cairn.md`, what Cairn is |
 | A press without a drag, or Escape, **lets a line selection go**, and the window losing focus cancels a drag; the selection's discard reads `Discard 2 Lines…`, its ellipsis saying it confirms. | `diff.md`, "Selections and patches" |
@@ -79,7 +79,9 @@ Kept, and why:
 | A nested repository among the untracked rows is never touched — left as it is, a line in the dialog saying so, as a submodule is — since deleting it deletes history no prompt can count; Fork deletes it as an untracked folder. | `engine.md`, the write verbs |
 | A submodule row's discard is greyed and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
 | During a rebase, `git am` or a sequence of cherry-picks or reverts the commit box is disabled and names git's own command to continue or abort, where Fork offers its commit box as usual. Continuing those operations is their own design. A single cherry-pick or revert is concluded by Commit, as in Fork. | `cairn.md`, the milestone — rewrites are the second lap |
-| While **Show Lost Commits** is on, a strip under the toolbar names the mode and turns it off; Fork shows no sign of the mode in the window itself. | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
+| The **history's graph column is as wide as its widest row's lanes**, so every subject starts at one place; Fork starts each row's chips just after that row's own lanes, so a row's subject moves with the lanes crossing it. | `history-graph.md` — one column width per list, laid out once, not per row |
+| **Splitters are 4 px handles**, where Fork draws 1 px `#525252` rules: kept for now by the user's decision, so a splitter stays easy to grab. | `platform.md` — every control reachable and usable |
+| **`HEAD`'s row carries no blue dot** before its chips, and **a merge's circle draws no chevron and is not filled while selected**: Fork's dot repeats the bold and the check mark, and its chevron is the handle of Collapse Merges, which is #1's. | `history-graph.md`; issue #1 |
 | Create Branch's **"Stash and reapply" is drawn greyed**, saying it comes with stashing, where Fork's acts. | `feature-inventory.md` — stash is its own feature |
 | Show Lost Commits reaches the commits `HEAD`'s and the local branches' reflogs hold; Fork's mode reaches every reflog, as `git log --all --reflog` does (TrackerWin #1307). | `history-graph.md`, "What it walks" |
 | **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree is marked, as Fork marks it in its sidebar — and, unlike Fork, its checkout is disabled. | `worktrees.md` |
@@ -87,10 +89,20 @@ Kept, and why:
 | Branch and commit context menus carry **forge links**: create pull request, open on the forge, copy permalink. After a push, the toast offers *Create pull request* directly. | `forge-links.md` |
 | **Conflict resolution is three-way and region-level**, with *edit in your editor* as the escape hatch, where Fork works a file at a time. | `conflicts.md` |
 | The toolbar has no Workspaces and no feedback face, and the menus no Git Flow, Git LFS, bisect, statistics, treemap, benchmark, accounts or SSH keys, and Cairn draws neither Fork's detached detail window nor its suggestion banners. **Fetch acts at once** on the default remote, where Fork's Fetch… opens a dialog; choosing the remote is issue #23. *Open in* and *Console* start programs other than git, so they are designed under the process guards before they are drawn. | `feature-inventory.md`, Tier 7 and "Explicitly out of scope"; `processes.md` |
+| **About Cairn** names the version, the licence and the `git` found as Cairn started, and closes by its Close button or Escape; Fork's About box carries its name, version and copyright with only a ✕, and Escape leaves it open. | `platform.md` — keyboard-first, every dialog leaves by Escape |
+| The menu bar has **no access keys**: Alt underlines nothing and opens no menu. Every item a person reaches often has its chord beside it, read from the one accelerator table, so the keys are learnt once; Fork underlines F, V, R, W and H while Alt is held. | `platform.md` — one accelerator table, keyboard-first |
+| The **Commit tab's rows are all the diff's 17 px** — its header's and its files' too, where Fork's are about 20 and 22 px — so a file opened in place draws its diff at the diff's row height while the tab stays one list of rows of one size. | `history-graph.md` — every history-sized list builds one viewport; `diff.md`, "The detail pane" |
+| The **diff bar's buttons and Expand All are Tab stops**, Space or Enter pressing them, since five of the bar's buttons have no chord; Fork's Tab cycle reaches only its file list and the history. | `platform.md` — keyboard-first, every action reachable |
+| The Commit tab draws **no ⌄ beside an address**, and the Changes tab's file filter keeps its **"Filter" placeholder** where Fork's field is blank: no feature Cairn builds fills that menu, and an empty field says what it is for. | `feature-inventory.md` — each feature brings its own controls |
 | **Avatars are initials**, coloured from the name; Cairn fetches no gravatar. | `diff.md`, "The detail pane" — no network call for a view |
+| **Paths, ids and the commit description are drawn in IBM Plex Mono**, the diff's face, where Fork draws paths and ids in its UI face: a path or an id reads the same in a list, the Commit tab and the diff, and the description's ruler at column 72 counts columns of one width. | "Palette and type", below; `diff.md`, "The diff view" |
 | Lanes keep **Cairn's colour-vision-safe set**, where Fork Dark's are orange and yellow. | "Palette and type", below |
-| **Every Tab stop shows focus** — a list by its selection's tone, any other control by a ring; Fork shows only the selection's tone, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
+| **Every Tab stop shows focus** — a list by its selection's tone and a ring, any other control by a ring, a button's drawn inside its border; Fork shows a list's focus only by the selection's tone, a dialog button's by a dashed rectangle, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
+| Dialogs draw **no logo and no ✕** in Fork's frame: Escape and the dialog's own answers close each one. | `platform.md` — every dialog leaves by Escape |
+| A commit row's menu and a file's offer **only the items that work**: Copy Commit SHA, Copy Commit Info, Copy Path, Copy Full Path and New Branch… beside Fork's chords; the Commit tab's file menu shows no chord and its list hears none, as Fork's. A menu too long to draw whole (none is today) scrolls at a fixed width, each group's rule along its first row. | `feature-inventory.md` — each feature brings its own controls; "No unbounded list renders without virtualization" (`CLAUDE.md`) |
 | The window has a **minimum size** at which nothing is cut; Fork clips its content below about 600 px. | `cairn.md`, what Cairn is — no text a person needs is cut |
+| While an operation runs, the status box shows **git's progress line up to its percentage** ("Receiving objects: 45%"; a line with no percentage up to its first comma), the whole line in the activity popover; an operation's name is drawn whole, and only a name wider than Fork's 300 px box — one carrying a long branch or remote name — is cut with "…", the whole name in the popover. The one place a running text is cut, by the user's decision: git's longer progress lines are wider than the box at every window size. Fork's own running box was observed only for a commit ("1 file…", ar22z). | `cairn.md`, what Cairn is — no text a person needs is cut; `fork-window-survey-2026-10-16.md`, the box's 300 px |
+| A branch with **no upstream has a glyph of its own shape** in the sidebar, in a quieter tone, where Fork greys its branch glyph. | "Palette and type", below — a kind is never told by colour alone |
 | No Accounts section in any sidebar. | `credentials.md` — Cairn holds no credential |
 | A visible **loading state** distinct from an empty repository. | `concurrency.md` — every query is assumed slow |
 
@@ -108,7 +120,8 @@ order and groups, with its chord beside it from the accelerator table: View hold
 Show Uncommitted Changes, Show All Commits, Hide Commit Details, Show HEAD and Show
 Lost Commits (Reflog); Repository holds Refresh, Fetch and the branch, tag, stash
 and worktree verbs; Window the zoom. Every context menu is the same component:
-groups split by rules, chords right-aligned, a greyed item's reason as its tooltip,
+groups split by rules, chords right-aligned, a greyed item's reason shown under it
+while the pointer rests on it, a ticked item's ✓ in a gutter before every label,
 and on every row Fork's verbs for it, Copy (Ctrl+C) and Copy Full (Ctrl+Shift+C)
 taking what that row names.
 
@@ -139,13 +152,13 @@ thousands of tags.
 
 While an operation runs, the status box shows it instead of the repository: a
 spinner and the operation's name, once it has run a quarter of a second, so a fast
-stage shows nothing, and how many wait behind it; a fetch adds git's progress line,
-and Fetch is greyed while one runs.
+stage shows nothing, and how many wait behind it; a fetch adds git's progress line under
+it, kept to its percentage so it fits the box, and Fetch is greyed while one runs.
 
 Pressing Local Changes puts the staging screen in the main region, as Fork lays it
 out: a bar across both lists — the filter, Stage All's double chevron, the
-side-by-side eye and View Mode — over Unstaged above Staged, each a list of paths
-with Fork's badges under a heading carrying its list's bordered `Stage` or
+eye that opens Quick Look, the file's diff side by side over the window, and View
+Mode — over Unstaged above Staged, each a list of paths with Fork's badges under a heading carrying its list's bordered `Stage` or
 `Unstage` button, the Staged heading also a small double chevron for Unstage All;
 and beside them, on the right, the diff of the selected file with the staging gesture on it and the commit
 box under it ("Staging", "The commit box", below). As built:
@@ -159,10 +172,11 @@ system. Fork's standing complaint — that each refresh holds `index.lock` for
 seconds on a large tree — does not carry over, because Cairn's reads take no
 lock (`engine.md`).
 
-Three banners can stand under the toolbar, each about the repository or the window
-rather than an operation: a leftover `index.lock` ("The leftover lock", below), a
+Two banners can stand under the toolbar, each about the repository or the window
+rather than an operation: a leftover `index.lock` ("The leftover lock", below) and a
 close waiting on a write — "Closing after Commit finishes. Close again to quit
-now." — and Show Lost Commits while it is on ("Show Lost Commits", below).
+now." Show Lost Commits, while it is on, is Fork's strip across the top of the history
+instead, since it is about what the history draws ("Show Lost Commits", below).
 
 ## Messages
 
@@ -371,9 +385,9 @@ with push, and is designed with it. Spec: `docs/prd/staging-and-commit.md` R10. 
 ### Show Lost Commits
 
 Fork's reflog view is a mode of the graph, not a list. Its toggle — View › "Show Lost
-Commits (Reflog)", ticked while on, and ⌘⇧. or Ctrl+Shift+., as in Fork, with a strip
-under the toolbar naming the mode and turning it off while it is on, which Fork does
-not have — adds the old
+Commits (Reflog)", ticked while on, and ⌘⇧. or Ctrl+Shift+., as in Fork, with Fork's strip
+across the top of the history while it is on, "Reflog mode enabled" and an "Exit" link that
+turns it off (`docs/research/ui-review/fork-menu-toggles-2026-10-19.md`, §2) — adds the old
 and the new id of every entry of `HEAD`'s reflog and of each local branch's to the walk's tips
 and draws the commits no ref reaches dimmed, as Fork dims them: their subject, author, id and
 date in a lighter grey, their lanes, edges and chips in their own colours
@@ -459,7 +473,7 @@ kind.
 
 Type is the platform's sans, as Fork uses Segoe UI on Windows — on Linux the first
 of Ubuntu, Adwaita Sans and Noto Sans the system has — at Fork's sizes, 12 px for
-the body; IBM Plex Mono for ids, paths and diffs. Icons are Lucide's, drawn as
+the body; IBM Plex Mono for ids, paths, diffs and the commit description. Icons are Lucide's, drawn as
 Fork's are, each over its label in the toolbar. Every size, tone and icon comes from
 one place, so the window reads as one instrument. `tabular-nums` wherever digits
 align.

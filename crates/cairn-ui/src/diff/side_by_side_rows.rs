@@ -22,7 +22,7 @@
 use cairn_model::{ByteRange, LineNumber, ShownDiff, SideBySideRow};
 use freya::prelude::*;
 
-use crate::diff::palette::{DIFF_MUTED, FILLER, GUTTER_SEPARATOR};
+use crate::diff::palette::{FILLER, GUTTER_SEPARATOR, HUNK_HEADER};
 use crate::diff::row_parts::{
     LineKind, SEPARATOR_WIDTH, TEXT_PADDING, line_text, number, separator, words,
 };
@@ -210,7 +210,7 @@ fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -
         Cell::Note(text) => (
             None,
             None,
-            Some(text_strip(data.text_width, columns.shift).child(words(text, DIFF_MUTED))),
+            Some(text_strip(data.text_width, columns.shift).child(words(text, HUNK_HEADER))),
         ),
         Cell::Filler => (None, None, None),
     };

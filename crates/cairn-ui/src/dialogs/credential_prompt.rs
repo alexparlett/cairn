@@ -17,9 +17,11 @@ use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::dialogs::answer_button::{AnswerColours, answer};
+use crate::dialogs::answer_button::{Answer, answer};
 use crate::dialogs::button_order::ordered;
+use crate::dialogs::frame;
 
+use crate::style::{metrics, tones};
 use crate::text_field::text_field;
 
 /// Width of the dialog, wide enough for a URL to stay on one line.
@@ -96,12 +98,12 @@ impl Component for CredentialPrompt {
     fn render(&self) -> impl IntoElement {
         let mut typed = use_state(String::new);
         let cancel_id = use_a11y();
+        let primary_id = use_a11y();
         let kind = PromptKind::of(&self.text);
-        let colours = get_theme_or_default();
-        let secondary = colours.read().colors().text_secondary;
+        let secondary = tones::DETAIL_LABEL;
 
         let on_cancel = self.on_cancel.clone();
-        let cancel = move |_| on_cancel.call(());
+        let cancel = EventHandler::new(move |()| on_cancel.call(()));
         let on_submit = self.on_submit.clone();
         let submit = EventHandler::new(move |()| {
             // Moved out, not cloned: the buffer that held the characters is the one
@@ -110,40 +112,33 @@ impl Component for CredentialPrompt {
             on_submit.call(answer);
         });
         let on_accept = self.on_submit.clone();
-        let accept = move |_| on_accept.call(PromptKind::ACCEPTED.to_owned());
+        let accept = move || on_accept.call(PromptKind::ACCEPTED.to_owned());
 
         // ssh's host-key question opens on Cancel, the safe answer, so a Return or Space
         // pressed by habit declines; a field's prompt opens in its field.
-        let identity = {
-            use std::hash::{DefaultHasher, Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            (&self.remote, &self.text).hash(&mut hasher);
-            hasher.finish()
-        };
         let cancel_button = answer(
-            identity,
             cancel_id,
             "Cancel".to_owned(),
             kind == PromptKind::Confirmation,
-            &AnswerColours::of_theme(),
+            Answer::Other,
             {
                 let on_cancel = self.on_cancel.clone();
                 move || on_cancel.call(())
             },
         );
         let primary: Element;
-        let mut content = PopupContent::new().child(
+        let mut content = frame::content().child(
             label()
                 .text(asking(kind, &self.text))
                 .width(Size::fill())
-                .font_size(14.),
+                .font_size(metrics::BODY),
         );
         if kind == PromptKind::Confirmation {
             content = content.child(
                 label()
                     .text(self.text.trim_end().to_owned())
                     .width(Size::fill())
-                    .font_size(12.)
+                    .font_size(metrics::BODY)
                     .color(secondary),
             );
             // What accepting costs, which the question itself does not say: ssh writes
@@ -153,56 +148,65 @@ impl Component for CredentialPrompt {
                 label()
                     .text(ACCEPTING_IS_PERMANENT.to_owned())
                     .width(Size::fill())
-                    .font_size(12.)
+                    .font_size(metrics::BODY)
                     .color(secondary),
             );
-            primary = Button::new()
-                .filled()
-                .on_press(accept)
-                .child("Yes, connect")
-                .into();
+            primary = answer(
+                primary_id,
+                "Yes, connect".to_owned(),
+                false,
+                Answer::Primary,
+                accept,
+            );
         } else {
             content = content
                 .child(
                     label()
                         .text(self.text.trim_end().to_owned())
                         .width(Size::fill())
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .color(secondary),
                 )
                 .child(
-                    text_field(typed)
-                        .width(Size::fill())
-                        .auto_focus(true)
-                        .mode(if kind.is_shown() {
-                            InputMode::Shown
-                        } else {
-                            InputMode::new_password()
-                        })
-                        .on_submit({
-                            let submit = submit.clone();
-                            move |_: String| submit.call(())
-                        }),
+                    rect().width(Size::fill()).font_size(metrics::BODY).child(
+                        text_field(typed)
+                            .width(Size::fill())
+                            .auto_focus(true)
+                            .mode(if kind.is_shown() {
+                                InputMode::Shown
+                            } else {
+                                InputMode::new_password()
+                            })
+                            .on_submit({
+                                let submit = submit.clone();
+                                move |_: String| submit.call(())
+                            }),
+                    ),
                 );
-            primary = Button::new()
-                .filled()
-                .on_press(move |_| submit.call(()))
-                .child("Continue")
-                .into();
+            primary = answer(
+                primary_id,
+                "Continue".to_owned(),
+                false,
+                Answer::Primary,
+                move || submit.call(()),
+            );
         }
         // In the platform's order.
-        let buttons =
-            PopupButtons::new().children(ordered(self.platform, vec![primary], cancel_button));
+        let buttons = frame::buttons(ordered(self.platform, vec![primary], cancel_button));
 
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(cancel)
-            .child(PopupTitle::new(format!(
-                "{} is asking for a credential",
-                self.remote
-            )))
-            .child(content)
-            .child(buttons)
+        frame::framed(
+            DIALOG_WIDTH,
+            cancel,
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::Dialog)
+                .child(frame::title(format!(
+                    "{} is asking for a credential",
+                    self.remote
+                )))
+                .child(content)
+                .child(buttons),
+        )
     }
 
     fn render_key(&self) -> DiffKey {

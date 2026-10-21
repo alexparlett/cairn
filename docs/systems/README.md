@@ -3,7 +3,8 @@ contract. Each is kept current in the same change that invalidates it.
 
 - `history-graph.md` — how the history view reads, lays out and draws a
   repository: the worker boundary, the history session, the lane assigner and
-  the virtualized list, Show Lost Commits and the Create Branch dialog.
+  the virtualized list, a row's ref chips, the status box's repository and branch, Show Lost
+  Commits and the Create Branch dialog.
 - `credentials.md` — the `git` subprocess backend and its environment, the
   askpass helper and its channel, the secret type, fetch end to end, and the
   decisions the `credential-prompts` packet locked.
@@ -30,7 +31,15 @@ contract. Each is kept current in the same change that invalidates it.
   read that asks it, and the oracles that check it.
 - `local-changes.md` — the Local Changes view: Unstaged and Staged laid out over a status on
   a worker, the filter, a path chosen and its working-tree diff asked and drawn for that path
-  alone, and how the path chosen follows each refresh.
+  alone, how the path chosen follows each refresh, the file actions, the diff's staging
+  gesture and the commit box.
+- `window-frame.md` — the window's frame: Fork's caption row on Linux and the menus as a row
+  inside the desktop's frame on macOS, the one menu component every menu is drawn by, the menu
+  bar's items and what each does, Fork's toolbar and the status box in it, the window's regions
+  and its minimum size, the desktop's title for the window, the zoom, and About Cairn.
+- `style.md` — the window's look: Fork's sizes and Fork Dark's tones in one module, the
+  theme the window launches with, the Lucide icons, a selection drawn by its list's focus, the
+  focus ring at every stop, and the one push button and Fork's dialog frame.
 - `staging.md` — staging, unstaging, discarding, committing and amending in the
   engine: the write verbs and their arguments, the stale check before every patch, the
   discards and an amend sealed behind a confirmation and the re-check before they run,

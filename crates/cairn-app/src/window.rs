@@ -2,12 +2,12 @@
 
 use std::rc::Rc;
 
-use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
+use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{
-    ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab,
-    DiffSettings, HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, Running, StatusBox,
-    Tracking, current_branch,
+    CaptionRow, ChangeCursor, CommitRow, ConfirmDialog, CredentialPrompt, DETAIL_STRIP_HEIGHT,
+    DetailTab, DiffSettings, HistoryList, MainView, ROW_HEIGHT, ReflogStrip, RowRender,
 };
 use freya::prelude::*;
 
@@ -29,10 +29,20 @@ use crate::sidebar::state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, shortcuts};
 
-/// The detail pane's height until the splitter is dragged.
-pub const PANE_HEIGHT: f32 = 260.0;
-/// The least a drag leaves the pane; pulled past it, the pane collapses (Fork's gesture).
-const PANE_MIN_HEIGHT: f32 = 90.0;
+/// The least share of the main region's height a drag leaves the pane, of a hundred; pulled past
+/// it, the pane collapses (Fork's gesture).
+const PANE_MIN_SHARE: f32 = 10.0;
+/// The Commit tab's rows down to Expand All for a one-line commit with refs: the people's
+/// block's four, REFS, SHA, PARENTS, a rule, the subject, a rule and Expand All's own.
+const COMMIT_TAB_ROWS_TO_EXPAND_ALL: f32 = 11.;
+/// The least height the pane is laid out at: its strip, the Commit tab of a one-line commit with
+/// refs down to Expand All, and room under that for the horizontal scrollbar the tab may draw
+/// over its bottom (`cairn_ui::END_ROOM`). Where its share of the room is less, the pane keeps
+/// this height and the history its share, so the pane runs past the window's bottom; at the
+/// window's minimum size its share is more (`frame::MIN_SIZE`).
+const PANE_MIN_HEIGHT: f32 = DETAIL_STRIP_HEIGHT
+    + COMMIT_TAB_ROWS_TO_EXPAND_ALL * cairn_ui::COMMIT_TAB_ROW_HEIGHT
+    + cairn_ui::END_ROOM;
 /// The least the commit list keeps when the window is squeezed.
 const LIST_MIN_HEIGHT: f32 = 80.0;
 /// The least the main region keeps beside the sidebar when the window is squeezed.
@@ -65,8 +75,9 @@ pub struct View {
     /// The detail pane's tab, kept for the session.
     pub detail_tab: State<DetailTab>,
     pub pane_collapsed: State<bool>,
-    /// The pane's height as last dragged; read when the pane is laid out again.
-    pub pane_height: State<f32>,
+    /// The history's and the pane's shares of the height, as last dragged; read when the pane
+    /// is laid out again.
+    pub pane_split: State<crate::detail::split::PaneSplit>,
     /// The settings every diff view shares, kept for the session.
     pub diff_settings: State<DiffSettings>,
     /// The diff view's scroll, shared so previous and next change can move it.
@@ -85,9 +96,13 @@ pub struct View {
     pub held_keys: State<HeldKeys>,
     /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
     pub refreshed: State<RefreshState>,
-    /// What the title bar calls the repository, once the worker has opened it
+    /// What the status box, the sidebar's header and the window's title call the repository, once
+    /// the worker has opened it
     /// (`Update::Opened`).
     pub repository: State<Option<String>>,
+    /// The repository's root, absolute, once the worker has opened it: what Copy Repository
+    /// Path copies (`Update::Opened`).
+    pub repository_path: State<Option<std::path::PathBuf>>,
     /// The sidebar: its rows, the filter, what the main region shows, a press's find.
     pub sidebar: SidebarView,
     /// Local Changes: its lists, its filter and its diff's scroll.
@@ -102,11 +117,16 @@ pub struct View {
     /// reflog entry too and draws what no ref reaches dimmed. Off as the window opens, kept
     /// for the session.
     pub show_lost: State<bool>,
+    /// The time zone every date is drawn in, read once on the worker (`Update::Started`) and
+    /// handed down to the history, the detail pane and the activity popover.
+    pub zone: State<cairn_ui::LocalZone>,
     /// Create Branch: its dialog, its name, its sticky check box and a create's failure.
     pub branch: crate::operations::create_branch::CreateBranchView,
     /// The activity popover: the session's operations, and whether it is open,
     /// in two states.
     pub activity: crate::operations::activity::ActivityView,
+    /// The window's frame: its zoom, About Cairn, and the `git` About names.
+    pub frame: crate::frame::FrameView,
 }
 
 impl std::fmt::Debug for View {
@@ -129,10 +149,9 @@ pub fn window(
     let status = view.progress.read().status().clone();
     let lanes = view.progress.read().lanes();
     let has_rows = view.progress.read().has_rows();
-    let counted = status_text::loaded_count(&view.progress.read());
     let placeholder = status_text::placeholder(&view.progress.read());
     let reading = status_text::reading_strip(&view.progress.read());
-    let fetch = view.fetch.read().clone();
+
     let prompt = view.prompt.read().clone();
     let confirming = view.confirming.read().clone();
     // The one banner about the window: which write it waits on to close.
@@ -154,6 +173,8 @@ pub fn window(
     });
     // Coming back to the window reads the refs and the working tree again.
     crate::refresh::focus::on_focus_gained(submit.clone());
+    // The desktop's title for the window names the repository.
+    crate::frame::use_title(view);
     // `Remove index.lock…`'s answer, read at its press, opens its confirmation.
     crate::operations::leftover_lock::use_lock_confirmation(view, submit.clone());
     // A scroll of the list supersedes a find in the sidebar: subscribed to the list's
@@ -175,13 +196,14 @@ pub fn window(
     let list = rect()
         .width(Size::fill())
         .height(Size::fill())
-        .child({
-            // Show Lost Commits' check box flips the toggle exactly as its chord does.
+        // No heading over the rows, as in Fork; while Show Lost Commits is on, Fork's strip
+        // across the top of the history, its Exit turning the mode off as the chord does.
+        .maybe_child(view.show_lost.read().then(|| {
             let toggling = submit.clone();
-            HistoryHeader::new().show_lost_commits(*view.show_lost.read(), move |_: bool| {
+            ReflogStrip::new().on_exit(move |()| {
                 crate::history::lost_commits::toggle(view, toggling.as_deref());
             })
-        })
+        }))
         // A reopen's walk reading, over the rows it will replace: they stay drawn and usable.
         .maybe_child(reading.map(reading_strip))
         .child(match placeholder {
@@ -197,7 +219,10 @@ pub fn window(
 
     rect()
         .expanded()
-        .theme_background()
+        .background(tones::HISTORY)
+        // Every text not given a size of its own — a menu's, a button's — takes the body's,
+        // never Freya's 16 px.
+        .font_size(metrics::BODY)
         // Every shortcut resolves through the accelerator table: here the ones heard
         // wherever focus is; the detail pane hears its own (`detail::pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
@@ -211,30 +236,18 @@ pub fn window(
             let mut held = view.held_keys;
             held.write().heard(&e, false);
         })
-        .child(title_bar(
-            // Fork's: the status box opens the activity popover, which hangs from where the box
-            // is laid out.
-            rect()
-                .on_press(move |_| view.activity.open())
-                .on_sized(move |e: Event<SizedEventData>| {
-                    let anchor = (e.area.min_x(), e.area.max_y());
-                    let mut log = view.activity.log;
-                    if log.peek().anchor_moved(anchor) {
-                        log.write().set_anchor(anchor);
-                    }
+        // Fork's caption row on Linux — the menus, "Cairn" and the window's controls — and on
+        // macOS the same menus as a row inside the desktop's frame.
+        .child({
+            let choosing = submit.clone();
+            CaptionRow::new(crate::menu_bar::menus(view, submit.is_some()))
+                .on_choose(move |choice| {
+                    crate::menu_bar::choose(choice, view, choosing.as_deref());
                 })
-                .child(status_box(
-                    view.repository.read().clone(),
-                    &view.refreshed.read(),
-                    running(view),
-                ))
-                .into(),
-            &counted,
-            &fetch,
-            view.fetch,
-            &view.remotes.read(),
-            submit.clone(),
-        ))
+                .on_frame(crate::frame::ask)
+        })
+        // Fork's toolbar: its buttons, the status box in its middle and the badges.
+        .child(crate::toolbar::toolbar(view, submit.clone()))
         // The two banners: the leftover lock, about the repository, and closing, about
         // the window.
         .maybe_child(crate::operations::leftover_lock::banner(view, unlocking))
@@ -268,6 +281,7 @@ pub fn window(
             Some(Modal::Popover) => {
                 Some(crate::operations::activity::ActivityLayer::new(view, popping).into())
             }
+            Some(Modal::About) => crate::frame::about(view),
             None => None,
         })
         // Every context menu opens here, so none panics for want of a host.
@@ -300,8 +314,12 @@ fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> E
         .into()
 }
 
-/// The sidebar left of the main region, behind a draggable splitter.
+/// The sidebar left of the main region, behind a draggable splitter; the main region alone
+/// while the toolbar's toggle hides the sidebar.
 fn beside(sidebar: Element, main: Element, view: View) -> Element {
+    if !*view.sidebar.shown.read() {
+        return rect().expanded().child(main).into();
+    }
     let mut width = view.sidebar.width;
     // Peeked: the width only matters when the split is laid out anew, and reading it would
     // redraw the window on every step of a drag.
@@ -322,12 +340,13 @@ fn beside(sidebar: Element, main: Element, view: View) -> Element {
         .into()
 }
 
-/// The commit list over the detail pane, behind a draggable splitter; a collapsed
-/// pane keeps only its strip, under a list that takes the rest.
+/// The commit list over the detail pane, behind a draggable splitter, sharing the height by
+/// proportion so both grow with the window; a collapsed pane keeps only its strip, under a list
+/// that takes the rest.
 fn split(list: Rect, pane: Element, view: View) -> Element {
     let View {
         mut pane_collapsed,
-        mut pane_height,
+        mut pane_split,
         ..
     } = view;
     if *pane_collapsed.read() {
@@ -343,23 +362,37 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
             )
             .into();
     }
-    // Peeked: the height only matters when the pane is laid out anew, and reading it would
+    // Peeked: the proportion only matters when the pane is laid out anew, and reading it would
     // redraw the window on every step of a drag.
-    let height = *pane_height.peek();
-    ResizableContainer::new()
+    let (list_share, pane_share) = pane_split.peek().weights();
+    // The room the panels split, kept so a drag reporting one panel's height reads it against
+    // the room: written without a reader, so a resize redraws nothing for it.
+    let measuring = move |e: Event<SizedEventData>| {
+        let room = e.area.height() - ResizableContext::HANDLE_SIZE;
+        if (pane_split.peek().room() - room).abs() > 0.5 {
+            pane_split.write().measured(room);
+        }
+    };
+    let container = ResizableContainer::new()
         .direction(Direction::Vertical)
         .panel(
-            ResizablePanel::new(PanelSize::percent(100.))
+            ResizablePanel::new(PanelSize::percent(list_share))
                 .min_pixels(LIST_MIN_HEIGHT)
+                .on_resized(move |dragged: f32| pane_split.write().list_dragged(dragged))
                 .child(list),
         )
         .panel(
-            ResizablePanel::new(PanelSize::px(height))
-                .min_size(PANE_MIN_HEIGHT)
-                .on_resized(move |dragged: f32| pane_height.set(dragged))
+            ResizablePanel::new(PanelSize::percent(pane_share))
+                .min_size(PANE_MIN_SHARE)
+                .min_pixels(PANE_MIN_HEIGHT)
+                .on_resized(move |dragged: f32| pane_split.write().pane_dragged(dragged))
                 .on_collapse(move |()| pane_collapsed.set(true))
                 .child(pane),
-        )
+        );
+    rect()
+        .expanded()
+        .on_sized(measuring)
+        .child(container)
         .into()
 }
 
@@ -398,7 +431,6 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let mut progress = view.progress;
     let choosing = submit.clone();
     let extending = submit.clone();
-    let acting = submit.clone();
     let second = view
         .pair
         .read()
@@ -412,18 +444,26 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
                 .chips(render.chips)
                 .head(render.head)
                 .lost(render.lost)
+                .head_reaches(render.head_reaches)
+                .zone(render.zone)
                 .selected(render.selected)
+                .focused(render.focused)
                 .into(),
-            // A stash's row: its `stash@{n}` chip and its message as the subject.
+            // A stash's row: its `stash@{n}` chip and git's message as the subject, greyed as
+            // Fork greys it, since `HEAD` never reaches a stash.
             RowContent::Stash(stash) => {
                 CommitRow::new(stash.as_commit(), render.graph, render.lanes)
                     .chips(render.chips)
+                    .head_reaches(render.head_reaches)
+                    .zone(render.zone)
                     .selected(render.selected)
+                    .focused(render.focused)
                     .into()
             }
         }
     })
     .refs(refs)
+    .zone(view.zone.read().clone())
     .lanes(lanes)
     .selected(*view.selected.read())
     .also_selected(second)
@@ -452,10 +492,8 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
         crate::operations::create_branch::open(view, at, subject);
     })
-    // The history's own chord, Show Lost Commits.
-    .on_action(move |action| {
-        crate::history::lost_commits::history_action(action, view, acting.as_deref())
-    })
+    // Copy Commit SHA and Copy Commit Info, from the menu or the copy chords.
+    .on_copy(crate::clipboard::copy)
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
         if view.sidebar.finding.peek().is_some() {
@@ -474,169 +512,42 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .into()
 }
 
-/// The status box for the repository called `name` — none until it is open — `*` while the last
-/// status listed a change, the current branch and its distance from its upstream, from what the
-/// last refresh answered — each as old as the answer it is read from (a status may be one
-/// refresh behind).
-fn status_box(name: Option<String>, refreshed: &RefreshState, running: Vec<Running>) -> StatusBox {
-    let refs = refreshed.refs();
-    let head = refs.map(|refs| refs.head.clone());
-    let tracking = refs
-        .and_then(|refs| {
-            let branch = current_branch(&refs.head)?;
-            Some(match refs.find(branch)?.upstream.as_ref()? {
-                Upstream::Gone { .. } => Tracking::Gone,
-                Upstream::Exists { .. } => refreshed
-                    .ahead_behind_of(branch)
-                    .map_or(Tracking::Untold, Tracking::Counts),
-            })
-        })
-        .unwrap_or(Tracking::Untold);
-    let dirty = match refreshed.status() {
-        Some(WorkingTreeStatus::Listed(entries)) => !entries.is_empty(),
-        Some(WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree) | None => {
-            false
-        }
-    };
-    StatusBox::new(name, head)
-        .dirty(dirty)
-        .tracking(tracking)
-        .running(running)
-}
-
-/// What runs, for the status box: the local write by its one name with the writes
-/// waiting behind it, and a fetch with git's latest progress line — each shown by the box once
-/// it has run 250 ms.
-fn running(view: View) -> Vec<Running> {
-    let writes = view.writes.read();
-    let write = writes
-        .running()
-        .zip(writes.running_since())
-        .map(|(asked, started)| Running {
-            serial: asked.id.number(),
-            name: asked.name.clone(),
-            started,
-            waiting: writes.queued().count(),
-            progress: None,
-        });
-    let fetch = view.fetch.read();
-    let progress = match &*fetch {
-        FetchStatus::Running { line, .. } => line.clone(),
-        _ => None,
-    };
-    let fetching = fetch
-        .is_in_flight()
-        // Read without subscribing: the fetch's own state draws the box again as it changes.
-        .then(|| view.activity.log.peek().fetch_running())
-        .flatten()
-        .map(|(serial, name, started)| Running {
-            serial: u64::MAX - serial,
-            name,
-            started,
-            waiting: 0,
-            progress,
-        });
-    write.into_iter().chain(fetching).collect()
-}
-
-fn title_bar(
-    status: Element,
-    counted: &str,
-    fetch: &FetchStatus,
-    fetch_state: State<FetchStatus>,
-    remotes: &[RemoteSummary],
-    submit: Option<Rc<dyn Fn(Request)>>,
-) -> Element {
-    rect()
-        .horizontal()
-        .content(Content::Flex)
-        .width(Size::fill())
-        .cross_align(Alignment::center())
-        .spacing(10.)
-        .padding(Gaps::new(8., 12., 8., 12.))
-        .child(label().text("Cairn").theme_color().font_size(16.))
-        .child(
-            rect()
-                .width(Size::flex(1.))
-                .overflow(Overflow::Clip)
-                .child(status),
-        )
-        .child(
-            label()
-                .text(counted.to_owned())
-                .max_lines(1)
-                .font_size(13.)
-                .color(get_theme_or_default().read().colors().text_placeholder),
-        )
-        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
-        .into()
-}
-
-/// "Fetch <remote>" for the default remote, greyed while a fetch is in flight, so a second
-/// fetch is never asked and the network lane's refusal never drawn; nothing when the repository
-/// has no remote to fetch. The press itself marks the fetch as starting, so a second press before
-/// the worker answers lands on a greyed button. A running fetch is cancelled from the activity
-/// popover, as in Fork.
-fn fetch_button(
-    fetch: &FetchStatus,
-    mut fetch_state: State<FetchStatus>,
-    remotes: &[RemoteSummary],
-    submit: Option<Rc<dyn Fn(Request)>>,
-) -> Option<Element> {
-    let submit = submit?;
-    let remote = remotes.first()?.name.clone();
-    let caption = format!("Fetch {remote}");
-    let in_flight = fetch.is_in_flight();
-    Some(
-        Button::new()
-            .compact()
-            .enabled(!in_flight)
-            .on_press(move |_| {
-                if fetch_state.peek().is_in_flight() {
-                    return;
-                }
-                fetch_state.write().starting(remote.clone());
-                submit(Request::Fetch {
-                    remote: remote.clone(),
-                });
-            })
-            .child(caption)
-            .into(),
-    )
-}
-
 fn notice(message: impl Into<String>, path: &str) -> Element {
     let message = message.into();
     rect()
         .expanded()
         .center()
         .spacing(6.)
-        .child(label().text(message).theme_color().font_size(14.))
+        .child(
+            label()
+                .text(message)
+                .color(tones::TEXT)
+                .font_size(metrics::BODY),
+        )
         .child(
             label()
                 .text(path.to_owned())
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
-                .font_size(12.)
-                .color(get_theme_or_default().read().colors().text_placeholder),
+                .font_size(metrics::BODY)
+                .color(tones::PLACEHOLDER),
         )
         .into()
 }
 
 /// A banner across the window: wrapped, never cut.
 fn banner(message: String) -> Element {
-    let colours = get_theme_or_default();
     rect()
         .width(Size::fill())
         .cross_align(Alignment::center())
         .padding(Gaps::new(6., 12., 6., 12.))
-        .background(colours.read().colors().surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().text_secondary),
+                .color(tones::TEXT),
         )
         .into()
 }
@@ -644,26 +555,26 @@ fn banner(message: String) -> Element {
 /// The strip over the history's rows while a walk replacing them reads: "Reading history… N
 /// commits".
 fn reading_strip(message: String) -> Element {
-    let colours = get_theme_or_default();
     rect()
         .width(Size::fill())
         .min_height(Size::px(ROW_HEIGHT))
         .cross_align(Alignment::center())
         .padding(Gaps::new(0., 12., 0., 12.))
-        .background(colours.read().colors().surface_tertiary)
+        .background(tones::BANNER)
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().text_secondary),
+                .color(tones::DETAIL_LABEL),
         )
         .into()
 }
 
 /// The history's own line under its rows: why a page failed to load.
 fn list_line(message: String) -> Element {
-    let colours = get_theme_or_default();
+    // The theme's error tone, which Fork Dark's table does not name.
+    let error = get_theme_or_default().read().colors().error;
     rect()
         .width(Size::fill())
         .min_height(Size::px(ROW_HEIGHT))
@@ -672,9 +583,9 @@ fn list_line(message: String) -> Element {
         .child(
             label()
                 .text(message)
-                .font_size(13.)
+                .font_size(metrics::BODY)
                 .width(Size::fill())
-                .color(colours.read().colors().error),
+                .color(error),
         )
         .into()
 }
@@ -687,8 +598,8 @@ pub(crate) mod tests {
         ChangeSet, ChangeStatus, ChangedFile, CommitDetails, Context, FileMode, GraphRow, Lane,
         Oid, PagedCommit, RenameDetection, RepoPath, RowsPage, Signature, Timestamp,
     };
+    use cairn_ui::HIDE_DETAILS_TOOLTIP;
     use cairn_ui::accelerators::Action;
-    use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
@@ -701,6 +612,10 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::history::state;
+    /// Whether a label's colour is a ref chip's text: drawn in the chips' own tone.
+    fn is_chip_tone(colour: Option<&Fill>) -> bool {
+        colour.and_then(Fill::as_color) == Some(cairn_ui::style::tones::CHIP_TEXT)
+    }
 
     const HEIGHT: f32 = 600.;
     /// Where the main region begins: right of the sidebar at its opening width and the
@@ -782,6 +697,27 @@ pub(crate) mod tests {
         fetch: FetchStatus,
         prompt: Option<PromptView>,
     ) -> (TestingRunner, View, Submitted, Answered) {
+        launch_at(initial, progress, fetch, prompt, (WINDOW_WIDTH, HEIGHT))
+    }
+
+    /// A window `size` wide and tall, `initial` rows loaded.
+    fn launch_sized(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        size: (f32, f32),
+    ) -> (TestingRunner, View, Submitted) {
+        let (test, view, submitted, _) =
+            launch_at(initial, progress, FetchStatus::Idle, None, size);
+        (test, view, submitted)
+    }
+
+    fn launch_at(
+        initial: Vec<TestRow>,
+        progress: Progress,
+        fetch: FetchStatus,
+        prompt: Option<PromptView>,
+        size: (f32, f32),
+    ) -> (TestingRunner, View, Submitted, Answered) {
         let submitted = Submitted::default();
         let answered = Answered::default();
         let app = {
@@ -804,7 +740,7 @@ pub(crate) mod tests {
         };
         let (mut test, view) = TestingRunner::new(
             app,
-            (WINDOW_WIDTH, HEIGHT).into(),
+            size.into(),
             move |runner| {
                 runner.provide_root_context(|| test_view(initial, progress, fetch, prompt))
             },
@@ -841,7 +777,7 @@ pub(crate) mod tests {
             history_cursor: State::create(0),
             detail_tab: State::create(DetailTab::default()),
             pane_collapsed: State::create(false),
-            pane_height: State::create(PANE_HEIGHT),
+            pane_split: State::create(crate::detail::split::PaneSplit::default()),
             diff_settings: State::create(DiffSettings::default()),
             diff_scroll: ScrollController::new(0, 0, Vec::new()),
             change_cursor: State::create(None),
@@ -851,13 +787,16 @@ pub(crate) mod tests {
             held_keys: State::create(HeldKeys::default()),
             refreshed: State::create(RefreshState::default()),
             repository: State::create(Some("engine".to_owned())),
+            repository_path: State::create(None),
             sidebar: SidebarView::created(),
             local: crate::local_changes::state::LocalChangesView::created(),
             writes: State::create(crate::operations::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
+            zone: State::create(cairn_ui::LocalZone::default()),
             activity: crate::operations::activity::ActivityView::created(),
             branch: crate::operations::create_branch::CreateBranchView::created(),
+            frame: crate::frame::FrameView::created(),
         }
     }
 
@@ -891,18 +830,13 @@ pub(crate) mod tests {
         test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
     }
 
-    /// The labels below the column headings: what fills the list's place.
+    /// The labels of the main region, under the toolbar and right of the sidebar: what fills
+    /// the list's place, the list having no heading.
     fn body(test: &TestingRunner) -> Vec<String> {
-        let headings_end = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Author")
-                    .map(|_| node.layout().area.max_y())
-            })
-            .unwrap();
         test.find_many(|node, element| {
+            let area = node.layout().area;
             Label::try_downcast(element)
-                .filter(|_| node.layout().area.min_y() >= headings_end)
+                .filter(|_| area.min_y() >= MAIN_TOP && area.min_x() >= LEFT)
                 .map(|label| label.text.to_string())
         })
     }
@@ -955,7 +889,7 @@ pub(crate) mod tests {
                 Vec::new(),
                 received(0, true),
                 &["No commits yet.", PATH],
-                &["0 commits"],
+                &[],
             ),
             (
                 "failed before any rows",
@@ -969,14 +903,14 @@ pub(crate) mod tests {
                 (0..3).map(row).collect(),
                 failed(3, "failed to read commit abc"),
                 &["failed to read commit abc", "commit 0"],
-                &["3 commits"],
+                &[],
             ),
             (
                 "ready",
                 (0..3).map(row).collect(),
                 received(3, false),
                 &["commit 0", "commit 2"],
-                &["3 commits…"],
+                &[],
             ),
         ];
 
@@ -996,6 +930,17 @@ pub(crate) mod tests {
                     "the {state} window does not show {sentence:?}; it shows {everywhere:?}"
                 );
             }
+            // No count of the loaded commits is drawn anywhere, as in Fork.
+            let counted = |text: &str| {
+                text.split_once(' ').is_some_and(|(number, noun)| {
+                    number.parse::<usize>().is_ok()
+                        && ["commit", "commits", "commits…"].contains(&noun)
+                })
+            };
+            assert!(
+                !everywhere.iter().any(|text| counted(text)),
+                "the {state} window counts its commits: {everywhere:?}"
+            );
         }
     }
 
@@ -1228,6 +1173,19 @@ pub(crate) mod tests {
         }
     }
 
+    /// A frozen table's `YYYY-MM-DD HH:MM` as the list draws the same instant: Fork's
+    /// `d Mon yyyy HH:mm`.
+    fn fork_date(before: &str) -> String {
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let (date, time) = before.split_once(' ').unwrap();
+        let parts: Vec<&str> = date.split('-').collect();
+        let month: usize = parts[1].parse().unwrap();
+        let day: u32 = parts[2].parse().unwrap();
+        format!("{day} {} {} {time}", MONTHS[month - 1], parts[0])
+    }
+
     #[test]
     fn the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed() {
         use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
@@ -1278,13 +1236,8 @@ pub(crate) mod tests {
         }
         test.sync_and_update();
 
-        let graph_left = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Graph and subject")
-                    .map(|_| node.layout().area.min_x())
-            })
-            .unwrap_or_else(|| panic!("no history header"));
+        // The list has no heading: its graph starts a row's padding in from its left edge.
+        let graph_left = LEFT + cairn_ui::ROW_PADDING;
         let mut drawn = Vec::new();
         for &(hex, ..) in MAIN_DRAWN_BEFORE {
             let id = Oid::parse(hex).unwrap();
@@ -1310,15 +1263,14 @@ pub(crate) mod tests {
                 })
                 .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
             // The chips name whatever refs the checkout has today: what the row drew before is
-            // its text past them.
-            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
+            // its text past them. A chip's text is told by its tone.
             let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
                 let area = node.layout().area;
                 Label::try_downcast(element)
                     .filter(|_| (area.center().y - centre_y).abs() < 1.0)
                     // The history's, not the sidebar's beside it.
                     .filter(|_| area.min_x() >= LEFT)
-                    .filter(|label| label.text_style_data.font_size != chip_size)
+                    .filter(|label| !is_chip_tone(label.text_style_data.color.as_ref()))
                     .map(|label| (area.min_x(), label.text.to_string()))
             });
             labels.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1350,14 +1302,18 @@ pub(crate) mod tests {
             line.push((!filled).to_string());
             drawn.push(line);
         }
+        // The table writes each date as `YYYY-MM-DD HH:MM` in UTC; the list draws the same
+        // instant in Fork's `d Mon yyyy HH:mm`, in UTC here, and the
+        // author's initials in an avatar before the name.
         let before: Vec<Vec<String>> = MAIN_DRAWN_BEFORE
             .iter()
             .map(|&(_, subject, author, short, date, ring)| {
                 vec![
                     subject.to_owned(),
+                    cairn_ui::initials(author),
                     author.to_owned(),
                     short.to_owned(),
-                    date.to_owned(),
+                    fork_date(date),
                     ring.to_string(),
                 ]
             })
@@ -1379,7 +1335,7 @@ pub(crate) mod tests {
         }
         assert_eq!(drawn.len(), 18, "main's rows were not all drawn");
         assert!(
-            before.iter().any(|line| line[4] == "true"),
+            before.iter().any(|line| line[5] == "true"),
             "no merge among main's rows, so no ring was decided"
         );
     }
@@ -1423,9 +1379,13 @@ pub(crate) mod tests {
         let backgrounds = |test: &TestingRunner, y: f32| {
             test.find_many(|node, element| {
                 let area = node.layout().area;
+                // The history's rows, not the sidebar's beside them.
                 Rect::try_downcast(element)
                     .filter(|_| {
-                        area.min_y() <= y && y < area.max_y() && area.height() == ROW_HEIGHT
+                        area.min_y() <= y
+                            && y < area.max_y()
+                            && area.height() == ROW_HEIGHT
+                            && area.min_x() >= LEFT
                     })
                     .map(|rect| rect.style.background)
             })
@@ -1443,6 +1403,52 @@ pub(crate) mod tests {
             backgrounds(&test, second),
             backgrounds(&test, third),
             "the clicked row looks like the one below it"
+        );
+        // The press gave the history focus, which the window's rows are told: Fork's blue.
+        test.sync_and_update();
+        let band = tones::selected(true).band;
+        assert!(
+            backgrounds(&test, second)
+                .iter()
+                .any(|background| background.as_color() == Some(band)),
+            "the clicked row is not drawn in the focused selection's band"
+        );
+    }
+
+    /// A text given no size of its own — a button's caption, a menu's item — is drawn at the
+    /// body's size, never Freya's 16 px: the window's root sets it, and the caption row's title,
+    /// the one unsized label of the window as it opens, stands as tall as the All Commits entry,
+    /// which is sized explicitly. Caught by: the root's size gone, so every unsized caption
+    /// outside a row that sets its own is drawn at 16 px.
+    #[test]
+    fn a_text_given_no_size_is_drawn_at_the_bodys() {
+        let (test, _, _) = launch((0..3).map(row).collect(), received(3, true));
+        let height = |text: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|label| (node.layout().area.height(), label.text_style_data.font_size))
+            })
+            .unwrap_or_else(|| panic!("no label reads {text:?}"))
+        };
+        let (caption, own) = height(cairn_ui::CAPTION_TITLE);
+        let (sized, size) = height(cairn_ui::ALL_COMMITS_CAPTION);
+        assert_eq!(own, None, "the caption was given a size of its own");
+        assert_eq!(size, Some(FontSize::from(metrics::BODY)));
+        assert_eq!(
+            caption, sized,
+            "an unsized caption is not at the body's size"
+        );
+        let root = test.find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| area.width() >= WINDOW_WIDTH && area.height() >= HEIGHT)
+                .and_then(|rect| rect.text_style_data.font_size)
+        });
+        assert_eq!(
+            root,
+            Some(FontSize::from(metrics::BODY)),
+            "the window's root sets no body size"
         );
     }
 
@@ -1623,12 +1629,20 @@ pub(crate) mod tests {
                 .write()
                 .progressed("Receiving objects: 40%".to_owned());
         });
-        let shown: Vec<String> = test.run_in(|| running(view).iter().map(running_text).collect());
+        let shown: Vec<(String, Option<String>)> = test.run_in(|| {
+            crate::toolbar::running(view)
+                .iter()
+                .map(|running| (running_text(running), running.progress.clone()))
+                .collect()
+        });
         assert_eq!(
             shown,
             [
-                "Stage 1 File · 1 waiting",
-                "Fetch 'origin'  Receiving objects: 40%"
+                ("Stage 1 File · 1 waiting".to_owned(), None),
+                (
+                    "Fetch 'origin'".to_owned(),
+                    Some("Receiving objects: 40%".to_owned())
+                )
             ]
         );
     }
@@ -1757,7 +1771,7 @@ pub(crate) mod tests {
     #[test]
     fn fetch_is_greyed_while_a_fetch_is_in_flight() {
         let (mut test, view, submitted) = launch(Vec::new(), received(0, true));
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         let fetches = |submitted: &Submitted| {
             submitted
                 .borrow()
@@ -1772,11 +1786,11 @@ pub(crate) mod tests {
                 remote: "origin".to_owned()
             }
         );
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         let mut fetch = view.fetch;
         fetch.write().started("origin".to_owned());
         test.sync_and_update();
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         assert_eq!(
             fetches(&submitted),
             1,
@@ -1787,7 +1801,7 @@ pub(crate) mod tests {
             remote: "origin".to_owned(),
         });
         test.sync_and_update();
-        click_label(&mut test, "Fetch origin");
+        click_label(&mut test, cairn_ui::FETCH_CAPTION);
         assert_eq!(fetches(&submitted), 2, "Fetch did not come back");
     }
 
@@ -2028,30 +2042,108 @@ pub(crate) mod tests {
         );
     }
 
-    /// Show Lost Commits' check box flips the toggle as the chord does — a reopen walking from
-    /// the reflogs, then, once the reopened walk's first page draws the list, the chord heard
-    /// again with no click (the list takes the keyboard back from the box). Caught by: a box that
-    /// asks nothing, one that walks otherwise than the chord would, or a list left without the
-    /// keyboard after a press on the box.
+    /// Whether the menu bar's View menu ticks Show Lost Commits.
+    fn lost_commits_ticked(test: &TestingRunner, view: View) -> bool {
+        test.run_in(|| crate::menu_bar::menus(view, true))
+            .iter()
+            .flat_map(|menu| menu.groups.iter().flatten())
+            .find(|item| item.label == "Show Lost Commits (Reflog)")
+            .map(|item| (item.ticked, item.chord))
+            .map_or_else(
+                || panic!("no Show Lost Commits item"),
+                |(ticked, chord)| {
+                    assert_eq!(chord, Some(Action::ShowLostCommits), "the item's chord");
+                    ticked
+                },
+            )
+    }
+
+    /// Show Lost Commits is the View menu's item, chosen as a person chooses it — the menu
+    /// opened, the item pressed — and its chord: on, the menu ticks it and Fork's strip stands
+    /// across the top of the history, "Reflog mode enabled" over the rows with its Exit link,
+    /// which turns it off as the chord does; off, the strip is gone. No check box or heading
+    /// names it in the window, and the list keeps the keyboard through each reopen. Caught
+    /// by: the header's check box or headings back, the strip missing while on or left after,
+    /// Exit asking nothing, or the item unticked while on.
     #[test]
-    fn the_show_lost_commits_box_flips_the_toggle_as_its_chord_does() {
+    fn show_lost_commits_is_the_view_menus_and_names_itself_while_on() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
         click_row(&mut test, 2);
         submitted.borrow_mut().clear();
-        click_label(&mut test, cairn_ui::SHOW_LOST_COMMITS_CAPTION);
-        assert!(*view.show_lost.read(), "the box turned it on");
-        let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+        for gone in [
+            "Show Lost Commits",
+            "Graph and subject",
+            "Author",
+            "Date (UTC)",
+        ] {
+            assert!(
+                !texts(&test).iter().any(|text| text == gone),
+                "{gone:?} drawn"
+            );
+        }
+        assert!(!lost_commits_ticked(&test, view));
         assert!(
-            matches!(asked.as_slice(), [Request::OpenHistory { lost: true, .. }]),
-            "{asked:?}"
+            !texts(&test)
+                .iter()
+                .any(|text| text == cairn_ui::REFLOG_STRIP_TEXT)
+        );
+
+        // The View menu, opened and its item pressed.
+        click_label(&mut test, "View");
+        click_label(&mut test, "Show Lost Commits (Reflog)");
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(*view.show_lost.read(), "the item turned it on");
+        assert!(
+            matches!(
+                submitted
+                    .borrow_mut()
+                    .drain(..)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                [Request::OpenHistory { lost: true, .. }]
+            ),
+            "the item reopened the history walking the reflogs"
         );
         first_page_arrives(&mut test, view, &submitted, 10);
         submitted.borrow_mut().clear();
-        press_chord(&mut test, Action::ShowLostCommits);
         assert!(
-            !*view.show_lost.read(),
-            "the chord, heard with no click, turned it off"
+            lost_commits_ticked(&test, view),
+            "the item is ticked while on"
         );
+        let drawn = texts(&test);
+        let strip = drawn
+            .iter()
+            .position(|text| text == cairn_ui::REFLOG_STRIP_TEXT);
+        let first_row = drawn.iter().position(|text| text == "commit 0");
+        assert!(
+            matches!((strip, first_row), (Some(strip), Some(row)) if strip < row),
+            "no strip over the rows: {drawn:?}"
+        );
+        assert!(drawn.iter().any(|text| text == cairn_ui::REFLOG_STRIP_EXIT));
+
+        // Its chord turns it off, heard with no click.
+        press_chord(&mut test, Action::ShowLostCommits);
+        assert!(!*view.show_lost.read(), "the chord turned it off");
+        first_page_arrives(&mut test, view, &submitted, 10);
+        submitted.borrow_mut().clear();
+        assert!(
+            !texts(&test)
+                .iter()
+                .any(|text| text == cairn_ui::REFLOG_STRIP_TEXT)
+        );
+        assert!(!lost_commits_ticked(&test, view));
+
+        // On again by the chord, and off by the strip's Exit.
+        press_chord(&mut test, Action::ShowLostCommits);
+        first_page_arrives(&mut test, view, &submitted, 10);
+        submitted.borrow_mut().clear();
+        click_label(&mut test, cairn_ui::REFLOG_STRIP_EXIT);
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(!*view.show_lost.read(), "Exit turned it off");
         assert!(
             matches!(
                 submitted.borrow().as_slice(),
@@ -2170,7 +2262,7 @@ pub(crate) mod tests {
         );
 
         let open_top = pane_top(&test);
-        click_label(&mut test, COLLAPSE_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
 
         assert!(*view.pane_collapsed.read());
         assert!(
@@ -2179,7 +2271,7 @@ pub(crate) mod tests {
         );
         assert!(!texts(&test).iter().any(|t| t == READING));
 
-        click_label(&mut test, EXPAND_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
             pane(&test).iter().any(|t| t == READING),
@@ -2262,8 +2354,8 @@ pub(crate) mod tests {
             test.sync_and_update();
             test.sync_and_update();
         };
-        // The history list, then the strip's Collapse control, then the files.
-        tab(&mut test, Modifiers::empty());
+        // The history list, then the files: the strip's icon is no Tab stop, its chord being
+        // Hide Commit Details'.
         tab(&mut test, Modifiers::empty());
         for _ in 0..26 {
             arrow(&mut test);
@@ -2279,7 +2371,6 @@ pub(crate) mod tests {
             pane(&test)
         );
 
-        tab(&mut test, Modifiers::SHIFT);
         tab(&mut test, Modifiers::SHIFT);
         arrow(&mut test);
         assert_eq!(
@@ -2383,9 +2474,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// The splitter between the list and the pane drags, and the height dragged to is
+    /// The splitter between the list and the pane drags, and the proportion dragged to is
     /// the one the pane opens at again after a collapse. Caught by: a fixed pane, or one
-    /// that forgets its height when it collapses.
+    /// that forgets its share when it collapses.
     #[test]
     fn the_splitter_drags_and_the_pane_keeps_its_height() {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
@@ -2414,15 +2505,510 @@ pub(crate) mod tests {
             "dragging the splitter up did not grow the pane: {top} then {dragged}"
         );
 
-        click_label(&mut test, COLLAPSE_CAPTION);
-        click_label(&mut test, EXPAND_CAPTION);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
+        click_named(&mut test, HIDE_DETAILS_TOOLTIP);
         test.sync_and_update();
         assert!(
             (pane_top(&test) - dragged).abs() < 2.,
             "the pane opened at {} rather than where it was dragged to, {dragged}",
             pane_top(&test)
         );
-        assert!(*view.pane_height.read() > PANE_HEIGHT);
+        let (_, pane_share) = view.pane_split.read().weights();
+        assert!(
+            pane_share > 50.,
+            "the drag left the pane's share at {pane_share}"
+        );
+    }
+
+    /// Where the label reading `text` is laid out, if one is drawn.
+    fn label_at(test: &TestingRunner, text: &str) -> Option<Area> {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area)
+        })
+    }
+
+    /// The least room the history keeps for a subject at the window's minimum size: a dozen
+    /// characters or a chip and a few.
+    const MIN_SUBJECT_ROOM: f32 = 100.;
+
+    /// The top of the main region: the caption row and the toolbar above it.
+    const MAIN_TOP: f32 = cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR;
+
+    /// The detail pane's own height, its panel's: the one pane-role rect below the main region's
+    /// top whose bottom is the window's.
+    fn pane_height(test: &TestingRunner, height: f32) -> f32 {
+        test.find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|rect| {
+                    rect.accessibility.builder.role() == AccessibilityRole::Pane
+                        && area.min_y() > MAIN_TOP + 10.
+                        && (area.max_y() - height).abs() < 0.5
+                })
+                .map(|_| area.height())
+        })
+        .unwrap_or_else(|| panic!("no detail pane"))
+    }
+
+    /// Half the room the history and the pane split in a window `height` tall: the main region
+    /// under the toolbar, less the splitter's handle.
+    fn even_share(height: f32) -> f32 {
+        (height - MAIN_TOP - ResizableContext::HANDLE_SIZE) / 2.
+    }
+
+    /// The history and the detail pane share the main region's height half each, both growing
+    /// with the window: the pane is exactly half the room at the window's minimum height and in
+    /// a tall window. Caught by: a pane of a fixed height, which is the same in both, or one
+    /// held at its floor above half the room.
+    #[test]
+    fn the_detail_pane_grows_with_the_window() {
+        let mut heights = Vec::new();
+        for height in [crate::frame::MIN_SIZE.1 as f32, 1200.] {
+            let (test, _, _) = launch_sized(
+                (0..10).map(row).collect(),
+                received(10, true),
+                (WINDOW_WIDTH, height),
+            );
+            let pane = pane_height(&test, height);
+            assert!(
+                (pane - even_share(height)).abs() < 2.,
+                "the pane is {pane}, half the room is {}, in a window {height} tall",
+                even_share(height)
+            );
+            heights.push(pane);
+        }
+        assert!(
+            heights[1] > heights[0] + 250.,
+            "the pane did not grow with the window: {heights:?}"
+        );
+    }
+
+    /// At the window's minimum size a drag down against the pane's floor — where one panel's
+    /// size changes and the other's hardly — leaves the proportion the window draws, and hiding
+    /// and bringing back the details keeps it. Caught by: one panel's pixels weighed against the
+    /// other's default share, which collapses the pane when it is laid out again.
+    #[test]
+    fn a_drag_against_the_panes_floor_keeps_the_proportion() {
+        let (width, height) = (
+            crate::frame::MIN_SIZE.0 as f32,
+            crate::frame::MIN_SIZE.1 as f32,
+        );
+        let (mut test, view, _) = launch_sized(
+            (0..10).map(row).collect(),
+            received(10, true),
+            (width, height),
+        );
+        let handle = test
+            .find(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.height() == ResizableContext::HANDLE_SIZE && area.width() > 400.
+                    })
+                    .map(|_| f64::from(area.center().y))
+            })
+            .unwrap();
+        test.press_cursor((LEFT_X + 300., handle));
+        test.move_cursor((LEFT_X + 300., handle + 60.));
+        test.sync_and_update();
+        test.move_cursor((LEFT_X + 300., handle + 100.));
+        test.sync_and_update();
+        test.release_cursor((LEFT_X + 300., handle + 100.));
+        test.sync_and_update();
+        let dragged = pane_top(&test);
+        let (_, share) = view.pane_split.read().weights();
+        assert!(share > 40., "the drag left the pane {share}% of the room");
+        for _ in 0..2 {
+            test.run_in(|| shortcuts::act(Action::ToggleDetails, view, None));
+            test.sync_and_update();
+        }
+        assert!(
+            (pane_top(&test) - dragged).abs() < 2.,
+            "the pane came back at {} rather than {dragged}",
+            pane_top(&test)
+        );
+    }
+
+    /// Expand All, over a commit's files, stands inside the pane and the window at the window's
+    /// minimum size and at 1024 × 1200, the pane at its even share at the minimum. Caught by: a
+    /// minimum too short for the pane's half to reach Expand All, where the pane's floor and
+    /// not its share would be what kept it in view.
+    #[test]
+    fn expand_all_is_visible_at_the_minimum_size_and_at_1024_by_1200() {
+        let (min_width, min_height) = crate::frame::MIN_SIZE;
+        for (width, height) in [(min_width as f32, min_height as f32), (1024., 1200.)] {
+            let (mut test, view, _) = launch_sized(
+                (0..10).map(row).collect(),
+                received(10, true),
+                (width, height),
+            );
+            click_row(&mut test, 1);
+            arrives(&mut test, view, 1, vec![oid(2)]);
+            let expand = label_at(&test, cairn_ui::EXPAND_ALL_CAPTION)
+                .unwrap_or_else(|| panic!("no Expand All at {width}×{height}: {:?}", pane(&test)));
+            assert!(
+                expand.min_y() >= pane_top(&test) && expand.max_y() <= height,
+                "Expand All at {expand:?} is cut off at {width}×{height}"
+            );
+            assert!(expand.max_x() <= width, "Expand All past the right edge");
+            // The minimum height is the one at which the pane's even share still reaches Expand
+            // All: the pane there is half the room, not held at its floor.
+            assert!(
+                (pane_height(&test, height) - even_share(height)).abs() < 2.,
+                "the pane is {} at {width}×{height}, not half the room, {}",
+                pane_height(&test, height),
+                even_share(height)
+            );
+        }
+    }
+
+    /// The pane's floor is what its comment says: in a window too short for the pane's share to
+    /// reach it, the pane is laid out at the floor, which holds its strip and the Commit tab of a
+    /// one-line commit with refs down to Expand All with room for the horizontal scrollbar under
+    /// it, and not a row more. Caught by: a floor counted in another list's row height, or a
+    /// Commit tab grown a row above Expand All, either way leaving the floor and its reason apart.
+    #[test]
+    fn the_panes_floor_is_its_strip_and_the_commit_tab_down_to_expand_all() {
+        let height = 480.;
+        let (mut test, view, _) = launch_sized(
+            Vec::new(),
+            received(2, true),
+            (crate::frame::MIN_SIZE.0 as f32, height),
+        );
+        label_the_head(&mut test, view);
+        click_row(&mut test, 0);
+        arrives(&mut test, view, 0, vec![oid(1)]);
+        assert!(
+            label_at(&test, cairn_ui::REFS_CAPTION).is_some(),
+            "the commit has no REFS row: {:?}",
+            pane(&test)
+        );
+        // The lower of the two panels the splitter divides: the pane's.
+        let pane_area = test
+            .find_many(|node, element| {
+                Rect::try_downcast(element)
+                    .filter(|rect| {
+                        rect.accessibility.builder.role() == AccessibilityRole::Pane
+                            && node.layout().area.min_y() > MAIN_TOP + 10.
+                    })
+                    .map(|_| node.layout().area)
+            })
+            .into_iter()
+            .max_by(|a, b| a.min_y().total_cmp(&b.min_y()))
+            .unwrap_or_else(|| panic!("no detail pane"));
+        assert!(
+            even_share(height) < PANE_MIN_HEIGHT,
+            "the window is tall enough for the pane's share to reach its floor"
+        );
+        assert!(
+            (pane_area.height() - PANE_MIN_HEIGHT).abs() < 0.5,
+            "the pane is {} tall, not held at its floor {PANE_MIN_HEIGHT}",
+            pane_area.height()
+        );
+        let expand = label_at(&test, cairn_ui::EXPAND_ALL_CAPTION)
+            .unwrap_or_else(|| panic!("no Expand All: {:?}", pane(&test)));
+        let under = pane_area.max_y() - expand.max_y();
+        assert!(
+            under >= cairn_ui::END_ROOM,
+            "the floor leaves {under} px under Expand All, less than the scrollbar's room"
+        );
+        assert!(
+            under < cairn_ui::END_ROOM + cairn_ui::COMMIT_TAB_ROW_HEIGHT,
+            "the floor leaves {under} px under Expand All, a Commit tab row more than its reason"
+        );
+    }
+
+    /// Hide Commit Details' chord leaves the pane's tab strip alone at the window's bottom, the
+    /// history taking the rest, and again brings the pane back at its share; the strip's icon stays
+    /// to bring it back. Caught by: the strip hidden with the pane, the chord not
+    /// heard, or the pane brought back at another height.
+    #[test]
+    fn hiding_the_details_leaves_the_tab_strip() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let open = pane_top(&test);
+        let toggle = |test: &mut TestingRunner| {
+            if accelerators::chords(Action::ToggleDetails, accelerators::Os::current()).is_empty() {
+                test.run_in(|| shortcuts::act(Action::ToggleDetails, view, None));
+                test.sync_and_update();
+            } else {
+                press_chord(test, Action::ToggleDetails);
+            }
+        };
+        toggle(&mut test);
+        assert!(
+            *view.pane_collapsed.read(),
+            "the chord did not hide the pane"
+        );
+        let strip = pane_top(&test);
+        assert!(
+            (HEIGHT - strip) <= DETAIL_STRIP_HEIGHT + 2.,
+            "the strip is not at the window's bottom: {strip}"
+        );
+        for tab in DetailTab::ALL {
+            let in_strip = test.find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == tab.caption())
+                    .map(|_| node.layout().area.min_y() >= strip - 2.)
+            });
+            assert!(
+                in_strip.contains(&true),
+                "the {tab:?} tab left with the pane"
+            );
+        }
+        let lit = test.find(|_, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(HIDE_DETAILS_TOOLTIP))
+                .map(|_| ())
+        });
+        assert!(lit.is_some(), "the strip's icon left with the pane");
+        toggle(&mut test);
+        assert!(!*view.pane_collapsed.read());
+        assert!(
+            (pane_top(&test) - open).abs() < 2.,
+            "the pane came back at {} rather than {open}",
+            pane_top(&test)
+        );
+    }
+
+    /// The banners — the leftover lock and a close waiting on a write — stand directly under the
+    /// toolbar across the whole window, above the sidebar and the main region. Caught by: a
+    /// banner drawn inside the main region, over the sidebar's column alone, or over the
+    /// toolbar.
+    #[test]
+    fn the_banners_stand_under_the_toolbar() {
+        let banner_of = |test: &TestingRunner, starts: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text.starts_with(starts))
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no banner says {starts:?}: {:?}", texts(test)))
+        };
+        let check = |test: &TestingRunner, starts: &str| {
+            let banner = banner_of(test, starts);
+            assert!(
+                banner.min_y() >= MAIN_TOP && banner.min_y() < MAIN_TOP + 12.,
+                "{starts:?} is not under the toolbar: {banner:?}"
+            );
+            assert!(
+                banner.min_x() < 20.,
+                "{starts:?} does not span the window: {banner:?}"
+            );
+            let sidebar = label_at(test, cairn_ui::ALL_COMMITS_CAPTION).unwrap();
+            assert!(
+                sidebar.min_y() >= banner.max_y(),
+                "the sidebar is not under {starts:?}: {sidebar:?}"
+            );
+            // The main region is under it too, so it spans both columns rather than one.
+            let main = label_at(test, "commit 0").unwrap();
+            assert!(
+                main.min_y() >= banner.max_y() && main.min_x() > LEFT,
+                "the main region is not under {starts:?}: {main:?}"
+            );
+        };
+
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let mut lock = view.lock;
+        lock.write().stated(Some(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(60),
+        ));
+        test.sync_and_update();
+        check(&test, cairn_ui::LOCK_BANNER_TEXT);
+
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let id = crate::worker::OperationId::for_tests(3);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        );
+        writes.write().started(id);
+        writes.write().closing();
+        test.sync_and_update();
+        check(&test, "Closing after");
+    }
+
+    /// As the window narrows the history's subject column gives the room: the author, the id and
+    /// the date keep their widths and their places from the right edge, and the graph its place
+    /// from the left. Caught by: the columns shrunk evenly, or the date pushed off the window.
+    #[test]
+    fn the_subject_column_shrinks_first() {
+        let columns = |width: f32| {
+            let (test, _, _) = launch_sized(
+                (0..3).map(row).collect(),
+                received(3, true),
+                (width, HEIGHT),
+            );
+            let author = label_at(&test, "Ada").unwrap_or_else(|| panic!("no author"));
+            let id = label_at(&test, oid(0).short().as_str()).unwrap_or_else(|| panic!("no id"));
+            let subject = label_at(&test, "commit 0").unwrap_or_else(|| panic!("no subject"));
+            (
+                width - author.min_x(),
+                width - id.min_x(),
+                subject.min_x(),
+                author.min_x() - subject.min_x(),
+            )
+        };
+        let wide = columns(WINDOW_WIDTH);
+        let narrow = columns(WINDOW_WIDTH - 200.);
+        assert!(
+            (wide.0 - narrow.0).abs() < 1. && (wide.1 - narrow.1).abs() < 1.,
+            "the author or the id moved from the right edge: {wide:?} then {narrow:?}"
+        );
+        assert!(
+            (wide.2 - narrow.2).abs() < 1.,
+            "the subject moved: {wide:?} {narrow:?}"
+        );
+        assert!(
+            narrow.3 < wide.3 - 150.,
+            "the subject column did not give the room: {wide:?} then {narrow:?}"
+        );
+    }
+
+    /// Where the rect assistive technology reads as `name` is laid out.
+    fn named_at(test: &TestingRunner, name: &str) -> Option<Area> {
+        test.find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|_| node.layout().area)
+        })
+    }
+
+    /// At the window's minimum size every region keeps its content whole: the toolbar's
+    /// buttons side by side inside the window, the status box no narrower than its least, the
+    /// history's author, id and date columns inside the window with room left for a subject, and
+    /// every button of the Changes tab's diff bar inside the window. Caught by: a minimum set
+    /// narrower than the window's layout needs, which clips one of them.
+    #[test]
+    fn the_window_keeps_every_region_whole_at_its_minimum_size() {
+        let (width, height) = (
+            crate::frame::MIN_SIZE.0 as f32,
+            crate::frame::MIN_SIZE.1 as f32,
+        );
+        let (mut test, view, submitted) = launch_sized(
+            (0..10).map(row).collect(),
+            received(10, true),
+            (width, height),
+        );
+
+        let mut toolbar: Vec<(String, Area)> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Label::try_downcast(element)
+                .filter(|_| {
+                    area.max_y() <= MAIN_TOP
+                        && area.min_y() >= cairn_ui::style::metrics::CAPTION_ROW
+                })
+                .map(|label| (label.text.to_string(), area))
+        });
+        toolbar.sort_by(|a, b| a.1.min_x().total_cmp(&b.1.min_x()));
+        let buttons = [
+            cairn_ui::QUICK_LAUNCH_CAPTION,
+            cairn_ui::FETCH_CAPTION,
+            cairn_ui::PULL_CAPTION,
+            cairn_ui::PUSH_CAPTION,
+            cairn_ui::STASH_CAPTION,
+            cairn_ui::BRANCH_CAPTION,
+            cairn_ui::APPEARANCE_CAPTION,
+        ];
+        let captions: Vec<&Area> = buttons
+            .iter()
+            .map(|caption| {
+                toolbar
+                    .iter()
+                    .find(|(text, _)| text == caption)
+                    .map(|(_, at)| at)
+                    .unwrap_or_else(|| panic!("no {caption} in the toolbar: {toolbar:?}"))
+            })
+            .collect();
+        for pair in captions.windows(2) {
+            assert!(
+                pair[0].max_x() <= pair[1].min_x(),
+                "two toolbar captions overlap: {:?} {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            captions.iter().all(|at| at.max_x() <= width),
+            "a toolbar caption is past the window's edge: {captions:?}"
+        );
+        let status = test
+            .find(|node, element| {
+                Rect::try_downcast(element)
+                    .filter(|rect| {
+                        rect.style.background.as_color() == Some(cairn_ui::style::tones::STATUS_BOX)
+                    })
+                    .map(|_| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("no status box"));
+        assert!(
+            status.width() >= cairn_ui::style::metrics::STATUS_BOX_MIN_WIDTH - 0.5,
+            "the status box is narrower than its least: {status:?}"
+        );
+
+        let date = test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text.starts_with("1970") || label.text.contains(':'))
+                .map(|_| node.layout().area.max_x())
+        });
+        let author = label_at(&test, "Ada").unwrap_or_else(|| panic!("no author"));
+        let subject = label_at(&test, "commit 0").unwrap_or_else(|| panic!("no subject"));
+        assert!(
+            date.iter().all(|right| *right <= width),
+            "a date is past the window's edge: {date:?}"
+        );
+        assert!(
+            author.min_x() - subject.min_x() >= MIN_SUBJECT_ROOM,
+            "the subject column keeps {} px",
+            author.min_x() - subject.min_x()
+        );
+
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        for name in [
+            cairn_ui::PREVIOUS_CHANGE_LABEL,
+            cairn_ui::NEXT_CHANGE_LABEL,
+            cairn_ui::IGNORE_WHITESPACE_LABEL,
+            cairn_ui::FEWER_LINES_LABEL,
+            cairn_ui::MORE_LINES_LABEL,
+            cairn_ui::ENTIRE_FILE_LABEL,
+            cairn_ui::SIDE_BY_SIDE_LABEL,
+        ] {
+            let at = named_at(&test, name).unwrap_or_else(|| panic!("no {name:?} in the bar"));
+            assert!(
+                at.max_x() <= width && at.max_y() <= height,
+                "{name:?} is cut off at {at:?}"
+            );
+        }
+    }
+
+    /// The toolbar's sidebar toggle hides the sidebar, the main region taking the window's
+    /// width, and shows it again at its width. Caught by: a toggle that does nothing, or a
+    /// sidebar that comes back at another width.
+    #[test]
+    fn the_sidebar_toggle_hides_and_shows_the_sidebar() {
+        let (mut test, view, _) = launch((0..3).map(row).collect(), received(3, true));
+        let subject = label_at(&test, "commit 0").unwrap().min_x();
+        click_named(&mut test, cairn_ui::SIDEBAR_TOGGLE_NAME);
+        assert!(!*view.sidebar.shown.read());
+        assert!(label_at(&test, cairn_ui::ALL_COMMITS_CAPTION).is_none());
+        let hidden = label_at(&test, "commit 0").unwrap().min_x();
+        assert!(
+            hidden < subject - 200.,
+            "the history did not take the room: {hidden}"
+        );
+        click_named(&mut test, cairn_ui::SIDEBAR_TOGGLE_NAME);
+        assert!(label_at(&test, cairn_ui::ALL_COMMITS_CAPTION).is_some());
+        let back = label_at(&test, "commit 0").unwrap().min_x();
+        assert!(
+            (back - subject).abs() < 1.,
+            "the sidebar came back at {back}, not {subject}"
+        );
     }
 
     /// Row `n`'s one file, `file-of-{n}.rs`, as a text diff of `lines` lines with one line in
@@ -2844,19 +3430,30 @@ pub(crate) mod tests {
         (selected, other)
     }
 
-    /// The title bar's texts: every label above the column headings.
+    /// The toolbar's texts, left to right: every label inside its band under the caption row.
     fn title(test: &TestingRunner) -> Vec<String> {
-        let headings = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "Author")
-                    .map(|_| node.layout().area.min_y())
-            })
-            .unwrap_or_else(|| panic!("no column headings"));
-        test.find_many(|node, element| {
+        let (top, bottom) = (
+            cairn_ui::style::metrics::CAPTION_ROW,
+            cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR,
+        );
+        let mut found = test.find_many(|node, element| {
+            let area = node.layout().area;
             Label::try_downcast(element)
-                .filter(|_| node.layout().area.max_y() <= headings)
-                .map(|label| label.text.to_string())
+                .filter(|_| area.min_y() >= top && area.max_y() <= bottom)
+                .map(|label| (area.min_x(), area.min_y(), label.text.to_string()))
+        });
+        found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        found.into_iter().map(|(_, _, text)| text).collect()
+    }
+
+    /// Where the toolbar's label reading `text` is laid out.
+    fn toolbar_label(test: &TestingRunner, text: &str) -> Option<Area> {
+        let bottom = cairn_ui::style::metrics::CAPTION_ROW + cairn_ui::style::metrics::TOOLBAR;
+        test.find(|node, element| {
+            let area = node.layout().area;
+            Label::try_downcast(element)
+                .filter(|label| label.text == text && area.max_y() <= bottom)
+                .map(|_| area)
         })
     }
 
@@ -2889,6 +3486,7 @@ pub(crate) mod tests {
                     }
                 }
             }),
+            commit_time: None,
         }];
         if let Some((name, true)) = upstream {
             refs.push(Ref {
@@ -2897,6 +3495,7 @@ pub(crate) mod tests {
                 target: RefTarget::Commit(oid(1)),
                 symbolic: None,
                 upstream: None,
+                commit_time: None,
             });
         }
         let mut refreshed = view.refreshed;
@@ -2912,7 +3511,7 @@ pub(crate) mod tests {
             let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
         }
         let _ = state.status_arrived(std::sync::Arc::new(cairn_model::LocalChanges::new(
-            WorkingTreeStatus::Listed(
+            cairn_model::WorkingTreeStatus::Listed(
                 (0..changed)
                     .map(|n| {
                         StatusEntry::Untracked(cairn_model::RepoPath::from(
@@ -2926,14 +3525,14 @@ pub(crate) mod tests {
         test.sync_and_update();
     }
 
-    /// The title bar names the repository — `*` while status lists a
-    /// change — the current branch and its counts behind then ahead; a gone upstream says so
-    /// and draws no counts; a detached `HEAD` its short id; an unborn branch its name and that
-    /// it has no commit. Caught by: the star drawn for a clean tree or missed for a dirty one,
-    /// another branch's counts, counts drawn for a gone upstream, or a detached or unborn
-    /// `HEAD` drawn as a branch.
+    /// The status box names the repository, bold, over the current branch — no star, however
+    /// much status lists, and no counts: those are Push's and Pull's badges — a gone upstream
+    /// said after the branch and no badge drawn; a detached `HEAD` its short id; an unborn
+    /// branch its name and that it has no commit. Caught by: the star or the counts left in the
+    /// box, the name beside the branch rather than over it, badges drawn for a gone upstream, or
+    /// a detached or unborn `HEAD` drawn as a branch.
     #[test]
-    fn the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream() {
+    fn the_status_box_names_the_repository_over_the_branch() {
         use cairn_model::{AheadBehind, HeadState, RefName};
         let main = || HeadState::Branch(RefName::new("refs/heads/main"));
 
@@ -2955,12 +3554,26 @@ pub(crate) mod tests {
             2,
         );
         let shown = title(&test);
-        for wanted in ["engine*", "main", "18↓1↑"] {
+        for wanted in ["engine", "main"] {
             assert!(
                 shown.contains(&wanted.to_owned()),
                 "no {wanted:?} in {shown:?}"
             );
         }
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.ends_with('*') || text.contains('↓') || text.contains('↑')),
+            "the star or the counts are still drawn: {shown:?}"
+        );
+        let (name, branch) = (
+            toolbar_label(&test, "engine").unwrap_or_else(|| panic!("no name")),
+            toolbar_label(&test, "main").unwrap_or_else(|| panic!("no branch")),
+        );
+        assert!(
+            name.max_y() <= branch.min_y() + 1.,
+            "the name is not over the branch: {name:?} {branch:?}"
+        );
 
         let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
         refreshed_with(
@@ -2983,10 +3596,8 @@ pub(crate) mod tests {
             );
         }
         assert!(
-            !shown
-                .iter()
-                .any(|text| text.contains('↓') || text.contains('↑')),
-            "{shown:?}"
+            !shown.iter().any(|text| text == "1" || text == "18"),
+            "badges drawn for a gone upstream: {shown:?}"
         );
 
         let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
@@ -3008,9 +3619,9 @@ pub(crate) mod tests {
             shown.contains(&"trunk (no commits yet)".to_owned()),
             "{shown:?}"
         );
-        assert!(shown.contains(&"engine*".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"engine".to_owned()), "{shown:?}");
 
-        // QC1: the name is the one the worker says it opened, never the path given.
+        // The name is the one the worker says it opened, never the path given.
         let mut repository = view.repository;
         repository.set(None);
         test.sync_and_update();
@@ -3025,6 +3636,7 @@ pub(crate) mod tests {
             crate::session::apply(
                 crate::worker::Update::Opened {
                     name: "folder".to_owned(),
+                    path: std::path::PathBuf::from("/srv/folder"),
                 },
                 view,
                 &crate::session::Worker {
@@ -3036,7 +3648,127 @@ pub(crate) mod tests {
         });
         test.sync_and_update();
         let shown = title(&test);
-        assert!(shown.contains(&"folder*".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"folder".to_owned()), "{shown:?}");
+    }
+
+    /// Rests the pointer on `at` long enough for a tooltip, and the labels drawn then.
+    fn hovered(test: &mut TestingRunner, at: Area) -> Vec<String> {
+        let centre = at.center();
+        test.move_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.poll(
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(900),
+        );
+        let shown = texts(test);
+        test.move_cursor((f64::from(WINDOW_WIDTH - 2.), f64::from(HEIGHT - 2.)));
+        test.poll(
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(400),
+        );
+        shown
+    }
+
+    /// The toolbar's Branch opens Create Branch at `HEAD` once the refs say where `HEAD` is, and
+    /// until then is greyed saying why, opening nothing; Fetch greyed with no remote says so.
+    /// Caught by: a toolbar press the window does nothing with, or a greyed button whose reason
+    /// is not the window's.
+    #[test]
+    fn the_toolbars_branch_and_fetch_act_and_say_why_when_they_cannot() {
+        use cairn_model::{HeadState, RefName};
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let branch = toolbar_label(&test, cairn_ui::BRANCH_CAPTION).unwrap();
+        assert!(
+            hovered(&mut test, branch)
+                .iter()
+                .any(|text| text == crate::history::head::REFS_UNREAD),
+            "Branch does not say the refs are unread"
+        );
+        click_label(&mut test, cairn_ui::BRANCH_CAPTION);
+        assert!(
+            !texts(&test)
+                .iter()
+                .any(|t| t == cairn_ui::CREATE_BRANCH_TITLE)
+        );
+
+        refreshed_with(
+            &mut test,
+            view,
+            HeadState::Branch(RefName::new("refs/heads/main")),
+            None,
+            None,
+            0,
+        );
+        click_label(&mut test, cairn_ui::BRANCH_CAPTION);
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == cairn_ui::CREATE_BRANCH_TITLE),
+            "Branch did not open Create Branch: {:?}",
+            texts(&test)
+        );
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let mut remotes = view.remotes;
+        remotes.set(Vec::new());
+        test.sync_and_update();
+        let fetch = toolbar_label(&test, cairn_ui::FETCH_CAPTION).unwrap();
+        assert!(
+            hovered(&mut test, fetch)
+                .iter()
+                .any(|text| text == crate::operations::fetch::NO_REMOTE),
+            "Fetch does not say there is no remote"
+        );
+    }
+
+    /// Each refresh's ahead/behind redraws the badges: the commits ahead on Push, those behind on
+    /// Pull, each absent at zero, and both gone when a refresh says the branch is level. Caught
+    /// by: the counts swapped between the buttons, a zero drawn, or a badge kept from an earlier
+    /// refresh.
+    #[test]
+    fn each_refresh_redraws_the_badges_on_push_and_pull() {
+        use cairn_model::{AheadBehind, HeadState, RefName};
+        let main = || HeadState::Branch(RefName::new("refs/heads/main"));
+        let upstream = Some(("refs/remotes/origin/main", true));
+        let badge_over = |test: &TestingRunner, count: &str, button: &str| {
+            let (badge, caption) = (
+                toolbar_label(test, count).unwrap_or_else(|| panic!("no badge {count:?}")),
+                toolbar_label(test, button).unwrap_or_else(|| panic!("no {button}")),
+            );
+            assert!(
+                badge.max_y() <= caption.min_y()
+                    && badge.min_x() >= caption.min_x() - 10.
+                    && badge.max_x() <= caption.max_x() + 20.,
+                "{count:?} is not {button}'s badge: {badge:?} over {caption:?}"
+            );
+        };
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        let counted = |ahead, behind| Some(AheadBehind { ahead, behind });
+        refreshed_with(&mut test, view, main(), upstream, counted(3, 18), 0);
+        badge_over(&test, "3", cairn_ui::PUSH_CAPTION);
+        badge_over(&test, "18", cairn_ui::PULL_CAPTION);
+
+        refreshed_with(&mut test, view, main(), upstream, counted(0, 2), 0);
+        badge_over(&test, "2", cairn_ui::PULL_CAPTION);
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text == "3" || text == "0" || text == "18"),
+            "an old or a zero badge is drawn: {shown:?}"
+        );
+
+        refreshed_with(&mut test, view, main(), upstream, counted(0, 0), 0);
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.chars().all(|c| c.is_ascii_digit())),
+            "a level branch has a badge: {shown:?}"
+        );
     }
 
     /// Through the window: a row's chips are laid out against the refresh's snapshot — the
@@ -3047,83 +3779,8 @@ pub(crate) mod tests {
     /// the head flag dropped, or the REFS row not given the selected row's chips.
     #[test]
     fn a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot() {
-        use cairn_model::{
-            HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
-        };
-
         let (mut test, view, _) = launch(Vec::new(), received(2, true));
-        let mut page = RowsPage::new();
-        let names = [
-            "refs/heads/main",
-            "refs/remotes/mike/main",
-            "refs/remotes/origin/main",
-        ];
-        let labels: Vec<RefLabel<'_>> = names
-            .iter()
-            .map(|name| RefLabel {
-                name,
-                kind: if name.starts_with("refs/heads/") {
-                    RefKind::LocalBranch
-                } else {
-                    RefKind::RemoteTracking
-                },
-                current: *name == "refs/heads/main",
-            })
-            .collect();
-        page.push_labelled(
-            GraphRow::new(oid(0), Lane::new(0), Vec::new()),
-            PagedCommit {
-                parents: 1,
-                subject: "commit 0",
-                author: "Ada",
-                author_time: 0,
-            },
-            true,
-            &labels,
-        );
-        page.push(
-            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
-            PagedCommit {
-                parents: 1,
-                subject: "commit 1",
-                author: "Ada",
-                author_time: 0,
-            },
-        );
-        let mut rows = view.rows;
-        rows.write()
-            .append(page)
-            .unwrap_or_else(|full| panic!("{full}"));
-        let listed = |name: &str, upstream: Option<&str>| Ref {
-            name: RefName::new(name),
-            kind: if name.starts_with("refs/heads/") {
-                RefKind::LocalBranch
-            } else {
-                RefKind::RemoteTracking
-            },
-            target: RefTarget::Commit(oid(0)),
-            symbolic: None,
-            upstream: upstream.map(|upstream| Upstream::Exists {
-                name: RefName::new(upstream),
-                commit: Some(oid(0)),
-            }),
-        };
-        let mut refreshed = view.refreshed;
-        let _ = refreshed
-            .write()
-            .refs_arrived(std::sync::Arc::new(RefsSnapshot {
-                refs: vec![
-                    listed("refs/heads/main", Some("refs/remotes/origin/main")),
-                    listed("refs/remotes/mike/main", None),
-                    listed("refs/remotes/origin/main", None),
-                ],
-                head: HeadState::Branch(RefName::new("refs/heads/main")),
-                stashes: Vec::new(),
-                unreadable: 0,
-                substitutions: cairn_model::Substitutions::default(),
-            }));
-        test.sync_and_update();
-        test.sync_and_update();
+        label_the_head(&mut test, view);
 
         let row_y = test
             .find(|node, element| {
@@ -3133,10 +3790,9 @@ pub(crate) mod tests {
             })
             .unwrap_or_else(|| panic!("the labelled row was not drawn"));
         let chips: Vec<(f32, String)> = {
-            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
             let mut found = test.find_many(|node, element| {
                 Label::try_downcast(element)
-                    .filter(|label| label.text_style_data.font_size == chip_size)
+                    .filter(|label| is_chip_tone(label.text_style_data.color.as_ref()))
                     .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
                     .map(|label| (node.layout().area.min_x(), label.text.to_string()))
             });
@@ -3194,6 +3850,186 @@ pub(crate) mod tests {
         assert!(
             !shown.iter().any(|text| text == cairn_ui::REFS_CAPTION),
             "a commit no ref points at has a REFS row: {shown:?}"
+        );
+    }
+
+    /// Rows 0 and 1 appended to the history, row 0 labelled by `main` — the current branch,
+    /// its upstream `origin/main` at the same commit — and `mike/main`, with the snapshot of
+    /// those refs as the refresh's.
+    fn label_the_head(test: &mut TestingRunner, view: View) {
+        use cairn_model::{
+            HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
+        };
+
+        let mut page = RowsPage::new();
+        let names = [
+            "refs/heads/main",
+            "refs/remotes/mike/main",
+            "refs/remotes/origin/main",
+        ];
+        let labels: Vec<RefLabel<'_>> = names
+            .iter()
+            .map(|name| RefLabel {
+                name,
+                kind: if name.starts_with("refs/heads/") {
+                    RefKind::LocalBranch
+                } else {
+                    RefKind::RemoteTracking
+                },
+                current: *name == "refs/heads/main",
+            })
+            .collect();
+        page.push_labelled(
+            GraphRow::new(oid(0), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 0",
+                author: "Ada",
+                author_time: 0,
+            },
+            true,
+            &labels,
+        );
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 1",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        let mut rows = view.rows;
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        let listed = |name: &str, upstream: Option<&str>| Ref {
+            name: RefName::new(name),
+            kind: if name.starts_with("refs/heads/") {
+                RefKind::LocalBranch
+            } else {
+                RefKind::RemoteTracking
+            },
+            target: RefTarget::Commit(oid(0)),
+            symbolic: None,
+            upstream: upstream.map(|upstream| Upstream::Exists {
+                name: RefName::new(upstream),
+                commit: Some(oid(0)),
+            }),
+            commit_time: None,
+        };
+        let mut refreshed = view.refreshed;
+        let _ = refreshed
+            .write()
+            .refs_arrived(std::sync::Arc::new(RefsSnapshot {
+                refs: vec![
+                    listed("refs/heads/main", Some("refs/remotes/origin/main")),
+                    listed("refs/remotes/mike/main", None),
+                    listed("refs/remotes/origin/main", None),
+                ],
+                head: HeadState::Branch(RefName::new("refs/heads/main")),
+                stashes: Vec::new(),
+                unreadable: 0,
+                substitutions: cairn_model::Substitutions::default(),
+            }));
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// The colour of the label reading `text`.
+    fn colour_of(test: &TestingRunner, text: &str) -> Option<Fill> {
+        test.find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|label| label.text_style_data.color.clone())
+        })
+        .unwrap_or_else(|| panic!("nothing reads {text:?}"))
+    }
+
+    /// Through the window: a commit the walk marked as beyond `HEAD`'s reach and a stash's row
+    /// are drawn in Fork's grey for a row `HEAD` cannot reach, a reached commit in the body's
+    /// tone; and the stash's row, pressed, is drawn in the focused selection's blue band and
+    /// white text, as a commit's row is. Caught by: the window's row callback dropping the mark
+    /// on either kind of row, or the stash's row not told the list has focus (drawn in the
+    /// unfocused grey band).
+    #[test]
+    fn rows_head_cannot_reach_are_grey_and_a_selected_stash_is_drawn_focused() {
+        let (mut test, view, _) = launch(Vec::new(), received(4, true));
+        let mut rows = view.rows;
+        let mut page = RowsPage::new();
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "side work",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        page.mark_beyond_head();
+        page.push_stash(
+            GraphRow::new(oid(90), Lane::new(1), Vec::new()),
+            cairn_model::PagedStash {
+                index: 0,
+                base: oid(2),
+                message: "On main: WIP on parser",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        page.mark_beyond_head();
+        page.push(
+            GraphRow::new(oid(2), Lane::new(1), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "main work",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        let grey = Some(Fill::from(tones::UNREACHABLE_TEXT));
+        assert_eq!(colour_of(&test, "side work"), grey);
+        assert_eq!(colour_of(&test, "On main: WIP on parser"), grey);
+        assert_eq!(colour_of(&test, "main work"), Some(Fill::from(tones::TEXT)));
+
+        // The stash's row pressed: the list has focus, so Fork's blue and white.
+        click_label(&mut test, "On main: WIP on parser");
+        test.sync_and_update();
+        assert_eq!(*view.selected.read(), Some(RowId::Stash(oid(90))));
+        let band_under = |test: &TestingRunner, text: &str| {
+            let y = test
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == text)
+                        .map(|_| node.layout().area.center().y)
+                })
+                .unwrap_or_else(|| panic!("nothing reads {text:?}"));
+            test.find_many(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.min_y() <= y
+                            && y < area.max_y()
+                            && area.height() == ROW_HEIGHT
+                            && area.min_x() >= LEFT
+                    })
+                    .and_then(|rect| rect.style.background.as_color())
+            })
+        };
+        let focused = tones::selected(true);
+        assert!(
+            band_under(&test, "On main: WIP on parser").contains(&focused.band),
+            "the focused stash row is not Fork's blue"
+        );
+        assert_eq!(
+            colour_of(&test, "On main: WIP on parser"),
+            Some(Fill::from(focused.text))
         );
     }
 
@@ -3964,8 +4800,10 @@ pub(crate) mod tests {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
         changes_tab_over(&mut test, view, 3);
         let shown = pane(&test);
-        let [author, id, date, subject] =
-            cairn_ui::summary_parts(&answer_for(2, Vec::new()).details.unwrap());
+        let [author, id, date, subject] = cairn_ui::summary_parts(
+            &answer_for(2, Vec::new()).details.unwrap(),
+            &cairn_ui::LocalZone::default(),
+        );
         for part in [&author, &id, &date, &subject] {
             assert!(
                 shown.contains(part),
@@ -4656,8 +5494,17 @@ pub(crate) mod tests {
         assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
         assert!(view.confirming.peek().is_some());
 
-        // A press behind it, on a row: the row is not chosen, and the dialog is cancelled.
-        click_row(&mut test, 5);
+        // A press behind it, on a row's date at the window's right, clear of the dialog: the
+        // row is not chosen, and the dialog is cancelled.
+        let row_y = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 5")
+                    .map(|_| node.layout().area.center().y)
+            })
+            .unwrap_or_else(|| panic!("no row 5"));
+        test.click_cursor((f64::from(WINDOW_WIDTH - 20.), f64::from(row_y)));
+        test.sync_and_update();
         assert_eq!(selection(view), (Some(RowId::Commit(oid(2))), None));
         assert!(view.confirming.peek().is_none(), "a press outside kept it");
         assert!(tokens.borrow().is_empty());

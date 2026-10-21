@@ -162,6 +162,9 @@ impl Component for ChangesTab {
         .current(current)
         .on_file(move |index: usize| {
             diff::actions::choose_file(index, view, choosing.as_deref());
+        })
+        .on_file_menu(move |(index, choice): (usize, cairn_ui::FileChoice)| {
+            crate::detail::file_copy::chosen(view, index, choice);
         });
 
         let mut width = view.changes_list_width;
@@ -171,7 +174,11 @@ impl Component for ChangesTab {
         let list_share = *width.peek();
         let header: Option<Element> = match comparison {
             Some(comparison) => Some(comparison),
-            None => details.map(|details| ChangesSummary::new(details).into()),
+            None => details.map(|details| {
+                ChangesSummary::new(details)
+                    .zone(view.zone.read().clone())
+                    .into()
+            }),
         };
         rect()
             .expanded()

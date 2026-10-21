@@ -5,11 +5,14 @@
 //! full parents and their author's address. The slim rows, read through a history built page
 //! by page, are held to it. Each row is drawn by the window's own row, `CommitRow`, and read
 //! back from the drawn tree: its labels' text, and the pixel at the centre of its node, which
-//! a dot fills and a merge's ring leaves empty.
+//! a dot fills and a merge's ring leaves empty. The oracle writes each date as
+//! `YYYY-MM-DD HH:MM` in UTC and the list draws Fork's `d Mon yyyy HH:mm` in the zone it is
+//! handed, UTC here, so each is compared in the list's form (`fork_date`) — the same instant —
+//! and the author's avatar, drawn before the name, is compared as its initials (`initials`).
 
 use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowContent, RowsPage};
 use cairn_ui::graph_geometry::{lane_x, row_middle};
-use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender};
+use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender, initials};
 use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -157,11 +160,13 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
     let stride = info.min_row_bytes();
     let mut pixels = vec![0u8; stride * height as usize];
     assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
-    let white_at = |x: f32, y: f32| {
+    // The history's ground, which an unpainted centre shows (the pixels are BGRA).
+    let ground = cairn_ui::style::tones::HISTORY;
+    let ground_at = |x: f32, y: f32| {
         let at = y.round() as usize * stride + x.round() as usize * 4;
         pixels
             .get(at..at + 3)
-            .is_some_and(|rgb| rgb.iter().all(|c| *c == 0xff))
+            .is_some_and(|bgr| [bgr[2], bgr[1], bgr[0]] == [ground.r(), ground.g(), ground.b()])
     };
 
     let rows = labels.iter().map(|(row, _, _)| *row + 1).max().unwrap_or(0);
@@ -176,9 +181,27 @@ fn drawn(test: &mut TestingRunner) -> Vec<(Vec<String>, bool)> {
                 ROW_PADDING + lane_x(Lane::new(0)),
                 row as f32 * ROW_HEIGHT + row_middle(),
             );
-            (texts, white_at(centre.0, centre.1))
+            (texts, ground_at(centre.0, centre.1))
         })
         .collect()
+}
+
+/// An oracle's `YYYY-MM-DD HH:MM` as the list draws the same instant: Fork's
+/// `d Mon yyyy HH:mm`.
+fn fork_date(before: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (date, time) = before
+        .split_once(' ')
+        .unwrap_or_else(|| panic!("{before:?} is no date"));
+    let parts: Vec<&str> = date.split('-').collect();
+    let [year, month, day] = parts[..] else {
+        panic!("{before:?} is no date");
+    };
+    let month: usize = month.parse().unwrap_or_else(|_| panic!("{before:?}"));
+    let day: u32 = day.parse().unwrap_or_else(|_| panic!("{before:?}"));
+    format!("{day} {} {year} {time}", MONTHS[month - 1])
 }
 
 #[test]
@@ -200,9 +223,10 @@ fn every_row_draws_what_it_drew_before_rows_were_slimmed() {
             (
                 vec![
                     subject(subject_text),
+                    initials(author),
                     author.to_owned(),
                     short.to_owned(),
-                    date.to_owned(),
+                    fork_date(date),
                 ],
                 ring,
             )

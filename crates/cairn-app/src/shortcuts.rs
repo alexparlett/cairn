@@ -7,7 +7,7 @@
 //! [`Scope::Detail`]: cairn_ui::accelerators::Scope::Detail
 
 use cairn_ui::accelerators::Action;
-use cairn_ui::{DetailTab, HeaderAction};
+use cairn_ui::{DetailTab, HeaderAction, MainView};
 use freya::prelude::*;
 
 use crate::diff;
@@ -15,22 +15,15 @@ use crate::window::View;
 use crate::worker::Request;
 
 /// The action a press in the diff's bar is: the bar's buttons and the chords are one set of
-/// actions, done in one place.
+/// actions, done in one place, and the bar names each button's action itself
+/// (`HeaderAction::action`), which its tooltip's chord is read for.
 pub fn of_header(pressed: HeaderAction) -> Action {
-    match pressed {
-        HeaderAction::PreviousChange => Action::PreviousChange,
-        HeaderAction::NextChange => Action::NextChange,
-        HeaderAction::IgnoreWhitespace => Action::ToggleIgnoreWhitespace,
-        HeaderAction::FewerLines => Action::FewerLines,
-        HeaderAction::MoreLines => Action::MoreLines,
-        HeaderAction::EntireFile => Action::EntireFile,
-        HeaderAction::SideBySide => Action::ToggleSideBySide,
-    }
+    pressed.action()
 }
 
 /// Whether the window's chords and the views' keys do nothing now: while any dialog — a
-/// credential prompt, a confirmation, a Git Error or "Couldn't <name>", Create Branch — or the
-/// activity popover, which Escape alone closes, is open: the one modal state
+/// credential prompt, a confirmation, a Git Error or "Couldn't <name>", Create Branch, About
+/// Cairn — or the activity popover, which Escape alone closes, is open: the one modal state
 /// decides it (`crate::modal`).
 pub fn keys_inert(view: View) -> bool {
     crate::modal::modal(view).is_some()
@@ -73,13 +66,11 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         | Action::SelectRange
         | Action::ExtendSelectionUp
         | Action::ExtendSelectionDown => {}
-        // Heard only in their own scopes — Local Changes' lists and diff, the commit box, the
-        // history list — by the view that has focus there, never by the window.
-        Action::StageOrUnstage
-        | Action::StageOrUnstageAll
-        | Action::Discard
-        | Action::Commit
-        | Action::ShowLostCommits => {}
+        // Heard only in their own scopes — Local Changes' lists and diff, the commit box — by
+        // the view that has focus there, never by the window.
+        Action::StageOrUnstage | Action::StageOrUnstageAll | Action::Discard | Action::Commit => {}
+        // Heard by the focused list alone, which chooses its own menu's item showing the chord.
+        Action::Copy | Action::CopyFull => {}
         // Fork's New Branch, at `HEAD`, wherever focus is.
         Action::NewBranch => crate::operations::create_branch::open_at_head(view),
         // Read again on the worker; the window only asks.
@@ -88,6 +79,17 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
                 submit(Request::Refresh);
             }
         }
+        Action::ShowLostCommits => crate::history::lost_commits::toggle(view, submit),
+        Action::ShowLocalChanges => crate::history::selection::focus_local_changes(view, submit),
+        Action::ShowAllCommits => {
+            crate::history::selection::show_main(MainView::AllCommits, view, submit);
+        }
+        Action::ShowHead => crate::history::head::show(view, submit),
+        // The pane collapses to its tab strip, or opens again at the height it had.
+        Action::ToggleDetails => pane_collapsed.toggle(),
+        Action::Fetch => crate::operations::fetch::start(view, submit),
+        Action::ZoomIn => crate::frame::zoom(view, true),
+        Action::ZoomOut => crate::frame::zoom(view, false),
     }
 }
 

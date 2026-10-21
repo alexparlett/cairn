@@ -8,10 +8,11 @@ use cairn_model::{
     Signature, Similarity, Timestamp,
 };
 use cairn_ui::accelerators::{self, Action, Os, Scope};
+use cairn_ui::style::metrics;
 use cairn_ui::{
-    AUTHOR_CAPTION, COLLAPSE_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab,
-    DetailTabs, EXPAND_ALL_CAPTION, EXPAND_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION,
-    cut_short_notice,
+    AUTHOR_CAPTION, COMMIT_TAB_ROW_HEIGHT, COMMITTER_CAPTION, CommitTab, DetailTab, DetailTabs,
+    EXPAND_ALL_CAPTION, HIDE_DETAILS_TOOLTIP, ID_CAPTION, LocalZone, NO_FILES, PARENTS_CAPTION,
+    avatar_colour, cut_short_notice,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -115,6 +116,18 @@ struct Fixture {
 type Parents = Rc<RefCell<Vec<Oid>>>;
 
 fn launch(initial: ChangeSet) -> (TestingRunner, Fixture, Parents) {
+    launch_in(initial, east_of_india())
+}
+
+/// A zone five and a half hours east of UTC, handed to the tab as the window hands it the
+/// system's.
+fn east_of_india() -> LocalZone {
+    LocalZone::read(jiff::tz::TimeZone::fixed(
+        jiff::tz::Offset::from_seconds(5 * 3_600 + 30 * 60).unwrap_or_else(|e| panic!("{e}")),
+    ))
+}
+
+fn launch_in(initial: ChangeSet, zone: LocalZone) -> (TestingRunner, Fixture, Parents) {
     let parents = Parents::default();
     let app = {
         let parents = parents.clone();
@@ -125,6 +138,7 @@ fn launch(initial: ChangeSet) -> (TestingRunner, Fixture, Parents) {
                 .expanded()
                 .child(
                     CommitTab::new(fixture.changes)
+                        .zone(zone.clone())
                         .on_parent(move |parent: Oid| parents.borrow_mut().push(parent)),
                 )
                 .into_element()
@@ -145,8 +159,16 @@ fn launch(initial: ChangeSet) -> (TestingRunner, Fixture, Parents) {
     (test, fixture, parents)
 }
 
+/// Every label's text, and every paragraph's spans joined.
 fn texts(test: &TestingRunner) -> Vec<String> {
-    test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+    test.find_many(|_, element| {
+        Label::try_downcast(element)
+            .map(|l| l.text.to_string())
+            .or_else(|| {
+                Paragraph::try_downcast(element)
+                    .map(|p| p.spans.iter().map(|span| span.text.as_ref()).collect())
+            })
+    })
 }
 
 fn shows(test: &TestingRunner, text: &str) -> bool {
@@ -162,11 +184,12 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
-/// The author and the committer, each with name, email and the full timestamp at its own
-/// offset; the full id; each parent as its short id; and the files, a rename showing both
-/// names (the message, row for row: `the_message_is_the_rows_git_log_shows_for_it`). Caught
-/// by: dropping the committer, rendering a date in UTC or without its offset, abbreviating
-/// the id, dropping a parent or the body, or a rename showing only its new name.
+/// The author and the committer, each with name, email and the full timestamp in the zone the
+/// tab is handed, whatever offset each was recorded at; the full id; each parent as its short
+/// id; and the files, a rename showing both names (the message, row for row:
+/// `the_message_is_the_rows_git_log_shows_for_it`). Caught by: dropping the committer,
+/// rendering a date in UTC, at its recorded offset or without its offset, abbreviating the id,
+/// dropping a parent or the body, or a rename showing only its new name.
 #[test]
 fn the_commit_tab_shows_every_field_r5_3_names() {
     let (test, _, _) = launch(change_set(0));
@@ -175,12 +198,10 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     let expected = vec![
         AUTHOR_CAPTION.to_owned(),
         COMMITTER_CAPTION.to_owned(),
-        "Ada Lovelace <ada@example.com>".to_owned(),
-        "Grace Hopper <grace@example.com>".to_owned(),
-        // The author's and the committer's moments, each at its own offset, as Fork shows a
-        // date: one instant, two offsets, two different days.
+        "Ada Lovelace  ada@example.com".to_owned(),
+        "Grace Hopper  grace@example.com".to_owned(),
+        // The author's moment in the zone, though it was recorded at another offset.
         "15 Nov 2023 03:43:20 +05:30".to_owned(),
-        "14 Nov 2023 14:13:20 -08:00".to_owned(),
         ID_CAPTION.to_owned(),
         oid(77).hex().as_str().to_owned(),
         PARENTS_CAPTION.to_owned(),
@@ -196,6 +217,20 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
             "the Commit tab does not show {text:?}; it shows {shown:?}"
         );
     }
+    // The committer recorded at -08:00 and the author at +05:30, one instant: both drawn in
+    // the zone.
+    assert_eq!(
+        shown
+            .iter()
+            .filter(|text| *text == "15 Nov 2023 03:43:20 +05:30")
+            .count(),
+        2,
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|text| text.contains("-08:00")),
+        "{shown:?}"
+    );
     for status in ["R", "A", "D"] {
         assert!(
             shown.iter().any(|t| t == status),
@@ -205,6 +240,113 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     assert!(
         !shown.iter().any(|t| t == "src/file-000000.rs"),
         "the rename's new name stands alone, without its old one: {shown:?}"
+    );
+}
+
+/// A commit whose committer is `committer`, its author Ada at one instant in +05:30.
+fn committed_by(committer: Signature) -> ChangeSet {
+    let mut changes = change_set(0);
+    if let Some(details) = changes.details.as_mut() {
+        details.committer = committer;
+    }
+    changes
+}
+
+/// Fork draws the COMMITTER block — its caption, the committer's avatar, name, address and date,
+/// in a column of its own beside the author's — only where the committer differs from the
+/// author by name, by address or by the instant, to the second; the same instant written at
+/// another offset is the same committer (`docs/research/ui-review/fork-committer-2026-10-20.md`
+/// questions 1-3, cm7-cm13). Caught by: the block drawn for every commit, for none, for an
+/// offset alone, or missed for a one-second difference, a name or an address alone; or the
+/// committer's column drawn under the author's rather than beside it.
+#[test]
+fn the_committer_is_shown_only_where_it_differs() {
+    let ada = |email: &str, seconds: i64, offset: i32| Signature {
+        name: "Ada Lovelace".to_owned(),
+        email: email.to_owned(),
+        time: Timestamp::new(seconds, offset),
+    };
+    let author_offset = 5 * 3600 + 30 * 60;
+    let cases = [
+        (
+            "the same committer",
+            ada("ada@example.com", 1_700_000_000, author_offset),
+            false,
+        ),
+        (
+            "a name alone",
+            Signature {
+                name: "Ada L".to_owned(),
+                ..ada("ada@example.com", 1_700_000_000, author_offset)
+            },
+            true,
+        ),
+        (
+            "an address alone",
+            ada("ada@work.example", 1_700_000_000, author_offset),
+            true,
+        ),
+        (
+            "an hour later",
+            ada("ada@example.com", 1_700_003_600, author_offset),
+            true,
+        ),
+        (
+            "a second later",
+            ada("ada@example.com", 1_700_000_001, author_offset),
+            true,
+        ),
+        (
+            "another offset alone",
+            ada("ada@example.com", 1_700_000_000, -8 * 3600),
+            false,
+        ),
+    ];
+    for (case, committer, drawn) in cases {
+        let (test, _, _) = launch(committed_by(committer));
+        let shown = texts(&test);
+        assert_eq!(
+            shown.iter().any(|text| text == COMMITTER_CAPTION),
+            drawn,
+            "{case}: COMMITTER drawn is not {drawn}: {shown:?}"
+        );
+        // The committer's block draws its name and address a second time.
+        let people = shown
+            .iter()
+            .filter(|text| text.starts_with("Ada L"))
+            .count();
+        assert_eq!(people, 1 + usize::from(drawn), "{case}: {shown:?}");
+        if case == "an hour later" {
+            // The committer's own instant beside the author's, both in the tab's zone.
+            for date in ["15 Nov 2023 03:43:20 +05:30", "15 Nov 2023 04:43:20 +05:30"] {
+                assert!(shown.iter().any(|text| text == date), "{case}: no {date:?}");
+            }
+        }
+    }
+
+    // The block stands beside the author's, on the same rows, its avatar the committer's.
+    let (test, _, _) = launch(change_set(0));
+    let at = |text: &str| -> (f32, f32) {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.min_x(), area.min_y())
+                })
+        })
+        .unwrap_or_else(|| panic!("no {text:?}: {:?}", texts(&test)))
+    };
+    let (author_x, author_y) = at(AUTHOR_CAPTION);
+    let (committer_x, committer_y) = at(COMMITTER_CAPTION);
+    assert_eq!(author_y, committer_y, "COMMITTER is not on AUTHOR's row");
+    assert!(
+        committer_x > author_x + WIDTH / 3.,
+        "COMMITTER is not in a column of its own: {author_x} and {committer_x}"
+    );
+    assert!(
+        texts(&test).iter().any(|text| text == "GH"),
+        "no committer's avatar"
     );
 }
 
@@ -240,7 +382,7 @@ fn the_message_is_the_rows_git_log_shows_for_it() {
 /// deep. Caught by: a list that builds a row per file.
 #[test]
 fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
-    let viewport_rows = (HEIGHT / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let viewport_rows = (HEIGHT / COMMIT_TAB_ROW_HEIGHT).ceil() as usize;
     let mut built = Vec::new();
     for files in [1_000, 55_184] {
         let (mut test, _, _) = launch(change_set(files));
@@ -253,7 +395,7 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
         let deep = files - 200;
         test.scroll(
             (100., 100.),
-            (0., -(deep as f64 * f64::from(DETAIL_ROW_HEIGHT))),
+            (0., -(deep as f64 * f64::from(COMMIT_TAB_ROW_HEIGHT))),
         );
         let scrolled = built_files(&test);
         assert!(
@@ -273,7 +415,10 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
         // long as the files (forgetting the header's rows) would cut off.
         test.scroll(
             (100., 100.),
-            (0., -((files + 100) as f64 * f64::from(DETAIL_ROW_HEIGHT))),
+            (
+                0.,
+                -((files + 100) as f64 * f64::from(COMMIT_TAB_ROW_HEIGHT)),
+            ),
         );
         let last = format!("src/file-{:06}.rs", files + 2);
         let at_end = built_files(&test);
@@ -612,9 +757,23 @@ fn click_label(test: &mut TestingRunner, caption: &str) {
     test.sync_and_update();
 }
 
-/// Commit is the default and both tabs report themselves; the strip's control asks to
-/// collapse an open pane and to open a collapsed one. Caught by: Changes as the default, a
-/// tab reporting the other, or a control that only ever collapses.
+/// Presses the control assistive technology reads as `name`.
+fn press_named(test: &mut TestingRunner, name: &str) {
+    let centre = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no control is named {name:?}"));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+}
+
+/// Commit is the default and both tabs report themselves; the strip's Hide commit details icon —
+/// Fork's, with Fork's words as its tooltip and no "Collapse" caption — asks to collapse an open
+/// pane and to open a collapsed one. Caught by: Changes as the default, a tab reporting the
+/// other, a control that only ever collapses, or the caption kept.
 #[test]
 fn the_strip_reports_its_tabs_and_its_collapse() {
     let (mut test, strip) = launch_strip();
@@ -624,11 +783,33 @@ fn the_strip_reports_its_tabs_and_its_collapse() {
     assert_eq!(*strip.tab.read(), DetailTab::Changes);
     click_label(&mut test, "Commit");
     assert_eq!(*strip.tab.read(), DetailTab::Commit);
+    assert!(
+        !texts(&test).iter().any(|text| text == "Collapse"),
+        "{:?}",
+        texts(&test)
+    );
 
-    click_label(&mut test, COLLAPSE_CAPTION);
+    press_named(&mut test, HIDE_DETAILS_TOOLTIP);
     assert!(*strip.collapsed.read());
-    click_label(&mut test, EXPAND_CAPTION);
+    press_named(&mut test, HIDE_DETAILS_TOOLTIP);
     assert!(!*strip.collapsed.read());
+
+    let at = test
+        .find(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.accessibility.builder.value() == Some(HIDE_DETAILS_TOOLTIP))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no icon"));
+    test.move_cursor((f64::from(at.x), f64::from(at.y)));
+    test.poll(
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(900),
+    );
+    assert!(
+        texts(&test).iter().any(|text| text == HIDE_DETAILS_TOOLTIP),
+        "no tooltip reads {HIDE_DETAILS_TOOLTIP:?}"
+    );
 }
 
 /// A file's row — disclosure, status letter, path — starts at its left padding and is centred
@@ -651,7 +832,7 @@ fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
             let area = node.layout().area;
             Rect::try_downcast(element)
                 .filter(|_| {
-                    area.height() == DETAIL_ROW_HEIGHT
+                    area.height() == COMMIT_TAB_ROW_HEIGHT
                         && area.width() > WIDTH / 2.
                         && area.min_y() <= label.min_y()
                         && area.max_y() >= label.max_y()
@@ -673,4 +854,228 @@ fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
         label.center().y,
         row.center().y
     );
+}
+
+/// A zone the worker could not read: the dates are drawn in UTC and the tab says so once,
+/// after the author's date; a zone read says nothing. Caught by: the fallback said nowhere, or
+/// after every date.
+#[test]
+fn the_commit_tab_says_once_that_the_zone_fell_back_to_utc() {
+    let (test, _, _) = launch_in(change_set(0), LocalZone::unreadable());
+    let shown = texts(&test);
+    assert!(
+        shown.contains(&"14 Nov 2023 22:13:20 +00:00 (UTC)".to_owned()),
+        "{shown:?}"
+    );
+    assert_eq!(
+        shown.iter().filter(|text| text.contains("(UTC)")).count(),
+        1,
+        "{shown:?}"
+    );
+    let (read, _, _) = launch(change_set(0));
+    assert!(!texts(&read).iter().any(|text| text.contains("(UTC)")));
+}
+
+/// Where `text` is drawn — a label, or a paragraph whose spans join to it — as `(left, top)`.
+fn drawn_at(test: &TestingRunner, text: &str) -> (f32, f32) {
+    test.find(|node, element| {
+        let joined = Label::try_downcast(element)
+            .map(|label| label.text.to_string())
+            .or_else(|| {
+                Paragraph::try_downcast(element)
+                    .map(|p| p.spans.iter().map(|span| span.text.as_ref()).collect())
+            });
+        joined.filter(|joined| joined == text).map(|_| {
+            let area = node.layout().area;
+            (area.min_x(), area.min_y())
+        })
+    })
+    .unwrap_or_else(|| panic!("nothing draws {text:?}: {:?}", texts(test)))
+}
+
+/// Fork's one column of values (uv9, uv7b): the author's name, the id beside SHA, the subject,
+/// each line of the body and each file's path all start where the values do, the captions and
+/// the avatar left of it. Caught by: the message or a path starting at the pane's padding, or
+/// a file row's chevron, badge and glyph not ending where the values start.
+#[test]
+fn the_message_and_the_paths_stand_in_the_values_column() {
+    let (test, _, _) = launch(change_set(0));
+    let (values, _) = drawn_at(&test, oid(77).hex().as_str());
+    for text in [
+        "Ada Lovelace  ada@example.com",
+        "Teach the engine to count",
+        "The first paragraph of the body.",
+        "src/file-000001.rs",
+    ] {
+        let (left, _) = drawn_at(&test, text);
+        assert!(
+            (left - values).abs() < 1.,
+            "{text:?} starts at {left}, the values at {values}"
+        );
+    }
+    let (caption, _) = drawn_at(&test, ID_CAPTION);
+    assert!(caption < values, "SHA's caption is not left of its value");
+}
+
+/// The author's 42 px avatar, and the committer's beside it where it is drawn, as Fork draws
+/// them (cm7z): each the person's initials in the regular weight on the person's colour, the
+/// square whole in the three rows under the caption — each row drawing its band of the one
+/// square, every band reaching a pixel under the next row so no seam shows. Caught by: no
+/// author's avatar, another size, a band drawn without its offset (each row would draw the
+/// square's top), the tail row dropped (the square cut at two rows), the overlap dropped, or
+/// bold initials.
+#[test]
+fn the_people_block_draws_each_persons_avatar_whole_across_its_rows() {
+    let (test, _, _) = launch(change_set(0));
+    for (name, initials) in [("Ada Lovelace", "AL"), ("Grace Hopper", "GH")] {
+        let squares: Vec<(f32, f32, f32, f32)> = test.find_many(|node, element| {
+            Rect::try_downcast(element)
+                .filter(|rect| rect.style.background.as_color() == Some(avatar_colour(name)))
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.min_x(), area.min_y(), area.width(), area.height())
+                })
+        });
+        assert_eq!(
+            squares.len(),
+            3,
+            "{name}'s avatar is not drawn in three bands"
+        );
+        assert!(
+            squares.windows(2).all(|pair| pair[0] == pair[1]),
+            "{name}'s bands do not draw one square: {squares:?}"
+        );
+        let (_, top, width, height) = squares[0];
+        assert_eq!(
+            (width, height),
+            (metrics::DETAIL_AVATAR, metrics::DETAIL_AVATAR)
+        );
+        // The bands: as wide as the square, a row and a pixel tall, a row apart from the
+        // square's top.
+        let mut bands: Vec<f32> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.width() == metrics::DETAIL_AVATAR
+                        && area.height() == COMMIT_TAB_ROW_HEIGHT + 1.
+                        && area.min_x() == squares[0].0
+                })
+                .map(|_| area.min_y() - top)
+        });
+        bands.sort_by(f32::total_cmp);
+        assert_eq!(
+            bands,
+            [0., COMMIT_TAB_ROW_HEIGHT, 2. * COMMIT_TAB_ROW_HEIGHT],
+            "{name}'s bands"
+        );
+        let weights: Vec<FontWeight> = test.find_many(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == initials)
+                .map(|label| label.text_style_data.font_weight.unwrap_or_default())
+        });
+        assert!(
+            !weights.is_empty() && weights.iter().all(|weight| *weight == FontWeight::NORMAL),
+            "{name}'s initials: {weights:?}"
+        );
+    }
+}
+
+/// A right press on a file row makes it the current file without opening or closing it, and
+/// opens Fork's Commit-tab menu — Copy Path and Copy Full Path, showing no chord — whose item
+/// is reported for that file; the copy chords, which that menu shows none of, report nothing
+/// (fork-copy-and-dialogs §4, cp52-cp59). Caught by: a right press that toggles the file open,
+/// leaves another file current, reports another file, shows a chord, or copies on Ctrl+C.
+#[test]
+fn a_files_right_press_opens_its_menu_without_opening_the_file() {
+    use cairn_ui::FileChoice;
+    use freya_testing::prelude::{MouseEventName, PlatformEvent};
+    let files: Rc<RefCell<Vec<usize>>> = Rc::default();
+    let pressed: Rc<RefCell<Vec<usize>>> = Rc::default();
+    let menu: Rc<RefCell<Vec<(usize, FileChoice)>>> = Rc::default();
+    let app = {
+        let (files, pressed, menu) = (files.clone(), pressed.clone(), menu.clone());
+        move || {
+            let fixture = use_consume::<Fixture>();
+            let (files, pressed, menu) = (files.clone(), pressed.clone(), menu.clone());
+            rect()
+                .expanded()
+                .child(
+                    CommitTab::new(fixture.changes)
+                        .on_file(move |index: usize| files.borrow_mut().push(index))
+                        .on_file_pressed(move |index: usize| pressed.borrow_mut().push(index))
+                        .on_file_menu(move |chosen: (usize, FileChoice)| {
+                            menu.borrow_mut().push(chosen)
+                        }),
+                )
+                .child(ContextMenuViewer::new())
+                .into_element()
+        }
+    };
+    let (mut test, _) = TestingRunner::new(
+        app,
+        (WIDTH, HEIGHT).into(),
+        |runner| {
+            runner.provide_root_context(|| Fixture {
+                changes: State::create(change_set(3)),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let centre = |test: &TestingRunner, text: &str| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area.center())
+        })
+        .map(|c| (f64::from(c.x), f64::from(c.y)))
+        .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", texts(test)))
+    };
+    let row = centre(&test, "src/file-000002.rs");
+    test.move_cursor(row);
+    for name in [MouseEventName::MouseDown, MouseEventName::MouseUp] {
+        test.send_event(PlatformEvent::Mouse {
+            name,
+            cursor: row.into(),
+            button: Some(MouseButton::Right),
+        });
+        test.sync_and_update();
+    }
+    test.sync_and_update();
+    assert_eq!(
+        files.borrow().as_slice(),
+        [2],
+        "the file was not made current"
+    );
+    assert!(
+        pressed.borrow().is_empty(),
+        "the right press opened or closed the file"
+    );
+    let drawn = texts(&test);
+    for chord in [Action::Copy, Action::CopyFull] {
+        let name = accelerators::chord_name(chord, Os::current()).unwrap();
+        assert!(!drawn.contains(&name), "the menu shows {name}: {drawn:?}");
+    }
+    test.click_cursor(centre(&test, "Copy Full Path"));
+    test.sync_and_update();
+    assert_eq!(menu.borrow().as_slice(), [(2, FileChoice::CopyFullPath)]);
+
+    press_action_physical(&mut test, Action::Copy);
+    assert_eq!(menu.borrow().len(), 1, "the Commit tab copied on its chord");
+}
+
+/// Presses `action`'s first chord as a keyboard sends it, the key at its place.
+fn press_action_physical(test: &mut TestingRunner, action: Action) {
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+    let (key, code, modifiers) = accelerators::chords(action, Os::current())
+        .first()
+        .and_then(|chord| chord.key_press())
+        .unwrap_or_else(|| panic!("{action:?} has no key chord"));
+    test.send_event(PlatformEvent::Keyboard {
+        name: KeyboardEventName::KeyDown,
+        key,
+        code,
+        modifiers,
+    });
+    test.sync_and_update();
 }

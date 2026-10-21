@@ -2,18 +2,17 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: seven packets shipped (`history-graph`, `credential-prompts`,
+**Status: eight packets shipped (`history-graph`, `credential-prompts`,
 `process-manager`, `diff-engine`, `refs-and-status`, `staging-and-commit`,
-`history-topo-order`). `history-topo-order` (5c) passed its merge bar and was torn down on
-`feature/history-topo-order` (2026-10-18); it reaches `main` with its packet pull request,
-merged by the user, with the decisions it made in flight listed for the user's review in that
-pull request. The critical path is built; D7 still needs 6
+`history-topo-order`, `fork-alignment`). `fork-alignment` (5d) passed its merge bar and was
+torn down on `feature/fork-alignment` (2026-10-21); it reaches `main` with its packet pull
+request, merged by the user, with the decisions it made in flight listed for the user's review
+in that pull request. The critical path is built; D7 still needs 6
 (`remote-sync`, its pull and push) and 7 (`branch-ops`, its branch operations), which are
 independent of each other, beside 5b (`stash-and-ignore`, which builds on 5) and 8; all
-four are briefs. Inserted 2026-10-16 ahead of them: 5c (`history-topo-order`, shipped)
-and 5d (`fork-alignment`, planned, next: `docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`),
-with 5e-5h (`file-tree-view`, `quick-launch`, `preferences`, `repository-manager`) briefs after
-5d (`roadmap.md`).**
+four are briefs, and each now adds its buttons and menu items into the Fork-aligned chrome.
+5e-5h (`file-tree-view`, `quick-launch`, `preferences`, `repository-manager`) are briefs
+after 5d, in an order the user sets (`roadmap.md`).**
 
 ## The milestone
 

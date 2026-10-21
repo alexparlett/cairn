@@ -205,9 +205,31 @@ pub fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
 pub fn show_main(chosen: cairn_ui::MainView, view: View, submit: Option<&dyn Fn(Request)>) {
     let mut main = view.sidebar.main;
     main.set(chosen);
+    // Focus goes into Unstaged only when the chord asks it (`focus_local_changes`).
+    let mut focus = view.local.focus_unstaged;
+    if focus.peek().is_some() {
+        focus.set(None);
+    }
     if chosen != cairn_ui::MainView::LocalChanges && view.diff.peek().changes_stale() {
         ask_again(view, submit);
     }
+}
+
+/// Local Changes shown with focus in its Unstaged list, as Fork's Ctrl+1 leaves it: a new
+/// request the list takes as it mounts, or at once when it is already shown.
+pub fn focus_local_changes(view: View, submit: Option<&dyn Fn(Request)>) {
+    show_main(cairn_ui::MainView::LocalChanges, view, submit);
+    let mut focus = view.local.focus_unstaged;
+    let next = focus_serial(view);
+    focus.set(Some(next));
+}
+
+/// The next focus request's number: one past the last given, counted for the window's life.
+fn focus_serial(view: View) -> u64 {
+    let mut given = view.local.focus_serial;
+    let next = *given.peek() + 1;
+    given.set(next);
+    next
 }
 
 /// Asks what `of` changed, unless it is what was asked last, its answer did not fail and what

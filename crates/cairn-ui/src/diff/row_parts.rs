@@ -25,12 +25,8 @@ use crate::diff::palette::{
 
 /// One column of IBM Plex Mono at the diff's size.
 pub(crate) const ADVANCE: f32 = DIFF_FONT_SIZE * MONO_ADVANCE_EM;
-/// The line numbers' size: Fork's numbers are smaller than its text. Fork's Mac numbers are
-/// 6.5 pt tall, and Plex Mono's figures are 0.698 em tall, so 6.5 ÷ 0.698 ≈ 9.3 px; a
-/// Windows capture of Fork agrees — its digits advance 0.84 of its code's advance, and
-/// 0.84 × 11 px ≈ 9.3 px. This toolkit build takes a font size in whole pixels (`FontSize`
-/// holds an `i32`), so 9.
-pub const NUMBER_FONT_SIZE: f32 = 9.0;
+/// The line numbers' size (`style::metrics::DIFF_LINE_NUMBER`, where its measurement is told).
+pub const NUMBER_FONT_SIZE: f32 = crate::style::metrics::DIFF_LINE_NUMBER;
 /// One digit of a line number: Plex Mono's advance at [`NUMBER_FONT_SIZE`].
 pub(crate) const NUMBER_ADVANCE: f32 = NUMBER_FONT_SIZE * MONO_ADVANCE_EM;
 /// Before a number's digits: Fork's columns sit about a digit apart, all of it on the

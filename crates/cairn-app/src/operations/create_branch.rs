@@ -26,7 +26,7 @@
 
 use std::rc::Rc;
 
-use cairn_model::{BranchName, Confirmed, Consequence, HeadState, Oid, Ref, RowContent};
+use cairn_model::{BranchName, Confirmed, Consequence, Oid, RowContent};
 use cairn_ui::{CreateBranchDialog, LocalChoice};
 use freya::prelude::*;
 
@@ -131,18 +131,7 @@ pub fn open_at_head(view: View) {
     if view.branch.state.peek().is_up() {
         return;
     }
-    let at = {
-        let refreshed = view.refreshed.peek();
-        let Some(refs) = refreshed.refs() else {
-            return;
-        };
-        match &refs.head {
-            HeadState::Branch(name) => refs.find(name).and_then(Ref::commit_id),
-            HeadState::Detached(at) => Some(*at),
-            HeadState::Unborn(_) => None,
-        }
-    };
-    let Some(at) = at else {
+    let Ok(at) = crate::history::head::head_commit(view) else {
         return;
     };
     let subject = {

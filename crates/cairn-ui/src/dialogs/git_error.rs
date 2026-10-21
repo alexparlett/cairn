@@ -22,11 +22,14 @@ use std::rc::Rc;
 use freya::prelude::*;
 
 use crate::accelerators::Os;
-use crate::dialogs::answer_button::{AnswerColours, answer};
+use crate::dialogs::answer_button::{Answer, answer};
 use crate::dialogs::button_order::ordered;
+use crate::dialogs::frame;
+use crate::push_button::{ButtonSize, PushButton};
 
 use crate::commit_box::SKIP_HOOKS_CAPTION;
 use crate::diff::palette::DIFF_FONT_FAMILY;
+use crate::style::{metrics, tones};
 
 /// Fork's words.
 pub const GIT_ERROR_TITLE: &str = "Git Error";
@@ -200,7 +203,6 @@ impl KeyExt for GitErrorDialog {
 
 impl Component for GitErrorDialog {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         let close_id = use_a11y();
         // Opened at the end of the output, where a failing hook says why.
         let controller = use_scroll_controller(|| ScrollConfig {
@@ -208,7 +210,7 @@ impl Component for GitErrorDialog {
             ..ScrollConfig::default()
         });
         let answered = use_state(|| false);
-        let mut showing_files = use_state(|| false);
+        let showing_files = use_state(|| false);
         let once = move |then: EventHandler<()>| {
             move || {
                 let mut answered = answered;
@@ -238,22 +240,22 @@ impl Component for GitErrorDialog {
                 .child(
                     label()
                         .text(ERROR_DETAILS)
-                        .font_size(12.)
-                        .color(colours.text_secondary),
+                        .font_size(metrics::BODY)
+                        .color(tones::DETAIL_LABEL),
                 )
                 .child(
                     label()
                         .text(command.clone())
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .width(Size::fill()),
                 )
                 .child(
                     rect()
                         .width(Size::fill())
-                        .border(Border::new().fill(colours.border).width(1.))
+                        .border(Border::new().fill(tones::RULE).width(1.))
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .child(output),
                 )
         });
@@ -272,88 +274,80 @@ impl Component for GitErrorDialog {
                 .width(Size::fill())
                 .spacing(4.)
                 .child(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_| {
-                            let now = *showing_files.peek();
-                            showing_files.set(!now);
-                        })
-                        .child(crate::dialogs::confirm::SHOW_FILES_CAPTION),
+                    PushButton::caption(
+                        crate::dialogs::confirm::SHOW_FILES_CAPTION,
+                        ButtonSize::Compact,
+                    )
+                    .on_press(move || {
+                        let mut showing = showing_files;
+                        let now = *showing.peek();
+                        showing.set(!now);
+                    }),
                 )
                 .maybe_child(list.map(|list| {
                     rect()
                         .width(Size::fill())
-                        .border(Border::new().fill(colours.border).width(1.))
+                        .border(Border::new().fill(tones::RULE).width(1.))
                         .font_family(DIFF_FONT_FAMILY)
-                        .font_size(12.)
+                        .font_size(metrics::BODY)
                         .child(list)
                 }))
         });
 
         let skip_id = use_a11y();
         let lock_id = use_a11y();
-        let colours_of_answers = AnswerColours::of_theme();
         let mut actions: Vec<Element> = Vec::new();
         if self.remove_lock {
             actions.push(answer(
-                self.serial,
                 lock_id,
                 REMOVE_LOCK_CAPTION.to_owned(),
                 false,
-                &colours_of_answers,
+                Answer::Other,
                 removing,
             ));
         }
         if self.skip {
             actions.push(answer(
-                self.serial,
                 skip_id,
                 SKIP_HOOKS_CAPTION.to_owned(),
                 false,
-                &colours_of_answers,
+                Answer::Other,
                 skip,
             ));
         }
         let closing = close.clone();
         // In the platform's order, Close in Cancel's place.
-        let buttons = PopupButtons::new().children(ordered(
+        // Nothing is the default, as in Fork's Git Error.
+        let buttons = frame::buttons(ordered(
             self.platform,
             actions,
             // Opened on Close, the safe answer, so a Return or Space pressed by habit never
             // skips the hooks nor removes a lock.
             answer(
-                self.serial,
                 close_id,
                 CLOSE_CAPTION.to_owned(),
                 true,
-                &colours_of_answers,
+                Answer::Other,
                 closing,
             ),
         ));
 
-        Popup::new()
-            .width(Size::px(DIALOG_WIDTH))
-            .on_close_request(move |()| close())
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .a11y_modal(true)
-                    .a11y_role(AccessibilityRole::AlertDialog)
-                    .child(PopupTitle::new(self.title.clone()))
-                    .child(
-                        PopupContent::new()
-                            // Wrapped, never cut.
-                            .child(
-                                label()
-                                    .text(self.sentence.clone())
-                                    .font_size(14.)
-                                    .width(Size::fill()),
-                            )
-                            .maybe_child(files)
-                            .maybe_child(details),
-                    )
-                    .child(buttons),
-            )
+        frame::framed(
+            DIALOG_WIDTH,
+            EventHandler::new(move |()| close()),
+            rect()
+                .a11y_modal(true)
+                .a11y_role(AccessibilityRole::AlertDialog)
+                .child(frame::title(self.title.clone()))
+                .child(
+                    frame::content()
+                        // Wrapped, never cut.
+                        .child(label().text(self.sentence.clone()).width(Size::fill()))
+                        .maybe_child(files)
+                        .maybe_child(details),
+                )
+                .child(buttons),
+        )
     }
 
     fn render_key(&self) -> DiffKey {

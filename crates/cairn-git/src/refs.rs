@@ -69,8 +69,8 @@ pub struct RefsCost {
     /// Ref entries read from the store: every listed, hidden or skipped ref, each level of
     /// a symbolic chain followed, and each upstream looked up.
     pub refs_read: usize,
-    /// Objects looked up, to tell what a ref names and to peel its tags, and stash
-    /// commits read for the commit they were made on.
+    /// Objects looked up, to tell what a ref names and to peel its tags, each tag's commit
+    /// read for its date, and stash commits read for the commit they were made on.
     pub objects_read: usize,
     /// Lines of the `refs/stash` reflog read.
     pub reflog_lines_read: usize,
@@ -94,12 +94,24 @@ impl Repository {
         };
         let head = reading.head()?;
         let mut refs = reading.listed(cancel)?;
+        let mut buffer = Vec::new();
         for reference in &mut refs {
-            if reference.kind == RefKind::LocalBranch {
-                if cancel.is_cancelled() {
-                    return Err(Error::RefsCancelled);
+            match reference.kind {
+                RefKind::LocalBranch => {
+                    if cancel.is_cancelled() {
+                        return Err(Error::RefsCancelled);
+                    }
+                    reference.upstream = upstream::of(&mut reading, &reference.name);
                 }
-                reference.upstream = upstream::of(&mut reading, &reference.name);
+                RefKind::Tag => {
+                    if cancel.is_cancelled() {
+                        return Err(Error::RefsCancelled);
+                    }
+                    reference.commit_time = reference
+                        .commit_id()
+                        .and_then(|id| reading.commit_time(&id, &mut buffer));
+                }
+                RefKind::RemoteTracking => {}
             }
         }
         let stashes = stash::list(&mut reading, cancel)?;
@@ -287,6 +299,7 @@ impl Reading<'_> {
                         target,
                         symbolic,
                         upstream: None,
+                        commit_time: None,
                     }),
                     Resolution::Dangling => {}
                     Resolution::Unreadable => self.unreadable += 1,
@@ -357,6 +370,19 @@ impl Reading<'_> {
                 })
             }
         }
+    }
+
+    /// The committer date of the commit `id`, read as git reads it through its substitutions
+    /// (`%(committerdate)`): what a tag is listed by. `None` when it cannot be read.
+    fn commit_time(&mut self, id: &cairn_model::Oid, buffer: &mut Vec<u8>) -> Option<i64> {
+        self.cost.objects_read += 1;
+        let (commit, _) = crate::commit::read_commit(&self.objects, id, buffer).ok()?;
+        commit
+            .committer()
+            .ok()?
+            .time()
+            .ok()
+            .map(|time| time.seconds)
     }
 
     fn kind(&mut self, id: gix::ObjectId) -> Option<gix::objs::Kind> {

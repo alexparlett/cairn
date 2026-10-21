@@ -130,6 +130,8 @@ pub(super) struct Decoration {
     labels: Arc<HashMap<Oid, Vec<SeedLabel>>>,
     head: Option<Oid>,
     stashes: Vec<Stash>,
+    /// The walk starts from a refs snapshot, which names `HEAD`.
+    from_refs: bool,
 }
 
 impl Decoration {
@@ -143,6 +145,17 @@ impl Decoration {
 
     pub(super) fn is_head(&self, commit: &Oid) -> bool {
         self.head.as_ref() == Some(commit)
+    }
+
+    /// `HEAD`'s commit: `None` for an unborn `HEAD`, a detached one naming what is not a commit,
+    /// or a walk not started from refs.
+    pub(super) fn head(&self) -> Option<Oid> {
+        self.head
+    }
+
+    /// Whether the walk starts from a refs snapshot, so `HEAD` is known — named or unborn.
+    pub(super) fn walked_from_refs(&self) -> bool {
+        self.from_refs
     }
 
     pub(super) fn stashes(&self) -> &[Stash] {
@@ -192,6 +205,7 @@ pub(super) fn resolve(
             labels: Arc::clone(&seeds.labels),
             head,
             stashes,
+            from_refs: true,
         },
     ))
 }

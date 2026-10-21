@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 use cairn_model::{Oid, RowId};
 use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::style::{metrics, tones};
 use cairn_ui::{CommitTab, DetailTab, DetailTabs, Refs, chips_of_row, reveal_row};
 use freya::prelude::*;
 
@@ -100,6 +101,7 @@ impl Component for DetailPane {
         rect()
             .width(Size::fill())
             .height(Size::fill())
+            .background(tones::DETAIL)
             // The pane's own chords (previous and next change), heard only from inside it: a
             // key press reaches this from whatever in the pane has focus, and from nowhere else.
             .on_key_down(move |e: Event<KeyboardEventData>| {
@@ -191,6 +193,7 @@ fn commit_body(
             let (toggling, expanding, loading) = (submit.clone(), submit.clone(), submit.clone());
             CommitTab::new(changes)
                 .refs(refs_of(view, id, finder))
+                .zone(view.zone.read().clone())
                 .expansion(expansion)
                 .side_by_side(side_by_side)
                 .on_parent(move |parent: Oid| follow_parent(parent, view, submit.as_deref()))
@@ -204,6 +207,9 @@ fn commit_body(
                 })
                 .on_load(move |index: usize| {
                     diff::actions::load_in_place(index, view, loading.as_deref());
+                })
+                .on_file_menu(move |(index, choice): (usize, cairn_ui::FileChoice)| {
+                    crate::detail::file_copy::chosen(view, index, choice);
                 })
                 .into()
         }
@@ -256,16 +262,21 @@ fn follow_parent(parent: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 pub(crate) fn notice(message: impl Into<String>, alarming: bool) -> Element {
-    let colours = get_theme_or_default();
+    // An alarming notice keeps the theme's error tone, which Fork Dark's table does not name.
     let colour = if alarming {
-        colours.read().colors().error
+        get_theme_or_default().read().colors().error
     } else {
-        colours.read().colors().text_placeholder
+        tones::PLACEHOLDER
     };
     rect()
         .expanded()
         .center()
         .padding(12.)
-        .child(label().text(message.into()).font_size(13.).color(colour))
+        .child(
+            label()
+                .text(message.into())
+                .font_size(metrics::BODY)
+                .color(colour),
+        )
         .into()
 }

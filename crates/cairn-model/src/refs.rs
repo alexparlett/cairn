@@ -90,6 +90,10 @@ pub struct Ref {
     pub symbolic: Option<RefName>,
     /// A local branch's upstream, when it has one configured; `None` for every other kind.
     pub upstream: Option<Upstream>,
+    /// For a tag, the committer date of the commit it identifies, in seconds since the epoch —
+    /// what Fork lists tags by, newest first (`sidebar_rows`). `None` for every other kind,
+    /// and for a tag that identifies no commit or whose commit could not be read.
+    pub commit_time: Option<i64>,
 }
 
 impl Ref {
@@ -252,6 +256,7 @@ mod tests {
             target,
             symbolic: None,
             upstream: None,
+            commit_time: None,
         }
     }
 

@@ -1,23 +1,32 @@
-//! One commit's row in the history list: its graph, the chips of the refs pointing at it
-//! (`ref_chips`), its subject — bold on `HEAD`'s row, as Fork marks it — its author, short id
-//! and date.
+//! One commit's row in the history list, as Fork draws it (`docs/research/ui-review/
+//! fork-window-survey-2026-10-16.md`, §4), with no heading over the list: its graph, the chips
+//! of the refs pointing at it (`ref_chips`), its subject, its author after an avatar
+//! (`avatar`), its short id and its local date — the whole row bold on `HEAD`'s, and its texts
+//! grey on a row `HEAD` cannot reach.
 
 use cairn_model::{CommitSummary, RowEdges};
 use freya::prelude::*;
 
+use crate::avatar::avatar;
 use crate::history::date_text;
 use crate::history::graph_cell::graph_cell;
 use crate::history::graph_geometry::{ROW_HEIGHT, graph_width};
 use crate::history::ref_chips::{CHIP_GAP, Chip, chips_row};
+use crate::local_time::LocalZone;
+use crate::style::{metrics, tones};
 
-pub const AUTHOR_WIDTH: f32 = 150.0;
-pub const ID_WIDTH: f32 = 72.0;
-/// Sized for `YYYY-MM-DD HH:MM`.
-pub const DATE_WIDTH: f32 = 132.0;
+/// The author column: the avatar and the name after it.
+pub const AUTHOR_WIDTH: f32 = 140.0;
+/// The 7-character id.
+pub const ID_WIDTH: f32 = 64.0;
+/// Sized for Fork's `d Mon yyyy HH:mm` at its widest, `28 May 2026 23:59`.
+pub const DATE_WIDTH: f32 = 116.0;
 pub const COLUMN_GAP: f32 = 10.0;
 pub const ROW_PADDING: f32 = 10.0;
+/// The room between an avatar and the author's name.
+const AVATAR_GAP: f32 = 5.0;
 
-pub const ROW_FONT_SIZE: f32 = 13.0;
+pub const ROW_FONT_SIZE: f32 = metrics::BODY;
 
 /// The room a row's chips and subject share in a list `list_width` wide whose graph column
 /// is `lanes` wide: what is left of the row past its padding, the graph and the fixed
@@ -38,9 +47,12 @@ pub struct CommitRow {
     graph: RowEdges,
     lanes: usize,
     selected: bool,
+    focused: bool,
     chips: Vec<Chip>,
     head: bool,
     lost: bool,
+    head_reaches: bool,
+    zone: LocalZone,
     key: DiffKey,
 }
 
@@ -54,15 +66,25 @@ impl CommitRow {
             graph,
             lanes,
             selected: false,
+            focused: false,
             chips: Vec::new(),
             head: false,
             lost: false,
+            head_reaches: true,
+            zone: LocalZone::default(),
             key: DiffKey::None,
         }
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Whether the list the row is in has focus: a selected row is Fork's blue with white
+    /// text while it has, and its grey when not (`tones::selected`).
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
         self
     }
 
@@ -73,15 +95,29 @@ impl CommitRow {
         self
     }
 
-    /// Whether this is `HEAD`'s commit, whose subject is bold.
+    /// Whether this is `HEAD`'s commit, whose row is bold — subject, author, id and date — as
+    /// Fork marks it.
     pub fn head(mut self, head: bool) -> Self {
         self.head = head;
         self
     }
 
+    /// Whether `HEAD` reaches this commit, as the walk marked it: when it does not, the row's
+    /// texts are drawn in Fork's grey for such a row, its graph and chips in their own colours.
+    pub fn head_reaches(mut self, head_reaches: bool) -> Self {
+        self.head_reaches = head_reaches;
+        self
+    }
+
+    /// The zone the date is drawn in, handed down by the window.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
+        self
+    }
+
     /// Whether no ref reaches this commit — Show Lost Commits drew it from a reflog — so the
-    /// row's texts — subject, author, short id and date — are drawn in the placeholder grey, as
-    /// Fork draws a lost commit, its graph and chips in their own colours.
+    /// row's texts — subject, author, short id and date — are drawn in Fork's grey for a row
+    /// `HEAD` cannot reach, its graph and chips in their own colours.
     pub fn lost(mut self, lost: bool) -> Self {
         self.lost = lost;
         self
@@ -96,17 +132,17 @@ impl KeyExt for CommitRow {
 
 impl ComponentOwned for CommitRow {
     fn render(self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let dimmed = colours.read().colors().text_placeholder;
-        let (primary, secondary) = if self.lost {
-            (dimmed, dimmed)
-        } else {
-            (
-                colours.read().colors().text_primary,
-                colours.read().colors().text_secondary,
-            )
+        // A selected row's every text is in the selection's tone; any other is the body's, or
+        // the unreachable grey for a commit `HEAD` cannot reach or a lost one. A selected row and
+        // `HEAD`'s are bold throughout.
+        let chosen = tones::selected(self.focused);
+        let text = match (self.selected, self.lost || !self.head_reaches) {
+            (true, _) => chosen.text,
+            (false, true) => tones::UNREACHABLE_TEXT,
+            (false, false) => tones::TEXT,
         };
-        let highlight = colours.read().colors().surface_secondary;
+        let emphasised = self.selected || self.head;
+        let bold = |label: Label| label.maybe(emphasised, |l| l.font_weight(FontWeight::BOLD));
 
         let row = rect()
             .horizontal()
@@ -145,176 +181,58 @@ impl ComponentOwned for CommitRow {
                                 (!self.chips.is_empty())
                                     .then(|| chips_row(&self.chips, self.graph.lane)),
                             )
-                            .child(
+                            .child(bold(
                                 label()
                                     .text(self.commit.summary)
                                     .width(Size::flex(1.))
                                     .max_lines(1)
                                     .text_overflow(TextOverflow::Ellipsis)
                                     .font_size(ROW_FONT_SIZE)
-                                    .maybe(self.head, |label| label.font_weight(FontWeight::BOLD))
-                                    .color(primary),
-                            ),
+                                    .color(text),
+                            )),
                     ),
             )
             .child(
-                label()
-                    .text(self.commit.author_name)
+                rect()
+                    .horizontal()
+                    .content(Content::Flex)
                     .width(Size::px(AUTHOR_WIDTH))
-                    .max_lines(1)
-                    .text_overflow(TextOverflow::Ellipsis)
-                    .font_size(ROW_FONT_SIZE)
-                    .color(secondary),
+                    .height(Size::px(ROW_HEIGHT))
+                    .cross_align(Alignment::center())
+                    .spacing(AVATAR_GAP)
+                    .child(avatar(&self.commit.author_name))
+                    .child(bold(
+                        label()
+                            .text(self.commit.author_name)
+                            .width(Size::flex(1.))
+                            .max_lines(1)
+                            .text_overflow(TextOverflow::Ellipsis)
+                            .font_size(ROW_FONT_SIZE)
+                            .color(text),
+                    )),
             )
-            .child(
+            .child(bold(
                 label()
                     .text(self.commit.id.short())
                     .width(Size::px(ID_WIDTH))
                     .max_lines(1)
                     .font_size(ROW_FONT_SIZE)
-                    .color(secondary),
-            )
-            .child(
+                    .color(text),
+            ))
+            .child(bold(
                 label()
-                    .text(date_text::utc_minutes(self.commit.author_time))
+                    .text(date_text::history_date(self.commit.author_time, &self.zone))
                     .width(Size::px(DATE_WIDTH))
                     .max_lines(1)
                     .font_size(ROW_FONT_SIZE)
-                    .color(secondary),
-            );
-        // The selection's background behind the row.
+                    .color(text),
+            ));
+        // The selection's band behind the row.
         rect()
             .width(Size::fill())
             .height(Size::px(ROW_HEIGHT))
-            .maybe(self.selected, |el| el.background(highlight))
+            .maybe(self.selected, |el| el.background(chosen.band))
             .child(row)
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
-    }
-}
-
-/// Show Lost Commits' check box's caption, drawn beside it and read by assistive technology.
-pub const SHOW_LOST_COMMITS_CAPTION: &str = "Show Lost Commits";
-
-/// The history's column headings, and — at the right end of the "Graph and subject" cell, just
-/// left of "Author" — Show Lost Commits' check box, so every heading stays over its column and no
-/// row loses width.
-#[derive(Clone)]
-pub struct HistoryHeader {
-    /// Show Lost Commits' state, when the header draws its check box.
-    lost: Option<bool>,
-    on_lost: EventHandler<bool>,
-    key: DiffKey,
-}
-
-impl HistoryHeader {
-    pub fn new() -> Self {
-        Self {
-            lost: None,
-            on_lost: EventHandler::new(|_: bool| {}),
-            key: DiffKey::None,
-        }
-    }
-
-    /// Draws Show Lost Commits' check box, ticked while `on`; a press reports the state it
-    /// turns to through `on_toggle`, which flips it exactly as the chord does. Its tooltip is
-    /// the chord the accelerator table lists for this platform.
-    pub fn show_lost_commits(mut self, on: bool, on_toggle: impl Into<EventHandler<bool>>) -> Self {
-        self.lost = Some(on);
-        self.on_lost = on_toggle.into();
-        self
-    }
-}
-
-// Hand-written: an `EventHandler` never compares equal, and its identity is stable.
-impl PartialEq for HistoryHeader {
-    fn eq(&self, other: &Self) -> bool {
-        self.lost == other.lost && self.key == other.key
-    }
-}
-
-impl std::fmt::Debug for HistoryHeader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HistoryHeader")
-            .field("lost", &self.lost)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Default for HistoryHeader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl KeyExt for HistoryHeader {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl ComponentOwned for HistoryHeader {
-    fn render(self) -> impl IntoElement {
-        let colours = get_theme_or_default();
-        let text = colours.read().colors().text_placeholder;
-        let line = colours.read().colors().border;
-
-        let heading = |caption: &'static str, width: Size| {
-            label()
-                .text(caption)
-                .width(width)
-                .max_lines(1)
-                .font_size(ROW_FONT_SIZE)
-                .color(text)
-        };
-
-        rect()
-            .horizontal()
-            .content(Content::Flex)
-            .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
-            .cross_align(Alignment::center())
-            .padding(Gaps::new(0., ROW_PADDING, 0., ROW_PADDING))
-            .spacing(COLUMN_GAP)
-            .border(Border::new().fill(line).width(BorderWidth {
-                top: 0.,
-                right: 0.,
-                bottom: 1.,
-                left: 0.,
-            }))
-            .child(
-                // The check box laid over the cell's right end, so the heading still spans
-                // the column it names.
-                rect()
-                    .width(Size::flex(1.))
-                    .height(Size::px(ROW_HEIGHT))
-                    .cross_align(Alignment::center())
-                    .child(heading("Graph and subject", Size::fill()))
-                    .maybe_child(self.lost.map(|on| {
-                        let chord = crate::accelerators::chord_name(
-                            crate::accelerators::Action::ShowLostCommits,
-                            crate::accelerators::Os::current(),
-                        )
-                        .unwrap_or_default();
-                        rect()
-                            .position(Position::new_absolute().top(0.).right(0.))
-                            .height(Size::px(ROW_HEIGHT))
-                            .cross_align(Alignment::center())
-                            .child(TooltipContainer::new(Tooltip::new_text(chord)).child(
-                                crate::check_box::check_box(
-                                    SHOW_LOST_COMMITS_CAPTION,
-                                    on,
-                                    true,
-                                    self.on_lost.clone(),
-                                ),
-                            ))
-                    })),
-            )
-            .child(heading("Author", Size::px(AUTHOR_WIDTH)))
-            .child(heading("Commit", Size::px(ID_WIDTH)))
-            .child(heading("Date (UTC)", Size::px(DATE_WIDTH)))
     }
 
     fn render_key(&self) -> DiffKey {

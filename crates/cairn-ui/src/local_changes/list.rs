@@ -1,6 +1,8 @@
-//! Local Changes' left side: a filter field, then Unstaged above Staged behind a draggable
-//! splitter, each headed by its name and each one flat, virtualised list of paths with Fork's
-//! badges. The diff of the selection's primary is the caller's, on the right.
+//! Local Changes' left side: Fork's bar across both lists — the filter, Stage All, the eye
+//! (greyed) and View Mode (`local_changes::bar`) — then Unstaged above Staged behind a
+//! draggable splitter, each under its bold heading and each one flat, virtualised list of paths
+//! with Fork's badges, 20 px apart. The diff of the selection's primary is the caller's, on the
+//! right.
 //!
 //! **A row.** Its badge, then its path, a rename's or a copy's source before it. The badges are
 //! Fork's, told apart by their shape: `M` for a modified file and a type change alike, `+` for
@@ -22,28 +24,28 @@
 //! its edges), each list's Stage or Unstage button — greyed while the selection is in the other
 //! list — and the context menu (`local_changes::menu`); Stage All and Unstage All by the
 //! heading's button with the table's heading press held (Shift on Linux, ⌥ on macOS: both
-//! buttons read Stage All and Unstage All while it is, enabled whatever is selected) and by the
-//! small double chevrons always drawn, ⇊ in Unstaged and ⇈ in Staged; and the discard chord and
-//! menu item, on the unstaged side only. The selection it draws is the caller's
-//! ([`LocalSelection`]), read by a binary search per row built; ↑ and ↓ move from its primary.
+//! buttons read Stage All and Unstage All while it is, enabled whatever is selected), by Stage
+//! All's double chevron in the bar over both lists, as Fork's, and by the small ⇈ on the Staged
+//! heading, always drawn; and the discard chord and menu item, on the unstaged side only. The
+//! selection it draws is the caller's ([`LocalSelection`]), read by a binary search per row
+//! built; ↑ and ↓ move from its primary.
 
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys, Scope};
-use crate::detail::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
-use crate::detail::commit_tab::DETAIL_ROW_HEIGHT;
+use crate::detail::changes_list::{FILTERING, filter_count};
 use crate::detail::file_filter::ShownFiles;
 use crate::diff::palette::DIFF_FONT_FAMILY;
-use crate::diff::toggle_glyphs::Glyph;
 use crate::history::ref_glyphs::RefGlyph;
+use crate::local_changes::bar::ListsBar;
 use crate::local_changes::drag::ListDrag;
 use crate::local_changes::menu::{
     MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
-    no_discard,
+    menu_groups, no_discard,
 };
 use crate::local_changes::selection::LocalSelection;
-use crate::text_field::text_field;
+use crate::style::{focus, icons, metrics, tones};
 
 /// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
 /// caller decides what each does to its selection and what it asks.
@@ -64,6 +66,8 @@ pub enum ListIntent {
     Drop { from: ChangeList, path: RepoPath },
     /// Copy Path: the selection's paths of `list`.
     CopyPaths(ChangeList),
+    /// Copy Full Path: the selection's paths of `list`, each joined to the working tree's.
+    CopyFullPaths(ChangeList),
 }
 
 /// The heading over the upper list.
@@ -73,10 +77,13 @@ pub const STAGED_CAPTION: &str = "Staged";
 /// Said in place of both lists when the filter leaves no path.
 pub const NO_PATH_MATCHES: &str = "No path matches the filter.";
 
-/// A heading's height.
-pub const LIST_HEADER_HEIGHT: f32 = 26.0;
+/// A heading's height, its rule included.
+pub const LIST_HEADER_HEIGHT: f32 = metrics::LIST_HEADING;
+/// A row's height: Fork's 20 px.
+pub const LOCAL_CHANGES_ROW_HEIGHT: f32 = metrics::LOCAL_CHANGES_ROW;
+/// The bar over both lists, its rule included.
+pub const LISTS_BAR_HEIGHT: f32 = metrics::LISTS_BAR;
 
-const FONT_SIZE: f32 = 13.0;
 const BADGE_WIDTH: f32 = 18.0;
 
 /// The heading over `list`.
@@ -143,6 +150,8 @@ pub struct LocalChangesList {
     held: Option<Readable<HeldKeys>>,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
+    /// A request for the Unstaged list to take focus: each new value given takes it once.
+    focus_unstaged: Option<u64>,
     key: DiffKey,
 }
 
@@ -167,8 +176,18 @@ impl LocalChangesList {
             held: None,
             on_choose: EventHandler::new(|_| {}),
             on_intent: EventHandler::new(|_| {}),
+            focus_unstaged: None,
             key: DiffKey::None,
         }
+    }
+
+    /// Puts focus in the Unstaged list, once for each new request (Fork's Ctrl+1, "Show
+    /// Uncommitted Changes", which leaves focus there): a list mounted with a request takes
+    /// focus as it mounts, and one already shown takes it when the request changes. `None` —
+    /// Local Changes reached by a press — asks nothing.
+    pub fn focus_unstaged(mut self, request: Option<u64>) -> Self {
+        self.focus_unstaged = request;
+        self
     }
 
     /// How many distinct paths the filter's rows show, as the pass that left them counted them
@@ -225,6 +244,7 @@ impl PartialEq for LocalChangesList {
             && self.shown_paths == other.shown_paths
             && self.selection == other.selection
             && self.held == other.held
+            && self.focus_unstaged == other.focus_unstaged
             && self.key == other.key
     }
 }
@@ -243,7 +263,6 @@ impl KeyExt for LocalChangesList {
 
 impl Component for LocalChangesList {
     fn render(&self) -> impl IntoElement {
-        let colours = get_theme_or_default().read().colors().clone();
         // The split's height as last laid out, which turns a dragged height into a share; and
         // the share itself when the caller keeps none. Peeked: a measurement redraws nothing.
         let mut split_height = use_state(|| 0f32);
@@ -270,8 +289,8 @@ impl Component for LocalChangesList {
                     filter_count(self.shown_paths.unwrap_or(total), total)
                 })
                 .max_lines(1)
-                .font_size(12.)
-                .color(colours.text_secondary)
+                .font_size(metrics::BODY)
+                .color(tones::DETAIL_LABEL)
         });
         let drag = ListDrag::used();
         let section = |list: ChangeList, shown: &Readable<ShownFiles>, rows: usize| ListSection {
@@ -284,6 +303,10 @@ impl Component for LocalChangesList {
             drag,
             on_choose: self.on_choose.clone(),
             on_intent: self.on_intent.clone(),
+            focus_request: match list {
+                ChangeList::Unstaged => self.focus_unstaged,
+                ChangeList::Staged => None,
+            },
         };
         let lists: Element = if filtering && !waiting && unstaged + staged == 0 {
             rect()
@@ -293,8 +316,8 @@ impl Component for LocalChangesList {
                 .child(
                     label()
                         .text(NO_PATH_MATCHES)
-                        .font_size(FONT_SIZE)
-                        .color(colours.text_placeholder),
+                        .font_size(metrics::BODY)
+                        .color(tones::PLACEHOLDER),
                 )
                 .into()
         } else {
@@ -327,21 +350,21 @@ impl Component for LocalChangesList {
                 )
                 .into()
         };
+        let bar = ListsBar {
+            filter: self.filter.clone(),
+            stage_all: unstaged > 0,
+            on_intent: self.on_intent.clone(),
+        };
         drag.on(rect())
             .expanded()
             .content(Content::Flex)
-            .child(
+            .child(bar.element())
+            .maybe_child(count.map(|count| {
                 rect()
                     .width(Size::fill())
-                    .padding(Gaps::new(4., 6., 4., 6.))
-                    .child(
-                        text_field(self.filter.clone())
-                            .placeholder(FILTER_PLACEHOLDER)
-                            .compact()
-                            .width(Size::fill()),
-                    )
-                    .maybe_child(count),
-            )
+                    .padding(Gaps::new(2., 8., 2., 8.))
+                    .child(count)
+            }))
             .child(lists)
     }
 
@@ -362,11 +385,14 @@ struct ListSection {
     drag: ListDrag,
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
+    /// Takes focus once for each new value (`LocalChangesList::focus_unstaged`).
+    focus_request: Option<u64>,
 }
 
 impl PartialEq for ListSection {
     fn eq(&self, other: &Self) -> bool {
-        self.list == other.list
+        self.focus_request == other.focus_request
+            && self.list == other.list
             && self.changes == other.changes
             && self.shown == other.shown
             && self.rows == other.rows
@@ -391,11 +417,16 @@ struct ListData {
     on_choose: EventHandler<(ChangeList, usize)>,
     on_intent: EventHandler<ListIntent>,
     list_id: AccessibilityId,
+    /// Whether the list has focus, which a selected row's tone says.
+    focused: bool,
 }
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
-        self.list == other.list && self.rows == other.rows && self.list_id == other.list_id
+        self.list == other.list
+            && self.rows == other.rows
+            && self.list_id == other.list_id
+            && self.focused == other.focused
     }
 }
 
@@ -415,24 +446,32 @@ fn button_caption(list: ChangeList, all: bool) -> &'static str {
     }
 }
 
-/// A small control of a list's heading: pressable without taking focus from the list, as
-/// Freya's `Button` would. Disabled, it reports nothing and draws dimmed.
+/// A control of a list's heading, bordered as Fork's: pressable without taking focus from the
+/// list, as Freya's `Button` would. Disabled, it reports nothing and draws in Fork's disabled
+/// tones.
 fn heading_control(
     child: Element,
     name: &str,
     enabled: bool,
+    padding: f32,
     pressed: impl Fn() + 'static,
 ) -> Rect {
-    let colours = get_theme_or_default().read().colors().clone();
     let control = rect()
-        .padding(Gaps::new(1., 6., 1., 6.))
-        .corner_radius(4.)
+        .height(Size::px(metrics::LIST_HEADING_BUTTON))
+        .main_align(Alignment::Center)
+        .padding(Gaps::new(0., padding, 0., padding))
+        .corner_radius(metrics::CONTROL_RADIUS)
+        .background(if enabled {
+            tones::BUTTON
+        } else {
+            tones::DISABLED_FILL
+        })
         .border(
             Border::new()
                 .fill(if enabled {
-                    colours.border
+                    tones::BUTTON_BORDER
                 } else {
-                    colours.disabled
+                    tones::DISABLED_BORDER
                 })
                 .width(1.),
         )
@@ -452,10 +491,15 @@ impl Component for ListSection {
     fn render(&self) -> impl IntoElement {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
+        // A focus request taken as the list mounts with one, and again each time it changes.
+        use_side_effect_with_deps(&self.focus_request, move |request| {
+            if request.is_some() {
+                list_id.request_focus();
+            }
+        });
         let controller = use_scroll_controller(ScrollConfig::default);
         let mut edge = crate::edge_scroll::use_edge_scroll(controller);
         let doubled = use_state(|| false);
-        let colours = get_theme_or_default().read().colors().clone();
         let (list, drag) = (self.list, self.drag);
         // A drag from the other list scrolls this one at its edges while it is on: the list it
         // would drop on, never the one it came from.
@@ -480,6 +524,8 @@ impl Component for ListSection {
             on_choose: self.on_choose.clone(),
             on_intent: self.on_intent.clone(),
             list_id,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
         // The heading's button acts on the selection when it is in this list, and is greyed
         // while it is in the other or there is none; with the heading press held it is Stage
@@ -498,14 +544,20 @@ impl Component for ListSection {
         });
         let caption = button_caption(list, all);
         let acting = self.on_intent.clone();
+        let pressable = if all { listed } else { selected };
         let button = heading_control(
             label()
                 .text(caption)
-                .font_size(12.)
-                .color(colours.text_primary)
+                .font_size(metrics::BODY)
+                .color(if pressable {
+                    tones::TEXT
+                } else {
+                    tones::DISABLED_TEXT
+                })
                 .into(),
             caption,
-            if all { listed } else { selected },
+            pressable,
+            metrics::LIST_HEADING_BUTTON_PADDING,
             move || {
                 let action = if all {
                     Action::StageOrUnstageAll
@@ -515,26 +567,27 @@ impl Component for ListSection {
                 acting.call(ListIntent::Act(list, action));
             },
         );
-        // The double chevron in each heading, kept deliberately small, as Fork keeps its own:
-        // ⇊ Stage All in Unstaged (Fork's), ⇈ Unstage All in Staged (where Fork for Windows
-        // shows Unstage All only while Shift is held).
+        // The Staged heading's double chevron, ⇈ Unstage All, kept deliberately small, as Fork
+        // keeps its own Stage All in the bar over both lists — where Fork for Windows shows
+        // Unstage All only while Shift is held. Unstaged's heading has none: Stage All is the
+        // bar's.
         let staging_all = self.on_intent.clone();
-        let (glyph, all_caption) = match list {
-            ChangeList::Unstaged => (Glyph::StageAll, STAGE_ALL_CAPTION),
-            ChangeList::Staged => (Glyph::UnstageAll, UNSTAGE_ALL_CAPTION),
-        };
-        let chevron = TooltipContainer::new(Tooltip::new_text(all_caption)).child(heading_control(
-            glyph
-                .draw(if listed {
-                    colours.text_primary
-                } else {
-                    colours.disabled
-                })
-                .into(),
-            all_caption,
-            listed,
-            move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),
-        ));
+        let chevron = (list == ChangeList::Staged).then(|| {
+            TooltipContainer::new(Tooltip::new_text(UNSTAGE_ALL_CAPTION)).child(heading_control(
+                icons::unstage_all(
+                    metrics::DIFF_BAR_ICON,
+                    if listed {
+                        tones::TEXT
+                    } else {
+                        tones::DISABLED_TEXT
+                    },
+                ),
+                UNSTAGE_ALL_CAPTION,
+                listed,
+                metrics::LIST_HEADING_BUTTON_PADDING / 2.,
+                move || staging_all.call(ListIntent::Act(list, Action::StageOrUnstageAll)),
+            ))
+        });
         let dropping = self.on_intent.clone();
         rect()
             .expanded()
@@ -558,38 +611,54 @@ impl Component for ListSection {
                     .width(Size::fill())
                     .height(Size::px(LIST_HEADER_HEIGHT))
                     .cross_align(Alignment::Center)
-                    .padding(Gaps::new(0., 8., 0., 8.))
+                    .padding(Gaps::new(0., 4., 0., 6.))
                     .spacing(6.)
-                    .background(colours.surface_tertiary)
+                    .background(tones::HEADING_BAR)
+                    .border(
+                        Border::new()
+                            .fill(tones::RULE)
+                            .width(BorderWidth {
+                                top: 0.,
+                                right: 0.,
+                                bottom: 1.,
+                                left: 0.,
+                            })
+                            .alignment(BorderAlignment::Inner),
+                    )
                     .child(
                         label()
                             .text(list_caption(list))
                             .width(Size::flex(1.))
                             .max_lines(1)
-                            .font_size(12.)
+                            .font_size(metrics::HEADING)
                             .font_weight(FontWeight::BOLD)
-                            .color(colours.text_secondary),
+                            .color(tones::TEXT),
                     )
-                    .child(chevron)
+                    .maybe_child(chevron)
                     .child(button),
             )
             .child(
                 edge.on(rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
+                    .background(tones::HISTORY)
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
-                    .maybe(focus() == Focus::Keyboard || targeted, |el| {
-                        el.border(Border::new().fill(colours.border_focus).width(1.))
+                    // The ring for keyboard focus, and for the list a drag would drop on.
+                    .maybe(focus::shown(focus()) || targeted, |el| {
+                        el.border(focus::ring())
                     })
                     .on_key_down(keyboard(&data, controller)))
                     .child(
                         VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                             // Room for the horizontal scrollbar after the last row
                             // (`end_room`); a row past the list's own builds empty.
-                            .length(crate::end_room::with_end_room(self.rows, DETAIL_ROW_HEIGHT))
-                            .item_size(DETAIL_ROW_HEIGHT)
+                            .length(crate::end_room::with_end_room(
+                                self.rows,
+                                LOCAL_CHANGES_ROW_HEIGHT,
+                            ))
+                            .item_size(LOCAL_CHANGES_ROW_HEIGHT)
                             // The arrows move the selection, not the viewport.
                             .scroll_with_arrows(false)
                             .expanded(),
@@ -626,6 +695,24 @@ fn keyboard(
         data.on_intent.clone(),
     );
     move |e: Event<KeyboardEventData>| {
+        // The copy chords choose the menu's item that shows them, for the selection in this
+        // list; with none here, nothing.
+        if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
+            e.stop_propagation();
+            let in_list = selection.as_ref().is_some_and(|selection| {
+                selection
+                    .peek()
+                    .as_ref()
+                    .is_some_and(|selection| selection.list() == list)
+            });
+            if let Some(choice) = in_list
+                .then(|| crate::menu::chosen_by(&menu_groups(list, None), copy))
+                .flatten()
+            {
+                on_intent.call(intent_of(list, choice));
+            }
+            return;
+        }
         let heard = accelerators::resolve_key(&e, Scope::LocalChanges)
             .or_else(|| accelerators::resolve_key(&e, Scope::LocalChangesLists));
         let extending = match heard {
@@ -674,8 +761,8 @@ fn keyboard(
             None => on_choose.call((list, row)),
         }
         controller.scroll_to_offset(
-            drawn as f32 * DETAIL_ROW_HEIGHT,
-            DETAIL_ROW_HEIGHT,
+            drawn as f32 * LOCAL_CHANGES_ROW_HEIGHT,
+            LOCAL_CHANGES_ROW_HEIGHT,
             Direction::Vertical,
         );
     }
@@ -692,23 +779,27 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let Some(at) = data.shown.read().file_at(item.index) else {
         return row.into();
     };
-    let (drawn, path) = {
+    let list = data.list;
+    let chosen = tones::selected(data.focused);
+    let (drawn, path, selected) = {
         let changes = data.changes.read();
-        let Some(change) = changes.get(data.list, at) else {
+        let Some(change) = changes.get(list, at) else {
             // The count and the rows can disagree for one frame.
             return row.into();
         };
-        (change_row(&change), change.path.clone())
+        // Read, not peeked: the rows redraw when the selection changes.
+        let selected = data.selection.as_ref().is_some_and(|selection| {
+            selection
+                .read()
+                .as_ref()
+                .is_some_and(|selection| selection.holds(list, change.path))
+        });
+        (
+            change_row(&change, selected.then_some(chosen.text)),
+            change.path.clone(),
+            selected,
+        )
     };
-    let list = data.list;
-    // Read, not peeked: the rows redraw when the selection changes.
-    let selected = data.selection.as_ref().is_some_and(|selection| {
-        selection
-            .read()
-            .as_ref()
-            .is_some_and(|selection| selection.holds(list, &path))
-    });
-    let highlight = get_theme_or_default().read().colors().surface_secondary;
     let (list_id, on_choose, on_intent) =
         (data.list_id, data.on_choose.clone(), data.on_intent.clone());
     let (held, mut drag, mut doubled) = (data.held.clone(), data.drag, data.doubled);
@@ -716,7 +807,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let downing = (data.on_intent.clone(), data.on_choose.clone());
     let (changes, selection) = (data.changes.clone(), data.selection.clone());
     let menu_path = path.clone();
-    row.maybe(selected, |el| el.background(highlight))
+    row.maybe(selected, |el| el.background(chosen.band))
         .on_pointer_down(move |e: Event<PointerEventData>| {
             match e.button() {
                 Some(MouseButton::Right) => {
@@ -747,11 +838,9 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                     ContextMenu::open_from_down(menu(
                         list,
                         refusal.as_ref(),
+                        list_id,
                         EventHandler::new(move |choice: MenuChoice| {
-                            choosing.call(match choice {
-                                MenuChoice::Act(action) => ListIntent::Act(list, action),
-                                MenuChoice::CopyPaths => ListIntent::CopyPaths(list),
-                            })
+                            choosing.call(intent_of(list, choice))
                         }),
                     ));
                 }
@@ -784,20 +873,33 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
-/// One path's row: its badge and its text.
-fn change_row(change: &LocalChange<'_>) -> Element {
+/// What choosing `choice` from `list`'s menu asks of the window.
+fn intent_of(list: ChangeList, choice: MenuChoice) -> ListIntent {
+    match choice {
+        MenuChoice::Act(action) => ListIntent::Act(list, action),
+        MenuChoice::CopyPaths => ListIntent::CopyPaths(list),
+        MenuChoice::CopyFullPaths => ListIntent::CopyFullPaths(list),
+    }
+}
+
+/// One path's row: its badge and its text, the text bold in `selected`'s tone when the row is
+/// selected.
+fn change_row(change: &LocalChange<'_>, selected: Option<Color>) -> Element {
+    // Fork Dark's badges where it gives one (an added path's green, a modified one's yellow);
+    // the theme's status tones for the rest. Colour reinforces the shape and never stands in
+    // for it.
     let colours = get_theme_or_default().read().colors().clone();
-    // Colour reinforces the shape and never stands in for it.
     let colour = match change.kind {
-        ChangeKind::Added => colours.success,
+        ChangeKind::Added => tones::ADDED_BADGE,
+        ChangeKind::Modified | ChangeKind::TypeChanged => tones::MODIFIED_BADGE,
         ChangeKind::Deleted => colours.error,
-        ChangeKind::Modified | ChangeKind::TypeChanged | ChangeKind::Conflicted => colours.warning,
+        ChangeKind::Conflicted => colours.warning,
         ChangeKind::Renamed | ChangeKind::Copied | ChangeKind::Submodule => colours.info,
     };
     let badge: Element = match change_badge(change.kind) {
         ChangeBadge::Letter(letter) => label()
             .text(letter)
-            .font_size(FONT_SIZE)
+            .font_size(metrics::BODY)
             .font_weight(FontWeight::BOLD)
             .color(colour)
             .into(),
@@ -818,8 +920,9 @@ fn change_row(change: &LocalChange<'_>) -> Element {
             label()
                 .text(change_text(change))
                 .max_lines(1)
-                .font_size(FONT_SIZE)
-                .color(colours.text_primary)
+                .font_size(metrics::BODY)
+                .color(selected.unwrap_or(tones::TEXT))
+                .maybe(selected.is_some(), |el| el.font_weight(FontWeight::BOLD))
                 .font_family(DIFF_FONT_FAMILY),
         )
         .into()

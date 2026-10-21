@@ -17,6 +17,7 @@
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, FieldKey, FieldScope, RecallStep};
+use crate::style::tones;
 
 /// A text field with no chord of its own, such as a filter: the window's chords pass through
 /// it, and it keeps every other key.
@@ -45,6 +46,20 @@ pub fn text_field_recalling(
     recall: Callback<RecallStep, bool>,
 ) -> Input {
     Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into()), Some(recall)))
+}
+
+/// `field` drawn as one part of a box of several, the box's border and the rules between its
+/// parts its own: flat on the field's fill, square, with the toolkit's focus outline in Fork's
+/// focused tone — the commit box's subject and description.
+pub fn field_part(field: Input) -> Input {
+    field
+        .flat()
+        .background(tones::FIELD)
+        .hover_background(tones::FIELD)
+        .focus_background(tones::FIELD)
+        .focus_border_fill(tones::ACCENT)
+        .focus_ring_fill(tones::ACCENT)
+        .corner_radius(CornerRadius::new_all(0.))
 }
 
 /// The pre-key handler: `true` lets the field's editor read the key.

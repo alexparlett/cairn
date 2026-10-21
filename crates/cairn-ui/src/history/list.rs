@@ -9,6 +9,10 @@ use crate::accelerators::{self, Action, HeldKeys, Scope};
 use crate::history::commit_row::label_room;
 use crate::history::graph_geometry::ROW_HEIGHT;
 use crate::history::ref_chips::{Chip, chips_of_row};
+use crate::history::row_menu::{RowChoice, menu_commits, row_menu};
+use crate::local_time::LocalZone;
+use crate::menu::context_menu_over;
+use crate::style::{focus, tones};
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -37,7 +41,14 @@ pub struct RowRender {
     pub head: bool,
     /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed.
     pub lost: bool,
+    /// Whether `HEAD` reaches the row's commit, as the walk marked it: a row it does not is
+    /// drawn greyed, a stash's among them.
+    pub head_reaches: bool,
+    /// The zone the row's date is drawn in.
+    pub zone: LocalZone,
     pub selected: bool,
+    /// Whether the list has focus, which a selected row's tone says.
+    pub focused: bool,
     /// Width of the graph column for the whole list, in lanes.
     pub lanes: usize,
 }
@@ -45,6 +56,7 @@ pub struct RowRender {
 pub struct HistoryList {
     rows: State<History>,
     refs: Option<Arc<RefsSnapshot>>,
+    zone: LocalZone,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -52,8 +64,8 @@ pub struct HistoryList {
     on_select: EventHandler<RowId>,
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
-    on_action: EventHandler<Action>,
     on_new_branch: EventHandler<(Oid, String)>,
+    on_copy: EventHandler<String>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
     cursor: Option<State<usize>>,
@@ -65,6 +77,7 @@ impl HistoryList {
         Self {
             rows,
             refs: None,
+            zone: LocalZone::default(),
             lanes: 1,
             selected: None,
             also_selected: None,
@@ -72,8 +85,8 @@ impl HistoryList {
             on_select: EventHandler::new(|_| {}),
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
-            on_action: EventHandler::new(|_: Action| {}),
             on_new_branch: EventHandler::new(|_: (Oid, String)| {}),
+            on_copy: EventHandler::new(|_: String| {}),
             row: Callback::new(row),
             controller: None,
             cursor: None,
@@ -107,6 +120,13 @@ impl HistoryList {
 
     pub fn lanes(mut self, lanes: usize) -> Self {
         self.lanes = lanes;
+        self
+    }
+
+    /// The zone the rows' dates are drawn in, handed down by the window, which had it read on a
+    /// worker.
+    pub fn zone(mut self, zone: LocalZone) -> Self {
+        self.zone = zone;
         self
     }
 
@@ -149,18 +169,18 @@ impl HistoryList {
         self
     }
 
-    /// A chord of the history's own scope pressed while the list has focus ([`Scope::History`]:
-    /// Show Lost Commits), resolved through the accelerator table. What it does is the caller's.
-    pub fn on_action(mut self, on_action: impl Into<EventHandler<Action>>) -> Self {
-        self.on_action = on_action.into();
-        self
-    }
-
     /// "New Branch…" chosen from a commit row's context menu — every commit's row, a lost
     /// one's too; a stash's row has no menu — reporting that commit and its subject. What it
     /// opens is the caller's.
     pub fn on_new_branch(mut self, on_new_branch: impl Into<EventHandler<(Oid, String)>>) -> Self {
         self.on_new_branch = on_new_branch.into();
+        self
+    }
+
+    /// Copy Commit SHA or Copy Commit Info chosen — from a commit row's menu, or by the item's
+    /// copy chord with the list focused — reporting the text to put on the clipboard.
+    pub fn on_copy(mut self, on_copy: impl Into<EventHandler<String>>) -> Self {
+        self.on_copy = on_copy.into();
         self
     }
 }
@@ -170,6 +190,7 @@ impl PartialEq for HistoryList {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
             && same_refs(&self.refs, &other.refs)
+            && self.zone == other.zone
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
@@ -199,6 +220,7 @@ impl KeyExt for HistoryList {
 struct ListData {
     rows: State<History>,
     refs: Option<Arc<RefsSnapshot>>,
+    zone: LocalZone,
     /// The room a row's chips and subject share, from the list's measured width.
     room: f32,
     lanes: usize,
@@ -211,18 +233,22 @@ struct ListData {
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     on_new_branch: EventHandler<(Oid, String)>,
+    on_copy: EventHandler<String>,
     list_id: AccessibilityId,
     cursor: State<usize>,
+    focused: bool,
 }
 
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
             && same_refs(&self.refs, &other.refs)
+            && self.zone == other.zone
             && self.room == other.room
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
+            && self.focused == other.focused
             && self.length == other.length
             && self.list_id == other.list_id
     }
@@ -249,6 +275,7 @@ impl Component for HistoryList {
         let data = ListData {
             rows: self.rows,
             refs: self.refs.clone(),
+            zone: self.zone.clone(),
             room: label_room(*width.read(), self.lanes),
             lanes: self.lanes,
             selected: self.selected,
@@ -260,23 +287,23 @@ impl Component for HistoryList {
             on_extend: self.on_extend.clone(),
             on_reach_end: self.on_reach_end.clone(),
             on_new_branch: self.on_new_branch.clone(),
+            on_copy: self.on_copy.clone(),
             list_id,
             cursor,
+            // Read from the toolkit's focus, so the rows are drawn again as it moves.
+            focused: focus().is_focused(),
         };
-
-        let border = get_theme_or_default().read().colors().border_focus;
 
         rect()
             .expanded()
+            .background(tones::HISTORY)
             .a11y_id(list_id)
             .a11y_focusable(true)
             .a11y_auto_focus(true)
             .a11y_role(AccessibilityRole::List)
             .on_key_down(self.keyboard(cursor, controller))
             .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
-            .maybe(focus() == Focus::Keyboard, |el| {
-                el.border(Border::new().fill(border).width(1.))
-            })
+            .border(focus::ring_when(focus()))
             .child(
                 VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                     .length(length)
@@ -301,19 +328,33 @@ impl HistoryList {
     ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
         let rows = self.rows;
         let selected = self.selected;
+        let also_selected = self.also_selected;
         let on_select = self.on_select.clone();
-        let on_action = self.on_action.clone();
+        let on_copy = self.on_copy.clone();
 
         move |e: Event<KeyboardEventData>| {
-            // The history's own chords: heard here, where its scope is.
-            if let Some(action) = accelerators::resolve_key(&e, Scope::History) {
+            // The copy chords choose the selection's menu item that shows them: Copy Commit SHA
+            // on Ctrl+C, Copy Commit Info on Ctrl+Shift+C, over both rows of a comparison.
+            if let Some(copy) = accelerators::resolve_key(&e, Scope::List) {
                 e.stop_propagation();
-                on_action.call(action);
+                let copied = {
+                    let held = rows.peek();
+                    let indices: Vec<usize> = [selected, also_selected]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| index_of(&held, id, *cursor.peek()))
+                        .collect();
+                    row_menu(&menu_commits(&held, &indices))
+                        .and_then(|groups| crate::menu::chosen_by(&groups, copy))
+                };
+                if let Some(RowChoice::Copy(text)) = copied {
+                    on_copy.call(text);
+                }
                 return;
             }
             // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
             // "next commit", even while the pane that hears it does not have focus.
-            if accelerators::is_chord(&e, &[Scope::History]) {
+            if accelerators::is_chord(&e, &[]) {
                 return;
             }
             // Drop the read guard before calling out: a handler that reloads the list would panic.
@@ -381,6 +422,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let held = data.held.clone();
     let on_reach_end = data.on_reach_end.clone();
     let on_new_branch = data.on_new_branch.clone();
+    let on_copy = data.on_copy.clone();
+    let (selected, also_selected) = (data.selected, data.also_selected);
     let rows = data.rows;
     // A right-click selects its row, unless it lands in the selection already made, as Fork
     // for Windows does.
@@ -411,8 +454,8 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .maybe(asks_for_more, |el| {
             el.on_visible(move |_| on_reach_end.call(()))
         })
-        // A right-click selects its row, and every commit's row offers Fork's "New Branch…";
-        // a stash's row offers nothing.
+        // A right-click selects its row, unless it lands in the selection, and opens the menu
+        // over the commits selected then (`row_menu`); a stash's row offers nothing.
         .on_pointer_down(move |e: Event<PointerEventData>| {
             if e.button() != Some(MouseButton::Right) {
                 return;
@@ -422,30 +465,34 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                 right_cursor.set(index);
                 right_selects.call(id);
             }
-            let commit = match id {
-                RowId::Commit(commit) => commit,
-                RowId::Stash(_) => return,
+            // Read as the menu opens, never per frame: the pressed row by its index, and the
+            // other row of a comparison it lands in found among the loaded rows.
+            let commits = {
+                let held = rows.peek();
+                let mut indices = vec![index];
+                if in_selection {
+                    indices.extend(
+                        [selected, also_selected]
+                            .into_iter()
+                            .flatten()
+                            .filter(|other| *other != id)
+                            .filter_map(|other| held.position(other)),
+                    );
+                }
+                menu_commits(&held, &indices)
             };
-            let on_new_branch = on_new_branch.clone();
-            // Read by index as the menu opens, never per frame. No wildcard arm.
-            let subject = rows
-                .peek()
-                .row(index)
-                .map(|row| match row.content() {
-                    RowContent::Commit(commit) => commit.summary,
-                    RowContent::Stash(stash) => stash.message,
-                })
-                .unwrap_or_default();
-            ContextMenu::open_from_down(
-                Menu::new().child(
-                    MenuButton::new()
-                        .on_press(move |_: Event<PressEventData>| {
-                            ContextMenu::close();
-                            on_new_branch.call((commit, subject.clone()));
-                        })
-                        .child(NEW_BRANCH_CAPTION),
-                ),
-            );
+            let Some(groups) = row_menu(&commits) else {
+                return;
+            };
+            let (on_new_branch, on_copy) = (on_new_branch.clone(), on_copy.clone());
+            ContextMenu::open_from_down(context_menu_over(
+                groups,
+                list_id,
+                move |choice: RowChoice| match choice {
+                    RowChoice::NewBranch(commit, subject) => on_new_branch.call((commit, subject)),
+                    RowChoice::Copy(text) => on_copy.call(text),
+                },
+            ));
         })
         .child(drawn)
         .into()
@@ -469,7 +516,10 @@ fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
         chips,
         head: row.labels().is_head(),
         lost: row.is_lost(),
+        head_reaches: row.head_reaches(),
+        zone: data.zone.clone(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
+        focused: data.focused,
         lanes: data.lanes,
     }
 }
@@ -745,8 +795,11 @@ mod tests {
             },
             1.,
         );
-        test.sync_and_update();
-        test.sync_and_update();
+        // The list takes focus as it opens, which draws its rows once more in the focused
+        // tone: settled once that has happened.
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
         let settled = LAYOUTS.with(std::cell::Cell::get);
         assert!(settled > 0, "no row laid out its chips");
         for n in 1..=20u32 {

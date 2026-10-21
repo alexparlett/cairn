@@ -15,7 +15,7 @@ use cairn_model::{
 use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{
     CANCEL_CAPTION, CLOSE_CAPTION, COUNTING_TEXT, IGNORE_WHITESPACE_LABEL, ListIntent,
-    STAGE_CAPTION, STAGED_CAPTION,
+    STAGE_ALL_CAPTION, STAGE_CAPTION, STAGED_CAPTION,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -24,7 +24,7 @@ use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use crate::local_changes::actions::{self, DISCARD_TITLE};
 use crate::local_changes::tests::{
     Submitted, apply, asked, changed, conflicted, labels, launch, open_local_changes, path_of,
-    press_row, status, untracked,
+    press_named, press_row, status, untracked,
 };
 use crate::operations::confirming::Confirming;
 use crate::operations::fetch::PromptView;
@@ -349,7 +349,7 @@ fn a_drag_the_menu_and_a_double_press_stage_what_is_selected() {
 
 /// A staged selection unstages as `git reset` takes it — a rename's source beside it, so the
 /// rename moves out whole — by the chord; Unstage All by the menu takes the whole list,
-/// gathered on the local lane from the lists drawn; and the chevron's Stage All the whole of
+/// gathered on the local lane from the lists drawn; and the bar's Stage All the whole of
 /// Unstaged. Caught by: a rename unstaged without its source, or an All that names the rows
 /// drawn on the UI thread.
 #[test]
@@ -368,9 +368,7 @@ fn a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list() 
 
     right_click(&mut test, "s.rs");
     click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
-    let (x, y) = at(&test, STAGE_CAPTION, 0);
-    test.click_cursor((x - 20., y));
-    settle(&mut test);
+    press_named(&mut test, STAGE_ALL_CAPTION);
     assert_eq!(
         writes(&submitted)[1..],
         [
@@ -758,11 +756,11 @@ fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
 fn backspace_in_the_filter_edits_the_filter_and_discards_nothing() {
     let (mut test, view, submitted) = opened(several());
     press_row(&mut test, "a.rs", 0);
-    // The filter field sits over Unstaged's heading.
+    // The filter field sits in the bar over Unstaged's heading.
     let heading = at(&test, cairn_ui::UNSTAGED_CAPTION, 0);
     test.click_cursor((
         heading.0 + 40.,
-        heading.1 - f64::from(cairn_ui::LIST_HEADER_HEIGHT),
+        heading.1 - f64::from((cairn_ui::LIST_HEADER_HEIGHT + cairn_ui::LISTS_BAR_HEIGHT) / 2.),
     ));
     settle(&mut test);
     test.write_text("ab");
@@ -1269,9 +1267,7 @@ fn the_selection_moves_to_the_row_that_takes_the_acted_rows_place() {
 fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
     let (mut test, view, submitted) = opened(filterable());
     filter_to(&mut test, view, &submitted, "x");
-    let (x, y) = at(&test, STAGE_CAPTION, 0);
-    test.click_cursor((x - 20., y));
-    settle(&mut test);
+    press_named(&mut test, STAGE_ALL_CAPTION);
     right_click(&mut test, "sx.rs");
     click(&mut test, cairn_ui::UNSTAGE_ALL_CAPTION);
     assert_eq!(

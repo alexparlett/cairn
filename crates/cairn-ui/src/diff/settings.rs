@@ -103,14 +103,6 @@ impl DiffSettings {
         true
     }
 
-    pub fn can_show_fewer_lines(self) -> bool {
-        !self.entire_file && self.lines > 1
-    }
-
-    pub fn can_show_more_lines(self) -> bool {
-        !self.entire_file
-    }
-
     /// The entire file, or back to the lines of context it left.
     pub fn toggle_entire_file(&mut self) {
         self.entire_file = !self.entire_file;
@@ -139,7 +131,6 @@ mod tests {
         assert!(settings.fewer_lines());
         assert!(settings.fewer_lines());
         assert_eq!(settings.context(), Context::Lines(1));
-        assert!(!settings.can_show_fewer_lines());
         assert!(!settings.fewer_lines(), "the context went below one line");
         assert_eq!(settings.context(), Context::Lines(1));
         assert!(settings.more_lines());
@@ -148,7 +139,6 @@ mod tests {
         settings.toggle_entire_file();
         assert_eq!(settings.context(), Context::EntireFile);
         assert!(!settings.more_lines() && !settings.fewer_lines());
-        assert!(!settings.can_show_more_lines() && !settings.can_show_fewer_lines());
         settings.toggle_entire_file();
         assert_eq!(settings.context(), Context::Lines(2));
     }

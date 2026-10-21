@@ -456,12 +456,20 @@ fn rows_answer_or_failure(updates: &mut Updates) -> Option<Update> {
     }
 }
 
-/// The first word of a stream whose repository opened: the name the title bar calls it
-/// (`Update::Opened`), which every open that succeeds sends before anything else.
+/// The first words of a stream whose repository opened: the `git` found, for About Cairn
+/// (`Update::Started`), then the name the status box calls the repository (`Update::Opened`),
+/// which every open that succeeds sends before anything else.
 pub(crate) fn opened_as(updates: &mut Updates) -> String {
     match next_by(updates, Instant::now() + WAIT, &[]) {
+        Some(Update::Started { git, .. }) => assert!(
+            git.starts_with("git ") && git.contains(", at /"),
+            "the git found is described as {git:?}"
+        ),
+        other => panic!("the open did not first say which git it found: {other:?}"),
+    }
+    match next_by(updates, Instant::now() + WAIT, &[]) {
         Some(Update::Opened { name, .. }) => name,
-        other => panic!("the open did not first say what it opened: {other:?}"),
+        other => panic!("the open did not then say what it opened: {other:?}"),
     }
 }
 

@@ -39,7 +39,7 @@ use crate::diff::{side_by_side_rows, unified_rows};
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
 /// on the Mac (a vendor screenshot at 2×), the hunk header the same.
 /// Fork's Windows pitch is not established at a known scale.
-pub const DIFF_ROW_HEIGHT: f32 = 17.0;
+pub const DIFF_ROW_HEIGHT: f32 = crate::style::metrics::DIFF_ROW;
 
 /// [`DIFF_ROW_HEIGHT`] in whole pixels, for scroll arithmetic: a row's offset is computed in
 /// integers, which an `f32` cannot hold exactly past 2^24 pixels — about 987,000 rows.
@@ -285,6 +285,7 @@ pub(crate) fn draw_row(
 impl Component for DiffView {
     fn render(&self) -> impl IntoElement {
         let focus_id = use_a11y();
+        let diff_focus = use_focus(focus_id);
         let mut viewport = use_state(|| (0.0f32, 0.0f32));
         let view_width = viewport.read().0;
         // The gesture's state, made whether or not a gesture is drawn: a view's hooks are the
@@ -341,6 +342,7 @@ impl Component for DiffView {
             .a11y_id(focus_id)
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::List)
+            .border(crate::style::focus::ring_when(diff_focus()))
             .on_press(move |_| focus_id.request_focus())
             .on_sized(move |e: Event<SizedEventData>| {
                 viewport.set_if_modified((e.area.width(), e.area.height()));

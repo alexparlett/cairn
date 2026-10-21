@@ -238,7 +238,8 @@ never enters `cairn-git` and never enters application state.
   `remote.<name>.mirror`, `remote.<name>.prune` and `fetch.prune`, and
   `git config --includes --null --get-all remote.<name>.fetch` — the second
   porcelain read, query form only, accepted by the user on 2026-10-04; see
-  `docs/systems/git-processes.md`, "What a read may run"). The same binary,
+  `docs/systems/git-processes.md`, "The environment", and `reads.rs`, "What a read may
+  run"). The same binary,
   the same built environment and the same `--git-dir`/`--work-tree` as the
   fetch, afresh on every fetch, so what the check decides on is what the
   fetch's own git reads: a refspec added in a terminal since Cairn started,
@@ -333,7 +334,8 @@ never enters `cairn-git` and never enters application state.
 - **`Repository::remotes`** (`crates/cairn-git/src/remotes.rs`). The
   configured remotes as `cairn_model::RemoteSummary`, the default first, read
   through gitoxide, a password embedded in a URL left out and a remote without
-  a URL listed without one; what the window's fetch button names
+  a URL listed without one; the default is what Fetch fetches and the Repository menu's
+  "Fetch '<remote>'" names
   (`the_default_is_first_a_password_is_left_out_and_a_missing_url_is_none`).
   The refresh after a fetch reads the refs snapshot through the handle the
   worker already holds (`Repository::refs`, `docs/systems/refs.md`); that it
@@ -425,8 +427,12 @@ never enters `cairn-git` and never enters application state.
   `letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket` and
   `a_prompt_waiting_at_shutdown_is_refused`.
 - **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
-  `operations/fetch.rs`). A "Fetch <remote>" button for the default remote, greyed from the press
-  (`FetchStatus::Starting`) until the fetch ends (`fetch_is_greyed_while_a_fetch_is_in_flight`);
+  `operations/fetch.rs`). The toolbar's Fetch, the Repository menu's "Fetch '<remote>'" and
+  Fetch's chord (Ctrl+Shift+F, ⌘⇧F on macOS) fetch the default remote alike
+  (`operations::fetch::start`), each greyed with its reason (`operations::fetch::refusal`) from
+  the press (`FetchStatus::Starting`) until the fetch ends
+  (`fetch_is_greyed_while_a_fetch_is_in_flight`,
+  `the_menu_bar_holds_only_what_works_in_forks_order`);
   its progress in the toolbar's status box — "Fetch 'origin'" and git's latest progress line,
   once it has run 250 ms (`the_status_box_is_handed_what_runs_by_its_one_name`,
   `the_status_box_shows_an_operation_only_once_it_has_run_250_ms`); its failure in Fork's Git
@@ -531,7 +537,7 @@ GPG signing, and any Cairn-owned credential storage, which D2 rules out
 permanently. Proxy, CA-bundle and Kerberos variables are inherited since
 issue #18 decided them (below, under L5); what that issue still holds open
 is the display and signing variables and pinning `GIT_EDITOR`. Not built:
-remembering anything between fetches (D2), a remote picker (the button
+remembering anything between fetches (D2), a remote picker (Fetch
 fetches the default remote; issue #23), and a fetch of more than one remote
 at a time.
 

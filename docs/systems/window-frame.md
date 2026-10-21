@@ -4,7 +4,8 @@ How Cairn's window is framed today: Fork's caption row on Linux, the same menus 
 the desktop's frame on macOS, the one menu component every menu is drawn by, the menu bar's
 items and what each does, Fork's toolbar and the status box in it, the window's regions and its
 minimum size, the desktop's title for the window, the zoom, and About Cairn. Intent:
-`docs/design/ui.md`, "The chrome". Spec: `docs/prd/fork-alignment.md` R2, R3, R4, R9.1, R11.2.
+`docs/design/ui.md`, "The caption row, the menus and the toolbar". Spec:
+`docs/prd/fork-alignment.md` R2, R3, R4, R9.1, R11.2.
 
 ## The frame
 
@@ -39,30 +40,30 @@ built from the same menus (the same test, its second half). No native menu bar i
 standard protocols, before the window is first shown: on Wayland it binds
 `zxdg_decoration_manager_v1` and sends `zxdg_toplevel_decoration_v1.set_mode(client_side)`
 (winit's `WindowDecorations::RequestClient`, `platform_impl/linux/wayland/window/mod.rs`); on
-X11 it sets `_MOTIF_WM_HINTS` with no decorations. On Hyprland 0.56 (the development host)
-`WAYLAND_DEBUG=1` shows that request and the compositor's `configure(server_side)` in reply,
-yet nothing of the compositor's own is drawn on the window: its decoration plugin, `hyprbars`,
-draws no bar on a window whose most recent request was client-side, nor on an X11 window whose
-Motif hints ask for none (it still lists its decoration as present, hidden, in `hyprctl
-decorations`). On Isle the same request is answered `configure(client_side)` and the window is
-drawn as Cairn draws it. Seen on screen on each, the caption row the top of the window; no
-window rule is needed. The desktop's title for the window reads `<repository> — Cairn` and its
-app id `cairn`.
+X11 it sets `_MOTIF_WM_HINTS` with no decorations. On Hyprland 0.56 `WAYLAND_DEBUG=1` shows that
+request and the compositor's `configure(server_side)` in reply, yet nothing of the compositor's
+own is drawn on the window: its decoration plugin, `hyprbars`, draws no bar on a window whose
+most recent request was client-side, nor on an X11 window whose Motif hints ask for none (it
+still lists its decoration as present, hidden, in `hyprctl decorations`). On Isle, the user's
+compositor, the same request is answered `configure(client_side)` and the window is drawn as
+Cairn draws it. Seen on screen on each, the caption row the top of the window; no window rule is
+needed. The desktop's title for the window reads `<repository> — Cairn` and its app id `cairn`.
 
-Driven by a virtual pointer on Isle (release build, the fixture): a press and drag on the
-caption row's empty space moves the window by the drag; a double press there maximizes it,
-the maximize button then drawing its restore glyph, and a second double press restores the box
-it had; a secondary press opens Isle's window menu at the press (`show_window_menu`), which a
-press elsewhere in the window dismisses; a drag on the right edge resizes the window, and Isle
-stops that drag at the minimum width. The menus open by a press and switch as the pointer moves
-along the bar. Hyprland's gestures were never driven by a pointer. What no headless test sees
-either: `freya-testing` drops the requests the window makes of the platform, so what
-`frame::ask` hands winit (`drag_window`, `set_maximized`, `set_minimized`, `show_window_menu`,
+Driven by a virtual pointer on Isle (release build, the fixture of
+`docs/research/ui-review/fixture-recipe.md`): a press and drag on the caption row's empty space
+moves the window by the drag; a double press there maximizes it, the maximize button then
+drawing its restore glyph, and a second double press restores the box it had; a secondary press
+opens Isle's window menu at the press (`show_window_menu`), which a press elsewhere in the
+window dismisses; a drag on the right edge resizes the window, and Isle stops that drag at the
+minimum width. The menus open by a press and switch as the pointer moves along the bar. On
+Hyprland the gestures are unchecked by a pointer. What no headless test sees either:
+`freya-testing` drops the requests the window makes of the platform, so what `frame::ask` hands
+winit (`drag_window`, `set_maximized`, `set_minimized`, `show_window_menu`,
 `request_close_window`), the scale factor the zoom sets, the title `frame::use_title` sets and
 the decorations and resize bands `main.rs` asks for are pinned only up to the request — the
-`FrameRequest`, the zoom's step, `frame::title` — and the rest was checked in the window as
-said here, or not at all. What a compositor does with an ask is its own: a tiling compositor
-may decline a move, a resize or a maximize.
+`FrameRequest`, the zoom's step, `frame::title` — and the rest is known only as seen in the real
+window, said here, or not at all. What a compositor does with an ask is its own: a tiling
+compositor may decline a move, a resize or a maximize.
 
 **macOS** is not compiled on the development host (no Apple target is installed), so the
 `Frame::Native` arm is checked only headlessly, with the frame forced, and the `cfg` paths and
@@ -73,14 +74,15 @@ may decline a move, a resize or a maximize.
 Every menu is drawn from data by one component (`cairn_ui::menu`, `crates/cairn-ui/src/menu.rs`
 beside `menu/`): a menu is groups of `Item`s — a label, the `Action` whose chord it shows, the
 reason it is greyed (a greyed item always has one), whether it is ticked, and what choosing it
-does (`ItemKind::Choose` with a value, or `ItemKind::Submenu`). `menu::panel` draws it: a rule
-between groups, each row `metrics::MENU_ITEM` high, its chord right-aligned in
-`tones::MENU_CHORD`, read from the accelerator table (`accelerators::chord_name`) and never typed,
-an action with no chord showing none; a greyed row in the disabled tone, its reason drawn under
-it in the tooltip's look while the pointer is on it (Freya's own tooltip hides while a context
-menu is open); and, while any item is ticked, a `metrics::MENU_TICK_GUTTER` (18 px) gutter before
-every label with a ✓ in the ticked one's, Fork's View menu's look. One row is highlighted — by the
-pointer or by the keys, one highlight for both — in Fork Dark's hover band with white text.
+does (`ItemKind::Choose` with a value, or `ItemKind::Submenu`). Its panel (`menu/panel.rs`)
+draws it: a rule between groups, each row `metrics::MENU_ITEM` high, its chord right-aligned in
+`tones::MENU_CHORD`, read from the accelerator table (`accelerators::chord_name`) and never
+typed, an action with no chord showing none; a greyed row in the disabled tone, its reason drawn
+under it in the tooltip's look while the pointer is on it (Freya's own tooltip hides while a
+context menu is open); and, while any item is ticked, a `metrics::MENU_TICK_GUTTER` (18 px)
+gutter before every label with a ✓ in the ticked one's, Fork's View menu's look. One row is
+highlighted — by the pointer or by the keys, one highlight for both — in Fork Dark's hover band
+with white text.
 
 Its keys (`accelerators::menu_key`, resolved in the table, so the panel names no modifier): ↑ and
 ↓ walk the items that can be chosen, skipping greyed ones and wrapping; Return chooses; → opens
@@ -98,10 +100,11 @@ highlighted, handing focus back to what held it as the menu opened; `menu::conte
 names that view itself, for a list that asked for focus in the same press that opens its menu.
 Every context menu is built by them: a commit row's (`history::row_menu`), a commit's file's in
 the Commit and Changes tabs (`detail::file_menu`), a ref's and the gear's in the sidebar, Local
-Changes' (`local_changes::menu`), the commit box's Recent Commit Messages and the bar's View
-Mode. Each row's items are Fork's that work, in Fork's groups and beside Fork's chords
-(`docs/systems/sidebar.md`, `local-changes.md`, `history-graph.md`; pinned whole as data by
-`every_context_menu_holds_its_rows_working_items`, `crates/cairn-ui/tests/context_menus.rs`).
+Changes' (`local_changes::menu`), the commit box's Recent Commit Messages, the bar's View Mode
+and the toolbar's Branch ⌄. Each row's items are Fork's that work, in Fork's groups and beside
+Fork's chords (`docs/systems/sidebar.md`, `local-changes.md`, `history-graph.md`; pinned whole
+as data by `every_context_menu_holds_its_rows_working_items`,
+`crates/cairn-ui/tests/context_menus.rs`).
 
 **The copy chords.** Copy (Ctrl+C, ⌘C) and Copy Full (Ctrl+Shift+C, ⇧⌘C) are heard by a focused
 list with a context menu alone (`Scope::List`): the history, the sidebar, the Changes tab's files
@@ -163,10 +166,10 @@ popover is up (the one modal state), a chosen action does nothing, as its chord 
 `the_menu_bar_holds_only_what_works_in_forks_order`, `each_menu_item_does_its_action` and
 `the_window_draws_the_menu_bar_and_its_choices_act` (`crates/cairn-app/src/menu_bar/tests.rs`).
 
-The new actions' chords, Linux first (`accelerators::chords`): Show Uncommitted Changes Ctrl+1,
-Show All Commits Ctrl+2, Show HEAD Ctrl+0, Fetch Ctrl+Shift+F, Zoom In Ctrl+= and Zoom Out Ctrl+-,
-each digit and mark matched where it sits; ⌘ for Ctrl on macOS, not yet checked against Fork for
-macOS. Show Lost Commits' Ctrl+Shift+. is heard wherever focus is.
+The menu bar's actions' chords, Linux first (`accelerators::chords`): Show Uncommitted Changes
+Ctrl+1, Show All Commits Ctrl+2, Show HEAD Ctrl+0, Fetch Ctrl+Shift+F, Zoom In Ctrl+= and Zoom
+Out Ctrl+-, each digit and mark matched where it sits; ⌘ for Ctrl on macOS, not yet checked
+against Fork for macOS. Show Lost Commits' Ctrl+Shift+. is heard wherever focus is.
 
 ## The toolbar
 
@@ -184,10 +187,10 @@ toolbar's tone, Fork's light box behind one under the pointer:
 | Pull, Push | greyed: "Comes with pull and push."; the commits behind the upstream a badge on Pull, those ahead on Push, each absent at zero |
 | Stash and its ⌄ | greyed: "Comes with stashing." |
 | the status box | below |
-| Branch and its ⌄ | Create Branch at `HEAD`, as New Branch… and its chord do; its ⌄ a menu of "New Branch…" alone, with its chord (New Worktree… comes with worktrees); both greyed while `HEAD` names no commit, with the menu bar's reason; no tooltip, as Fork's |
+| Branch and its ⌄ | Create Branch at `HEAD`, as New Branch… and its chord do; its ⌄ a menu of "New Branch…" alone, with its chord (New Worktree… comes with worktrees); both greyed while `HEAD` names no commit, with the menu bar's reason as their tooltip; no tooltip while they can act, as Fork's |
 | Appearance and its ⌄ | greyed: "Comes with Preferences." |
 
-Fork's Open in, Console and Work are not drawn: no packet plans them. A greyed button keeps its
+Fork's Open in, Console and Work are not drawn: nothing plans them. A greyed button keeps its
 place, draws in the disabled tone and reports nothing to a press or a key — none takes focus.
 Every press is a `ToolbarPress` the window does (`crate::toolbar::pressed`). Pinned by
 `the_toolbar_is_forks_with_the_unbuilt_buttons_greyed`,
@@ -206,14 +209,16 @@ window narrows, but the window's minimum keeps it at 300.
 
 ## The regions and the minimum size
 
-Under the toolbar stand the banners — the leftover lock's and a close waiting on a write — across
-the whole window, above the sidebar and the main region, as Fork's notification banner does
-(`the_banners_stand_under_the_toolbar`). The history and the detail pane share the main region's
-height half each, growing together (`docs/systems/diff.md`, "Where it sits";
+Under the toolbar stand the banners — the leftover lock's and a close waiting on a write —
+across the whole window, above the sidebar and the main region, as Fork's notification banner
+does (`the_banners_stand_under_the_toolbar`). The history and the detail pane share the main
+region's height by proportion — half each as the window opens, a drag of the splitter moving the
+share (`crate::detail::split`) — growing together (`docs/systems/diff.md`, "Where it sits";
 `the_detail_pane_grows_with_the_window`), and Hide Commit Details — the View item, Ctrl+Shift+D
-on Linux, the strip's icon — leaves the pane its strip (`hiding_the_details_leaves_the_tab_strip`).
-As the window narrows the history's subject column gives the room, the author, id and date
-keeping their widths (`the_subject_column_shrinks_first`).
+on Linux, the strip's icon — leaves the pane its strip
+(`hiding_the_details_leaves_the_tab_strip`). As the window narrows the history's subject column
+gives the room, the author, id and date keeping their widths
+(`the_subject_column_shrinks_first`).
 
 The window opens at 1024 × 768 and stops at **880 × 620** (`frame::OPENING_SIZE`,
 `frame::MIN_SIZE`, `WindowConfig::with_min_size`, which reaches Wayland as
@@ -222,8 +227,9 @@ when asked for less, and Isle stops an edge drag there; Isle's own `isle windows
 ignores the minimum and configures a smaller box, which the window takes and clips. Measured in
 the headless window and checked in the real one (release build, the fixture):
 
-- the toolbar's groups take about 550 px at the body's size and the status box its 300, so the
-  toolbar needs about 780 px; 880 leaves it whole with Fork's 300 px box;
+- the toolbar's buttons and the gaps between them take about 550 px at the body's size, and the
+  status box at its least 200 with a group gap either side, so the toolbar needs about 780 px;
+  880 leaves it whole with Fork's 300 px box;
 - at 880 px, beside the sidebar's 300, the history keeps about 180 px for a row's chips and
   subject, cut with "…" where a row's chips take most of it, as Fork's subjects are cut;
 - at 620 px the main region's half is 276 px, enough for the pane's strip and a one-line commit's

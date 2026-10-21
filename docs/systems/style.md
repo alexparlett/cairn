@@ -2,10 +2,12 @@
 
 How Cairn's window gets its sizes, tones and icons today: one module, `cairn_ui::style`
 (`crates/cairn-ui/src/style.rs` beside `style/`), from which every render file takes its font
-sizes, tones and icons. Layout sizes — row heights, widths, paddings — are still written in the
-views, and `style::metrics`' row heights, bars and sidebar width are read as the phases that
-lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spec:
-`docs/prd/fork-alignment.md` R1.
+sizes, tones and icons, and each region its row heights, bars, strips and widths — the
+history's, the sidebar's, Local Changes' and the diff's row pitch, the caption row, the toolbar,
+the detail pane's strip, Local Changes' bar and headings, the sidebar's width. The layout sizes
+Fork's survey does not give — paddings, gaps, a dialog's width — are written in the views,
+beside what they size, and no guard reads a layout size ("Held by", below). Intent:
+`docs/design/ui.md`, "Palette and type". Spec: `docs/prd/fork-alignment.md` R1.
 
 ## One module
 
@@ -23,15 +25,17 @@ lay those regions out land. Intent: `docs/design/ui.md`, "Palette and type". Spe
   Changes' 17 px bar over its lists and its 32 px headings, each with its rule, their 22 px
   buttons, and the commit box's 15 px margin, 22 px subject, 22 px button and its 16 px ⌄
   (`fork-window-survey-2-2026-10-16.md` §1c, uw6) — and the sizes Fork's survey does not give, each
-  saying where it comes from (the diff's text and line numbers, measured from Fork earlier;
-  a heading's 14 px; the Commit tab's subject and captions, Cairn's).
+  saying where it comes from (the diff's text and line numbers, measured from Fork's Mac and
+  Windows captures; a heading's 14 px; the Commit tab's subject and captions and an avatar's
+  initials, Cairn's).
 - **`style::tones`** — Fork Dark's tones, sampled from Fork's dark theme
   (`docs/research/ui-review/fork-window-survey-2-2026-10-16.md`, section 1): every surface,
   text, selection, menu, dialog, button, diff band and chip tone of the PRD's table, then the
   few more the same survey sampled that the table does not name (a field's fill and
   placeholder, a check box's border, a banner, a link, the badges of an added and a modified
   file, a menu's shadow, a disabled button's border, the sidebar's chosen entry, a remote chip's
-  grey cloud), the sidebar's sampled in uw27 and the sidebar survey
+  grey cloud, the status box's fill and the count badges on Push and Pull, a dialog's title and
+  body text), the sidebar's sampled in uw27 and the sidebar survey
   (`docs/research/ui-review/fork-sidebar-2026-10-20.md`: its icons, its quieter chevrons, its
   filter's fill and a gone upstream's warning), the diff bar's glyph, its toggled-on blue and
   the square under the pointer (`docs/research/ui-review/fork-committer-2026-10-20.md`), `UNSEEN` for text laid out only to hold its room
@@ -55,11 +59,11 @@ tables to the module's value.
   renamed file's badge — stay the launch theme's, read from its sheet.
 - **The launch theme** (`tones::theme`, installed by `crates/cairn-app/src/main.rs`) is Freya's
   `dark_theme` over a sheet with Fork Dark's tones in every slot Fork gives one (`tones::sheet`:
-  the body text, the history's ground, the rules, Fork's blue as the focus border and the
-  accent, the selection blue as the primary), with the buttons', menus', fields', tooltips',
-  splitters' and dialogs' component themes set where the sheet cannot say Fork's tone; a
-  tooltip at the body's size. So Freya's own components draw no stock tone for anything the
-  table names (`the_launch_theme_carries_fork_darks_tones_into_freyas_components`).
+  the body text, the history's ground, the rules, Fork's blue (`tones::ACCENT`) as the focus
+  border and the text highlight, the selection blue as the primary), with the buttons', menus',
+  fields', tooltips', splitters' and dialogs' component themes set where the sheet cannot say
+  Fork's tone; a tooltip at the body's size. So Freya's own components draw no stock tone for
+  anything the table names (`the_launch_theme_carries_fork_darks_tones_into_freyas_components`).
 - **The body size** is set once at the window's root (`crates/cairn-app/src/window.rs`), so a
   text given no size of its own — a menu's, a button's — is 12 px, never Freya's 16 px
   default. No dialog draws Freya's `PopupTitle` or `PopupContent`, which set 18 px and 15 px:
@@ -78,7 +82,8 @@ and nothing else: the history (`HistoryList`, through `RowRender::focused` to
 `CommitRow::focused`), the sidebar (which takes focus when one of its rows is pressed), both of
 Local Changes' lists, the Changes tab's files and the Commit tab's file rows. A list takes focus
 from a press on one of its rows; the history also as the window opens.
-`a_selection_is_blue_while_its_list_has_focus_and_grey_when_not` holds the five lists to it.
+`a_selection_is_blue_while_its_list_has_focus_and_grey_when_not` holds the history, the sidebar,
+both of Local Changes' lists and the Changes tab's files to it.
 
 ## Focus at every stop
 
@@ -94,14 +99,17 @@ toolkit's `Input` does, its border and an outer ring in the same blue (the theme
 list and a dashed one on a dialog's button (`fork-copy-and-dialogs-2026-10-20.md` §6-7); the ring
 at every stop is a `ui.md` row. Pinned by `every_tab_stop_shows_focus` (the window, All Commits and
 Local Changes) and `every_dialogs_tab_stop_shows_focus`, each walking Tab until it comes round and
-requiring a mark to appear inside each stop as focus reaches it (`tests/support/focus_marks.rs`).
+requiring a mark to appear inside each stop as focus reaches it
+(`crates/cairn-ui/tests/support/focus_marks.rs` for the dialogs, its twin
+`crates/cairn-app/src/local_changes/tests/focus_marks.rs` for the window).
 
 ## Buttons and dialogs
 
-Every push button is one component, `PushButton` (`crates/cairn-ui/src/push_button.rs`): Fork Dark's
-`#373737` in a 1 px `#525252` border, greyed in the disabled tones, and a dialog's default answer
-— its primary — bordered in Fork's blue `#0078D7` rather than filled, as Fork's default button is
-(cp60-cp76). Every dialog is framed by `dialogs::frame`: a square `#2B2B2B` ground in a 1 px
+Every push button of a dialog, a banner or a notice is one component, `PushButton`
+(`crates/cairn-ui/src/push_button.rs`): Fork Dark's `#373737` in a 1 px `#525252` border, greyed
+in the disabled tones, and a dialog's default answer — its primary — bordered in Fork's blue
+`#0078D7` rather than filled, as Fork's default button is (`fork-copy-and-dialogs-2026-10-20.md`
+§6, cp60-cp76). Every dialog is framed by `dialogs::frame`: a square `#2B2B2B` ground in a 1 px
 `#3BACED` border over the toolkit's shade, the title white and bold at the heading's size
 (`tones::DIALOG_TITLE`), the body Fork's `#CAC6C6` at the body's (`tones::DIALOG_TEXT`); the launch
 theme's popup is a bare holder, its ground, padding and rounding drawn over by the frame. Fork's

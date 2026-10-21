@@ -180,7 +180,11 @@ a `OnceLock`. Each repository's thread asks for it before it looks for the
 repository, and waits if it is not in yet; if the discovery thread could not
 be started, the first to ask finds it, once. A missing or too-old `git`
 reaches every repository that asks as the same `Update::Failed`, naming the
-version Cairn needs, and nothing is served behind it.
+version Cairn needs, and nothing is served behind it. A `git` found is the stream's first
+word instead, `Update::Started { git, zone }`: the `git` described for About Cairn, "git
+<version>, at <path>", beside the system's time zone read on the same thread
+(`worker/zone.rs`); `Update::Opened { name, path }` follows once the repository is open
+(`opened_as`, in `worker/network/tests.rs`, reads both off every successful open).
 
 The probe has no deadline, as no invocation does: a `git --version` that never
 answers leaves every repository waiting on `Discovery::git`, unable to open,
@@ -1136,10 +1140,12 @@ in `fork-observed-2026-10-10.md`, `am1`, `am2`): the status box's list glyph ope
 window, drawn by `cairn_ui::ActivityPopover` inside `crate::activity::ActivityLayer`, a child
 component of the window that alone reads the log. On the left the session's operations — every
 local write and every fetch — newest first, each row its one name, Fork's result line under it
-(`LocalWrite::result_lines`, kept on `local_writes::Asked`), its start time as `HH:MM:SS` in the window's zone (`cairn_ui::time_of_day`),
-`⚠` on a failure (`cairn_ui::FAILED_GLYPH`) and `⊘` on a cancel (`CANCELLED_GLYPH`), and no
-status word, with Fork's × beside a running one that can be cancelled (a commit, an amend, a
-fetch). On the right the one selected: its name; one of four words — `running`, `succeeded`,
+(`LocalWrite::result_lines`, kept on `local_writes::Asked`), its start time as `HH:MM:SS` in the
+system's time zone (`cairn_ui::time_of_day`, through `ActivityLog::shown_in`) — read once on a
+worker as the repository opens (`worker/zone.rs`) and handed to the window in `Update::Started`,
+UTC when it cannot be read — `⚠` on a failure (`cairn_ui::FAILED_GLYPH`) and `⊘` on a cancel
+(`CANCELLED_GLYPH`), and no status word, with Fork's × beside a running one that can be
+cancelled (a commit, an amend, a fetch). On the right the one selected: its name; one of four words — `running`, `succeeded`,
 `failed`, `cancelled` (`cairn_ui::ActivityStatus`: a refusal, a stale write, one never run and
 a partly done discard are each `failed`) — with its time and how long it took; for a failure or
 a cancel its one sentence, wrapped, never cut (a write's cancel `activity::WRITE_CANCELLED`, a
@@ -1182,21 +1188,23 @@ opens no dialog (C35; `an_amend_pushed_while_it_ran_says_so_in_its_entry`,
 The user's decisions on it, as built:
 
 - **It hangs from the status box**, opened by the list glyph at the box's left alone — a press
-  on the box's centre opens nothing, as Fork's (`fork-window-survey-2-2026-10-16.md`, section
-  2). The window reads the box's laid-out place as Freya
-  lays it out — the `on_sized` event of the box (`Toolbar::on_status_sized`) (`SizedEventData::area`, global
-  coordinates, the mechanism Freya's own `Attached` uses), kept by `ActivityLog::set_anchor`
-  only when it moved — and the popover's panel hangs from it: its left edge under the box's, an
-  arrow (a square turned 45°, half hidden under the panel) pointing up at the box, the whole
+  on the box's centre opens nothing, as Fork's
+  (`docs/research/ui-review/fork-window-survey-2-2026-10-16.md`, section 2). The window reads
+  the box's laid-out place as Freya lays it out — the `on_sized` event of the box, handed on by
+  `Toolbar::on_status_sized` (`SizedEventData::area`, global coordinates, the mechanism Freya's
+  own `Attached` uses), kept by `ActivityLog::set_anchor` only when it moved — and the
+  popover's panel hangs from it: its left edge under the box's, an arrow (a square turned 45°,
+  half hidden under the panel) pointing up at the box, the whole
   kept inside the window's width (`Platform::root_size`), the panel narrowed to a window
   narrower than it (`cairn_ui::toolbar::activity_popover::hung`;
   `the_panel_hangs_under_the_box_inside_the_window`,
   `the_popover_hangs_from_the_status_box_inside_the_window`,
   `the_popover_hangs_under_the_status_box`).
-- **Keys do nothing while it is open but close it**: it is the lowest rung of the one
-  modal state ("Where an ending goes", below), so `shortcuts::keys_inert` answers yes while it
-  is open, and the window's chords (`shortcuts::act`), Local Changes' list intents, the history
-  list's presses and the Show Lost Commits action ask it; the panel is `a11y_modal`, pulling
+- **Keys do nothing while it is open but close it**: it is a rung of the one modal state
+  ("Where an ending goes", below), beneath every dialog but About Cairn, so
+  `shortcuts::keys_inert` answers yes while it is open, and the window's chords
+  (`shortcuts::act`), Local Changes' list intents, the history list's presses and the Show Lost
+  Commits action ask it; the panel is `a11y_modal`, pulling
   focus into it; Escape closes it (`while_the_popover_is_open_the_keys_do_nothing_but_close_it`).
   A dialog opened over it is drawn alone, and the popover is drawn again once that is
   answered.
@@ -1258,7 +1266,7 @@ output so far and never following what arrives after, and at a finished one's to
 `a_running_entry_opens_at_its_end_and_does_not_follow`),
 the prompt laid out above the lines' list (`the_popover_builds_one_viewport_of_operations_and_of_lines`,
 `the_prompt_is_whole_above_fixed_lines_and_a_cut_is_said`). The open popover reads a snapshot
-(`ActivityLog::shown`): the selected entry's lines shared by a reference count, copied only when
+(`ActivityLog::shown_in`): the selected entry's lines shared by a reference count, copied only when
 a line arrives while a snapshot is held (`the_popover_reads_a_shared_snapshot`). The window's
 root reads whether the popover is open (`ActivityView::open`, a state of its own), never the
 log, and the commit box keeps its commit's output apart from the state the root reads, so a
@@ -1340,8 +1348,8 @@ and every other ending's dialog in `crate::ending_dialog::Endings`, the oldest f
 
 **One modal state** decides which dialog is drawn (`crate::modal`): a credential prompt, then a
 confirmation, then the commit box's Git Error, then the other endings', then Create Branch,
-then the popover. Only the one on top is drawn, so no key reaches one beneath it — a commit's
-Git Error arriving while Create Branch is up is drawn alone, its Escape closes it, and Create
+then the popover, then About Cairn (`docs/systems/window-frame.md`). Only the one on top is
+drawn, so no key reaches one beneath it — a commit's Git Error arriving while Create Branch is up is drawn alone, its Escape closes it, and Create
 Branch is drawn again as it was left — and while any is up the window's chords and the lists'
 keys do nothing (`shortcuts::keys_inert`). Pinned by `every_ending_has_exactly_one_home`,
 `the_workers_words_are_the_dialogs`, `a_sentence_names_its_path_escaped_and_ends_once`,

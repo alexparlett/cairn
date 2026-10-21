@@ -1551,8 +1551,8 @@ Expand All, so the history gives way first; a drag leaves the pane at least a te
 dragging it 24 px past that collapses it, Fork's gesture. The strip's right holds Fork's "Hide
 commit details" icon (`cairn_ui::HIDE_DETAILS_TOOLTIP`, its tooltip Fork's words, lit in the
 accent while the pane is hidden; Fork's pop-out icon is not drawn), which collapses the pane and
-brings it back, as Hide Commit Details in the View menu and its chord do (Ctrl+Shift+D on Linux;
-`hiding_the_details_leaves_the_tab_strip`, `the_strip_reports_its_tabs_and_its_collapse`). A
+brings it back, as Hide Commit Details in the View menu and its chord do (`Action::ToggleDetails`:
+Ctrl+Shift+D on Linux, none on macOS; `hiding_the_details_leaves_the_tab_strip`, `the_strip_reports_its_tabs_and_its_collapse`). A
 collapsed pane keeps its strip of tabs at the window's bottom under a list that takes the rest,
 and opens again from the icon, a tab pressed, or a tab's chord, at the share it was last dragged
 to (`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
@@ -1561,7 +1561,8 @@ involved: the exceptions roster stays empty.
 **The Changes tab** (`crates/cairn-app/src/detail/changes_tab.rs`, phase 07, R5.4), Fork's
 (Findings 5 and 19; `docs/research/ui-review/fork-window-survey-2026-10-16.md` §6 and
 `fork-window-survey-2-2026-10-16.md` §1b, uw5): a one-line summary — the author's 18 px
-avatar, the author's name, the id's first nine characters and the author's date in the
+avatar (`AvatarSize::Summary`), the author's name, the id's first nine characters
+(`SUMMARY_ID_LENGTH`) and the author's date in the
 window's zone as the history draws it (`16 Oct 2026 12:12`), both in the secondary tone, and
 the subject in bold (`cairn_ui::ChangesSummary`, `summary_parts`), on Fork's 23 px strip with
 the rule under it (`the_changes_summary_opens_with_the_avatar`,
@@ -1601,10 +1602,17 @@ either end (`the_arrows_move_through_the_files_the_list_shows`) — is chosen th
 query is superseded, its `git` killed by the epoch and its answer never drawn
 (`a_file_chosen_in_the_list_supersedes_the_last_ones_diff`). The list highlights the file
 chosen by the index `DiffState` records as it is chosen (`DiffState::file_index`), never
-by searching the change set.
+by searching the change set. A right press on a file makes it the current file and opens its
+menu (`cairn_ui::file_menu`, `FileMenuIn::ChangesTab`): Fork's Copy Path and Copy Full Path
+alone, each beside its chord, which the list hears while it has focus (`Action::Copy` and
+`Action::CopyFull`, in `Scope::List`) — the path as git writes it, a rename's new one, or that
+path joined to the working tree's (`crates/cairn-app/src/detail/file_copy.rs`;
+`a_files_menu_and_the_copy_chords_choose_its_copies`).
 
 **The tabs** (`cairn_ui::DetailTabs`, `crates/cairn-ui/src/detail/tabs.rs`). Commit,
-the default, and Changes, as text tabs with no count, the shown one underlined. The
+the default, and Changes, as text tabs with no count on Fork's strip (`DETAIL_STRIP_HEIGHT`,
+`style::metrics::DETAIL_STRIP`: its 31 px between two rules), the shown one's caption in Fork's
+blue over an underline as wide as the tab. The
 tab chosen is the window's `View::detail_tab`, created once per window, so it is kept
 across every selection and every collapse for the session
 (`the_tab_chosen_is_kept_across_selections_and_a_collapse`). While two commits are
@@ -1670,7 +1678,10 @@ score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — a docu
 and its path in the values' column, both paths, `old → new`, for a rename or a copy
 (`the_commit_tab_shows_every_field_r5_3_names`;
 `a_cut_short_rename_search_is_said_above_the_files`). No network call: an avatar is its
-initials. Fork's ⌄ beside each address is not drawn — nothing Cairn builds fills its menu.
+initials. Fork's ⌄ beside each address is not drawn — nothing Cairn builds fills its menu. A
+right press on a file row makes it the current file without opening or closing it and opens the
+Changes tab's menu showing no chord, and the copy chords do nothing there, as in Fork
+(`FileMenuIn::CommitTab`; `a_files_right_press_opens_its_menu_without_opening_the_file`).
 
 **REFS** (refs-and-status R6.1, Fork's Finding 3): above SHA, under the dates, a REFS row
 holds the chips of the refs pointing at the commit — exactly the chips its row in the
@@ -1695,8 +1706,8 @@ address are cut with an ellipsis where their column is narrower than they are; n
 in the tab is cut.
 
 **The file list has focus of its own** (user decision 6, Fork's model). The tab takes
-focus when a file row is pressed or when Tab reaches it, and draws a focus border when
-reached from the keyboard; while it has focus, ↑ and ↓ move the current file — drawn
+focus when a file row is pressed or when Tab reaches it, and draws the one focus ring
+(`style::focus`) when reached from the keyboard; while it has focus, ↑ and ↓ move the current file — drawn
 highlighted, brought into view, reported through `CommitTab::on_file` by its index in
 the change set — and stop at either end
 (`the_focused_file_list_moves_the_current_file_with_the_arrows`). Tab and Shift-Tab
@@ -2024,7 +2035,8 @@ name in the text colour, a rename's or a copy's old path in a tooltip; on the ri
 whitespaces, Decrease and Increase number of visible lines, Show entire file and Side by side
 diff — Fork's Show hidden symbols and Word wrap are not drawn (#33, #34). The bar is Fork's
 17 px with the rule under it (`style::metrics::DIFF_BAR`), its buttons 16 px squares 20 px
-apart. Each button is a Lucide glyph (`style::icons`: `chevron-up`, `chevron-down`, `space`,
+apart, each drawn by `crates/cairn-ui/src/bar_button.rs` as Local Changes' bar's are. Each button
+is a Lucide glyph (`style::icons`: `chevron-up`, `chevron-down`, `space`,
 `list-minus`, `list-plus` and `list-chevrons-up-down` turned left for right so the sign stands
 at the lines' left as Fork's does, `columns-2`), `#CFCFCF`, a `#242424` square behind it under
 the pointer. Its tooltip is Fork's, verbatim: its words, and where the accelerator table lists a
@@ -2037,7 +2049,7 @@ meaning never rests on the glyph
 (`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_forks_blue`), drawn exactly as
 the style module's icon for it, the three mirrored ones about their own middle
 (`each_bar_button_draws_its_forks_glyph`). Every button that can be pressed is a Tab stop, Space
-or Enter pressing it and a 1 px ring showing focus that came by key — five of them have no
+or Enter pressing it and the one 1 px ring (`style::focus`) showing focus that came by key — five of them have no
 chord — a deviation from Fork's three-stop cycle `docs/design/ui.md` records
 (`every_bar_button_that_can_be_pressed_is_a_tab_stop`); the square under the pointer stands
 behind an enabled button alone
@@ -2049,8 +2061,8 @@ button reports nothing
 the bar says "Ignoring whitespace hides some changes" exactly when the answer hides one —
 never just because the toggle is on (`the_bar_says_changes_are_hidden_only_when_they_are`,
 `ignoring_whitespace_hides_whitespace_only_changes_and_says_so_only_then`, R6.7) — a
-deliberate deviation from Fork, which hides them silently. No button has a chord (the
-user's decision, `docs/research/diff-engine/fork-shortcuts.md`); each press is mapped to
+deliberate deviation from Fork, which hides them silently. No button but previous and next
+change has a chord (the user's decision, `docs/research/diff-engine/fork-shortcuts.md`); each press is mapped to
 its `Action` (`shortcuts::of_header`) and done by `shortcuts::act`, the one place a chord
 is done too.
 
@@ -2113,10 +2125,10 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Row pitch (`DIFF_ROW_HEIGHT`) | 17 px, a hunk header the same | Fork-measured: 17 pt on the Mac (Finding 24, a vendor screenshot at 2×, May 2026). Windows' 30–31 px is at an unknown display scale, so not used. |
 | Bar height (`DIFF_HEADER_HEIGHT`) | 18 px: 17 and the rule under it | Fork-measured: Fork Dark's bar, uw5 and cm14 (`fork-committer-2026-10-20.md` question 6). The Changes tab's filter bar is the same height, level with it. |
 | Changes tab summary strip (`SUMMARY_HEIGHT`) | 24 px: 23 and the rule under it | Fork-measured: uw5. |
-| The bar's buttons | Lucide's chevrons, `space`, `list-minus`, `list-plus`, `list-chevrons-up-down` mirrored, `columns-2`; 16 px squares 20 px apart, a `#242424` square under the pointer | Fork-measured: FS1 §6 and `fork-committer-2026-10-20.md` questions 5 and 6, word wrap and invisibles left out (#33, #34). Lucide's glyphs, not Fork's artwork (L4). |
+| The bar's buttons | Lucide's chevrons, `space`, `list-minus`, `list-plus`, `list-chevrons-up-down` mirrored, `columns-2`; 16 px squares 20 px apart, a `#242424` square under the pointer | Fork-measured: `docs/research/ui-review/fork-window-survey-2026-10-16.md` §6 and `fork-committer-2026-10-20.md` questions 5 and 6, word wrap and invisibles left out (#33, #34). Lucide's glyphs, not Fork's artwork. |
 | An active toggle | its glyph in `#419BF9`, nothing behind it | Fork-measured: cm26-cm28. |
 | Disabled line buttons | both, only while the entire file is shown | Fork-measured: cm27, cm38 (Decrease stays pressable at one line). |
-| Tooltips and names | "Go to previous change, Ctrl+↑", "Go to next change, Ctrl+↓" (⌘ on macOS), "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file", "Side by side diff" | Fork-measured: FS1 §6 (uv11), cm15-cm25; the chords read from the accelerator table. |
+| Tooltips and names | "Go to previous change, Ctrl+↑", "Go to next change, Ctrl+↓" (⌘ on macOS), "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file", "Side by side diff" | Fork-measured: `fork-window-survey-2026-10-16.md` §6 (uv11), `fork-committer-2026-10-20.md` cm15-cm25; the chords read from the accelerator table. |
 | Previous and next change chords | Ctrl+↑/↓, ⌘↑/↓, heard in the detail pane | Fork-measured: `fork-shortcuts.md`. |
 | Keys in a focused diff | ↑/↓ a row, Page Up/Down a view, Home/End either end, ←/→ four columns | Cairn-chosen: Fork's diff is a text control (`NSTextView`, AvalonEdit) whose keys move a caret, and Fork documents none of its own beyond the chords above; Cairn's diff has no caret, so the keys scroll as a list's do. |
 | Tab stops | eight columns, counted in terminal widths | Cairn-chosen (the user's decision "terminal widths"): what `git diff` shows in a terminal. Fork's tab width is a setting whose default is not established (Finding 17). |
@@ -2157,7 +2169,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |
 | Expand All over files already open | keeps them as they are drawn and reads only the rest: an open diff is never read again nor drawn anew, and its lines are not charged to the budget | User's decision, 2026-10-04 (as built it read them again with the rest, from the first file). |
 | A file row's disclosure | a chevron, right when closed, down when open | Fork-measured: Windows rows carry a chevron (uv7b, uv9z); Lucide's, drawn on every platform (Mac rows carry none). |
-| Row pitch of the Commit tab | 17 px (`COMMIT_TAB_ROW_HEIGHT`), every row: the in-place diff's at the diff's row height, the header's and the files' with it | The packet's commitment (fork-alignment R7.2): an opened file's diff at the diff's row height. Forced: the tab is one virtualised list of rows of one size, the invariant that keeps 55,184 files and every opened line one viewport of work, so the header and file rows take the diff's pitch where Fork's are ~20 and 22 px (uv7b). |
+| Row pitch of the Commit tab | 17 px (`COMMIT_TAB_ROW_HEIGHT`), every row: the in-place diff's at the diff's row height, the header's and the files' with it | Cairn-chosen (`docs/prd/fork-alignment.md`): an opened file's diff at the diff's row height. Forced: the tab is one virtualised list of rows of one size, the invariant that keeps 55,184 files and every opened line one viewport of work, so the header and file rows take the diff's pitch where Fork's are ~20 and 22 px (uv7b). |
 | The committer's block | beside the author's, only where name, address or instant differ | Fork-measured: `fork-committer-2026-10-20.md` questions 1-3. |
 | Sideways scroll of in-place diffs | the whole Commit tab scrolls sideways as one, to the widest row built | User's decision, 2026-10-04, kept as built; forced as above: Fork scrolls each inline diff on its own (Finding 4); one list is one scroll. |
 | An in-place diff being read, failed, or hiding whitespace | "Reading the diff…"; the failure in the error colour, that file's alone; "Whitespace changes are hidden" as a row above it | User's decision, 2026-10-04, kept as built: the Changes tab's words, as rows (Fork's in-place states are not recorded). |
@@ -2233,8 +2245,9 @@ in its action's scope but the stage's bare Return, heard from Local Changes' fil
 wherever focus is; `Detail`, only while focus is inside the detail pane or Local Changes'
 diff; `LocalChanges`, only while a file list or the diff in Local Changes has focus;
 `LocalChangesLists`, only while Unstaged or Staged has focus; `CommitBox`, only while the
-commit box's subject or description has focus; and `History`, only while the history list
-has focus. The table is data: one match naming every action for the chords, one for the
+commit box's subject or description has focus; and `List`, only while a list with a context
+menu has focus — the history, the sidebar, the Changes tab's files, Local Changes' lists — and
+never a text field, so Ctrl+C or ⌘C in a field copies its text. The table is data: one match naming every action for the chords, one for the
 scope. A chord holds its modifiers exactly (the lock keys are ignored, an extra Shift is not,
 for a key and a pointer press alike), and is completed by a key that names itself (an arrow,
 Enter, Backspace, matched by the key), by a key where it sits (a digit, a letter or the full
@@ -2244,16 +2257,19 @@ turns `.` into `>`), or by a primary pointer press.
 A chord is spelled for a person in one place, from this data: `accelerators::chord_name(action,
 os)` (`crates/cairn-ui/src/accelerators/chord_names.rs`, the user's decision)
 renders an action's first chord as Fork's own menus write it — on Linux Fork for Windows' form,
-`Ctrl+Shift+Alt+S` (its Local Changes menu's Stage All, FS1 §8), held keys in that order joined
+`Ctrl+Shift+Alt+S` (its Local Changes menu's Stage All, `docs/research/ui-review/fork-window-survey-2026-10-16.md` §8), held keys in that order joined
 by `+`; on macOS the symbols run together,
 `⌘⌥⇧S`, `⌘Return`, `⌫` — and `None` for a press or an action with none
-(`a_chord_is_named_from_the_table_as_forks_lists_write_it`). Show Lost Commits' check box shows
-it as its tooltip. It is the one render file the modifier guard lets spell a chord, each of its
+(`a_chord_is_named_from_the_table_as_forks_lists_write_it`). A menu item shows it beside its
+label (the menu bar's and every context menu's), the diff bar's buttons after their words
+(`bar_tooltip`, above) and the toolbar's Fetch in its tooltip. It is the one render file the modifier guard lets spell a chord, each of its
 literals one held key's name alone (`CHORD_NAMES`, `hand_typed_chords`).
 
 The chords are Fork's and only Fork's — the user's decision of 2026-10-03, from
-`docs/research/diff-engine/fork-shortcuts.md`, and for staging
-`docs/research/staging-and-commit/fork-staging-and-commit.md` §1-2:
+`docs/research/diff-engine/fork-shortcuts.md`, for staging
+`docs/research/staging-and-commit/fork-staging-and-commit.md` §1-2, and for the menus' and the
+copy chords Fork for Windows' own menus (`docs/research/ui-review/fork-window-survey-2026-10-16.md`
+§9, `fork-menu-toggles-2026-10-19.md` §1, `fork-copy-and-dialogs-2026-10-20.md`):
 
 | Action | Linux | macOS | Heard |
 | --- | --- | --- | --- |
@@ -2269,7 +2285,11 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | Copy, Copy Full: the focused list's menu item showing the chord — Copy Commit SHA or Copy Commit Info, Copy Path or Copy Full Path, Copy Branch Name or Copy Tag Name (`docs/systems/window-frame.md`, "The copy chords") | Ctrl+C, Ctrl+Shift+C | ⌘C, ⇧⌘C (not yet checked against Fork for macOS) | in a focused list with a context menu (`Scope::List`), never a text field |
 | Hide Commit Details: the detail pane to its tab strip and back | Ctrl+Shift+D | none (the View menu's item alone) | anywhere |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
-| Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |
+| Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | anywhere |
+| Show Uncommitted Changes / Show All Commits: the main region's Local Changes or All Commits | Ctrl+1 / Ctrl+2 | ⌘1 / ⌘2 (not yet checked against Fork for macOS) | anywhere |
+| Show HEAD | Ctrl+0 | ⌘0 (not yet checked against Fork for macOS) | anywhere |
+| Fetch | Ctrl+Shift+F | ⇧⌘F (not yet checked against Fork for macOS) | anywhere |
+| Zoom In / Zoom Out | Ctrl+= / Ctrl+- | ⌘= / ⌘- (not yet checked against Fork for macOS) | anywhere |
 | New Branch, Create Branch at `HEAD` (staging-and-commit R11.3) | Ctrl+Shift+B | ⇧⌘B | anywhere |
 | toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
 
@@ -2284,10 +2304,9 @@ is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md` ⌘
 `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows row, as it
 does for every chord here, and F5 is bound by no Linux desktop nor by any other action. Fork
 keeps alternates for staging — stage on Return and ⌘S (Ctrl+S on Windows, and Ctrl+Shift+S),
-discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. On Linux Fork for
-Windows' Ctrl+Shift+D is its View menu's Hide Commit Details instead (fork-alignment L9), and
-discard keeps Backspace and Delete; macOS keeps ⇧⌘D for discard and gives Hide Commit Details no
-chord until Fork for macOS is observed (⌥⌘D is the desktop's Dock toggle). In Fork's diff Return
+discard on Backspace, Delete and Ctrl+Shift+D — so an action holds a list. On Linux
+discard keeps Delete and Backspace, Ctrl+Shift+D being Hide Commit Details (above); macOS gives
+Hide Commit Details no chord until Fork for macOS is observed (⌥⌘D is the desktop's Dock toggle). In Fork's diff Return
 does nothing and ⌘S or Ctrl+S stages the whole selection (observed in Fork for Windows 2.21.1,
 `lc3`, `lc4`; staging-and-commit R7.3), so the stage's bare Return is
 heard from the file lists alone. No chord is listed twice on one platform, within one list or
@@ -2303,8 +2322,8 @@ press, a chord listed twice for one action and one shared by two actions each fa
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
 action a key press is in a scope, or `accelerators::is_chord(event, own)` whether it is a
 chord the view must leave alone — the window's, the detail pane's, or one of a scope the
-view is in (`own`: the history list's `History`, Local Changes' lists' `LocalChanges` and
-`LocalChangesLists`) — and never reads the held keys itself; the module's public
+view is in (`own`: Local Changes' lists' `LocalChanges` and `LocalChangesLists`; every other
+view passes none) — and never reads the held keys itself; the module's public
 surface speaks actions, scopes and chords, never a modifier a caller could branch on — but
 for `Chord::key_press` and `Chord::press_hold`, which hand a chord's keys to a headless test
 so it presses a chord, or holds a pointer chord's modifier key down, through the table rather
@@ -2486,7 +2505,7 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
 from the encoding its `encoding` header names before printing any of it — no header
 means UTF-8 — and prints the object's bytes unconverted when the conversion fails: a
 sequence the encoding refuses anywhere in the object, or an encoding iconv does not
-know. `CommitEncoding::of_commit` decides as git does, and both the details and the
+know. `CommitEncoding::of_decoded` decides as git does, and both the details and the
 history row read every field through it. ISO-8859-1 (under any name glibc's iconv
 accepts, and `Latin-1`, which git renames to it) is decoded as itself; US-ASCII is
 UTF-8 either way; every other encoding goes through `encoding_rs` (a dependency the

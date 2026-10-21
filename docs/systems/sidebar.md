@@ -80,22 +80,23 @@ stash or a detached `HEAD` walked to is chosen at once, as a press chooses it, s
 selects its commit while the sidebar keeps focus, and a heading or folder walked to only holds
 the walk, drawn as the selection. ← closes an open heading or folder and from any other row goes
 to the row it stands in; → opens a closed one and from an open one goes to its first row. Return
-does nothing, as in Fork. Where the walk stands is the sidebar's own state (`keys::Walk`): it holds
-while the entry chosen is the one it chose — a row chosen in the history lets it go — and while
-the rows are the ones it stood among, but for the rows laid out again for a heading or folder it
-or a press opened or closed. With no walk standing, a key first looks for the chosen entry's row
+does nothing, as in Fork (`fork-sidebar-2026-10-20.md` §4). Where the walk stands is the
+sidebar's own state (`keys::Walk`): it holds while the entry chosen is the one it chose — a row
+chosen in the history lets it go — and while the rows are the ones it stood among, but for the
+rows laid out again for a heading or folder it or a press opened or closed. With no walk standing, a key first looks for the chosen entry's row
 among the rows, once per press.
 
-**A right press** on a ref selects its commit as a press does (FS1 §8) and opens its menu through
-the one menu component (`cairn_ui::ref_menu`): a branch's or a remote-tracking ref's **New
-Branch…** then **Copy Branch Name**, a tag's **New Branch…** then **Copy Tag Name** — R9.2's working
-items, New Branch… greyed on a tag that names no commit. New Branch… opens Create Branch at the
-ref's commit, its subject the loaded row's (`sidebar::menu::chosen`); Copy puts the ref's name past
+**A right press** on a ref selects its commit as a press does
+(`fork-window-survey-2026-10-16.md` §8) and opens its menu through the one menu component
+(`cairn_ui::ref_menu`): a branch's or a remote-tracking ref's **New Branch…** then **Copy Branch
+Name**, a tag's **New Branch…** then **Copy Tag Name** — the items of Fork's that work, each
+beside its chord, New Branch… greyed on a tag that names no commit. New Branch… opens Create
+Branch at the ref's commit, its subject the loaded row's (`sidebar::menu::chosen`); Copy puts the ref's name past
 its namespace on the clipboard — `feature/login`, `origin/main`, `v0.2` — as Fork's copies
 (`sidebar::menu::ref_name_text`, sb84-sb86). Copy Branch Name and Copy Tag Name show Copy's
 chord, and with the sidebar focused on a ref the chord copies its name, as Fork's Ctrl+C does;
-Copy Full's chord, which no ref's menu shows, copies nothing (fork-copy-and-dialogs §3,
-`the_copy_chord_copies_the_walked_refs_name`). A right press on a stash or a detached `HEAD`
+Copy Full's chord, which no ref's menu shows, copies nothing
+(`fork-copy-and-dialogs-2026-10-20.md` §3, `the_copy_chord_copies_the_walked_refs_name`). A right press on a stash or a detached `HEAD`
 chooses it and opens nothing; on a heading or folder it does nothing.
 
 ## Where its rows are laid out
@@ -217,7 +218,8 @@ page asked.
 - Drawing (`crates/cairn-ui/tests/sidebar.rs`): `the_sidebar_is_forks`,
   `each_entry_draws_its_kinds_glyph`, `the_entry_chosen_is_drawn_chosen_by_its_name`,
   `a_press_is_reported_for_what_it_pressed`, `a_right_press_on_a_ref_selects_its_commit`,
-  `the_gear_copies_the_repository_path`, `the_sidebar_walks_by_key_as_forks_tree`, and the
+  `the_gear_copies_the_repository_path`, `the_sidebar_walks_by_key_as_forks_tree`,
+  `the_copy_chord_copies_the_walked_refs_name`, and the
   viewport twins `a_sidebar_of_50000_refs_builds_one_viewport` and
   `a_folder_of_10000_branches_open_builds_one_viewport` (each requiring Fork's 22 px rows), named
   in the root `CLAUDE.md`'s virtualization invariant; the walk's rule
@@ -263,8 +265,8 @@ page asked.
 - Measured: `measures_a_find_through_the_boundary` (`#[ignore]`d, driven by
   `CAIRN_BENCH_REPO`, with `CAIRN_FIND_TARGET` or `CAIRN_FIND_REF`) times a find of the
   repository's oldest commit, or of a named ref, through the real boundary (median of
-  seven), reads what it retains against C16's ceiling, stops one halfway as a scroll does
-  and checks the next page takes the walk up where it stopped.
+  seven), holds what it retains under a ceiling of 64 MiB (or a lower `CAIRN_C16_MIB`), stops
+  one halfway as a scroll does and checks the next page takes the walk up where it stopped.
 
 ## Where it is not Fork's, and other limits
 
@@ -281,13 +283,8 @@ page asked.
   (pin, show only, hide: #2), a branch name's tooltip ("Local branch / Tracked branch"),
   double-click checkout and ⌘-click compare from the sidebar are not built.
 - New Branch… from a ref opens Create Branch at the ref's commit, its short id and subject in
-  "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82). No requirement
-  asks for it yet.
-- Pressing All Commits does not move focus to the history, where Fork's does (sb73). No
-  requirement asks for it yet.
-- `docs/prd/fork-alignment.md` C14 and R10.3 ask for Return to open Local Changes or All
-  Commits from the sidebar's rows; Fork's arrows never reach those two and its Return does
-  nothing on any row (`fork-sidebar-2026-10-20.md` §4), so the sidebar's keys are Fork's.
+  "Create branch at:"; Fork's names the ref there with its glyph (sb78-sb82).
+- Pressing All Commits does not move focus to the history, where Fork's does (sb73).
 - A find's page is `FIND_PAGE_ROWS` rows, so the page holding the row may carry up to that
   many rows past it — a few dozen kilobytes kept beyond what a scroll's page would.
 - A stash whose base no ref reaches is known to have no row only when the walk ends: its

@@ -2,7 +2,7 @@
 //! `<gitdir>/index.lock` exists now — the refresh thread's `stat` on every refresh
 //! (`Update::IndexLock`) — never by an operation's entry.
 //!
-//! The banner under the title bar shows while the file is there, no `git` of Cairn's runs or
+//! The banner under the toolbar shows while the file is there, no `git` of Cairn's runs or
 //! waits in the repository (a write running or queued, a fetch in flight), and the file is older
 //! than about ten seconds (`cairn_ui::LockBanner` decides that last); it goes when a stat finds
 //! the file gone, whoever removed it. Its `Remove index.lock…`, and the same button in a write's

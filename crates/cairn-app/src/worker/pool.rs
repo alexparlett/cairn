@@ -299,10 +299,6 @@ fn described(git: &GitBinary) -> String {
     format!("git {}, at {}", git.version(), git.path().display())
 }
 
-/// What the title bar calls `shared`: the last component of its working tree — of its git
-/// directory, when it is bare — which discovery has already made absolute and free of `.`
-/// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
-/// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
 /// The repository's root — its working tree, or its git directory when it is bare — made
 /// absolute against the working directory, as a person pastes it.
 fn repository_root(shared: &SharedRepository) -> std::path::PathBuf {
@@ -310,6 +306,11 @@ fn repository_root(shared: &SharedRepository) -> std::path::PathBuf {
     std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
+/// What the toolbar's status box and the window's title call `shared`: the last component of
+/// its working tree — of its git directory, when it is bare — which discovery has already made
+/// absolute and free of `.` and `..`, so a repository opened at `.`, `..`, a subdirectory or its
+/// `.git` is named by its own folder
+/// (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
 fn repository_name(shared: &SharedRepository) -> String {
     let root = shared.workdir().unwrap_or_else(|| shared.git_dir());
     root.file_name().map_or_else(
@@ -1353,7 +1354,7 @@ mod tests {
         }
     }
 
-    /// The title bar names the repository's own folder whatever path it was opened
+    /// The status box names the repository's own folder whatever path it was opened
     /// at — its working tree, `<it>/.`, `<it>/sub/..`, a subdirectory, its `.git` — as Fork
     /// names a repository by its folder. Caught by: naming the path as given (`.`, `..`,
     /// `sub`, `.git`), unresolved.

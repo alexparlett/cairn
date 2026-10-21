@@ -591,8 +591,8 @@ pub enum Update {
         git: String,
         zone: Option<jiff::tz::TimeZone>,
     },
-    /// The repository is open: `name` is what the title bar calls it — the last component of
-    /// its working tree, or of its git directory when it is bare, as Fork names a
+    /// The repository is open: `name` is what the toolbar's status box and the window's title
+    /// call it — the last component of its working tree, or of its git directory when it is bare, as Fork names a
     /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
     /// `path` is that working tree's root, or the git directory of a bare one, made absolute:
     /// what Copy Repository Path copies. Sent once, after `Started`, tied to no request.

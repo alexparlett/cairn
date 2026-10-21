@@ -1,5 +1,5 @@
 //! View state for a fetch and the credential prompt it may raise, and Fetch asked of the
-//! default remote — by the title row's button, the Repository menu and the chord alike.
+//! default remote — by the toolbar's button, the Repository menu and the chord alike.
 
 use crate::window::View;
 use crate::worker::{PromptId, Request};

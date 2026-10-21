@@ -13,7 +13,8 @@ pub const OPENING_SIZE: (f64, f64) = (1024., 768.);
 /// The least the window shrinks to, at the zoom's own size: the narrowest and shortest at which
 /// every region keeps its content whole — the toolbar's buttons, the status box at its narrowest,
 /// the history's columns with room for a subject, the detail pane's bar, and the Commit tab down
-/// to Expand All under the pane's even share (`docs/systems/window-frame.md`, "The minimum size").
+/// to Expand All under the pane's even share (`docs/systems/window-frame.md`, "The regions and
+/// the minimum size").
 /// Fork clips below about 600 px instead; Cairn does not.
 pub const MIN_SIZE: (f64, f64) = (880., 620.);
 

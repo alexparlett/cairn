@@ -1,8 +1,8 @@
 //! What the last refresh answered, as the window keeps it: the refs snapshot, each branch's
 //! ahead/behind and the working tree's status, each kept until the next answer replaces it,
-//! and each read's failure beside it. The history's chips and the title bar read the refs,
-//! the title bar the current branch's counts and whether status listed a change; the sidebar
-//! and Local Changes read the rest.
+//! and each read's failure beside it. The history's chips and the toolbar's status box read the
+//! refs, the status box and Push's and Pull's badges the current branch's counts; the sidebar
+//! reads the refs, every branch's counts and, for its count, the status.
 //!
 //! An answer replaced is handed back, never dropped here: the window sends it to a worker to
 //! free (`Request::Retire`), since a snapshot of tens of thousands of refs, or a status of

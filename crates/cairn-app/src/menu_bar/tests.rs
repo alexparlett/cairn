@@ -446,7 +446,7 @@ fn at(test: &TestingRunner, text: &str) -> (f64, f64) {
 
 /// The window draws the menu bar in its top row, over everything else, and an item chosen from
 /// it there acts: View's Show Uncommitted Changes shows Local Changes. Caught by: a bar the
-/// window does not draw, drawn under the title row, or whose choices reach nothing.
+/// window does not draw, drawn under the toolbar, or whose choices reach nothing.
 #[test]
 fn the_window_draws_the_menu_bar_and_its_choices_act() {
     let (mut test, view, _) = launch();

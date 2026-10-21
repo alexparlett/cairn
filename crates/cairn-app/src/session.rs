@@ -311,7 +311,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = refreshed.write().ahead_behind_arrived(counts);
             retire(replaced, worker);
         }
-        // Kept for the title bar and the sidebar's count; laid out for Local Changes' lists,
+        // Kept for the sidebar's count; laid out for Local Changes' lists,
         // drawn at once or once a filter's rows are here. What either lets go of is freed
         // on a worker.
         Update::Status { changes } => {

@@ -102,7 +102,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     // What the last refresh answered.
     let refreshed = use_state(refresh::state::RefreshState::default);
-    // What the title bar calls the repository, once the worker has opened it.
+    // What the status box and the window's title call the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
     let repository_path = use_state(|| None::<std::path::PathBuf>);
     // The sidebar's state, for the session.

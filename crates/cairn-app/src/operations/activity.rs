@@ -28,7 +28,7 @@
 //! log — so a commit's streamed line, which the commit box also keeps apart from the state the
 //! root reads (`commit_box::state::StreamedOutput`), re-renders nothing while the popover is
 //! closed, and only the popover while it is open. A fetch's progress does re-render the root,
-//! by design: the status box in the title bar draws its latest line (`FetchStatus`).
+//! by design: the toolbar's status box draws its latest line (`FetchStatus`).
 
 use std::collections::VecDeque;
 use std::rc::Rc;

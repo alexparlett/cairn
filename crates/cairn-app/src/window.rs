@@ -32,9 +32,17 @@ use crate::{PAGE_ROWS, shortcuts};
 /// The least share of the main region's height a drag leaves the pane, of a hundred; pulled past
 /// it, the pane collapses (Fork's gesture).
 const PANE_MIN_SHARE: f32 = 10.0;
-/// The least the pane keeps when the window is squeezed: its strip and the Commit tab of a
-/// one-line commit with refs down to Expand All, so the history gives way first.
-const PANE_MIN_HEIGHT: f32 = DETAIL_STRIP_HEIGHT + 10. * cairn_ui::DETAIL_ROW_HEIGHT;
+/// The Commit tab's rows down to Expand All for a one-line commit with refs: the people's
+/// block's four, REFS, SHA, PARENTS, a rule, the subject, a rule and Expand All's own.
+const COMMIT_TAB_ROWS_TO_EXPAND_ALL: f32 = 11.;
+/// The least height the pane is laid out at: its strip, the Commit tab of a one-line commit with
+/// refs down to Expand All, and room under that for the horizontal scrollbar the tab may draw
+/// over its bottom (`cairn_ui::END_ROOM`). Where its share of the room is less, the pane keeps
+/// this height and the history its share, so the pane runs past the window's bottom; at the
+/// window's minimum size its share is more (`frame::MIN_SIZE`).
+const PANE_MIN_HEIGHT: f32 = DETAIL_STRIP_HEIGHT
+    + COMMIT_TAB_ROWS_TO_EXPAND_ALL * cairn_ui::COMMIT_TAB_ROW_HEIGHT
+    + cairn_ui::END_ROOM;
 /// The least the commit list keeps when the window is squeezed.
 const LIST_MIN_HEIGHT: f32 = 80.0;
 /// The least the main region keeps beside the sidebar when the window is squeezed.
@@ -88,7 +96,8 @@ pub struct View {
     pub held_keys: State<HeldKeys>,
     /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
     pub refreshed: State<RefreshState>,
-    /// What the title bar calls the repository, once the worker has opened it
+    /// What the status box and the window's title call the repository, once the worker has
+    /// opened it
     /// (`Update::Opened`).
     pub repository: State<Option<String>>,
     /// The repository's root, absolute, once the worker has opened it: what Copy Repository
@@ -921,7 +930,7 @@ pub(crate) mod tests {
                     "the {state} window does not show {sentence:?}; it shows {everywhere:?}"
                 );
             }
-            // The loaded count is gone with the title row, as in Fork.
+            // No count of the loaded commits is drawn anywhere, as in Fork.
             let counted = |text: &str| {
                 text.split_once(' ').is_some_and(|(number, noun)| {
                     number.parse::<usize>().is_ok()
@@ -2655,6 +2664,62 @@ pub(crate) mod tests {
         }
     }
 
+    /// The pane's floor is what its comment says: in a window too short for the pane's share to
+    /// reach it, the pane is laid out at the floor, which holds its strip and the Commit tab of a
+    /// one-line commit with refs down to Expand All with room for the horizontal scrollbar under
+    /// it, and not a row more. Caught by: a floor counted in another list's row height, or a
+    /// Commit tab grown a row above Expand All, either way leaving the floor and its reason apart.
+    #[test]
+    fn the_panes_floor_is_its_strip_and_the_commit_tab_down_to_expand_all() {
+        let height = 480.;
+        let (mut test, view, _) = launch_sized(
+            Vec::new(),
+            received(2, true),
+            (crate::frame::MIN_SIZE.0 as f32, height),
+        );
+        label_the_head(&mut test, view);
+        click_row(&mut test, 0);
+        arrives(&mut test, view, 0, vec![oid(1)]);
+        assert!(
+            label_at(&test, cairn_ui::REFS_CAPTION).is_some(),
+            "the commit has no REFS row: {:?}",
+            pane(&test)
+        );
+        // The lower of the two panels the splitter divides: the pane's.
+        let pane_area = test
+            .find_many(|node, element| {
+                Rect::try_downcast(element)
+                    .filter(|rect| {
+                        rect.accessibility.builder.role() == AccessibilityRole::Pane
+                            && node.layout().area.min_y() > MAIN_TOP + 10.
+                    })
+                    .map(|_| node.layout().area)
+            })
+            .into_iter()
+            .max_by(|a, b| a.min_y().total_cmp(&b.min_y()))
+            .unwrap_or_else(|| panic!("no detail pane"));
+        assert!(
+            even_share(height) < PANE_MIN_HEIGHT,
+            "the window is tall enough for the pane's share to reach its floor"
+        );
+        assert!(
+            (pane_area.height() - PANE_MIN_HEIGHT).abs() < 0.5,
+            "the pane is {} tall, not held at its floor {PANE_MIN_HEIGHT}",
+            pane_area.height()
+        );
+        let expand = label_at(&test, cairn_ui::EXPAND_ALL_CAPTION)
+            .unwrap_or_else(|| panic!("no Expand All: {:?}", pane(&test)));
+        let under = pane_area.max_y() - expand.max_y();
+        assert!(
+            under >= cairn_ui::END_ROOM,
+            "the floor leaves {under} px under Expand All, less than the scrollbar's room"
+        );
+        assert!(
+            under < cairn_ui::END_ROOM + cairn_ui::COMMIT_TAB_ROW_HEIGHT,
+            "the floor leaves {under} px under Expand All, a Commit tab row more than its reason"
+        );
+    }
+
     /// Hide Commit Details' chord leaves the pane's tab strip alone at the window's bottom, the
     /// history taking the rest, and again brings the pane back at its share; the strip's icon stays
     /// to bring it back. Caught by: the strip hidden with the pane, the chord not
@@ -3714,11 +3779,88 @@ pub(crate) mod tests {
     /// the head flag dropped, or the REFS row not given the selected row's chips.
     #[test]
     fn a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot() {
+        let (mut test, view, _) = launch(Vec::new(), received(2, true));
+        label_the_head(&mut test, view);
+
+        let row_y = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 0")
+                    .map(|_| node.layout().area.center().y)
+            })
+            .unwrap_or_else(|| panic!("the labelled row was not drawn"));
+        let chips: Vec<(f32, String)> = {
+            let mut found = test.find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| is_chip_tone(label.text_style_data.color.as_ref()))
+                    .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
+                    .map(|label| (node.layout().area.min_x(), label.text.to_string()))
+            });
+            found.sort_by(|a, b| a.0.total_cmp(&b.0));
+            found
+        };
+        let texts: Vec<&str> = chips.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["main", "mike/main"],
+            "origin/main was not folded into main"
+        );
+        let weight = |text: &str| {
+            test.find(|_, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|label| label.text_style_data.font_weight)
+            })
+            .flatten()
+        };
+        assert_eq!(
+            weight("commit 0"),
+            Some(FontWeight::BOLD),
+            "HEAD's subject is not bold"
+        );
+        assert_ne!(weight("commit 1"), Some(FontWeight::BOLD));
+
+        click_row(&mut test, 0);
+        arrives(&mut test, view, 0, vec![oid(1)]);
+        let shown = pane(&test);
+        let at = |text: &str| shown.iter().position(|shown| shown == text);
+        assert!(
+            at(cairn_ui::REFS_CAPTION).is_some(),
+            "no REFS row: {shown:?}"
+        );
+        assert!(
+            at(cairn_ui::REFS_CAPTION) < at("main")
+                && at("main") < at("mike/main")
+                && at("mike/main") < at(cairn_ui::ID_CAPTION),
+            "REFS does not hold the row's chips above the id: {shown:?}"
+        );
+        assert_eq!(
+            at("origin/main"),
+            None,
+            "the REFS row did not fold origin/main"
+        );
+
+        click_row(&mut test, 1);
+        arrives(&mut test, view, 1, vec![oid(2)]);
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|text| text == cairn_ui::ID_CAPTION),
+            "{shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text == cairn_ui::REFS_CAPTION),
+            "a commit no ref points at has a REFS row: {shown:?}"
+        );
+    }
+
+    /// Rows 0 and 1 appended to the history, row 0 labelled by `main` — the current branch,
+    /// its upstream `origin/main` at the same commit — and `mike/main`, with the snapshot of
+    /// those refs as the refresh's.
+    fn label_the_head(test: &mut TestingRunner, view: View) {
         use cairn_model::{
             HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
         };
 
-        let (mut test, view, _) = launch(Vec::new(), received(2, true));
         let mut page = RowsPage::new();
         let names = [
             "refs/heads/main",
@@ -3792,76 +3934,6 @@ pub(crate) mod tests {
             }));
         test.sync_and_update();
         test.sync_and_update();
-
-        let row_y = test
-            .find(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == "commit 0")
-                    .map(|_| node.layout().area.center().y)
-            })
-            .unwrap_or_else(|| panic!("the labelled row was not drawn"));
-        let chips: Vec<(f32, String)> = {
-            let mut found = test.find_many(|node, element| {
-                Label::try_downcast(element)
-                    .filter(|label| is_chip_tone(label.text_style_data.color.as_ref()))
-                    .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
-                    .map(|label| (node.layout().area.min_x(), label.text.to_string()))
-            });
-            found.sort_by(|a, b| a.0.total_cmp(&b.0));
-            found
-        };
-        let texts: Vec<&str> = chips.iter().map(|(_, text)| text.as_str()).collect();
-        assert_eq!(
-            texts,
-            ["main", "mike/main"],
-            "origin/main was not folded into main"
-        );
-        let weight = |text: &str| {
-            test.find(|_, element| {
-                Label::try_downcast(element)
-                    .filter(|label| label.text == text)
-                    .map(|label| label.text_style_data.font_weight)
-            })
-            .flatten()
-        };
-        assert_eq!(
-            weight("commit 0"),
-            Some(FontWeight::BOLD),
-            "HEAD's subject is not bold"
-        );
-        assert_ne!(weight("commit 1"), Some(FontWeight::BOLD));
-
-        click_row(&mut test, 0);
-        arrives(&mut test, view, 0, vec![oid(1)]);
-        let shown = pane(&test);
-        let at = |text: &str| shown.iter().position(|shown| shown == text);
-        assert!(
-            at(cairn_ui::REFS_CAPTION).is_some(),
-            "no REFS row: {shown:?}"
-        );
-        assert!(
-            at(cairn_ui::REFS_CAPTION) < at("main")
-                && at("main") < at("mike/main")
-                && at("mike/main") < at(cairn_ui::ID_CAPTION),
-            "REFS does not hold the row's chips above the id: {shown:?}"
-        );
-        assert_eq!(
-            at("origin/main"),
-            None,
-            "the REFS row did not fold origin/main"
-        );
-
-        click_row(&mut test, 1);
-        arrives(&mut test, view, 1, vec![oid(2)]);
-        let shown = pane(&test);
-        assert!(
-            shown.iter().any(|text| text == cairn_ui::ID_CAPTION),
-            "{shown:?}"
-        );
-        assert!(
-            !shown.iter().any(|text| text == cairn_ui::REFS_CAPTION),
-            "a commit no ref points at has a REFS row: {shown:?}"
-        );
     }
 
     /// The colour of the label reading `text`.

@@ -232,8 +232,12 @@ the headless window and checked in the real one (release build, the fixture):
   880 leaves it whole with Fork's 300 px box;
 - at 880 px, beside the sidebar's 300, the history keeps about 180 px for a row's chips and
   subject, cut with "…" where a row's chips take most of it, as Fork's subjects are cut;
-- at 620 px the main region's half is 276 px, enough for the pane's strip and a one-line commit's
-  Commit tab down to Expand All, which the pane's floor then keeps when a banner takes room;
+- at 620 px the pane's half of the main region is about 274 px, above its floor
+  (`window::PANE_MIN_HEIGHT`, 240 px): the pane's strip, the Commit tab of a one-line commit with
+  refs down to Expand All — eleven of its 17 px rows — and room under that for the horizontal
+  scrollbar. A banner up to about 69 px tall leaves the pane its share and whole; past that the
+  pane keeps its floor and the history its share, so the pane runs past the window's bottom
+  (`the_panes_floor_is_its_strip_and_the_commit_tab_down_to_expand_all`);
 - the diff bar's seven buttons stay inside the window.
 
 Pinned by `the_window_keeps_every_region_whole_at_its_minimum_size` and

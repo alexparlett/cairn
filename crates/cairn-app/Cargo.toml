@@ -21,10 +21,10 @@ cairn-git.workspace = true
 cairn-model.workspace = true
 cairn-ui.workspace = true
 # `borderless` compiles in the resize edges of a window whose frame Cairn draws, one crate,
-# `freya-borderless-plugin`, from the same pinned source (fork-alignment L10; the feature set
-# pinned in `deny.toml`).
+# `freya-borderless-plugin`, from the same pinned source (user-approved; the feature set pinned
+# in `deny.toml`).
 freya = { workspace = true, features = ["borderless"] }
-# The system's time zone, read once on a worker (`src/worker/zone.rs`; fork-alignment L5).
+# The system's time zone, read once on a worker (`src/worker/zone.rs`; user-approved).
 jiff.workspace = true
 
 [dev-dependencies]

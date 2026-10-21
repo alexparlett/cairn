@@ -14,16 +14,16 @@ publish = false
 cairn-model.workspace = true
 # `engine` exposes Skia for painting the graph column; no new crate. `icons-lucide` compiles
 # in the Lucide icons `src/style/icons.rs` names, one crate, `freya-icons`, from the same
-# pinned source (user-approved, fork-alignment L10; the feature set pinned in `deny.toml`).
+# pinned source (user-approved; the feature set pinned in `deny.toml`).
 # `titlebar` compiles in the window controls the caption row draws (`src/caption_row.rs`), no
-# new crate (fork-alignment L10; pinned in `deny.toml`).
+# new crate (user-approved; pinned in `deny.toml`).
 freya = { workspace = true, features = ["engine", "icons-lucide", "titlebar"] }
 # Terminal column widths for tab stops (`src/diff/columns.rs`; user-approved 2026-10-03).
 unicode-width.workspace = true
-# The edge auto-scroll's timer (`src/edge_scroll.rs`; user-approved 2026-10-07, L5).
+# The edge auto-scroll's timer (`src/edge_scroll.rs`; user-approved 2026-10-07).
 async-io.workspace = true
 # The time zone the window is handed, and each instant's offset in it (`src/local_time.rs`;
-# fork-alignment L5). The zone itself is read by the application's worker, never here.
+# user-approved). The zone itself is read by the application's worker, never here.
 jiff.workspace = true
 
 [dev-dependencies]

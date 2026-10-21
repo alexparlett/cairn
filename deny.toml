@@ -43,11 +43,10 @@ crate = "nix"
 exact = true
 allow = ["process", "signal"]
 
-# async-io is a direct dependency of cairn-ui (staging-and-commit decision L5, approved by the
-# user 2026-10-07): its `Timer` paces the auto-scroll of a drag held still at a list's edge,
-# as a future on Freya's executor, since the UI thread may never sleep. It adds no crate: the
-# lockfile already held it at this version through Freya, which times its own tooltips and
-# animations with it. It has no default feature and Cairn names none; its one optional
+# async-io is a direct dependency of cairn-ui, approved by the user: its `Timer` paces the
+# auto-scroll of a drag held still at a list's edge, as a future on Freya's executor, since the
+# UI thread may never sleep. It adds no crate: the lockfile already held it at this version
+# through Freya, which times its own tooltips and animations with it. It has no default feature and Cairn names none; its one optional
 # dependency, `tracing`, stays off, which this pins.
 [[bans.features]]
 crate = "async-io"
@@ -60,7 +59,7 @@ allow = []
 # (with the `icons` it implies), the Lucide icons `cairn_ui::style::icons` names, and the
 # caption row Cairn draws on Linux in place of the desktop's frame — `titlebar`, the window
 # controls `cairn_ui::CaptionRow` draws (no crate of its own), and `borderless`, the resize
-# edges of a window with no frame, one crate, `freya-borderless-plugin` (fork-alignment L10).
+# edges of a window with no frame, one crate, `freya-borderless-plugin`, approved by the user.
 # `icons-lucide` adds one crate to the lockfile, `freya-icons`, from the same pinned Freya
 # source; its icons are Lucide's, under the licence recorded under `[licenses]` below. Another
 # feature — another icon set, the native menu bar (`menu`, which pulls muda), the zoom shortcuts
@@ -70,7 +69,7 @@ crate = "freya"
 exact = true
 allow = ["borderless", "default", "engine", "icons", "icons-lucide", "titlebar", "winit"]
 
-# jiff is a direct dependency of cairn-ui and cairn-app (fork-alignment L5): the system's time
+# jiff is a direct dependency of cairn-ui and cairn-app, approved by the user: the system's time
 # zone, read once on cairn-app's worker, and the offset it gives each date the window draws. It
 # adds no crate: the lockfile already held it at this version through gix-date, which takes its
 # default features, and Cairn names none beyond them, so the set below is exactly what gix-date
@@ -95,8 +94,7 @@ allow = [
 # Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's
 # release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary
 # (`crates/cairn-app/assets/fonts/`) under the SIL Open Font License 1.1, whose text ships
-# beside it as the licence requires. Its download was approved by the user (2026-10-03,
-# packet decision L16); another font file is the same kind of decision. What this file
+# beside it as the licence requires. Its download was approved by the user; another font file is the same kind of decision. What this file
 # cannot check, the guard does: the directory holds exactly `EMBEDDED_FONTS`
 # (`crates/cairn-guards/tests/invariants.rs`), each font beside its licence file
 # (`the_embedded_fonts_are_the_roster_each_with_its_licence`).

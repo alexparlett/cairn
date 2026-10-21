@@ -101,23 +101,27 @@ history's walk forward ("Finding <ref>…"), every page kept as a scroll's would
 next press, a scroll or a row chosen superseding the find; a tag on a tree, and a stash
 whose base no ref reaches (its changes shown), say they are not in the graph.
 Local Changes is Fork's view in the main region (`docs/systems/local-changes.md`):
-a filter answered on a worker over Unstaged above Staged behind a splitter, each a virtualized
+Fork's bar across both lists — a filter answered on a worker, Stage All, the eye greyed until
+Quick Look and View Mode offering List alone — over Unstaged above Staged behind a splitter,
+each under a bold heading with its bordered Stage or Unstage button, each a virtualized
 list of paths in Fork's natural order with Fork's badges, told apart by shape, laid out on the
 refresh thread as the status is read; one selection with a primary — the file clicked first,
 whose staged, unstaged or untracked diff alone is drawn, asked in the file-diff lane the Changes
 tab shares — and an anchor (⌘- or Ctrl-click, Shift-click, Shift+↑/↓), moved after each action
 and as each status and filter's rows arrive by one pure rule (`next_selection`), never from a
 render effect. Its files are staged and unstaged by Fork's five routes — a double press, the
-table's chords, a drag dropped on the other list, each list's button and double chevron (Stage
-All and Unstage All with Shift held on Linux, ⌥ on macOS) and the context menu — and discarded
+table's chords, a drag dropped on the other list, each heading's button, the bar's Stage All and
+Staged's double chevron (Stage All and Unstage All by a heading's button with Shift held on
+Linux, ⌥ on macOS) and the context menu, which also copies a path or its full path — and discarded
 on the unstaged side alone, never a submodule, a conflict or a nested repository; a conflicted
 row stages whole. Over the diff is Fork's staging gesture: a hovered chunk's Stage and Discard
 Changes… (Unstage over the staged diff), a drag-selection narrowing them to its lines, a mode
 change its own row, each selection belonging to the text it was made over
-(`ShownDiff::content`). Under the diff is Fork's commit box: a subject with its counter and
-Recent Commit Messages, a description with a ruler at column 72, one button — `Commit N Files`,
+(`ShownDiff::content`). Under the diff is Fork's commit box: one field of a subject — bold once
+typed, its counter shown then — with Recent Commit Messages, and a description with a ruler at
+column 72, growing from one line; Fork's split button — `Commit N Files`,
 or "Amend Last Commit" while Amend is ticked, which draws amend's staged list in Staged against
-`HEAD`'s parent — an operation's `MERGE_MSG` filling only an untouched empty draft, as git's
+`HEAD`'s parent, its ⌄ greyed until push gives it items — an operation's `MERGE_MSG` filling only an untouched empty draft, as git's
 editor would leave it, and one line naming a rebase, `git am` or sequence that disables the box,
 or a detached `HEAD`. The engine (`docs/systems/staging.md`) stages and unstages files, lines and
 mode changes through git's own verbs, each patch checked against the index and the file before
@@ -156,8 +160,14 @@ compositor's window menu and every edge resizing it; on macOS the same menus as 
 desktop's frame. Every menu, the context menus included, is drawn from data by one component
 (`cairn_ui::menu`) that walks by Fork's keys and holds the keyboard while open; the desktop's
 title names the repository; Zoom In and Out scale the window through the toolkit's scale factor;
-and About Cairn names the version and the `git` found. There is no repository picker: one
-repository, named on the command line.
+and About Cairn names the version and the `git` found. The whole window is drawn at Fork's
+measured sizes in Fork Dark's tones with Lucide's icons, each from one style module
+(`cairn_ui::style`, `docs/systems/style.md`): a selection blue while its list has focus and grey
+when not, every other Tab stop ringed in Fork's blue (`style::focus`), every dialog in Fork's
+frame with its primary Fork's bordered default (`dialogs::frame`, `PushButton`), and every row's
+context menu holding Fork's working items with Copy and Copy Full on Ctrl+C and Ctrl+Shift+C
+(⌘C and ⇧⌘C on macOS). There is no repository picker: one repository, named on the command
+line.
 
 ## Repo map
 
@@ -1104,7 +1114,7 @@ Project invariants:
   platform (`accelerators::chords`, staging-and-commit R7.2: Fork keeps alternates —
   stage on Return or ⌘S on macOS, Enter, Ctrl+S or Ctrl+Shift+S on Linux; discard on
   Backspace or ⇧⌘D, and Delete or Backspace, Fork for Windows' Ctrl+Shift+D being Hide Commit
-  Details on Linux, fork-alignment L9), and
+  Details on Linux, fork-alignment R10.1), and
   to the scope it is heard in — each chord its action's scope but the stage's bare
   Return, heard from the file lists alone (`accelerators::chord_heard_in`); Copy and Copy Full
   (⌘C and ⇧⌘C, Ctrl+C and Ctrl+Shift+C) heard by a focused list with a context menu alone
@@ -1258,8 +1268,9 @@ Project invariants:
   in a braced `use freya::{..}`) or one of `ICON_SET_IDENTS` (`freya_icons`, `lucide`,
   `SvgViewer`, `ArrowIcon`, `TickIcon`), and that file must name `lucide`. Residual review
   obligations, `qa-checklist`'s (its item 1): **layout sizes are not matched at all** — row
-  heights, widths, paddings, gaps and radii are literals in the views until the phases that
-  lay them out read them from `style::metrics`, so the guard holds font sizes and tones only;
+  heights, widths, paddings, gaps and radii are read from `style::metrics` where a view lays out
+  one of Fork's measured regions, but nothing refuses a literal one, so the guard holds font
+  sizes and tones only;
   the matchers read spellings, so a font size reaching `font_size` through a local binding, a
   helper's parameter or a constant declared in another render file under a name without
   `FONT`, a colour from a `u32` literal or a variable (`Color::from(x)`, `.into()`), a tuple
@@ -1703,6 +1714,8 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   `docs/research/diff-engine/c14-measured.md` is Cairn's measured diff and
   window numbers on the bench repository, against git's own in
   `measured-baseline.md` beside it, `docs/research/refs-and-status/measured.md`
-  its refs, status, retained-row and window numbers on the same repository, and
+  its refs, status, retained-row and window numbers on the same repository,
   `docs/research/staging-and-commit/measured.md` its stage, unstage, discard and
-  commit costs against git's own in `measured-baseline.md` beside it.
+  commit costs against git's own in `measured-baseline.md` beside it, and
+  `docs/research/ui-review/` holds the first-hand surveys of Fork for Windows the window is
+  drawn from, and its `measured.md` the window's frames after the alignment.

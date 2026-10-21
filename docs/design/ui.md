@@ -95,6 +95,7 @@ Kept, and why:
 | The **diff bar's buttons and Expand All are Tab stops**, Space or Enter pressing them, since five of the bar's buttons have no chord; Fork's Tab cycle reaches only its file list and the history. | `platform.md` — keyboard-first, every action reachable |
 | The Commit tab draws **no ⌄ beside an address**, and the Changes tab's file filter keeps its **"Filter" placeholder** where Fork's field is blank: no feature Cairn builds fills that menu, and an empty field says what it is for. | `feature-inventory.md` — each feature brings its own controls |
 | **Avatars are initials**, coloured from the name; Cairn fetches no gravatar. | `diff.md`, "The detail pane" — no network call for a view |
+| **Paths, ids and the commit description are drawn in IBM Plex Mono**, the diff's face, where Fork draws paths and ids in its UI face: a path or an id reads the same in a list, the Commit tab and the diff, and the description's ruler at column 72 counts columns of one width. | "Palette and type", below; `diff.md`, "The diff view" |
 | Lanes keep **Cairn's colour-vision-safe set**, where Fork Dark's are orange and yellow. | "Palette and type", below |
 | **Every Tab stop shows focus** — a list by its selection's tone and a ring, any other control by a ring, a button's drawn inside its border; Fork shows a list's focus only by the selection's tone, a dialog button's by a dashed rectangle, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
 | Dialogs draw **no logo and no ✕** in Fork's frame: Escape and the dialog's own answers close each one. | `platform.md` — every dialog leaves by Escape |
@@ -472,7 +473,7 @@ kind.
 
 Type is the platform's sans, as Fork uses Segoe UI on Windows — on Linux the first
 of Ubuntu, Adwaita Sans and Noto Sans the system has — at Fork's sizes, 12 px for
-the body; IBM Plex Mono for ids, paths and diffs. Icons are Lucide's, drawn as
+the body; IBM Plex Mono for ids, paths, diffs and the commit description. Icons are Lucide's, drawn as
 Fork's are, each over its label in the toolbar. Every size, tone and icon comes from
 one place, so the window reads as one instrument. `tabular-nums` wherever digits
 align.

@@ -1,10 +1,38 @@
 ---
-status: in-flight
+status: shipped
 packet: fork-alignment
 opened: 2026-10-16
+shipped: 2026-10-21
 ---
 
 # PRD — Fork alignment
+
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For how the window
+is drawn now, read: the style module, its tones, metrics, icons and focus treatment,
+`docs/systems/style.md`; the caption row, the menus, the toolbar, the regions and the minimum
+size, `docs/systems/window-frame.md`; the history's rows, chips, avatars, local dates, `HEAD`'s
+reach, the stash lane and Show Lost Commits' strip, `docs/systems/history-graph.md`; the
+sidebar's header, rows, order and tree walk, `docs/systems/sidebar.md`; the detail pane, the
+Commit tab, the Changes summary, the diff bar and the accelerator table,
+`docs/systems/diff.md`; Local Changes' bar, headings and commit box,
+`docs/systems/local-changes.md`; and the status box, the activity popover's local times and the
+dialogs, `docs/systems/git-processes.md`. Those are the living truth and this is not; the design
+is `docs/design/ui.md`, and the invariants this packet added are in the root `CLAUDE.md`, each
+with its twin. Requirements R1-R12 and acceptance criteria C1-C22 were met at the merge bar
+(2026-10-20), each against a test that decides it; C22 was met as measured, by the user's
+acceptance, on the runs that repeated each gesture — one frame of 19.28 ms in the first run's
+deep scroll, which later runs did not repeat (5.75-6.10 ms), stays recorded with every number in
+`docs/research/ui-review/measured.md`. The real window was compared surface by surface with Fork
+on the user's desktop (Isle) at 1024×768 and 880×620; chords were decided by the headless suites,
+and macOS was not built or observed. The work directory this cites
+(`docs/work/fork-alignment/`, with the brainstorm's S1-S5 and L1-L10) was torn down and lives in
+git history. It closes #67 and #103; leftovers: #143-#153.
+
+Amendments made in flight are marked inline, each following Fork's first-hand evidence and naming
+its file under `docs/research/ui-review/`: where the evidence contradicted a requirement as written
+and the user ratified building Fork's behaviour (2026-10-20), the amendment says so; the others
+record what an observation the requirement asked for found, or where a requirement's paraphrase
+of a survey was wrong.
 
 Cairn's window drawn as Fork for Windows draws its own: the caption row with the menus, the
 toolbar with the status box in its middle, the sidebar, the history, the detail pane and Local
@@ -164,7 +192,9 @@ its parents.
      - "Show Lost Commits (Reflog)" Ctrl+Shift+., heard anywhere in the window.
 
      How Fork marks those two items while their state is on (a changed label, a tick) was not
-     observed; phase 02 observes it with `/observe-fork` before building it.
+     observed; phase 02 observes it with `/observe-fork` before building it. (Amended 2026-10-19,
+     as observed, `fork-menu-toggles-2026-10-19.md`: each shows a ✓ while on, its label
+     unchanged, and the ✓'s gutter moves every label of the menu.)
    - **Repository**:
      - "Refresh" F5;
      - "Fetch '<remote>'" Ctrl+Shift+F, greyed while a fetch runs;
@@ -216,7 +246,9 @@ its parents.
 
 1. The banners — the leftover lock, a close waiting on a write, and the Show Lost Commits strip
    (R5.9) — stand under the toolbar, across the whole width, above the sidebar and the main region,
-   as Fork's notification banner does.
+   as Fork's notification banner does. (Amended 2026-10-20, the user's decision, following Fork's
+   evidence, `fork-menu-toggles-2026-10-19.md` §2: the Show Lost Commits strip stands across the
+   top of the history column instead, as R5.9 now says.)
 2. **The history and the detail pane share the main region's height as a proportion**, half each
    at first, both growing with the window; the splitter moves the proportion. Expand All is never
    cut off at any window height the minimum allows.
@@ -290,7 +322,10 @@ its parents.
      Commits" button;
    - the item is ticked.
 
-   The history's header check box goes with the header.
+   The history's header check box goes with the header. (Amended 2026-10-20, the user's decision,
+   following Fork's evidence, `fork-menu-toggles-2026-10-19.md` §2 (mb7): the strip reads "Reflog
+   mode enabled" with an "Exit" link that turns the mode off, and stands over the history column,
+   not under the toolbar.)
 
 ### R6 — The sidebar (FS1 §3, FS2 §2)
 
@@ -314,7 +349,10 @@ its parents.
    - a stash reads its message after git's `On <branch>: ` ("WIP on parser"), with the archive
      glyph;
    - ahead is right-aligned "1↑", as Fork draws it; how Fork draws a behind count was not
-     observed, and phase 05 observes it before building it.
+     observed, and phase 05 observes it before building it. (Amended 2026-10-20, as observed,
+     `fork-sidebar-2026-10-20.md`: ahead then behind, "1↑ 2↓", in the body tone; a gone upstream
+     draws no count but a yellow warning on its branch glyph; tags are newest first by their
+     tagged commit's date.)
 
    Fork's hover icons (pin, show only, hide) are not drawn: filtering is #2.
 6. Each ref row's context menu holds its working items (R9.2).
@@ -328,12 +366,17 @@ its parents.
    - a 42 px avatar beside the name, the email and the date with seconds and its offset;
    - "COMMITTER" and its block only where the committer differs from the author. FS1 §5 saw only
      the agreeing case, with no block; phase 06 observes a differing committer with
-     `/observe-fork` before building it, and which fields count as differing is that observation's;
+     `/observe-fork` before building it, and which fields count as differing is that observation's
+     (amended 2026-10-20, as observed, `fork-committer-2026-10-20.md`: the name, the address or the
+     instant to the second, not the offset it is written at; the block stands beside AUTHOR);
    - REFS (absent when no ref names the commit), SHA (the full id) and PARENTS (links);
    - a rule, the message, a rule, Expand All and the files.
 
    A file opened in place draws its diff at the diff's row height (R1.2), not the list's.
-3. **The Changes tab's summary line** opens with the author's avatar.
+3. **The Changes tab's summary line** opens with the author's avatar. (Amended 2026-10-20,
+   following Fork's evidence, `fork-committer-2026-10-20.md` (cm14) and the id FS1 §6 itself
+   quotes: the summary's id is its first nine characters, where FS1 §6's text says ten, and its
+   date is the history's short form.)
 4. **The diff bar**, in Fork's order:
    - ^ "Go to previous change" and ⌄ "Go to next change", with their chords on the tooltip;
    - the path, centred, its folder in the secondary tone;
@@ -349,7 +392,10 @@ its parents.
 1. **One bar across both lists' top**, as Fork for Windows' (L6):
    - the filter, a magnifier with no placeholder;
    - at its right, ⌄⌄ "Stage All";
-   - the eye "Show diff side-by-side";
+   - the eye "Show diff side-by-side" (amended 2026-10-20, the user's decision, following Fork's
+     evidence, `fork-local-changes-2026-10-20.md` (lc9): Fork's eye opens Quick Look, a window of
+     the file's diff side by side, not a toggle of the main diff, so the eye is greyed, its
+     tooltip "Comes with Quick Look.", until Quick Look (#35) builds it);
    - View Mode, whose menu offers List alone, enabled, until the file-tree packet (L7).
 2. **"Unstaged" and "Staged" headings**, bold, each with its bordered "Stage" or "Unstage" button,
    greyed while nothing is selected in its list. The Staged heading keeps a visible ⌄⌄ "Unstage
@@ -364,7 +410,10 @@ its parents.
      nothing until remote-sync gives it items;
    - the character counter appears only once the subject has text (FS2 §2).
 
-   The rest of the box is unchanged.
+   The rest of the box is unchanged. (Amended 2026-10-20, following Fork's evidence,
+   `fork-window-survey-2-2026-10-16.md` (uw36) and `fork-local-changes-2026-10-20.md` (lc28): the
+   typed subject is bold, and the description is one line while empty and grows a line at a
+   time.)
 4. Rows are 20 px. The badges, natural order, selection, drag and every staging route are
    unchanged (`docs/systems/local-changes.md`).
 
@@ -375,7 +424,9 @@ its parents.
    - each item's chord right-aligned in the chord tone;
    - a greyed item's reason as its tooltip;
    - a submenu opened by → or a hover;
-   - the first item focused on open, keys as R2.6.
+   - the first item focused on open, keys as R2.6 (amended 2026-10-19, following Fork's evidence,
+     `fork-menu-toggles-2026-10-19.md`: a context menu highlights its first item, but a menu of the
+     bar opened by a press highlights nothing until ↓ is pressed).
 
    Each menu's items are data the component draws: no view builds its own menu rows.
 2. **Each row's working items**, in Fork's groups and order:
@@ -393,6 +444,10 @@ its parents.
 
    A stash row has no menu until stashing gives it items. "Copy Commit Info" copies Fork's form:
    the short id and the subject. Phase 08 checks the form in the VM first and records it.
+   (Amended 2026-10-20, following Fork's evidence, `fork-copy-and-dialogs-2026-10-20.md`: Copy
+   Commit Info is `<7-character id> - <subject>` on one line; the Commit tab's file menu shows no
+   chords (cp52-cp59), the Changes tab's does; Unstage All shows Ctrl+Shift+Alt+S and the staged
+   menu has no discard, `fork-window-survey-2026-10-16.md` (uv15).)
 3. A right press selects the row it lands on, or keeps a selection it lands inside, as today. On a
    ref in the sidebar it also selects that ref's commit in the history, as Fork's does (FS1 §8).
 
@@ -418,13 +473,19 @@ its parents.
    the focused tone, as Fork's does; every other control by a 1 px ring in the focused-field tone.
    No stop shows nothing (CS (f3)).
 3. Local Changes is reachable from the keyboard (Ctrl+1, and the sidebar's rows by ↑/↓ and Return
-   once the sidebar has focus).
+   once the sidebar has focus). (Amended 2026-10-20, the user's decision, following Fork's
+   evidence, `fork-sidebar-2026-10-20.md` (sb55-sb68): ↑/↓ walk the sidebar's tree — every
+   heading, folder, ref and stash, never the filter, Local Changes or All Commits — and Return does
+   nothing there, as Fork's; Ctrl+1 and Ctrl+2 reach Local Changes and All Commits.)
 
 ### R11 — Dialogs and wording (FS2 §1e, CI)
 
 1. Every dialog takes R1.3's look, and its primary button is filled. That covers the confirmation,
    the Git Error and "Couldn't <name>", Create Branch, the credential prompt and About Cairn. Today
-   only two of the four existing dialogs fill it.
+   only two of the four existing dialogs fill it. (Amended 2026-10-20, the user's decision,
+   following Fork's evidence, `fork-copy-and-dialogs-2026-10-20.md` (cp60-cp76): the primary is
+   Fork's default button — the button's #373737 in a 1 px #0078D7 border, not filled — the other
+   answers bordered #525252, and the Git Error dialog has no default, as Fork's.)
 2. **About Cairn:** the name, the version, the licence and the git found at startup with its
    version; Close.
 3. No message tells the person to do what the window cannot do: the engine error that says to
@@ -479,16 +540,16 @@ brackets.
 | C10 | The history has no header, 23 px rows, avatars, Fork's chips (R5.5) and local dates in Fork's format. `cairn-ui` never reads the system's zone. Ctrl+0 selects `HEAD`'s row and brings it into view. | `a_history_row_is_forks`, `a_rows_chips_are_forks`, `the_render_layer_is_handed_its_time_zone`, `show_head_selects_heads_row` [04] |
 | C11 | Rows `HEAD` cannot reach are marked by the walk and drawn greyed. The mark agrees with `git rev-list HEAD` on fixture repositories with a merge, a side branch and a stash. | `the_walk_marks_what_head_reaches_as_git_rev_list_does` (cairn-git, real git) [04] |
 | C12 | A stash takes its base's lane when that lane is waiting for the base, and a new lane when it is not. The graph's joins are curves and a merge's node is the larger hollow circle (R5.8). | `a_stash_is_drawn_on_its_base_commits_lane` (`LaneAssigner`'s unit tests in cairn-model and `crates/cairn-ui/tests/drawn_lanes.rs`), the `graph_geometry` tests [04] |
-| C13 | Show Lost Commits is the View item and its chord, the strip stands while it is on, and the header check box is gone. | `show_lost_commits_is_the_view_menus_and_names_itself_while_on` [04] |
-| C14 | The sidebar's header, icons, indentation, leaf names, disclosure defaults, tag order and stash wording are Fork's. A right press on a ref selects its commit; the sidebar's rows walk by ↑/↓ and Return opens Local Changes or All Commits. | `the_sidebar_is_forks`, `a_right_press_on_a_ref_selects_its_commit`, `the_sidebar_walks_by_key_and_opens_with_return` (cairn-ui tests) [05] |
+| C13 | Show Lost Commits is the View item and its chord, the strip stands while it is on, and the header check box is gone. (Amended 2026-10-20, the user's decision: the strip is Fork's, "Reflog mode enabled" and "Exit" over the history column, R5.9.) | `show_lost_commits_is_the_view_menus_and_names_itself_while_on` [04] |
+| C14 | The sidebar's header, icons, indentation, leaf names, disclosure defaults, tag order and stash wording are Fork's. A right press on a ref selects its commit; the sidebar's rows walk by ↑/↓ and Return opens Local Changes or All Commits. (Amended 2026-10-20, the user's decision: ↑/↓ walk the tree and Return does nothing, as Fork's, R10.3.) | `the_sidebar_is_forks`, `a_right_press_on_a_ref_selects_its_commit`, `the_sidebar_walks_by_key_as_forks_tree` (cairn-ui tests) [05] |
 | C15 | The Commit tab shows COMMITTER only where it differs, as observed, and an opened file's diff at the diff's row height. The Changes summary opens with the avatar. The diff bar holds R7.4's buttons with their tooltips, verbatim. | `the_committer_is_shown_only_where_it_differs`, `the_changes_summary_opens_with_the_avatar`, `the_diff_bar_is_forks_with_its_tooltips` [06] |
 | C16 | Local Changes' shared bar, headings, one-field commit box, split Commit button with its greyed ⌄, and 20 px rows are R8's. Every staging route still passes its existing tests. | `local_changes_bar_and_headings_are_forks`, `the_commit_box_is_one_field_and_a_split_button`; the `local_changes_actions` and `commit_box` suites [07] |
 | C17 | Every context menu holds exactly R9.2's items, separated and with chords, through the one component, and Copy and Copy Full put the right text on the clipboard. | `every_context_menu_holds_its_rows_working_items`, `copy_and_copy_full_copy_what_the_focused_view_names` [08] |
 | C18 | R10.1's actions resolve in their scopes; Ctrl+Shift+D is ToggleDetails on Linux and Discard is Backspace and Delete there. The table's pin still holds: no chord twice, bare keys only where admitted. | the accelerator table's unit tests and its pin [03, 08] |
 | C19 | Every Tab stop shows focus. Ctrl+1 reaches Local Changes with focus in Unstaged. | `every_tab_stop_shows_focus`, `ctrl_1_opens_local_changes_with_unstaged_focused` [08] |
-| C20 | Every dialog's primary button is filled and its look is R1.3's. About Cairn names the version and the git found. No message asks the person to reopen the repository. | `every_dialogs_primary_button_is_filled` (the `dialog_buttons` tests), `about_cairn_names_the_version_and_the_git`, `no_message_asks_to_reopen_the_repository` [02, 08] |
+| C20 | Every dialog's primary button is filled and its look is R1.3's. About Cairn names the version and the git found. No message asks the person to reopen the repository. (Amended 2026-10-20, the user's decision: the primary is Fork's bordered default, not filled, and the Git Error dialog has none, R11.1.) | `every_dialogs_primary_button_is_forks_default_in_forks_frame` (the `dialog_buttons` tests), `about_cairn_names_the_version_and_the_git`, `no_message_asks_to_reopen_the_repository` [02, 08] |
 | C21 | The menus, and a sidebar of 50,000 refs at 22 px, build one viewport. The existing virtualization twins hold. | `a_long_menu_builds_one_viewport`, `a_sidebar_of_50000_refs_builds_one_viewport` (kept) [05, 08] |
-| C22 | No frame over 16.7 ms on the bench in R12.2's three gestures, the numbers in `docs/research/ui-review/measured.md`. | the `#[ignore]`d window checks, read on the bench machine [09] |
+| C22 | No frame over 16.7 ms on the bench in R12.2's three gestures, the numbers in `docs/research/ui-review/measured.md`. (Amended 2026-10-20, the user's decision: met as measured — one frame of 19.28 ms in the first run's deep scroll, not repeated in later runs, stays recorded there.) | the `#[ignore]`d window checks, read on the bench machine [09] |
 
 ## Out of scope
 

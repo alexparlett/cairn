@@ -3,6 +3,93 @@
 Running log, newest first. Each phase's dismissed QA findings are logged here with their
 reasons, for the final QA phase to audit.
 
+## 2026-10-21 — the real-window pass on Isle (phases 01-09, packet mode)
+
+Committed onto `feature/fork-alignment` over 22bbe70. The pass phase 09 owed, run on the user's
+live Isle session: qa-checklist items 5, 6 and 7 for the whole packet.
+
+- **How it was driven.** Release build (`cargo build --workspace --release`) over the fixture
+  built on the host by `fixture-recipe.md`, at 1024×768 and at 880×620 (`isle windows set-box`).
+  Captures by `grim` of Cairn's box alone; keys by `wtype`; the pointer by a throwaway client in
+  the scratch directory binding `zwlr_virtual_pointer_manager_v1` (motion_absolute, button,
+  frame), built offline from the cargo cache and committed nowhere. Before every key and pointer
+  batch Isle's window list was read and input sent only with Cairn the focused front window,
+  pointer motion inside its box; the window was closed and the earlier focus restored afterwards.
+- **Isle drops `wtype`'s modifiers.** `WAYLAND_DEBUG=1` shows Isle forwarding wtype's keymap and
+  the key, but `wl_keyboard.modifiers` with nothing depressed, and no key event for a pressed
+  Control_L: Ctrl+0, Ctrl+1 and Ctrl+Shift+. never reach the window as chords. Bare keys (arrows,
+  Tab, Escape, Enter) arrive. So no chord was checked in the real window; each action was
+  reached by its menu item instead (View's Show HEAD and Show Lost Commits, the row menus'
+  items), and the chords stay decided by the headless suites.
+- **Compared, at both sizes** (Fork: uw3 and uv2 for the window, mb2-mb8 for the menus and the
+  reflog strip, uv3-uv3f for the toolbar's tooltips, lc20 for Local Changes, cm_tips for the diff
+  bar, cp61-cp75 for the dialogs, uv14-uv15 for the file menus):
+  - the caption row and menu bar: File, View, Repository, Window and Help open by a press with
+    nothing highlighted and switch as the pointer moves along the bar; View's ✓ for Show Lost
+    Commits widens the menu and moves every label by the gutter, as mb8; About Cairn names the
+    version, licence and git, Close its default. Fetch reads "Fetch 'origin'" (Fetch acts at once,
+    a `ui.md` row).
+  - the toolbar: Quick Launch, Pull, Push, Stash and Appearance greyed with their "Comes with …."
+    tooltips, Push's badge "1", Fetch's tooltip "Fetch" over "Ctrl+Shift+F"; the sidebar toggle,
+    the status box and Branch show no tooltip, as uv3d-uv3f. The status box draws no funnel on
+    hover where Fork's does (unplanned, so absent).
+  - the sidebar: Fork's order, indent and leaf names, folders and Tags closed, ✓ main bold with
+    "1↑"; a ref press selects its row (sidebar blue, history grey); the ref menu (New Branch…,
+    Copy Branch Name Ctrl+C) and the gear's Copy Repository Path; ↑/↓ walk the rows, a folder
+    opening under the press.
+  - the history: 23 px rows, avatars, Fork's chips, the rows `HEAD` cannot reach greyed; the row
+    menu (New Branch…, Copy Commit SHA, Copy Commit Info with their chords); Show Lost Commits'
+    strip "Reflog mode enabled" "Exit" on #333333 between #525252 rules, as mb7, and Exit turns it
+    off. The fixture's commits share one second, so `bugfix/crash` lists above the stash and
+    `main`, as `git log --date-order` lists them; Fork's fixture had distinct times.
+  - the detail pane: Commit and Changes tabs, the author block with the avatar, REFS, SHA,
+    PARENTS, the bold subject and Expand All (visible at 880×620); the Changes summary with the
+    avatar; the diff bar's seven tooltips verbatim.
+  - Local Changes: the bar (filter, ⇊, the greyed eye, View Mode), the bold headings with their
+    bordered Stage and Unstage (greyed with nothing selected) and ⇈, 20 px rows, the commit box
+    as one field and the greyed split button; both file menus with Fork's items and chords.
+  - Create Branch and the discard confirmation: Fork's frame (#2B2B2B in its blue border, title
+    bold white, body grey), the primary Fork's blue-bordered default, Create greyed until a name
+    is typed, Escape cancelling (the working tree unchanged afterwards).
+  - Nothing is cut at 880×620 but the history's subjects, cut with "…" beside long chips as
+    Fork's are; the toolbar, the status box, the diff bar and Expand All are whole.
+- **12 px, measured.** Cap heights read from the captures are 9 px for menu items, tooltips,
+  toolbar captions, buttons (Stage, Cancel, Expand All, Commit 1 File), sidebar rows and history
+  subjects — 12 px — and 11 px for a dialog's title (14 px bold). Nothing falls back to Freya's
+  16 px.
+- **Focus at every Tab stop.** Walked by Tab in All Commits (the history, the Changes filter, its
+  list, the diff bar's ↑, ⌄ and five buttons, the diff view, the sidebar's list and filter) and
+  in Local Changes (the bar's filter, ⇊ and View Mode, Unstaged, Staged, the diff bar, the diff
+  view, the subject, Recent Commit Messages, the description, Amend, the sidebar): every stop
+  shows its ring; greyed controls are skipped. Create Branch cycles the field, the check box and
+  Cancel (Create greyed); the discard dialog opens on Cancel with no ring, as Fork's dashed
+  rectangle waits for Tab, and Tab rings Discard then Cancel. The selection's tone follows focus:
+  a list's row blue while it holds focus and #525252 once focus leaves it, the history grey while
+  the sidebar walks. Fields keep the toolkit's 2 px ring (phase 08's batch item 5); the
+  description's ring stands a pixel or two outside its part of the box.
+- **The caption row by pointer on Isle:** a drag on empty space moved the window exactly by the
+  drag; a double press filled the screen (the restore glyph drawn) and a second restored the box;
+  a secondary press opened Isle's window menu at the press, dismissed by a press in the window; a
+  drag on the right edge resized it and stopped at 880. Isle's `set-box` below the minimum is
+  obeyed and clips (the client sends `set_min_size(880, 620)`); the edge drag honours it.
+  `docs/systems/window-frame.md` now says so, and its minimum-size measurement reads the sidebar's
+  300 (79f4a87).
+- **Defects found: none in code.** The one fix is that stale systems text.
+
+**Batched for the user — PENDING, not approved:**
+1. **Nothing is selected when the window opens**; Fork selects `HEAD`'s row and shows its
+   details (uw3). No `ui.md` row. Options: (a) select `HEAD` on open as Fork does (recommended,
+   a later change); (b) keep the empty pane and add a `ui.md` row.
+2. **Paths, ids and the description are IBM Plex Mono** where Fork draws paths and ids in its
+   UI face (lc20, uw3). `ui.md`'s "Palette and type" states it as intent; it has no row in "What
+   changes, and why". Options: add the row (recommended), or move paths to the body face.
+3. **Isle's `set-box` ignores the client's minimum size**, unlike its interactive resize — Isle's
+   to change, not Cairn's; stated in `window-frame.md`.
+
+**Unverified:** every chord in the real window (Isle drops `wtype`'s modifiers; decided headlessly),
+Ctrl+C and Ctrl+Shift+C into the clipboard, a commit whose committer differs (the fixture has
+none), macOS throughout.
+
 ## 2026-10-20 — phase 09, the merge bar (packet mode)
 
 Committed onto `feature/fork-alignment` over phase 08's ff97147. An independent review of the

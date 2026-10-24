@@ -41,7 +41,7 @@ merging to `main`: every file the PRD names is as `feature/fork-alignment` (b539
 ## Interfaces introduced so far
 
 None yet. Planned names (`implementation-plan.md`): `WindowView`, `TabView`, `TabId`,
-`crates/cairn-app/src/tabs/holder.rs`, `worker/folder_picker.rs`, `worker/tab_store.rs`,
+`crates/cairn-app/src/tabs/holder.rs`, `crates/cairn-app/src/folder_picker.rs`, `worker/application.rs`, `worker/tab_store.rs`,
 `crates/cairn-ui/src/tab_strip.rs`, `crates/cairn-ui/src/repository_manager.rs`, the actions
 `NewTab`, `OpenRepository`, `CloseTab`, `RestoreClosedTab`, `NextTab`, `PreviousTab`, and the
 guard `only_the_tab_holder_opens_a_repository`.

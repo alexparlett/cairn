@@ -40,8 +40,12 @@ Kept, and why:
   that commit's lane above it, as Fork for Windows draws it (`history-graph.md`); one whose commit no
   ref reaches is in the sidebar alone, and pressing it shows its changes. Fork's feature list calls this out for a
   reason.
-- **Repository tabs** across the top. The manager behind them is open
-  (`cairn.md`, "Still open"); tabs are the least-committing surface to show.
+- **Repository tabs** under the toolbar, one per open repository, as Fork's strip draws them, with
+  Fork's Repository Manager tab behind New Tab and the "+": several repositories in one window,
+  each tab keeping what its person was looking at. File holds Fork's New Tab, Open Repository…,
+  Close Tab and Restore Closed Tab, and Window its Select Previous Tab and Select Next Tab; while
+  the Manager tab is shown the menu bar holds File, Window and Help alone and the toolbar's
+  repository buttons are greyed, as Fork's are (`repository-tabs.md`).
 - **A detail pane below the graph**, behind a draggable splitter, with Commit and
   Changes tabs (`diff.md`).
 - **Dialog buttons in the platform's order** (the user's decision E): on Linux
@@ -90,6 +94,8 @@ Kept, and why:
 | **Avatars are initials**, coloured from the name; Cairn fetches no gravatar. | `diff.md`, "The detail pane" — no network call for a view |
 | Lanes keep **Cairn's colour-vision-safe set**, where Fork Dark's are orange and yellow. | "Palette and type", below |
 | **Every Tab stop shows focus** — a list by its selection's tone, any other control by a ring; Fork shows only the selection's tone, and some of its stops show nothing. | `platform.md` — keyboard-first throughout |
+| A tab's **name is worked out again on every open and close**, so a tab left alone under its folder's name drops the parent folder that told it apart; Fork keeps `t (uirev)` until it is relaunched. | `repository-tabs.md`, "The strip" |
+| A **credential prompt names the tab whose `git` asks** and comes forward over whatever tab is shown; every other dialog waits on its own tab, which is marked until shown. | `repository-tabs.md`, "Dialogs and background tabs" |
 | The window has a **minimum size** at which nothing is cut; Fork clips its content below about 600 px. | `cairn.md`, what Cairn is — no text a person needs is cut |
 | No Accounts section in any sidebar. | `credentials.md` — Cairn holds no credential |
 | A visible **loading state** distinct from an empty repository. | `concurrency.md` — every query is assumed slow |
@@ -152,7 +158,8 @@ box under it ("Staging", "The commit box", below). As built:
 `docs/systems/local-changes.md`.
 
 **Refresh** is Fork's: refs and status are re-read when the window gains focus,
-after Cairn's own operations, and on the Refresh chord. After an operation only
+after Cairn's own operations, and on the Refresh chord — on focus, the shown tab's
+whole and every other tab's status alone (`repository-tabs.md`). After an operation only
 what it changed is re-read, and while a commit's hooks run Cairn starts no refresh
 of its own (`concurrency.md`, "Operations"). Nothing watches the file
 system. Fork's standing complaint — that each refresh holds `index.lock` for

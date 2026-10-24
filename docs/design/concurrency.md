@@ -53,7 +53,10 @@ Status is not superseded: a refresh leaves a running `git status` to finish, its
 answer drawn, and every refresh asked while it runs becomes one follow-up status
 after it, however many there were. Ending a status to start another would, on a
 tree whose status takes longer than the gap between refreshes, never let one
-finish; only closing the repository ends a running one.
+finish; only closing the repository ends a running one. Focus asks a refresh of
+the repository shown; with several open, a tab each, every other tab reads its
+status alone on its own refresh thread, so its tab's mark stays current, and a tab
+made active refreshes whole (`repository-tabs.md`, "A tab not shown").
 
 The epoch is the cancel signal itself, not just a discard filter: the engine
 polls it, so superseding a query stops its walk rather than discarding its
@@ -113,9 +116,11 @@ write of Cairn's meets the commit's own `index.lock`.
 Of the local writes only a commit — or an amend — is cancellable, and only while
 it runs, because its hooks are the one local write that may run for minutes; killing it in its
 hooks leaves no `index.lock`. A cancelled or unwatched write reports that it may have
-taken effect, and the refresh after it shows what did. Closing the window while a
-local write runs waits for it and says which ("Finishing commit…"), never killing
-it; a second close after the window's patience closes anyway, and a lock that
+taken effect, and the refresh after it shows what did. Closing a repository — its tab, or the
+window and every tab with it — while a local write runs waits for that write on the
+repository's own threads and never kills it; the window says which write in which
+repository it waits on before it goes, and a second close after the window's patience
+closes anyway, and a lock that
 leaves behind is named the next time the repository opens (`processes.md`,
 "Lifecycle").
 

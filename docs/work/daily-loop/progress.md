@@ -3,6 +3,17 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-24 — repository-tabs planned as 5e
+
+The user asked for several repositories as tabs, as Fork does, once fork-alignment is done and
+before anything else. Planned with `/feature-plan` as packet 5e, `repository-tabs`
+(`docs/prd/repository-tabs.md`, `docs/work/repository-tabs/`, evidence
+`docs/research/repository-tabs/`): the window's state split per tab, Fork's strip, the Repository
+Manager tab with Recent and Open, Close and Restore Closed Tab, and the tabs remembered across
+launches. The briefs after 5d moved to 5f-5i; `repository-manager` (5i) keeps Clone, Init and the
+Manager's summary card. The spine's open question on the repository manager's shape is answered
+(`docs/design/repository-tabs.md`).
+
 ## 2026-10-18 — history-topo-order shipped and torn down
 
 Packet 5c passed its merge bar (every C1-C10 met, each test checked to fail under a mutation;

@@ -23,7 +23,7 @@ Everything downstream consumes these. Getting one wrong is a rewrite, not a fix.
 
 | Feature | Note |
 | --- | --- |
-| Repository open / discovery | From a path on the command line, and from the repository manager, whose shape is deliberately parked (`cairn.md`, "Still open"). |
+| Repository open / discovery | From paths on the command line, Open Repository…'s folder picker and the Repository Manager tab's Recent list, each repository in a tab of its own (`repository-tabs.md`). |
 | History graph | `history-graph.md`. |
 | Refs enumeration | Branches, remotes, tags, stashes. Feeds graph decoration, branch UI, and every ref operation. |
 | Working-tree status | Changed, staged, untracked, ignored, conflicted. The other half of what staging needs. |
@@ -118,8 +118,9 @@ reason it comes last here.
 
 | Feature | Note |
 | --- | --- |
-| Recent repositories | |
-| Multi-repository UI | Tabs, sidebar, or windows — parked in `cairn.md`, "Still open". |
+| Recent repositories | The Repository Manager tab's Recent list, remembered across launches (`repository-tabs.md`). |
+| Multi-repository UI | Tabs in one window, as Fork's; the open tabs remembered across launches (`repository-tabs.md`). |
+| Repository Manager summary and source folder | Fork's card of counts, remotes, branches and tags for the selected repository, and its list of the repositories under a chosen folder. |
 | Init | |
 | **Worktrees** | First-class: list, create, switch, remove, and show which worktree holds a branch. Fork lists them and marks a branch one holds; few other clients do (`worktrees.md`). |
 | Submodule init / update / sync | |

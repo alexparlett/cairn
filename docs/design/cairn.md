@@ -55,7 +55,9 @@ process is built in one place, in its own process group, and can always be
 ended (`processes.md`). Cairn holds no credential; git's helpers do, and prompts
 reach the window through Cairn's own askpass helper (`credentials.md`). The UI thread never waits on a repository:
 work runs on a few routed worker threads per repository, and a superseded query
-is cancelled, not rendered (`concurrency.md`).
+is cancelled, not rendered (`concurrency.md`). Several repositories open in one
+window, a tab each, every tab's repository with its own threads
+(`repository-tabs.md`).
 
 ## The first version worth having
 
@@ -85,6 +87,7 @@ back to Fork daily. The build order is `docs/work/daily-loop/roadmap.md`.
 | `worktrees.md` | Worktrees as a first-class surface |
 | `forge-links.md` | Forge URLs in, forge APIs out |
 | `platform.md` | Linux first, the macOS disciplines, the toolkit |
+| `repository-tabs.md` | Several repositories in one window: what a tab owns and what the window owns, the strip, the Repository Manager tab, opening, closing, and the tabs remembered across launches |
 | `ui.md` | The layout, kept from Fork, and every deviation from it; staging, discard, the commit box, Show Lost Commits and the activity popover |
 | `feature-inventory.md` | The whole feature surface, tiered by risk, and what is out of scope |
 
@@ -105,10 +108,6 @@ cite by number; each lives in the document that designs it.
 
 ## Still open
 
-- **Repository manager shape.** Tabs, a sidebar of repositories, or separate
-  windows. It decides how much state is per-repository versus global, so it wants
-  answering before a second repository can be open at once. Worker threads per
-  repository with view settings app-wide fit all three shapes.
 - **Whether the local write lane is keyed per worktree.** One lane per
   repository is safe because refs and objects are shared, but it puts staging in
   one worktree behind a commit in another (`concurrency.md`, `worktrees.md`).

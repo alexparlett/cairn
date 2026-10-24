@@ -12,8 +12,9 @@ pull request. The critical path is built; D7 still needs 6
 independent of each other, beside 5b (`stash-and-ignore`, which builds on 5) and 8; all
 four are briefs. Inserted 2026-10-16 ahead of them: 5c (`history-topo-order`, shipped)
 and 5d (`fork-alignment`, planned, next: `docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`),
-with 5e-5h (`file-tree-view`, `quick-launch`, `preferences`, `repository-manager`) briefs after
-5d (`roadmap.md`).**
+then 5e (`repository-tabs`, planned 2026-10-24, next after 5d: `docs/prd/repository-tabs.md`,
+`docs/work/repository-tabs/`), with 5f-5i (`file-tree-view`, `quick-launch`, `preferences`,
+`repository-manager`) briefs after it (`roadmap.md`).**
 
 ## The milestone
 

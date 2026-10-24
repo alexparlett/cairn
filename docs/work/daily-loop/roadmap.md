@@ -1,7 +1,7 @@
 # Roadmap — daily-loop
 
 Build order for the ten packets that reach D7, the two inserted before the rest of them
-(5c, 5d), and four that follow the alignment (5e-5h), which are not D7's. Order lives here, never in the
+(5c, 5d), and five that follow the alignment (5e-5i), which are not D7's. Order lives here, never in the
 design spine. Each packet gets its own `/feature-plan` run when it starts, writing
 its PRD and phases against then-current code — the briefs below carry the design
 nuance that run must not lose.
@@ -17,10 +17,11 @@ nuance that run must not lose.
 | 5b | `stash-and-ignore` | brief only | 5, 5d |
 | 5c | `history-topo-order` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1 |
 | 5d | `fork-alignment` | **planned** — next (`docs/prd/fork-alignment.md`, `docs/work/fork-alignment/`) | 5, 5c |
-| 5e | `file-tree-view` | brief only | 5d |
-| 5f | `quick-launch` | brief only | 5d |
-| 5g | `preferences` | brief only | 5d |
-| 5h | `repository-manager` | brief only | 5d, 5g |
+| 5e | `repository-tabs` | **planned** — next after 5d (`docs/prd/repository-tabs.md`, `docs/work/repository-tabs/`) | 5d |
+| 5f | `file-tree-view` | brief only | 5d |
+| 5g | `quick-launch` | brief only | 5d, 5e |
+| 5h | `preferences` | brief only | 5d |
+| 5i | `repository-manager` | brief only | 5e |
 | 6 | `remote-sync` | brief only | 2, 2a, 4, 5d |
 | 7 | `branch-ops` | brief only | 2a, 4, 5d |
 | 8 | `worktrees` | brief only | 2a, 4, 5d |
@@ -35,7 +36,10 @@ The local write lane is built by 5, which 7 then uses. The critical path to D7 i
 theirs. 5c-5h were inserted on 2026-10-16 by fork-alignment's planning (its brainstorm
 S3-S5): 5c first, because it fixes a git-parity bug in the graph the alignment draws on;
 5d before 6, 7, 8 and 5b, so they put their buttons and menu items into chrome that
-already matches Fork; 5e-5h after 5d, in an order the user sets when each starts.
+already matches Fork; 5e-5h after 5d, in an order the user sets when each starts. On
+2026-10-24 the user put `repository-tabs` next after 5d, ahead of the rest, as 5e (its brainstorm
+T13), so the briefs after it became 5f-5i and `repository-manager` keeps only what tabs do not
+build.
 
 ---
 
@@ -315,7 +319,19 @@ Fork's density and in Fork Dark's tones, every context menu, Fork's keys. The sh
 built now; the toolbar greys what a later packet owns ("Comes with <feature>."), and the
 menus list only what works, so each later packet below adds its items into Fork's groups.
 
-## 5e. file-tree-view — brief
+## 5e. repository-tabs — planned
+
+`docs/prd/repository-tabs.md`, `docs/work/repository-tabs/`, evidence
+`docs/research/repository-tabs/`. Several repositories in one window behind Fork's tab strip,
+each with its own worker and `SharedRepository`: the window's state split into what the window
+owns and what each tab owns; the strip (names told apart, the mark of uncommitted changes, ×,
+"+", reordering, an overflow list); the Repository Manager tab with Recent and Open; File's Open
+Repository…, New Tab, Close Tab and Restore Closed Tab, and Window's tab switching; a credential
+prompt coming forward from any tab; and the open tabs and Recent remembered across launches in
+Cairn's own state file — the first store on disk, ahead of 5h's settings. Its first phase
+observes Fork's unrecorded tab behaviour in the VM.
+
+## 5f. file-tree-view — brief
 
 **Builds:** Fork's View Mode — Tree, List and Combined List — for the Changes tab and
 Local Changes (`fork-window-survey-2-2026-10-16.md` §2), Tree the default as in Fork, the
@@ -325,19 +341,20 @@ selection goes after an action and a refresh (`next_selection`), dragging a fold
 the lists, Stage All under a filter, and the virtualized lists' rows (a tree is a list of
 visible rows, every twin still one viewport). Closes #36, #71.
 
-## 5f. quick-launch — brief
+## 5g. quick-launch — brief
 
-**Builds:** Fork's Quick Launch (Ctrl+P): a palette of recent repositories, once the
-Repository Manager keeps any, and every command, alphabetical, filtered as typed
+**Builds:** Fork's Quick Launch (Ctrl+P): a palette of the recent repositories 5e keeps,
+and every command, alphabetical, filtered as typed
 (`fork-window-survey-2-2026-10-16.md` §2: about 620×370, placeholder "Command", 33
 commands). Its commands are the accelerator table's actions and the menus' items, so the
 palette never lists an action the window lacks. Its field is built by
 `cairn_ui::text_field`. Enables the toolbar's greyed Quick Launch.
 
-## 5g. preferences — brief
+## 5h. preferences — brief
 
-**Builds:** the first persisted settings store (#89: its file a row of the
-filesystem-mutation guard's exceptions, written outside any repository) and Fork's
+**Builds:** the persisted settings store (#89: its file a row of the
+filesystem-mutation guard's exceptions, written outside any repository, beside 5e's tabs file and
+in its format, TOML through `serde`) and Fork's
 Preferences dialog (File › Preferences…, Ctrl+,; `fork-window-survey-2026-10-16.md` §10:
 General, Commit, Git, … and one Close, settings applied as made) for what Cairn has: the
 diff's font size and settings (#29), "Sort commits", the commit message's limits and page
@@ -345,15 +362,14 @@ guide (#95), "Check out after create", the sidebar's disclosure (#72); and Fork'
 Appearance menu — a light theme with its own diff palette (`ui.md`, "Open") and the detail
 pane to the right (#30). Enables the toolbar's greyed Appearance.
 
-## 5h. repository-manager — brief
+## 5i. repository-manager — brief
 
-**Builds:** several repositories in one window, each with its own worker pool and
-`SharedRepository`, behind Fork's tab strip (`fork-window-survey-2026-10-16.md` §1, §11:
-equal-width tabs, a "+", a dot marking uncommitted changes, tabs named apart by their
-folder when two share a name); Fork's Repository Manager tab (Recent and Repositories, a
-summary of the one selected), File's Open Repository…, New Tab, Close Tab, Restore Closed
-Tab, Clone and Init, and Window's tab switching. Needs 5g's store for the recent list.
-Cairn opens one repository from its command line until then (root `CLAUDE.md`).
+**Builds:** what 5e's Repository Manager tab leaves out: Fork's Repositories list (the
+repositories under a chosen source folder, which 5h's Preferences sets) and its summary of the
+one selected — uncommitted files, commits, first and last commit, remotes, and the Summary and
+Statistics tabs' Branches, Tags and Commits cards (`fork-window-survey-2026-10-16.md` §11, whose
+counts and remote-only Branches card are Fork bugs to check before copying) — and File's Clone…
+(Ctrl+N) and Init New Repository… (Ctrl+Shift+N), each opening its result in a tab of its own.
 
 ## 6. remote-sync — brief
 
@@ -454,5 +470,5 @@ not accidentally foreclose them: merge with structured conflict resolution (D6),
 rebase, cherry-pick, revert, reset, blame, file history, commit search, image
 diffs, submodules, LFS verification, and interactive rebase as its own program; and Open
 in and Console, which start programs other than git and need a design under the process
-guards. The repository manager and the first persisted settings store are briefs now, 5h
-and 5g.
+guards. The repository manager's remainder and the settings store are briefs now, 5i and 5h;
+tabs are 5e.

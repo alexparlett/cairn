@@ -15,7 +15,7 @@ STEP 1  Load context via an Explore agent over crates/cairn-app/src/main.rs, win
         Verify every Freya API you are not certain of in the vendored source
         (~/.cargo/git/checkouts/), never from memory.
 STEP 2  Implement:
-        1. The tab holder (R3.1, R3.5): crates/cairn-app/src/tabs/holder.rs, one keyed child per
+        1. The tab holder (R3.1, R3.6): crates/cairn-app/src/tabs/holder.rs, one keyed child per
            tab, drawing nothing, owning its TabView, its update task and its Replier; the window's
            list of tabs; a headless test first proving an unmounted holder drops its State and
            cancels its task. The guard only_the_tab_holder_opens_a_repository with its self-test,
@@ -23,11 +23,18 @@ STEP 2  Implement:
         2. Several tabs (R3.2-R3.4, R7.1): every command-line path a tab, the last shown; only the
            active tab drawn, keyed by its id; switching keeping every per-tab value; a minimal
            strip of names to press (its full look is 03's).
-        3. Refreshes (R5): focus refreshes the shown tab whole and the others' status alone;
+        3. The window's root-scope hooks following the shown tab, and every list's scroll lifted
+           into TabView (R3.3, R3.4, implementation-plan.md "The tab holder"); the diff context's
+           per-tab seed and the window's chosen context (R2.3's several-tab half).
+        4. Refreshes (R5): focus refreshes the shown tab whole and the others' status alone;
            activation refreshes; a commit holds back its own tab's refresh only.
-        4. The window checks (R13): tabs_switch_check, tabs_idle_check, tabs_launch_check and
+        5. The window checks (R13): tabs_switch_check, tabs_idle_check, tabs_launch_check and
            tabs_refresh_check, #[ignore]d, with the worker-side helper that waits on several
            Updates; run them where the bench exists and record the numbers.
+        6. The living docs this phase makes false (implementation-plan.md, "The living docs"):
+           the root CLAUDE.md's status paragraph and its one-repository line,
+           docs/systems/history-graph.md's opening, window-frame.md's title, the comments that
+           count one repository; docs/systems/repository-tabs.md extended with the holder.
         Invariants in play: the UI-thread guard and its residual list in the root CLAUDE.md and
         .claude/agents/responsiveness-reviewer.md (main.rs's use_hook wiring moves to the holder:
         rewrite both); the secret guard (no Replier field); the virtualization twins.
@@ -42,7 +49,7 @@ STEP 3  Validate: `scripts/gate.sh --fast` while iterating, `scripts/gate.sh` be
         QA brief. Adjudication goes to a fresh qa-confirm agent, never this session inline. Log
         dismissed findings with reasons in progress.md. Fix confirmed findings in focused
         commits. Disputed findings go to the user.
-STEP 4  Acceptance: C4, C5, C6, C11, C14's first criterion (`every_path_named_opens_a_tab_and_the_last_is_shown`), and C25's checks written (docs/prd/repository-tabs.md).
+STEP 4  Acceptance: C3's second half (`a_toggle_asks_a_background_tabs_diff_again_when_it_is_shown`), C4, C5, C6, C11, C14's first criterion (`every_path_named_opens_a_tab_and_the_last_is_shown`), and C25's checks written (docs/prd/repository-tabs.md).
 STEP 5  Update state.md (interfaces introduced, test renames, validation row) and progress.md
         (newest first); save memory-worthy decisions.
 STEP 6  Branch authority follows the declared mode. In user mode: commit explicit paths (never

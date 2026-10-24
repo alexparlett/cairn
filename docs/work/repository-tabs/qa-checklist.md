@@ -34,5 +34,8 @@ names and the ones its diff touches; phase 07 runs them all.
 8. **Words.** Every new string — the Manager's, the greyed toolbar's reason, the closing line, a
    prompt's title, a failed open's tab — follows `ui.md`'s rules: Fork's words where Fork has them,
    one short sentence, Title Case for titles and buttons, no text a person needs cut.
-9. **The store is Cairn's alone.** The tabs file holds paths and nothing read from a repository;
+9. **Living docs, true at every phase.** Each phase leaves no living doc saying one repository where
+   its change made several possible: the ones `implementation-plan.md`'s "The living docs" lists
+   for it, and `docs/systems/repository-tabs.md` describing exactly what is built so far.
+10. **The store is Cairn's alone.** The tabs file holds paths and nothing read from a repository;
    it is written only by its one excepted file; a bad file is never fatal.

@@ -15,13 +15,16 @@ STEP 1  Load context via an Explore agent over crates/cairn-app/src/modal.rs, se
         Verify every Freya API you are not certain of in the vendored source
         (~/.cargo/git/checkouts/), never from memory.
 STEP 2  Implement:
-        1. Prompts (R9.1): a process-unique PromptId; the window's prompts a queue, each with its
-           tab, answered through its own tab's Replier; the prompt titled with its tab's name and
-           coming forward over any tab.
+        1. Prompts (R9.1): a process-unique PromptId; each tab's prompt in its TabView, the window
+           showing the oldest; the prompt drawn by its own tab's holder, so it is answered through
+           that holder's Replier, which never leaves its hook (implementation-plan.md, "The tab
+           holder"); titled with its tab's name and coming forward over any tab.
         2. One modal state across tabs (R9.2): the strip takes no press while a dialog is drawn.
-        3. Endings waiting (R9.3): a background tab's endings kept on its tab, the waiting mark
-           drawn, the dialog opened when the tab is shown.
-        4. The status box and the activity popover the shown tab's (R9.4).
+        3. Endings waiting (R9.3): a background tab's endings, and a lock confirmation answered
+           after its tab was left, kept on its tab, the waiting mark drawn, the dialog opened when
+           the tab is shown.
+        4. The status box and the activity popover the shown tab's (R9.4). docs/systems/
+           credentials.md's prompt passage and docs/systems/repository-tabs.md brought current.
         Invariants in play: no credential value logged or stored (Secret, the Replier never a
         field); the confirmation seal (a confirmation is the shown tab's); one modal state.
         Out of scope: the store (06).

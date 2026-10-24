@@ -16,16 +16,20 @@ STEP 1  Load context via an Explore agent over crates/cairn-app/src/closing.rs, 
         (~/.cargo/git/checkouts/), never from memory.
 STEP 2  Implement:
         1. Open Repository… (R7.2-R7.5): rfd made direct (R12.1: allowlist row, exact feature pin,
-           no new package or stop), worker/folder_picker.rs behind a seam the tests answer;
-           duplicates switching; a path inside a repository; a failed open's tab.
+           no new package or stop), crates/cairn-app/src/folder_picker.rs (render side, its future
+           awaited in a task) behind a seam the tests answer; duplicates switching, closing the
+           second of two racing opens of one root; a path inside a repository; a failed open's tab.
         2. The Repository Manager tab (R6, with Recent as this session's opens until 06): New Tab,
            "+", the virtualized Recent list, Open in place, the reduced menu bar and greyed
            toolbar.
-        3. Closing (R8.1-R8.5): Close Tab by every route, the neighbour shown, the holder kept
-           until its stream ends, nothing freed on the UI thread, the last tab leaving a Manager,
+        3. Closing (R8.1-R8.5): Close Tab by every route (03's ×, middle press and menu wired),
+           the neighbour shown, the tab's prompt refused, the holder kept until its stream ends,
+           a closed tab's failed write coming forward with Close alone, nothing freed on the UI
+           thread, the last tab leaving a Manager,
            the window's close across every tab and its closing line naming the repository.
         4. Restore Closed Tab (R8.6), and the File and Window menus and the four remaining chords
-           (R10).
+           (R10). The living docs this phase makes false (implementation-plan.md, "The living
+           docs"), and docs/systems/repository-tabs.md extended with opening and closing.
         Invariants in play: the UI-thread guard (a close never waits); the local lane's close
         waiting on its running write; the dependency allowlist and deny.toml; the virtualization
         twins (the Recent list); the accelerator pin. Rewrite the root CLAUDE.md, docs/systems/
@@ -40,7 +44,7 @@ STEP 3  Validate: `scripts/gate.sh --fast` while iterating, `scripts/gate.sh` be
         QA brief. Adjudication goes to a fresh qa-confirm agent, never this session inline. Log
         dismissed findings with reasons in progress.md. Fix confirmed findings in focused
         commits. Disputed findings go to the user.
-STEP 4  Acceptance: C12, C13, C14's other criteria, C15, C16, C17, C18, C21, and C24's rfd half (docs/prd/repository-tabs.md).
+STEP 4  Acceptance: C8's close half (`a_tab_closes_by_its_cross_its_middle_press_and_its_menu`), C12, C13, C14's other criteria, C15, C16, C17, C18, C21, and C24's rfd half (docs/prd/repository-tabs.md).
 STEP 5  Update state.md (interfaces introduced, test renames, validation row) and progress.md
         (newest first); save memory-worthy decisions.
 STEP 6  Branch authority follows the declared mode. In user mode: commit explicit paths (never

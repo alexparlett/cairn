@@ -28,7 +28,7 @@ tab's.**
 | The diff's toggles: side by side, ignore whitespace, entire file, and the context once the person has changed it | The detail pane's tab, Commit or Changes |
 | Zoom, the theme, the time zone, the `git` About names | The sidebar's filter, disclosure and the ref being found |
 | Create Branch's "Check out after create" | Show Lost Commits |
-| The held keys a press is resolved against | The Changes tab's filter, the diff shown and its scroll |
+| The held keys a press is resolved against | The Changes tab's filter, the diff shown, and the scroll of every list the tab draws |
 | The one modal state | Local Changes' filter, selection and lists, and the commit box's draft and Amend |
 | | The operations it ran and runs: its writes, its fetch, its activity entries, the endings waiting to be shown |
 
@@ -39,9 +39,8 @@ other tab's when it is next shown. Show Lost Commits is the tab's, not the windo
 turning it on reopens that repository's walk: a window-wide toggle would reopen every
 repository's history at once.
 
-Fork's vendor notes call its diff context and its file list's View Mode global; whether Fork keeps
-its splitters per tab is unobserved, and the evidence lists it among the questions for an
-observation (`docs/research/repository-tabs/fork-tabs-evidence.md` §12, §17).
+Fork's vendor notes call its diff context and its file list's View Mode global
+(`docs/research/repository-tabs/fork-tabs-evidence.md` §12).
 
 ## A tab not shown
 
@@ -74,7 +73,10 @@ Repository Manager when one is open, as Fork's (`fork-tabs-evidence.md` §1):
 - the active tab is drawn in the surface tone of the sidebar under it, the others in the strip's
   darker tone;
 - each tab carries a mark at its left and its name centred;
-- a tab is pressed to show it, closed by its ×, and closed by a middle press;
+- a tab is pressed to show it; its ×, drawn on the active tab and on the tab under the pointer,
+  closes it, and so does a middle press;
+- a tab is dragged along the strip to reorder it, and its context menu offers Close Tab and Close
+  Other Tabs;
 - keyboard Tab never reaches the strip: tabs are switched by Ctrl+Tab and Ctrl+Shift+Tab, in the
   strip's order, wrapping at its ends.
 
@@ -93,9 +95,8 @@ different shape in its place, so the two are told apart by shape, never by colou
 listing every tab by its whole name; a tab is never scrolled out of reach and its name is never
 cut without the whole name one press away.
 
-What Fork's "+" does, whether it draws a ×, how it overflows, what its dot means and what its
-tab's context menu holds are unrecorded (`fork-tabs-evidence.md` §17); at each of those points
-this section is Cairn's design, and any difference from Fork's is a row of `ui.md`'s deviations.
+Wherever Fork's own strip does otherwise than this section, the difference is a row of `ui.md`'s
+deviations; Fork's strip as recorded is `fork-tabs-evidence.md`.
 
 ## The Repository Manager tab
 
@@ -112,7 +113,7 @@ one Open Repository… button besides its list.
 
 Outside this design: Fork's Repositories list — the repositories under its Preferences' source folder —
 its summary card of counts, remotes, branches and tags, Clone and Init. Each is a feature of its
-own (`feature-inventory.md`, Tier 6).
+own (`feature-inventory.md`, Tiers 5 and 6).
 
 ## Opening
 
@@ -125,13 +126,16 @@ A repository opens in a tab of its own from:
 
 A path inside a repository opens the repository that contains it, as `git` finds it. Opening a
 repository already open shows its tab: one tab per repository root, so one local write lane writes
-each index. Two worktrees of one repository are two roots and two tabs; their write lanes are one
+each index. The root is known once the new tab's repository has been found, so a tab that turns
+out to hold a root already open closes before it is drawn, and of two opens of one root at once
+the second to be found goes. Two worktrees of one repository are two roots and two tabs; their write lanes are one
 lane, keyed by the common directory they share (`concurrency.md`).
 
 A repository that cannot be opened — gone, not a repository, refused by git's ownership check, a
 ref storage Cairn refuses — opens its tab anyway, showing why in the tab's body, as a single
 failed open does, with Close. The folder picker is the desktop's own, through the XDG portal on
-Linux and the native panel on macOS (`platform.md`).
+Linux and the native panel on macOS, so it needs nothing per platform of Cairn's (D5,
+`platform.md`).
 
 ## Closing
 
@@ -139,7 +143,9 @@ Close Tab — File › Close Tab, Ctrl+W, the tab's ×, a middle press — close
 repository and shows the tab its left neighbour, or its right when it had none. The tab leaves at
 once. A write running in it finishes, never killed, on that repository's own threads, as closing
 the window's repository always has (`concurrency.md`); the repository's other work is ended as a
-window's close ends it, and nothing the tab held is freed on the UI thread.
+window's close ends it, a credential prompt it had open is refused, and nothing the tab held is
+freed on the UI thread. Should that write fail, its Git Error has no tab to wait on, so it comes
+forward over the tab shown, titled with the closed repository's name, with Close alone.
 
 Closing the last repository leaves the window open on a Repository Manager tab. File › Exit, or the
 window's own close, closes every tab's repository: the window goes once each has ended, waiting on
@@ -159,8 +165,9 @@ Across tabs:
   tab whose `git` asks, since that `git` is blocked on the answer. Two tabs' prompts are shown one
   after the other.
 - **Every other dialog waits on its own tab** — a Git Error, a "Couldn't <name>", a confirmation
-  still counting — and the tab carries its waiting mark until it is shown, when the dialog opens.
-  A dialog that opens at a press opens on the tab pressed, which is the one shown.
+  whose answer arrived after the person left the tab, as `Remove index.lock…`'s does — and the tab
+  carries its waiting mark until it is shown, when the dialog opens. A dialog that opens at a press
+  opens on the tab pressed, which is the one shown.
 - The status box and the activity popover are the shown tab's: its running operation, its entries.
   A background tab's operation runs on and ends into its own tab's state.
 
@@ -177,7 +184,8 @@ They are kept in one file of Cairn's own state, outside every repository, under
 application starts and written whole each time the tabs or Recent change, to a temporary file
 renamed into its place, so a crash leaves the old file or the new one, never half of either. A
 file that is missing, unreadable or not one Cairn wrote opens no tab and is never fatal; the next
-write replaces it. The file holds paths alone, never anything read from a repository.
+write replaces it. The file holds paths alone, never anything read from a repository; a path
+that is not valid UTF-8 cannot be written in TOML, so its tab works but is not remembered.
 
 Two Cairn processes each keep their own tabs, and the one that writes last decides what the next
 launch opens. A second launch handing its paths to the running window is a feature of its own.

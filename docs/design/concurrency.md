@@ -53,10 +53,10 @@ Status is not superseded: a refresh leaves a running `git status` to finish, its
 answer drawn, and every refresh asked while it runs becomes one follow-up status
 after it, however many there were. Ending a status to start another would, on a
 tree whose status takes longer than the gap between refreshes, never let one
-finish; only closing the repository ends a running one. With several repositories
-open, a tab each, the focus refresh is the shown tab's whole and every other tab's
-status alone, each on its own repository's refresh thread, and a tab made active
-refreshes whole (`repository-tabs.md`, "A tab not shown").
+finish; only closing the repository ends a running one. Focus asks a refresh of
+the repository shown; with several open, a tab each, every other tab reads its
+status alone on its own refresh thread, so its tab's mark stays current, and a tab
+made active refreshes whole (`repository-tabs.md`, "A tab not shown").
 
 The epoch is the cancel signal itself, not just a discard filter: the engine
 polls it, so superseding a query stops its walk rather than discarding its

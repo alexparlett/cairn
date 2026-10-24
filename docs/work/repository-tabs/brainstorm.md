@@ -100,7 +100,9 @@ brainstorm already listed "stale tab names" among the Fork bugs not to copy.
 dependency adds no package (FR §5, measured). On Linux it asks the XDG portal through `libdbus`,
 loaded at run time, and falls back to running `zenity`. That process starts outside Cairn's
 `process/` module and is not `git`: a review point, not a guard failure. It has macOS's native
-panel too (D5). Its async call runs on a thread of its own; Cairn asks it from `worker/`.
+panel too (D5). Its async call runs the portal on a thread of its own; Cairn awaits its future in a task on the
+UI executor, on the render side, since `worker/` names no Freya and the dialog's parent window is
+Freya's.
 
 *Rejected:* `ashpd` (one new package, Linux only, so macOS would need another route later); no
 picker, a typed path (a folder dropped on the window would not work on native Wayland, FR §6).

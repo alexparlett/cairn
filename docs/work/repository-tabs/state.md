@@ -22,15 +22,16 @@ merging to `main`: every file the PRD names is as `feature/fork-alignment` (b539
   mark for uncommitted changes, a second shape for a waiting dialog.
 - **T6. Names:** the folder, told apart by the parent folders in parentheses, worked out again on
   every open and close (Fork's stale names not copied).
-- **T7. Picker:** `rfd`, made direct: no new package, asked from `worker/`.
+- **T7. Picker:** `rfd`, made direct: no new package, its future awaited in a render-side task.
 - **T8. Refresh:** focus refreshes the shown tab whole and the others' status alone; activation
   refreshes whole.
 - **T9. Closing:** the last tab leaves a Manager tab; a closed tab's write finishes; quitting waits
   and names the repository.
 - **T10. Duplicates:** opening an open repository shows its tab. Worktrees: two tabs, two lanes,
   until `worktrees` (8) keys the lane.
-- **T11. Dialogs:** a credential prompt comes forward, titled with its tab; every other dialog waits
-  on its tab, which is marked.
+- **T11. Dialogs:** a credential prompt comes forward, titled with its tab, drawn by that tab's
+  holder; every other dialog — an ending, a confirmation answered after a switch — waits on its
+  tab, which is marked. A closed tab's failed write comes forward with Close alone.
 - **T12. Store:** TOML through `serde`, `$XDG_STATE_HOME/cairn/tabs.toml`, written whole and
   atomically on an application thread; a `FILESYSTEM_MUTATION_EXCEPTIONS` row.
 - **T13.** The packet is roadmap 5e; `file-tree-view`, `quick-launch`, `preferences` and

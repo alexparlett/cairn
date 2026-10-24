@@ -23,8 +23,10 @@ STEP 2  Implement:
            its kinds of write, into the root CLAUDE.md's filesystem invariant.
         3. The launch rules (R11.5): remembered tabs, then the paths named, the shown tab, the
            working directory, the Manager.
-        4. Recent remembered: the Manager's Recent from the store; a missing folder's row and
-           Remove from Recent (R6.4).
+        4. Recent remembered: the Manager's Recent from the store; each row's folder checked on
+           the store's thread when the Manager is shown, a missing folder's row and Remove from
+           Recent (R6.4); a non-UTF-8 path left out (R11.2). docs/systems/repository-tabs.md
+           extended with the store.
         Invariants in play: only ops/ changes the filesystem (the new row its one exception for
         cairn-app); the dependency allowlist; the UI thread never waits (the write is the store
         thread's; the one read is before the window exists).

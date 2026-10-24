@@ -42,7 +42,10 @@ Kept, and why:
   reason.
 - **Repository tabs** under the toolbar, one per open repository, as Fork's strip draws them, with
   Fork's Repository Manager tab behind New Tab and the "+": several repositories in one window,
-  each tab keeping what its person was looking at (`repository-tabs.md`).
+  each tab keeping what its person was looking at. File holds Fork's New Tab, Open Repository…,
+  Close Tab and Restore Closed Tab, and Window its Select Previous Tab and Select Next Tab; while
+  the Manager tab is shown the menu bar holds File, Window and Help alone and the toolbar's
+  repository buttons are greyed, as Fork's are (`repository-tabs.md`).
 - **A detail pane below the graph**, behind a draggable splitter, with Commit and
   Changes tabs (`diff.md`).
 - **Dialog buttons in the platform's order** (the user's decision E): on Linux
@@ -155,7 +158,8 @@ box under it ("Staging", "The commit box", below). As built:
 `docs/systems/local-changes.md`.
 
 **Refresh** is Fork's: refs and status are re-read when the window gains focus,
-after Cairn's own operations, and on the Refresh chord. After an operation only
+after Cairn's own operations, and on the Refresh chord — on focus, the shown tab's
+whole and every other tab's status alone (`repository-tabs.md`). After an operation only
 what it changed is re-read, and while a commit's hooks run Cairn starts no refresh
 of its own (`concurrency.md`, "Operations"). Nothing watches the file
 system. Fork's standing complaint — that each refresh holds `index.lock` for

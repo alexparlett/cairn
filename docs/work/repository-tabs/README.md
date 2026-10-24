@@ -13,9 +13,9 @@ Spec: `docs/prd/repository-tabs.md` (the one copy of the acceptance criteria). D
 | Phase | File | Builds | Criteria |
 | --- | --- | --- | --- |
 | 01 | `phase-01-observe-and-split.md` | Fork observed; `WindowView` and `TabView`; the zone and `git` read once | C1 (observation), C2, C3 (one tab) |
-| 02 | `phase-02-several-tabs.md` | the tab holder and its guard, several tabs from the command line, switching, refreshes across tabs, the window checks | C4-C6, C11, C14 (paths), C25 (written) |
-| 03 | `phase-03-the-strip.md` | the strip's look, ×, middle press, reorder, its menu, overflow, names, marks, Ctrl+Tab | C7-C10, C21 (tab switching) |
-| 04 | `phase-04-open-and-close.md` | Open Repository… (`rfd`), the Repository Manager tab, Close Tab, closing across tabs, Restore Closed Tab, the File and Window menus | C12-C18, C21, C24 (`rfd`) |
+| 02 | `phase-02-several-tabs.md` | the tab holder and its guard, several tabs from the command line, switching, refreshes across tabs, the window checks | C3 (several tabs), C4-C6, C11, C14 (paths), C25 (written) |
+| 03 | `phase-03-the-strip.md` | the strip's look, ×, middle press, reorder, its menu, overflow, names, marks, Ctrl+Tab | C7, C8 (reorder), C9, C10 (status), C21 (tab switching) |
+| 04 | `phase-04-open-and-close.md` | Open Repository… (`rfd`), the Repository Manager tab, Close Tab, closing across tabs, Restore Closed Tab, the File and Window menus | C8 (close), C12-C18, C21, C24 (`rfd`) |
 | 05 | `phase-05-dialogs-across-tabs.md` | prompts coming forward with their tab's name, endings waiting on their tab, the status box and popover per tab | C10 (waiting), C19, C20 |
 | 06 | `phase-06-remembered-tabs.md` | the tabs file (`serde`, `toml`), its filesystem row, the launch rules, Recent across launches | C12 (missing), C22-C24 |
 | 07 | `phase-07-qa.md` | the merge bar: whole-packet `/qa`, every criterion, the bench measurements, teardown | C25, C26 and all |

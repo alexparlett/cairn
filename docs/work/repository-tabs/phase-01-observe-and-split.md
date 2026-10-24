@@ -12,7 +12,7 @@ STEP 0  Pre-flight: read docs/work/repository-tabs/state.md and this file, nothi
         stop and say so before editing anything.
         Direct integration work requires an orchestrator prompt that explicitly declares
         packet mode.
-STEP 1  Load context via an Explore agent over docs/research/repository-tabs/ (all four records), crates/cairn-app/src/window.rs (View, test_view), main.rs, session.rs, closing.rs, frame.rs, the sub-states (sidebar/state.rs, local_changes/state.rs, commit_box/state.rs, operations/create_branch.rs, operations/activity.rs, diff/state.rs, detail/split.rs), worker/zone.rs, worker/pool.rs (Update::Started), and the guards naming these paths (crates/cairn-guards/tests/invariants.rs: CONFIRMED_HOLDERS, WINDOW_TOKEN_FIELDS, PROCESS_CALL_EXCEPTIONS, ZONE_READER); read state.md, this file, implementation-plan.md
+STEP 1  Load context via an Explore agent over docs/research/repository-tabs/ (all four records), crates/cairn-app/src/window.rs (View, test_view), main.rs, session.rs, closing.rs, frame.rs, the sub-states (sidebar/state.rs, local_changes/state.rs, commit_box/state.rs, operations/create_branch.rs, operations/activity.rs, diff/state.rs, detail/split.rs), worker/zone.rs, worker/request.rs (Update::Started), and the guards naming these paths (crates/cairn-guards/tests/invariants.rs: CONFIRMED_HOLDERS, WINDOW_TOKEN_FIELDS, PROCESS_CALL_EXCEPTIONS, ZONE_READER); read state.md, this file, implementation-plan.md
         and the PRD sections and evidence named below directly; nothing else of the planning docs.
         Verify every Freya API you are not certain of in the vendored source
         (~/.cargo/git/checkouts/), never from memory.
@@ -29,14 +29,16 @@ STEP 2  Implement:
         3. The diff settings' rule (R2.3) as far as one tab shows it: the context seeded from
            diff.context until chosen, held by the window.
         4. The zone and the git description read once per application (R2.4): Update::Started
-           loses them; worker/zone.rs stays the zone's reader.
+           loses them; worker/zone.rs stays the zone's reader; they reach WindowView on the
+           application stream (worker/application.rs, implementation-plan.md "Startup").
+        5. docs/systems/repository-tabs.md created, stating the window's two states as built
+           (implementation-plan.md, "The living docs").
         Invariants in play: the UI-thread guard (no waiting primitive outside worker/); the
         confirmation seal's holder rosters (CONFIRMED_HOLDERS, WINDOW_TOKEN_FIELDS) if GitError
         or LocalWrite's file moves; the zone guard; every virtualization twin.
         Out of scope: a second tab, the holder and the strip (02, 03); any menu item (04).
 STEP 3  Validate: `scripts/gate.sh --fast` while iterating, `scripts/gate.sh` before done (never
-        pipe it through tail or head). Run the release build with several repositories open and
-        drive the phase's surfaces (qa-checklist item 6). Then orchestrate this phase's QA in this
+        pipe it through tail or head). Run the release build and drive the phase's surfaces (qa-checklist item 6). Then orchestrate this phase's QA in this
         session: /qa over the phase diff, with the reviewers implementation-plan.md's dispatch
         table names for this phase, spawned fresh, plus the qa-checklist.md items and this file's
         QA brief. Adjudication goes to a fresh qa-confirm agent, never this session inline. Log

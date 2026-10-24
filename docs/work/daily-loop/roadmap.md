@@ -21,10 +21,10 @@ nuance that run must not lose.
 | 5f | `file-tree-view` | brief only | 5d |
 | 5g | `quick-launch` | brief only | 5d, 5e |
 | 5h | `preferences` | brief only | 5d |
-| 5i | `repository-manager` | brief only | 5e |
+| 5i | `repository-manager` | brief only | 5e, 5h |
 | 6 | `remote-sync` | brief only | 2, 2a, 4, 5d |
 | 7 | `branch-ops` | brief only | 2a, 4, 5d |
-| 8 | `worktrees` | brief only | 2a, 4, 5d |
+| 8 | `worktrees` | brief only | 2a, 4, 5d, 5e |
 
 2a depends on 2. 3 depends on 2a, and 4 on 1, 2a (O2 sent status to `git`) and
 3 (whose working-tree query its Local Changes view opens). Every packet that
@@ -33,13 +33,12 @@ seal and activity popover it builds on. 6, 7 and 8 are independent of each other
 The local write lane is built by 5, which 7 then uses. The critical path to D7 is
 1 → 2 → 2a → 3 → 5, with 4 needed before 5. 2a was inserted on 2026-10-02 and 5b on
 2026-10-07 (staging-and-commit's L1, L21), each numbered so the other packets keep
-theirs. 5c-5h were inserted on 2026-10-16 by fork-alignment's planning (its brainstorm
+theirs. 5c-5h were inserted on 2026-10-16, and 5e on 2026-10-24, by fork-alignment's planning (its brainstorm
 S3-S5): 5c first, because it fixes a git-parity bug in the graph the alignment draws on;
 5d before 6, 7, 8 and 5b, so they put their buttons and menu items into chrome that
-already matches Fork; 5e-5h after 5d, in an order the user sets when each starts. On
-2026-10-24 the user put `repository-tabs` next after 5d, ahead of the rest, as 5e (its brainstorm
-T13), so the briefs after it became 5f-5i and `repository-manager` keeps only what tabs do not
-build.
+already matches Fork; after 5d, 5e (`repository-tabs`, which the user put next on 2026-10-24,
+its brainstorm T13), then 5f-5i in an order the user sets when each starts, `repository-manager`
+keeping only what tabs do not build.
 
 ---
 
@@ -354,7 +353,8 @@ palette never lists an action the window lacks. Its field is built by
 
 **Builds:** the persisted settings store (#89: its file a row of the
 filesystem-mutation guard's exceptions, written outside any repository, beside 5e's tabs file and
-in its format, TOML through `serde`) and Fork's
+perhaps in its format, TOML through `serde`; tabs are state, settings are configuration, so the
+two files are apart) and Fork's
 Preferences dialog (File › Preferences…, Ctrl+,; `fork-window-survey-2026-10-16.md` §10:
 General, Commit, Git, … and one Close, settings applied as made) for what Cairn has: the
 diff's font size and settings (#29), "Sort commits", the commit message's limits and page
@@ -449,6 +449,12 @@ them, remove them. Decision D8 makes this first-class rather than incidental.
 
 **The guard that matters even read-only:** a client unaware of worktrees offers to
 check out a branch that is already checked out elsewhere, then fails confusingly.
+
+**Tabs (5e):** each worktree opens in a tab of its own, and 5e keeps a local write lane per tab,
+so two worktrees of one repository in two tabs each write through their own lane. This packet
+keys the lane by the common directory across tabs, as `concurrency.md` designs it, and decides
+whether switching to a worktree shows its tab (Fork opens the tab of the worktree that holds a
+branch, `fork-tabs-evidence.md` §12).
 
 **Open:** O5 — whether Cairn creates worktrees, or only manages existing ones.
 Creating means choosing a path, which is a UI surface; the guard above needs only
